@@ -1,0 +1,64 @@
+# media_hub sur TrueNAS Scale : Applications > Discover Apps > Custom App > « Install via YAML ».
+#
+# Deux conteneurs qui partagent le même réseau :
+#   tailscale  rend le serveur joignable en HTTPS depuis n'importe où (https://nas.<ton-tailnet>.ts.net) ;
+#   media_hub  le serveur de la médiathèque, qui écoute sur le port 8080.
+# Sur la télé, à la maison : http://192.168.0.42:8080 (le port est publié sur le réseau local).
+#
+# Remplace /mnt/tank/... par tes datasets. Les variables ${...} viennent du fichier .env voisin
+# (copie .env.example en .env) ; avec l'éditeur YAML de TrueNAS, remplace-les directement par leurs valeurs.
+
+name: media-hub
+
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: media-hub-tailscale
+    hostname: nas                      # → https://nas.tail59c227.ts.net
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}        # clé jetable (Tailscale > Settings > Keys) ; inutile une fois l'état conservé
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"             # pas besoin de /dev/net/tun ni de privilèges
+      TS_SERVE_CONFIG: /config/serve.json
+    ports:
+      - "8080:8080"                    # port du media_hub (même réseau), publié sur le réseau local pour la télé
+    volumes:
+      - ${APPS}/tailscale:/var/lib/tailscale
+      - ./serve.json:/config/serve.json:ro
+
+  media_hub:
+    image: python:3.13-slim
+    container_name: media-hub
+    restart: unless-stopped
+    network_mode: service:tailscale    # même réseau que tailscale : 127.0.0.1:8080 est joignable par `tailscale serve`
+    depends_on:
+      - tailscale
+    working_dir: /app/media_hub
+    # Pillow est facultatif (pochettes plus légères) : installé une fois dans le dossier de données, puis réutilisé.
+    command: ["sh", "-c", "pip install -q --disable-pip-version-check --target /data/pylib pillow >/dev/null 2>&1; exec python -m hub"]
+    environment:
+      PYTHONPATH: /data/pylib
+      PYTHONUNBUFFERED: "1"
+      HUB_SRV: /srv
+      HUB_DATA: /data
+      HUB_REPO: /app/media_library
+      HUB_FFMPEG: /opt/ffmpeg          # dossier qui contient ffmpeg et ffprobe (voir fetch-ffmpeg.sh)
+      HUB_BIND: 0.0.0.0                # écoute aussi le réseau local : mets alors un mot de passe
+      HUB_PORT: "8080"
+      HUB_PASSWORD: ${HUB_PASSWORD}
+      HUB_MAX_STREAMS: "2"             # transcodages simultanés (i3-13100F : 2 flux 1080p sans souci)
+      HUB_AUTOSCAN_HOURS: "6"
+      TMDB_KEY: ${TMDB_KEY}
+    volumes:
+      - ${APPS}/media_hub:/app/media_hub:ro
+      - ${APPS}/media_library:/app/media_library:ro
+      - ${APPS}/media_hub-data:/data
+      - ${APPS}/ffmpeg:/opt/ffmpeg:ro
+      # Bibliothèques. « :ro » = lecture seule. Retire-le si tu veux que le bouton « Nettoyer » supprime les Thumbs.db,
+      # ou que les scripts de media_library (étiquetage, renommage) tournent depuis ce conteneur.
+      - ${MEDIA}/Films:/srv/Films:ro
+      - ${MEDIA}/Series:/srv/Series:ro
+      - ${MEDIA}/Animations:/srv/Animations:ro
+      - ${MEDIA}/Musique:/srv/Musique:ro
+      - ${MEDIA}/Livres:/srv/Livres:ro

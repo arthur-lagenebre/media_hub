@@ -1,0 +1,478 @@
+/* Les pages : accueil, bibliothèque, fiche, recherche, gestion. */
+(function () {
+  'use strict';
+  var H = window.Hub, h = H.h;
+
+  H.libs = [];
+  H.lib = function (id) { return H.libs.filter(function (l) { return l.id === id; })[0] || null; };
+
+  // --- Barre du haut ----------------------------------------------------------
+  H.nav = {
+    build: function () {
+      var nav = H.clear(document.getElementById('nav'));
+      nav.appendChild(h('a', { class: 'brand f', href: '#/', 'data-nav': '#/' }, H.icon('home'), h('span', { class: 'name' }, 'Médiathèque')));
+      var links = h('nav', { class: 'links' });
+      H.libs.forEach(function (l) {
+        links.appendChild(h('a', { class: 'link f', href: '#/l/' + l.id, 'data-nav': '#/l/' + l.id, 'data-lib': l.id }, h('i', { class: 'dot' }), l.label));
+      });
+      nav.appendChild(links);
+      nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': 'Recherche' }, H.icon('search')));
+      nav.appendChild(h('a', { class: 'tool f', href: '#/admin', 'data-nav': '#/admin', 'aria-label': 'Gestion' }, H.icon('gear')));
+    },
+    mark: function (hash) {
+      Array.prototype.forEach.call(document.querySelectorAll('#nav [data-nav]'), function (a) {
+        var key = a.getAttribute('data-nav');
+        var on = key === '#/' ? (hash === '#/' || hash === '' || !hash) : hash.indexOf(key) === 0;
+        a.classList.toggle('on', on);
+        if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+      });
+    }
+  };
+
+  // --- Vignettes -------------------------------------------------------------
+  function initial(title) { var c = (title || '?').replace(/^[^A-Za-zÀ-ÿ0-9]+/, '').charAt(0); return (c || '?').toUpperCase(); }
+  H.picture = function (src, title, cls) {
+    var img = h('img', { src: src, alt: '', loading: 'lazy', decoding: 'async', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } });
+    return h('div', { class: 'poster ' + (cls || '') }, h('span', { class: 'ph', style: '--h:' + H.hue(title || '') }, initial(title)), img);
+  };
+  function itemSub(it, kind) {
+    var parts = [];
+    if (it.type === 'album') { if (it.grp) parts.push(it.grp); if (it.year) parts.push(it.year); }
+    else if (it.type === 'show') { if (it.year) parts.push(it.year); parts.push(it.n + ' ép.'); }
+    else if (it.type === 'series') { parts.push(H.plural(it.n, 'volume')); if (it.missing) parts.push(it.missing + ' manquant' + (it.missing > 1 ? 's' : '')); }
+    else { if (it.year) parts.push(it.year); }
+    return parts.join(' · ');
+  }
+  H.card = function (it, withGroup) {
+    var square = it.type === 'album';
+    var a = h('a', { class: 'card f' + (square ? ' sq' : ''), href: '#/i/' + it.id, 'data-key': it.id, title: it.title });
+    var pic = H.picture('/img/item/' + it.id + '?w=300', it.title, square ? 'sq' : '');
+    var total = it.n || 1;
+    if (it.seen >= total && it.seen > 0) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
+    else if (it.seen || it.started) pic.appendChild(h('span', { class: 'badge' }, it.type === 'movie' ? 'En cours' : (it.seen || 0) + '/' + total));
+    a.appendChild(pic);
+    a.appendChild(h('div', { class: 't' }, it.title));
+    a.appendChild(h('div', { class: 's' }, (withGroup && it.grp ? it.grp + ' · ' : '') + itemSub(it)));
+    return a;
+  };
+  function row(title, href, cards, more) {
+    var wrap = h('section', { class: 'shelf' });
+    wrap.appendChild(h('h2', null, href ? h('a', { class: 'f head', href: href }, title) : title));
+    var r = h('div', { class: 'row' }, cards);
+    if (more) r.appendChild(more);
+    wrap.appendChild(r);
+    return wrap;
+  }
+  function playHref(entry, start) {
+    return (entry.kind === 'book' ? '#/read/' : '#/play/') + entry.id + (start === 0 ? '?t=0' : '');
+  }
+  function resumeCard(c) {
+    var href = playHref(c);
+    var label;
+    if (c.item.type === 'show') label = 'S' + (c.season || 1) + ' · E' + (c.number || '?') + (c.title ? ' · ' + c.title : '');
+    else if (c.kind === 'book') label = (c.label ? 'Tome ' + c.label : c.title);
+    else label = c.item.type === 'movie' ? '' : c.title;
+    var ratio = c.total ? Math.min(1, c.position / c.total) : 0;
+    var note = c.resume ? (c.kind === 'book' ? 'Page ' + (Math.floor(c.position) + 1) : 'À ' + H.time(c.position)) : 'Épisode suivant';
+    if (c.kind === 'book' && !c.resume) note = 'Volume suivant';
+    var pic = h('div', { class: 'poster wide' }, h('span', { class: 'ph', style: '--h:' + H.hue(c.item.title) }, initial(c.item.title)));
+    var tryItem = function () { this.onerror = function () { if (this.parentNode) this.parentNode.removeChild(this); }; this.src = '/img/item/' + c.item.id + '?w=480'; };
+    pic.appendChild(h('img', { src: '/img/entry/' + c.id + '?w=480', alt: '', loading: 'lazy', onload: function () { this.classList.add('in'); }, onerror: tryItem }));
+    if (c.resume && ratio > 0) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(ratio * 100) + '%' })));
+    return h('a', { class: 'card wide f', href: href, 'data-key': 'c' + c.id }, pic, h('div', { class: 't' }, c.item.title), h('div', { class: 's' }, [label, note].filter(Boolean).join(' · ')));
+  }
+
+  // --- Accueil -------------------------------------------------------------------
+  H.route(/^\/$/, function () {
+    var el = h('section', { class: 'home' });
+    var timer = null;
+    function load() {
+      return H.api('/api/home').then(function (data) {
+        H.clear(el);
+        var total = data.libraries.reduce(function (n, l) { return n + l.count; }, 0);
+        if (!total) {
+          el.appendChild(h('div', { class: 'blank' },
+            h('h1', null, 'Ta médiathèque est vide pour l’instant'),
+            h('p', null, H.libs.length ? 'Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.' : 'Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Animations, Musique, Livres), ou décris-les avec HUB_LIBRARIES.'),
+            h('a', { class: 'btn f primary', href: '#/admin', 'data-autofocus': '1' }, 'Ouvrir la gestion')));
+          clearTimeout(timer);
+          timer = setTimeout(function () { if (el.isConnected && !document.hidden) load(); }, 4000);
+          return;
+        }
+        if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(resumeCard)));
+        data.libraries.forEach(function (lib) {
+          if (!lib.recent.length) return;
+          var more = lib.count > lib.recent.length ? h('a', { class: 'card more f', href: '#/l/' + lib.id }, h('div', null, H.icon('fwd'), h('span', null, 'Tout voir'), h('small', null, H.number(lib.count)))) : null;
+          var shelf = row(lib.label, '#/l/' + lib.id, lib.recent.map(function (it) { return H.card(it, lib.kind === 'music'); }), more);
+          shelf.setAttribute('data-lib', lib.id);
+          el.appendChild(shelf);
+        });
+        var a = document.activeElement;
+        if (!a || a === document.body || (a.closest && a.closest('#nav')) && el.style.display !== 'none') H.focus.first();
+      }).catch(function (e) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Le serveur ne répond pas'), h('p', null, e.message), h('button', { class: 'btn f', onclick: load, 'data-autofocus': '1' }, 'Réessayer'))); });
+    }
+    load();
+    return { el: el, nav: '#/', refresh: load, destroy: function () { clearTimeout(timer); } };
+  });
+
+  // --- Bibliothèque ----------------------------------------------------------------
+  var SORTS = {
+    movies: [['title', 'Titre'], ['added', 'Ajouts récents'], ['year', 'Plus récents'], ['year-asc', 'Plus anciens']],
+    music: [['title', 'Artiste'], ['added', 'Ajouts récents'], ['year', 'Plus récents'], ['year-asc', 'Plus anciens']],
+    books: [['title', 'Collection'], ['added', 'Ajouts récents'], ['year', 'Plus récents'], ['year-asc', 'Plus anciens']]
+  };
+  H.route(/^\/l\/([\w-]+)$/, function (m) {
+    var libId = m[1], lib = H.lib(libId);
+    var kind = lib ? lib.kind : 'movies';
+    var sorts = SORTS[kind] || SORTS.movies;
+    var st = { q: '', letter: '', genre: '', sort: H.pref('sort.' + libId) || 'title', unseen: false };
+    var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { letters: [], genres: [] };
+    var grid = h('div', { class: 'grid' + (kind === 'music' ? ' sq' : '') });
+    var sentinel = h('div', { class: 'sentinel' });
+    var count = h('span', { class: 'count' });
+    var search = h('input', { class: 'f field', type: 'search', placeholder: 'Filtrer ' + (lib ? lib.label.toLowerCase() : ''), 'aria-label': 'Filtrer',
+      oninput: function () { clearTimeout(search.t); search.t = setTimeout(function () { st.q = search.value; reset(); }, 280); },
+      onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
+    var bLetter = H.button('', null, { onclick: pickLetter }), bGenre = H.button('', null, { onclick: pickGenre }), bSort = H.button('', null, { onclick: pickSort });
+    var bSeen = H.button('Non vus', null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
+    var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, bSort, kind === 'music' ? null : bSeen, count);
+    var empty = h('div', { class: 'blank', hidden: true });
+    var el = h('section', { class: 'library' }, h('h1', null, lib ? lib.label : 'Bibliothèque'), tools, grid, empty, sentinel);
+
+    function label(btn, name, value) { H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('small', null, name + ' '), value])); }
+    function paint() {
+      label(bLetter, 'Lettre', st.letter || 'Toutes');
+      label(bGenre, 'Genre', st.genre || 'Tous');
+      label(bSort, 'Tri', (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
+      bSeen.setAttribute('aria-pressed', st.unseen ? 'true' : 'false');
+      bSeen.classList.toggle('on', st.unseen);
+      bGenre.hidden = !facets.genres.length;
+      var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: 'album', books: 'série' }[kind] || 'élément';
+      count.textContent = total ? H.plural(total, word) : '';
+    }
+    function pickLetter() {
+      var list = [{ label: 'Toutes', value: '' }].concat(facets.letters.map(function (l) { return { label: l[0], detail: String(l[1]), value: l[0] }; }));
+      H.menu('Commence par', list, st.letter, function (v) { st.letter = v; reset(); });
+    }
+    function pickGenre() {
+      var list = [{ label: 'Tous les genres', value: '' }].concat(facets.genres.map(function (g) { return { label: g[0], detail: String(g[1]), value: g[0] }; }));
+      H.menu('Genre', list, st.genre, function (v) { st.genre = v; reset(); });
+    }
+    function pickSort() {
+      H.menu('Trier par', sorts.map(function (s) { return { label: s[1], value: s[0] }; }), st.sort, function (v) { st.sort = v; H.pref('sort.' + libId, v); reset(); });
+    }
+    function query(offset) {
+      var q = ['offset=' + offset, 'limit=240', 'sort=' + encodeURIComponent(st.sort)];
+      if (st.q) q.push('q=' + encodeURIComponent(st.q));
+      if (st.letter) q.push('letter=' + encodeURIComponent(st.letter));
+      if (st.genre) q.push('genre=' + encodeURIComponent(st.genre));
+      if (st.unseen) q.push('filter=unseen');
+      return '/api/library/' + libId + '?' + q.join('&');
+    }
+    function append(list) {
+      var frag = document.createDocumentFragment();
+      list.forEach(function (it) {
+        if ((kind === 'music' || kind === 'books') && st.sort === 'title' && it.grp !== lastGrp) {
+          lastGrp = it.grp;
+          frag.appendChild(h('h3', { class: 'grp' }, it.grp || (kind === 'music' ? 'Artiste inconnu' : 'Sans collection')));
+        }
+        frag.appendChild(H.card(it, false));
+      });
+      grid.appendChild(frag);
+      items = items.concat(list);
+    }
+    function fetchMore(first) {
+      if (loading || (!first && items.length >= total)) return;
+      loading = true;
+      var mine = token;
+      H.api(query(items.length)).then(function (res) {
+        if (mine !== token) return;
+        total = res.total;
+        if (first) facets = res;
+        append(res.items);
+        loading = false;
+        paint();
+        empty.hidden = items.length > 0;
+        if (!items.length) showEmpty();
+        if (first && !H.overlay.isOpen() && el.isConnected && el.style.display !== 'none' && (document.activeElement === document.body || el.contains(document.activeElement))) H.focus.set(grid.querySelector('.card') || search, true);
+        if (items.length < total && sentinel.getBoundingClientRect().top < window.innerHeight + 600) fetchMore(false);
+      }).catch(function (e) { loading = false; empty.hidden = false; H.clear(empty).appendChild(h('p', null, e.message)); });
+    }
+    function showEmpty() {
+      var filtered = st.q || st.letter || st.genre || st.unseen;
+      H.clear(empty).appendChild(h('div', null,
+        h('h2', null, filtered ? 'Rien ne correspond' : 'Cette bibliothèque est vide'),
+        h('p', null, filtered ? 'Change ou retire un filtre.' : 'Vérifie que le dossier est bien monté, puis lance une mise à jour.'),
+        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.letter = st.genre = ''; st.unseen = false; search.value = ''; reset(); } }, 'Retirer les filtres') : h('a', { class: 'btn f', href: '#/admin' }, 'Ouvrir la gestion')));
+    }
+    function reset() {
+      token++; items = []; total = 0; lastGrp = null; loading = false;
+      H.clear(grid);
+      fetchMore(true);
+    }
+    if ('IntersectionObserver' in window) new IntersectionObserver(function (e) { if (e[0].isIntersecting) fetchMore(false); }, { rootMargin: '800px' }).observe(sentinel);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    function onScroll() { if (el.isConnected && el.style.display !== 'none' && sentinel.getBoundingClientRect().top < window.innerHeight + 800) fetchMore(false); }
+    grid.addEventListener('focusin', function (e) {
+      var cards = grid.querySelectorAll('.card'), idx = Array.prototype.indexOf.call(cards, e.target);
+      if (idx >= 0 && idx > cards.length - 40) fetchMore(false);
+    });
+    reset();
+    paint();
+    return {
+      el: el, lib: libId, nav: '#/l/' + libId,
+      refresh: function () {      // au retour d'une fiche : les pastilles « vu » ont pu changer
+        var mine = ++token, keep = items.length;
+        H.api(query(0).replace('limit=240', 'limit=' + Math.min(600, Math.max(240, keep)))).then(function (res) {
+          if (mine !== token) return;
+          var focus = document.activeElement && grid.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+          items = []; lastGrp = null; total = res.total; facets = res; H.clear(grid); append(res.items); paint();
+          if (focus) H.focus.key(grid, focus);
+        }).catch(function () {});
+      },
+      destroy: function () { window.removeEventListener('scroll', onScroll); }
+    };
+  });
+
+  // --- Fiche -----------------------------------------------------------------------
+  function entryProgress(e) { return e.progress && !e.progress.done && e.progress.position >= (e.kind === 'book' ? 1 : 20) ? e.progress : null; }
+  function epLabel(e) { return 'S' + (e.season === null || e.season === undefined ? 1 : e.season) + ' · E' + (e.number === null || e.number === undefined ? '?' : e.number); }
+
+  H.route(/^\/i\/(\w+)$/, function (m) {
+    var id = m[1], el = h('section', { class: 'detail' }), season = null, data = null;
+    function load() {
+      return H.api('/api/item/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
+        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/', 'data-autofocus': '1' }, 'Accueil')));
+      });
+    }
+    function setSeen(done, seasonNo) { H.api('/api/item/' + id + '/seen', { done: done, season: seasonNo === undefined ? null : seasonNo }).then(load); }
+
+    function render() {
+      var d = data, focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      H.clear(el);
+      el.setAttribute('data-lib', d.library.id);
+      var square = d.type === 'album', entries = d.entries;
+      var resume = entries.filter(function (e) { return e.id === d.resume; })[0] || entries[0];
+      var prog = resume ? entryProgress(resume) : null;
+      var allDone = entries.length > 0 && entries.every(function (e) { return e.progress && e.progress.done; });
+      var meta = [];
+      if (d.type === 'movie') { if (d.year) meta.push(d.year); var secs = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (secs) meta.push(H.dur(secs)); }
+      else if (d.type === 'show') { if (d.year) meta.push(d.year); if (d.seasons && d.seasons.length) meta.push(H.plural(d.seasons.filter(function (s) { return s > 0; }).length || 1, 'saison')); meta.push(H.plural(entries.length, 'épisode')); if (d.status) meta.push(d.status); }
+      else if (d.type === 'album') { if (d.artist) meta.push(d.artist); if (d.year) meta.push(d.year); meta.push(H.plural(entries.length, 'piste')); var t = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (t) meta.push(H.dur(t)); if (d.formats && d.formats.length) meta.push(d.formats.join(' / ')); }
+      else { meta.push(d.grp || 'Livres'); meta.push(H.plural(entries.length, d.unit || 'volume')); if (d.year) meta.push(d.year); }
+      var genres = (d.genres || []).join(', ');
+
+      var info = h('div', { class: 'info' }, h('h1', null, d.title), h('p', { class: 'meta' }, meta.filter(Boolean).join(' · ')));
+      if (genres) info.appendChild(h('p', { class: 'genres' }, genres));
+      if (d.directors && d.directors.length) info.appendChild(h('p', { class: 'credit' }, 'De ' + d.directors.join(', ')));
+      if (d.authors && d.authors.length) info.appendChild(h('p', { class: 'credit' }, 'Par ' + d.authors.join(', ')));
+      if (d.summary) info.appendChild(h('p', { class: 'synopsis' }, d.summary));
+
+      var actions = h('div', { class: 'actions' });
+      if (d.type === 'album') {
+        actions.appendChild(H.button('Lire l’album', 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.audio.play(trackList(), 0); } }));
+        actions.appendChild(H.button('Aléatoire', 'shuffle', { onclick: function () { H.audio.play(trackList(), 0, true); } }));
+      } else if (resume) {
+        var what = d.type === 'show' ? epLabel(resume) : (d.type === 'series' ? 'tome ' + (resume.label || resume.number || '') : '');
+        var main = prog ? 'Reprendre' + (what ? ' ' + what : '') + (resume.kind === 'book' ? ' (page ' + (Math.floor(prog.position) + 1) + ')' : ' à ' + H.time(prog.position)) : (d.type === 'movie' && allDone ? 'Revoir' : 'Lire' + (what ? ' ' + what : ''));
+        actions.appendChild(H.button(main, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go(playHref(resume)); } }));
+        if (prog) actions.appendChild(H.button('Depuis le début', 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
+      }
+      if (d.type !== 'album' && entries.length) actions.appendChild(H.button(allDone ? 'Marquer non vu' : 'Marquer comme vu', 'check', { onclick: function () { setSeen(!allDone); } }));
+      info.appendChild(actions);
+      var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),
+        h('div', { class: 'hero-in' }, H.picture('/img/item/' + d.id + '?w=500', d.title, square ? 'sq big' : 'big'), info));
+      el.appendChild(hero);
+
+      var body = h('div', { class: 'body' });
+      if (d.type === 'show') body.appendChild(episodes(d));
+      else if (d.type === 'album') body.appendChild(tracks(d));
+      else if (d.type === 'series') body.appendChild(volumes(d));
+      else if (entries.length > 1) body.appendChild(parts(d));
+      if (d.actors && d.actors.length) body.appendChild(h('section', { class: 'cast' }, h('h2', null, 'Distribution'), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); }))));
+      if (d.saga && d.saga.length > 1) body.appendChild(row(d.grp, null, d.saga.map(function (s) { return H.card(s); })));
+      el.appendChild(body);
+      if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
+    }
+
+    function trackList() {
+      return data.entries.map(function (e) { return { id: e.id, title: e.title, artist: e.artist || data.artist || '', album: data.title, item: data.id, duration: e.duration }; });
+    }
+    function tracks(d) {
+      var list = h('div', { class: 'tracks' }), disc = null, multi = (d.discs || 1) > 1;
+      d.entries.forEach(function (e, i) {
+        if (multi && e.disc !== disc) { disc = e.disc; list.appendChild(h('h3', { class: 'grp' }, 'Disque ' + (disc || 1))); }
+        var done = e.progress && e.progress.done;
+        list.appendChild(h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { H.audio.play(trackList(), i); } },
+          h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, e.title), done ? h('span', { class: 'seen' }, H.icon('check')) : null, h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')));
+      });
+      var sec = h('section', null, list);
+      H.audio.mark(list);
+      return sec;
+    }
+    function episodes(d) {
+      var sec = h('section', { class: 'episodes' });
+      var seasons = d.seasons && d.seasons.length ? d.seasons : [1];
+      if (season === null || seasons.indexOf(season) < 0) {
+        var r = d.entries.filter(function (e) { return e.id === d.resume; })[0];
+        season = r && seasons.indexOf(r.season) >= 0 ? r.season : seasons[0];
+      }
+      var list = h('div', { class: 'eps' });
+      function fill() {
+        H.clear(list);
+        d.entries.filter(function (e) { return (e.season === null || e.season === undefined ? 1 : e.season) === season; }).forEach(function (e) {
+          var p = entryProgress(e), done = e.progress && e.progress.done, ratio = p && e.duration ? Math.min(1, p.position / e.duration) : 0;
+          var thumb = h('div', { class: 'poster wide' }, h('span', { class: 'ph', style: '--h:' + H.hue(d.title + e.number) }, e.number === null || e.number === undefined ? '' : e.number),
+            h('img', { src: '/img/entry/' + e.id + '?w=400', alt: '', loading: 'lazy', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } }));
+          if (ratio) thumb.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(ratio * 100) + '%' })));
+          list.appendChild(h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { H.go(playHref(e)); } }, h('div', { class: 'thumb' }, thumb),
+            h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, e.number === null || e.number === undefined ? '' : e.number + '.'), ' ', e.title || 'Épisode'),
+              e.summary ? h('div', { class: 'su' }, e.summary) : null,
+              h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
+            done ? h('span', { class: 'seen' }, H.icon('check')) : null));
+        });
+      }
+      var chips = h('div', { class: 'chips' });
+      if (seasons.length > 1 || seasons[0] !== 1) seasons.forEach(function (s) {
+        chips.appendChild(h('button', { class: 'chip f' + (s === season ? ' on' : ''), 'data-key': 's' + s, 'aria-pressed': s === season ? 'true' : 'false', onclick: function () {
+          season = s; Array.prototype.forEach.call(chips.querySelectorAll('.chip'), function (c) { var on = c.getAttribute('data-key') === 's' + s; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on ? 'true' : 'false'); }); fill();
+        } }, s === 0 ? 'Spéciaux' : 'Saison ' + s));
+      });
+      if (seasons.length > 1) chips.appendChild(h('button', { class: 'chip f ghost', onclick: function () {
+        var all = d.entries.filter(function (e) { return e.season === season; }).every(function (e) { return e.progress && e.progress.done; });
+        setSeen(!all, season);
+      } }, 'Saison vue / non vue'));
+      sec.appendChild(chips); sec.appendChild(list);
+      fill();
+      return sec;
+    }
+    function volumes(d) {
+      var sec = h('section', { class: 'volumes' }, h('h2', null, d.unit ? d.unit.charAt(0).toUpperCase() + d.unit.slice(1) + 's' : 'Volumes'));
+      var grid = h('div', { class: 'grid small' });
+      d.entries.forEach(function (e) {
+        var p = entryProgress(e), done = e.progress && e.progress.done;
+        var pic = H.picture('/img/entry/' + e.id + '?w=300', e.title || d.title);
+        if (done) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
+        else if (p) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(Math.min(1, p.position / Math.max(1, p.duration || 1)) * 100) + '%' })));
+        grid.appendChild(h('a', { class: 'card f', href: playHref(e), 'data-key': e.id }, pic, h('div', { class: 't' }, e.label ? 'N° ' + e.label : (e.title || '')), h('div', { class: 's' }, [(e.format || '').toUpperCase(), e.pages ? e.pages + ' p.' : ''].filter(Boolean).join(' · '))));
+      });
+      sec.appendChild(grid);
+      if (d.missing && d.missing.length) {
+        sec.appendChild(h('p', { class: 'missing' }, 'Manquants : ' + d.missing.map(function (x) { return (x.label ? x.label + ' ' : '') + x.numbers.join(', '); }).join(' ; ')));
+      }
+      return sec;
+    }
+    function parts(d) {
+      var sec = h('section', { class: 'eps' }, h('h2', null, 'Parties'));
+      d.entries.forEach(function (e) {
+        sec.appendChild(h('button', { class: 'ep f', onclick: function () { H.go(playHref(e)); } }, h('div', { class: 'txt' }, h('div', { class: 'ti' }, e.title), h('div', { class: 'du' }, H.dur(e.duration)))));
+      });
+      return sec;
+    }
+    load();
+    return { el: el, nav: null, refresh: load, get lib() { return data ? data.library.id : ''; } };
+  });
+
+  // --- Recherche -------------------------------------------------------------------
+  H.route(/^\/search$/, function () {
+    var out = h('div', { class: 'results' }), last = '', timer = null;
+    var input = h('input', { class: 'f field big', type: 'search', placeholder: 'Titre, artiste, collection…', 'aria-label': 'Rechercher', 'data-autofocus': '1', autocomplete: 'off',
+      oninput: function () { clearTimeout(timer); timer = setTimeout(run, 300); },
+      onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); run(); var c = out.querySelector('.f'); if (c) { input.blur(); H.focus.set(c); } } } });
+    function run() {
+      var q = input.value.trim();
+      if (q === last) return;
+      last = q;
+      if (q.length < 2) { H.clear(out).appendChild(h('p', { class: 'muted' }, 'Tape au moins deux lettres.')); return; }
+      H.api('/api/search?q=' + encodeURIComponent(q)).then(function (res) {
+        if (q !== last) return;
+        H.clear(out);
+        if (!res.results.length) { out.appendChild(h('p', { class: 'muted' }, 'Aucun résultat pour « ' + q + ' ».')); return; }
+        res.results.forEach(function (g) {
+          var sec = h('section', { class: 'shelf', 'data-lib': g.id }, h('h2', null, h('a', { class: 'f head', href: '#/l/' + g.id }, g.label)), h('div', { class: 'grid' + (g.kind === 'music' ? ' sq' : '') }, g.items.map(function (it) { return H.card(it, g.kind === 'music'); })));
+          out.appendChild(sec);
+        });
+      }).catch(function (e) { H.clear(out).appendChild(h('p', { class: 'muted' }, e.message)); });
+    }
+    var el = h('section', { class: 'search' }, h('h1', null, 'Recherche'), input, out);
+    return { el: el, nav: '#/search' };
+  });
+
+  // --- Gestion ---------------------------------------------------------------------
+  function ago(ts) {
+    if (!ts) return 'jamais';
+    var s = Math.max(0, Date.now() / 1000 - ts);
+    if (s < 90) return 'à l’instant';
+    if (s < 5400) return 'il y a ' + Math.round(s / 60) + ' min';
+    if (s < 129600) return 'il y a ' + Math.round(s / 3600) + ' h';
+    return 'il y a ' + Math.round(s / 86400) + ' j';
+  }
+  H.route(/^\/admin$/, function () {
+    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, state = null, jobs = [];
+    function qualityLabel(v) { return { auto: 'Qualité d’origine quand c’est possible', '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': '480p · 1,5 Mb/s' }[v] || v; }
+    function start(path, body, text) {
+      return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
+    }
+    function render() {
+      var focus = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      H.clear(el);
+      var busy = jobs.some(function (j) { return j.status === 'waiting' || j.status === 'running'; });
+      el.appendChild(h('h1', null, 'Gestion'));
+      var libs = h('section', { class: 'panel' }, h('h2', null, 'Bibliothèques'));
+      state.libraries.forEach(function (l) {
+        libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
+          h('div', { class: 'what' }, h('b', null, l.label), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · mis à jour ' + ago(l.scanned) : 'dossier introuvable')),
+          H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } }),
+          l.kind === 'shows' ? H.button('Enrichir (TMDB)', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Enrichissement lancé : ' + l.label); } }) : null));
+      });
+      libs.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Tout'), h('span', null, 'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.')),
+        H.button('Tout mettre à jour', 'refresh', { class: 'primary', 'data-autofocus': '1', 'data-key': 'scan-all', onclick: function () { start('/api/scan', {}, 'Mise à jour lancée'); } })));
+      el.appendChild(libs);
+
+      var play = h('section', { class: 'panel' }, h('h2', null, 'Lecture'));
+      var q = H.pref('quality') || 'auto', surround = !!H.pref('surround');
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Qualité'), h('span', null, qualityLabel(q))),
+        H.button('Changer', 'quality', { 'data-key': 'quality', onclick: function () {
+          H.menu('Qualité de lecture', ['auto', '1080', '720', '480'].map(function (v) { return { label: qualityLabel(v), value: v }; }), q, function (v) { H.pref('quality', v); render(); H.focus.key(el, 'quality'); });
+        } })));
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Son surround 5.1'), h('span', null, surround ? 'Activé : le 5.1 est envoyé tel quel si l’appareil le lit.' : 'Désactivé : le son est ramené en stéréo (le plus sûr).')),
+        H.button(surround ? 'Désactiver' : 'Activer', 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
+      el.appendChild(play);
+
+      var tools = h('section', { class: 'panel' }, h('h2', null, 'Entretien'));
+      tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Fichiers parasites'), h('span', null, 'Thumbs.db, desktop.ini et .DS_Store semés par Windows et macOS.')),
+        H.button('Compter', null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, 'Simulation lancée'); } }),
+        H.button('Supprimer', null, { 'data-key': 'junk-del', onclick: function () { start('/api/cleanup', { apply: true }, 'Nettoyage lancé'); } })));
+      el.appendChild(tools);
+
+      var server = h('section', { class: 'panel' }, h('h2', null, 'Serveur'));
+      var facts = [['Version', state.version], ['ffmpeg', state.ffmpeg ? 'présent' : 'absent : lecture directe uniquement'], ['TMDB', state.tmdb ? 'clé configurée' : 'pas de clé (TMDB_KEY)'],
+        ['Conversions', state.streams + ' en cours sur ' + state.max_streams], ['Accès', state.auth ? 'protégé par mot de passe' : 'sans mot de passe']];
+      server.appendChild(h('dl', null, facts.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })));
+      if (state.auth) server.appendChild(h('a', { class: 'btn f', href: '/api/logout' }, 'Se déconnecter'));
+      el.appendChild(server);
+
+      var log = h('section', { class: 'panel' }, h('h2', null, 'Tâches', busy ? h('span', { class: 'spin' }, '…') : null));
+      if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, 'Aucune tâche pour l’instant.'));
+      jobs.slice(0, 6).forEach(function (j) {
+        var status = { waiting: 'en attente', running: 'en cours', done: 'terminée', failed: 'échec' }[j.status];
+        log.appendChild(h('div', { class: 'job ' + j.status }, h('div', { class: 'jt' }, h('b', null, j.label), h('span', null, status)), j.log && j.log.length ? h('pre', null, j.log.slice(-8).join('\n')) : null));
+      });
+      el.appendChild(log);
+      if (focus) H.focus.key(el, focus); else H.focus.first();
+    }
+    function poll() {
+      clearTimeout(timer);
+      return Promise.all([H.api('/api/state'), H.api('/api/jobs?log=1')]).then(function (r) {
+        state = r[0]; jobs = r[1].jobs; H.libs = state.libraries;
+        var busy = r[1].busy;
+        if (wasBusy && !busy) H.toast('Terminé');
+        wasBusy = busy;
+        render();
+        if (busy) timer = setTimeout(poll, 1500);
+      }).catch(function (e) { H.toast(e.message, 5000); });
+    }
+    poll();
+    return { el: el, nav: '#/admin', refresh: poll, destroy: function () { clearTimeout(timer); } };
+  });
+})();
