@@ -84,6 +84,9 @@ class Jobs:
     def enrich(self, lib, force=False):
         return self._submit(f"Enrichissement TMDB · {lib.label}", lambda log: enrich.enrich_shows(self.cfg, self.db, lib, log, force))
 
+    def enrich_artists(self, lib, force=False):
+        return self._submit(f"Fiches artistes · {lib.label}", lambda log: enrich.enrich_artists(self.cfg, self.db, lib, log, force))
+
     def cleanup(self, apply):
         def run(log):
             return clean_junk(self.cfg.libraries, apply, log)

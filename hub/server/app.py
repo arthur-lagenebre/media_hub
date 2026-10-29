@@ -26,8 +26,10 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from libraries.books import shelf
 from libraries.books.archive import BookError
 from libraries.common.text import fold, initial
+from libraries.music import artistinfo
 
 from .. import __version__
+from .. import enrich
 from .. import playlists
 from ..db import Database, make_id
 from ..media import books as bookmedia
@@ -136,6 +138,8 @@ def summary(row, seen=None):
         out["part"] = meta["part"]
     if row["type"] == "album" and meta.get("duration"):
         out["duration"] = meta["duration"]
+    if row["type"] == "album" and meta.get("artist_id"):
+        out["artist_id"] = meta["artist_id"]
     if row["type"] == "series" and meta.get("missing"):
         out["missing"] = sum(len(m["numbers"]) for m in meta["missing"])
     if seen is not None:
@@ -644,7 +648,7 @@ def api_item(h, m, q):
     meta = safe_json(item["meta"], {})
     out = summary(item)
     out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": meta.get("tagged", False)})
-    for key in ("directors", "writers", "actors", "artist", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
+    for key in ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
                 "seasons_total", "tmdb", "missing", "unit", "years", "discs", "season_summaries"):
         if meta.get(key) not in (None, "", []):
             out[key] = meta[key]
@@ -658,6 +662,38 @@ def api_item(h, m, q):
         out["saga"] = sorted((with_seen(r, seen) for r in saga), key=lambda r: (r.get("part") is None, r.get("part") or 0, r["title"]))
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
+    h.send_json(out)
+
+
+def artist_sheet(info):
+    """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo)."""
+    members = [{"name": mem["name"], "roles": mem.get("roles", []), "period": artistinfo.period(mem)} for mem in info.get("members") or []]
+    return {"facts": artistinfo.facts(info), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": info.get("links", [])}
+
+
+@route("GET", r"/api/artist/([\w-]+)/(\w+)")
+def api_artist(h, m, q):
+    """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, et ce que MusicBrainz et Wikipédia en disent (une fois les fiches demandées dans Gestion)."""
+    hub = h.hub
+    lib = library_or_404(hub, m.group(1))
+    if lib.kind != "music":
+        raise HttpError(404, "pas une bibliothèque de musique")
+    rows = [r for r in hub.db.query("SELECT * FROM items WHERE lib=? AND type='album'", (lib.id,)) if safe_json(r["meta"], {}).get("artist_id") == m.group(2)]
+    if not rows:
+        raise HttpError(404, "artiste inconnu")
+    rows.sort(key=TITLE_SORTS["music"])
+    seen = seen_counts(hub, lib.id)
+    name = rows[0]["grp"] or "Artiste inconnu"
+    out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": []}
+    for row in rows:
+        album = safe_json(row["meta"], {})
+        for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
+            out["tracks"].append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"]})
+        mbid = album.get("artist_mbid")
+        kept = hub.db.kv_get(enrich.artist_key(mbid)) if mbid and "info" not in out else None
+        if kept:
+            out["info"] = artist_sheet(kept["info"])
+    out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
     h.send_json(out)
 
 
@@ -1069,8 +1105,11 @@ def api_scan(h, m, q):
 def api_enrich(h, m, q):
     body = h.body_json()
     lib = library_or_404(h.hub, str(body.get("lib", "")))
+    if lib.kind == "music":                     # MusicBrainz et Wikipédia : pas de clé
+        h.send_json({"job": h.hub.jobs.enrich_artists(lib, bool(body.get("force"))).public()}, 202)
+        return
     if lib.kind != "shows":
-        raise HttpError(400, "l'enrichissement TMDB ne concerne que les séries et animations")
+        raise HttpError(400, "l'enrichissement ne concerne que les séries, les animations et la musique")
     if not h.hub.cfg.tmdb_key:
         raise HttpError(400, "pas de clé TMDB : renseigne TMDB_KEY sur le serveur")
     h.send_json({"job": h.hub.jobs.enrich(lib, bool(body.get("force"))).public()}, 202)
