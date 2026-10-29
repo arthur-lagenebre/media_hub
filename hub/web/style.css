@@ -47,6 +47,8 @@ body.full #nav { display: none; }
 .link.on, .brand.on, .tool.on { color: var(--text); background: var(--s2); }
 .link.on .dot { opacity: 1; box-shadow: 0 0 0 0.18rem rgba(255, 255, 255, 0.12); }
 .tool { padding: 0.45rem 0.6rem; border-radius: 0.6rem; color: var(--mute); text-decoration: none; margin-left: 0.2rem; }
+.tool.back { margin: 0 0.3rem 0 -0.6rem; border: 0; background: transparent; cursor: pointer; }
+.tool.back:not([hidden]) + .brand { margin-left: 0; }
 @media (max-width: 640px) { .brand .name { display: none; } .brand { margin-right: 0.2rem; } }
 
 /* Boutons et champs */
