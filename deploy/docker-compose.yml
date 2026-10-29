@@ -25,7 +25,7 @@ services:
       - "8080:8080"                    # port du media_hub (même réseau), publié sur le réseau local pour la télé
     volumes:
       - ${APPS}/tailscale:/var/lib/tailscale
-      - ./serve.json:/config/serve.json:ro
+      - ${APPS}/tailscale-config/serve.json:/config/serve.json:ro   # copie serve.json à cet endroit (chemin absolu : TrueNAS n'a pas de dossier « courant »)
 
   media_hub:
     image: python:3.13-slim

@@ -20,7 +20,8 @@ Sur un dataset d'applications (ici `/mnt/tank/apps/media`, adapte) :
   media_library/      le dossier media_library de cette archive
   media_hub-data/     vide : base SQLite, cache d'images, Pillow
   ffmpeg/             ffmpeg et ffprobe (étape 2)
-  tailscale/          l'état Tailscale existant (ou vide)
+  tailscale/          l'état Tailscale (vide au premier lancement)
+  tailscale-config/   y copier deploy/serve.json
 ```
 
 Les bibliothèques gardent leur place (`/mnt/tank/media/Films`, `Series`, `Animations`, `Musique`, `Livres`). Si le conteneur tourne avec un utilisateur non root, `media_hub-data` doit lui être accessible en écriture.
