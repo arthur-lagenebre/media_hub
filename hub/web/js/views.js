@@ -397,9 +397,11 @@
         var r = d.entries.filter(function (e) { return e.id === d.resume; })[0];
         season = r && seasons.indexOf(r.season) >= 0 ? r.season : seasons[0];
       }
-      var list = h('div', { class: 'eps' });
+      var list = h('div', { class: 'eps' }), blurb = h('p', { class: 'seasonsum' });
       function fill() {
         H.clear(list);
+        var text = (d.season_summaries || {})[String(season)] || '';
+        blurb.textContent = text; blurb.hidden = !text;
         d.entries.filter(function (e) { return (e.season === null || e.season === undefined ? 1 : e.season) === season; }).forEach(function (e) {
           var p = entryProgress(e), done = e.progress && e.progress.done, ratio = p && e.duration ? Math.min(1, p.position / e.duration) : 0;
           var thumb = h('div', { class: 'poster wide' }, h('span', { class: 'ph', style: '--h:' + H.hue(d.title + e.number) }, e.number === null || e.number === undefined ? '' : e.number),
@@ -422,7 +424,7 @@
         var all = d.entries.filter(function (e) { return e.season === season; }).every(function (e) { return e.progress && e.progress.done; });
         setSeen(!all, season);
       } }, 'Saison vue / non vue'));
-      sec.appendChild(chips); sec.appendChild(list);
+      sec.appendChild(chips); sec.appendChild(blurb); sec.appendChild(list);
       fill();
       return sec;
     }

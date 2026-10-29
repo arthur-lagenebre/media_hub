@@ -407,6 +407,41 @@ class TestJobs(ServerCase):
         self.assertEqual(self.api.json("/api/enrich", {"lib": "films"})[0], 400)
         self.assertEqual(self.api.json("/api/enrich", {"lib": "series"})[0], 400)
 
+    def test_enrich_keeps_show_synopsis_seasons_and_cast(self):
+        from unittest import mock
+        from libraries.video.tmdb import TmdbError
+
+        class FakeTmdb:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def series(self, show_id):
+                return {"name": "Dark", "overview": "Un enfant disparaît.", "genres": [{"name": "Drame"}], "first_air_date": "2017-12-01", "number_of_seasons": 3}
+
+            def season(self, show_id, number):
+                if number == 2:
+                    raise TmdbError("introuvable")
+                return {"overview": "Synopsis de la saison %d." % number}
+
+            def aggregate_credits(self, show_id):
+                return {"cast": [{"name": "Invité", "total_episode_count": 1, "roles": [{"character": "Passant", "episode_count": 1}]},
+                                 {"name": "Louis Hofmann", "total_episode_count": 26, "roles": [{"character": "Jonas", "episode_count": 26}]}]}
+
+        lib = next(l for l in self.hub.cfg.libraries if l.id == "series")
+        self.hub.cfg.tmdb_key = "fake"
+        self.addCleanup(setattr, self.hub.cfg, "tmdb_key", "")
+        with mock.patch("hub.enrich.Tmdb", FakeTmdb), mock.patch("hub.enrich.lookup.resolve_show_id", return_value=1234):
+            self.assertEqual(self.api.json("/api/enrich", {"lib": "series"})[0], 202)
+            self.run_.wait_jobs()
+        dark = self.detail(self.item_by_title("series", "Dark")["id"])
+        self.assertEqual(dark["summary"], "Un enfant disparaît.")
+        self.assertEqual(dark["season_summaries"], {"1": "Synopsis de la saison 1."})
+        self.assertEqual(dark["actors"][0], {"name": "Louis Hofmann", "role": "Jonas"})
+        self.hub.jobs.scan(lib)                 # un rescan n'efface rien
+        self.run_.wait_jobs()
+        again = self.detail(self.item_by_title("series", "Dark")["id"])
+        self.assertEqual((again["summary"], again["season_summaries"], again["actors"]), (dark["summary"], dark["season_summaries"], dark["actors"]))
+
 
 @unittest.skipUnless(FFMPEG, "ffmpeg absent")
 class TestPlayback(ServerCase):
