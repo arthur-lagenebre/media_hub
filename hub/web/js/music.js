@@ -198,9 +198,15 @@
       var body = h('div', { class: 'body' });
       body.appendChild(h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, d.albums.map(function (a) { return H.card(a, false); }))));
       if (info && info.members && info.members.length) {
-        body.appendChild(h('section', { class: 'cast' }, h('h2', null, 'Membres'), h('ul', null, info.members.map(function (p) {
-          return h('li', null, h('b', null, p.name), [p.roles.join(', '), p.period].filter(Boolean).length ? h('span', null, [p.roles.join(', '), p.period].filter(Boolean).join(' · ')) : null);
-        }))));
+        var current = info.members.filter(function (p) { return !p.former; }), former = info.members.filter(function (p) { return p.former; });
+        var members = function (title, list) {
+          if (!list.length) return;
+          body.appendChild(h('section', { class: 'cast' }, h('h2', null, title), h('ul', null, list.map(function (p) {
+            return h('li', null, h('b', null, p.name), [p.roles.join(', '), p.period].filter(Boolean).length ? h('span', null, [p.roles.join(', '), p.period].filter(Boolean).join(' · ')) : null);
+          }))));
+        };
+        members(former.length ? 'Membres actuels' : 'Membres', current);       // « actuels » ne veut dire quelque chose que s'il y en a d'anciens
+        members('Anciens membres', former);
       }
       if (info && info.links && info.links.length) {
         body.appendChild(h('section', { class: 'links-out' }, h('h2', null, 'Liens'), h('div', { class: 'actions' }, info.links.map(function (l) {

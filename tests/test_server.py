@@ -453,7 +453,7 @@ class TestJobs(ServerCase):
         self.assertIn("genres", sheet)
         self.assertEqual(sheet["info"]["facts"], "Groupe · France · 1993 – 2021")
         self.assertEqual(sheet["info"]["wiki"]["extract"], "Duo de musique électronique.")
-        self.assertEqual(sheet["info"]["members"][0], {"name": "Thomas Bangalter", "roles": ["synthétiseur"], "period": "1993 – 2021"})
+        self.assertEqual(sheet["info"]["members"][0], {"name": "Thomas Bangalter", "roles": ["synthétiseur"], "period": "1993 – 2021", "former": True})
         self.assertEqual([(l["label"], l["url"]) for l in sheet["info"]["links"]], [("Site officiel", "https://daftpunk.com"), ("YouTube", "https://youtube.com/daftpunk"),
                           ("Wikipédia", "https://fr.wikipedia.org/wiki/Daft_Punk"), ("MusicBrainz", "https://musicbrainz.org/artist/abc")])      # ni Facebook ni le doublon ; Wikipédia et MusicBrainz en dernier
         self.hub.jobs.scan(lib)

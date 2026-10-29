@@ -674,7 +674,7 @@ def api_item(h, m, q):
 
 def artist_sheet(info, mbid=""):
     """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo)."""
-    members = [{"name": mem["name"], "roles": mem.get("roles", []), "period": artistinfo.period(mem)} for mem in info.get("members") or []]
+    members = [{"name": mem["name"], "roles": mem.get("roles", []), "period": artistinfo.period(mem), "former": bool(mem.get("ended"))} for mem in info.get("members") or []]
     links = enrich.pick_links(info.get("links", []))       # aussi à l'affichage : les fiches déjà gardées gardent peut-être d'autres liens
     if (info.get("wiki") or {}).get("url"):
         links.append({"label": "Wikipédia", "url": info["wiki"]["url"]})
