@@ -96,6 +96,26 @@
     return value;
   };
 
+  // --- Appareil : pc, phone, tablet ou tv ----------------------------------------------
+  // Le navigateur ne dit pas « je suis une télé » : on le devine à son identifiant (Tizen, webOS, Fire TV…), puis au toucher. Approximatif, donc modifiable dans Gestion.
+  H.devices = [['auto', 'Automatique'], ['pc', 'Ordinateur'], ['phone', 'Smartphone'], ['tablet', 'Tablette'], ['tv', 'Télévision']];
+  H.detectDevice = function () {
+    var ua = navigator.userAgent || '', touch = (navigator.maxTouchPoints || 0) > 1;
+    var tizenPhone = /Tizen/i.test(ua) && /Mobile/i.test(ua) && !/TV/i.test(ua);                        // Tizen est aussi celui de quelques téléphones Samsung ; un Fire TV, lui, s'annonce « Mobile »
+    if (/SMART-?TV|HbbTV|Tizen|Web0S|webOS|NetCast|VIDAA|CrKey|AppleTV|Roku|Viera|PhilipsTV|BRAVIA|AFT[A-Z0-9]+\b|Android.*\b(TV|SHIELD)\b/i.test(ua) && !tizenPhone) return 'tv';
+    if (/iPad|Tablet/i.test(ua) || (/Macintosh/.test(ua) && touch)) return 'tablet';             // un iPad se présente comme un Mac : seul le toucher le trahit
+    if (/Android/i.test(ua)) return /Mobile/i.test(ua) ? 'phone' : 'tablet';
+    if (/Mobi|iPhone|iPod/i.test(ua)) return 'phone';
+    return 'pc';
+  };
+  H.applyDevice = function () {
+    var chosen = H.pref('device');
+    H.device = H.devices.some(function (d) { return d[0] === chosen && chosen !== 'auto'; }) ? chosen : H.detectDevice();
+    document.documentElement.setAttribute('data-device', H.device);
+    return H.device;
+  };
+  H.applyDevice();
+
   // --- Formats ----------------------------------------------------------------
   function pad(n) { return n < 10 ? '0' + n : '' + n; }
   H.time = function (s) {
