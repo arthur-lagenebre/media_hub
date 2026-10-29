@@ -154,8 +154,19 @@
 
   // --- La fiche d'un artiste ou d'un groupe ---------------------------------------------
   H.route(/^\/artist\/([\w-]+)\/(\w+)$/, function (m) {
-    var lib = m[1], id = m[2], data = null;
+    var lib = m[1], id = m[2], data = null, stamp = 0;
     var el = h('section', { class: 'detail artist', 'data-lib': lib });
+    var picker = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', hidden: true, 'aria-hidden': 'true', tabindex: '-1',
+      onchange: function () { var file = this.files && this.files[0]; this.value = ''; if (file) upload(file); } });
+    function upload(file) {
+      if (file.size > 10 * 1024 * 1024) { H.toast('Image trop grosse (10 Mo au plus).'); return; }
+      H.api('/api/artist/' + lib + '/' + id + '/photo', file, { raw: true }).then(function () { stamp = Date.now(); H.toast('Photo enregistrée'); return load(); }).catch(fail);
+    }
+    function removeOwn() {
+      H.menu('Retirer la photo envoyée ?', [{ label: 'Retirer ma photo', detail: 'Retour à celle de Wikipédia, ou à la pochette', value: 'yes' }, { label: 'Garder', value: 'no' }], 'no', function (v) {
+        if (v === 'yes') H.api('/api/artist/' + lib + '/' + id + '/photo/delete', {}).then(function () { stamp = Date.now(); H.toast('Photo retirée'); return load(); }).catch(fail);
+      });
+    }
     function load() {
       return H.api('/api/artist/' + lib + '/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
         H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Artiste introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + lib, 'data-autofocus': '1' }, 'Retour à la musique')));
@@ -176,10 +187,13 @@
         H.button('Tout lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }),
         H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
         H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
-        H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } })));
-      var first = d.albums[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id;       // la photo de l'artiste, sinon la pochette de son premier album
-      el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320)' }),
-        h('div', { class: 'hero-in' }, H.picture(face + '?w=480', d.name, 'sq big'), box)));
+        H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }),
+        H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),
+        d.own_photo ? H.button('Retirer ma photo', 'trash', { 'data-key': 'unphoto', onclick: removeOwn }) : null));
+      var first = d.albums[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id, v = stamp ? '&v=' + stamp : '';       // la photo de l'artiste, sinon la pochette de son premier album
+      el.appendChild(picker);
+      el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320' + v + ')' }),
+        h('div', { class: 'hero-in' }, H.picture(face + '?w=480' + v, d.name, 'sq big'), box)));
 
       var body = h('div', { class: 'body' });
       body.appendChild(h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, d.albums.map(function (a) { return H.card(a, false); }))));

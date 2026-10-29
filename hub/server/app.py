@@ -300,6 +300,13 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(413, "corps trop gros")
         return safe_json(self.rfile.read(length).decode("utf-8", "replace") if length else "", {})
 
+    def body_bytes(self, limit):
+        """Le corps de la requête tel quel (un fichier envoyé) ; 413 au-delà de `limit` octets."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > limit:
+            raise HttpError(413, f"fichier trop gros (au plus {limit >> 20} Mo)")
+        return self.rfile.read(length)
+
     # --- Fichiers du site -------------------------------------------------
     def static(self, path):
         web = self.hub.cfg.web.resolve()
@@ -692,8 +699,20 @@ def artist_kept(hub, rows):
     return None
 
 
-def artist_photo(hub, kept):
-    """Le fichier de la photo d'un artiste, s'il en a une (téléchargée par « Fiches artistes ») ; sinon None."""
+PHOTO_UPLOAD_MAX = 10 << 20
+PHOTO_TYPES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"), (b"RIFF", ".webp"))
+
+
+def custom_photos(hub, artist_id):
+    """Les photos que l'utilisateur a envoyées pour cet artiste (une seule en pratique) : data/artists/custom-<id>.<ext>. Elles passent avant celle de Wikipédia et un « Fiches artistes » n'y touche pas."""
+    return sorted((hub.cfg.data / "artists").glob(f"custom-{artist_id}.*"))
+
+
+def artist_photo(hub, artist_id, kept):
+    """Le fichier de la photo d'un artiste : celle qu'on lui a envoyée, sinon celle de Wikipédia (téléchargée par « Fiches artistes ») ; None s'il n'en a pas."""
+    mine = custom_photos(hub, artist_id)
+    if mine:
+        return mine[0]
     name = ((kept or {}).get("info") or {}).get("photo")
     path = hub.cfg.data / "artists" / name if name and name == os.path.basename(name) else None
     return path if path and path.is_file() else None
@@ -718,8 +737,38 @@ def api_artist(h, m, q):
     kept = artist_kept(hub, rows)
     if kept:
         out["info"] = artist_sheet(kept["info"])
-        out["photo"] = artist_photo(hub, kept) is not None
+    out["photo"] = artist_photo(hub, m.group(2), kept) is not None
+    out["own_photo"] = bool(custom_photos(hub, m.group(2)))
     h.send_json(out)
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/photo")
+def api_artist_photo_set(h, m, q):
+    """Remplace la photo d'un artiste par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus)."""
+    hub = h.hub
+    artist_albums(hub, m.group(1), m.group(2))
+    data = h.body_bytes(PHOTO_UPLOAD_MAX)
+    ext = next((ext for magic, ext in PHOTO_TYPES if data.startswith(magic)), None)
+    if not ext or (ext == ".webp" and data[8:12] != b"WEBP"):
+        raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
+    folder = hub.cfg.data / "artists"
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in custom_photos(hub, m.group(2)):
+        old.unlink()
+    (folder / f"custom-{m.group(2)}{ext}").write_bytes(data)
+    h.send_json({"ok": True})
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/photo/delete")
+def api_artist_photo_delete(h, m, q):
+    """Retire la photo envoyée : l'artiste retrouve celle de Wikipédia, ou la pochette de son premier album."""
+    hub = h.hub
+    artist_albums(hub, m.group(1), m.group(2))
+    h.body_json()
+    removed = custom_photos(hub, m.group(2))
+    for old in removed:
+        old.unlink()
+    h.send_json({"ok": True, "removed": len(removed)})
 
 
 @route("GET", r"/img/artist/([\w-]+)/(\w+)")
@@ -727,7 +776,7 @@ def artist_image(h, m, q):
     """La photo d'un artiste, réduite comme les pochettes ; 404 s'il n'en a pas (la page garde alors la pochette de son premier album)."""
     hub = h.hub
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
-    path = artist_photo(hub, artist_kept(hub, rows))
+    path = artist_photo(hub, m.group(2), artist_kept(hub, rows))
     try:
         width = int(q.get("w", 0))
     except ValueError:
