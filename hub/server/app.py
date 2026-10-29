@@ -761,7 +761,7 @@ def api_item_dismiss(h, m, q):
     hub = h.hub
     h.body_json()                 # le corps doit être lu, même vide de sens : sinon il reste sur la connexion et colle à la requête suivante (501)
     item = hub.item(m.group(1))
-    latest =hub.db.one("SELECT MAX(p.updated) AS t FROM progress p JOIN entries e ON e.id=p.entry_id WHERE p.profile=? AND e.item_id=?", (PROFILE, item["id"]))
+    latest = hub.db.one("SELECT MAX(p.updated) AS t FROM progress p JOIN entries e ON e.id=p.entry_id WHERE p.profile=? AND e.item_id=?", (PROFILE, item["id"]))
     hub.db.kv_set(dismiss_key(item["id"]), latest["t"] or 0)
     h.send_json({"ok": True})
 
