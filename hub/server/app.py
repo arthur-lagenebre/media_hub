@@ -407,6 +407,10 @@ def next_entry(hub, entry):
     return None
 
 
+def dismiss_key(item_id):
+    return f"dismiss:{PROFILE}:{item_id}"
+
+
 def continue_row(hub):
     """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant."""
     rows = hub.db.query(
@@ -417,6 +421,8 @@ def continue_row(hub):
         if row["item_id"] in seen_items:
             continue
         seen_items.add(row["item_id"])
+        if row["updated"] <= hub.db.kv_get(dismiss_key(row["item_id"]), -1):
+            continue
         item = hub.db.one("SELECT * FROM items WHERE id=?", (row["item_id"],))
         if item is None:
             continue
@@ -749,6 +755,16 @@ def api_progress(h, m, q):
     h.send_json({"ok": True, "done": done})
 
 
+@route("POST", r"/api/item/(\w+)/dismiss")
+def api_item_dismiss(h, m, q):
+    """Retire un élément de « Reprendre » sans toucher à la progression : il y revient dès qu'on le relance."""
+    hub = h.hub
+    item = hub.item(m.group(1))
+    latest = hub.db.one("SELECT MAX(p.updated) AS t FROM progress p JOIN entries e ON e.id=p.entry_id WHERE p.profile=? AND e.item_id=?", (PROFILE, item["id"]))
+    hub.db.kv_set(dismiss_key(item["id"]), latest["t"] or 0)
+    h.send_json({"ok": True})
+
+
 @route("POST", r"/api/entry/(\w+)/seen")
 def api_entry_seen(h, m, q):
     hub = h.hub
@@ -967,9 +983,9 @@ def image(h, m, q):
     data, mime, key = found
     tag = f'"{key}"'
     if h.headers.get("If-None-Match") == tag:
-        h.send_body(b"", mime, 304, {"ETag": tag})
+        h.send_body(b"", mime, 304, {"ETag": tag, "Cache-Control": "private, no-cache"})
         return
-    h.send_body(data, mime, 200, {"ETag": tag, "Cache-Control": "private, max-age=604800"}, h.command == "HEAD")
+    h.send_body(data, mime, 200, {"ETag": tag, "Cache-Control": "private, no-cache"}, h.command == "HEAD")
 
 
 # ---------------------------------------------------------------------------
