@@ -458,6 +458,24 @@ class TestJobs(ServerCase):
         self.hub.jobs.scan(lib)
         self.run_.wait_jobs()
 
+    def test_artist_photo_can_be_uploaded_and_removed(self):
+        detail = self.detail(self.item_by_title("musique", "Discovery")["id"])
+        base = f"/api/artist/musique/{detail['artist_id']}"
+        photo = f"/img/artist/musique/{detail['artist_id']}?w=320"
+        self.addCleanup(self.api.json, base + "/photo/delete", {})
+        self.assertFalse(self.api.json(base)[1]["own_photo"])
+        self.assertEqual(self.api.request("POST", base + "/photo", body=b"ceci n'est pas une image", headers={"Content-Type": "image/png"})[0], 415)
+        self.assertEqual(self.api.request("POST", "/api/artist/musique/deadbeef/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})[0], 404)
+        status, _, body = self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})
+        self.assertEqual(status, 200, body)
+        sheet = self.api.json(base)[1]
+        self.assertTrue(sheet["photo"] and sheet["own_photo"])
+        self.assertEqual(self.api.get(photo)[0], 200)
+        self.assertEqual(self.api.json(base + "/photo/delete", {})[1]["removed"], 1)
+        sheet = self.api.json(base)[1]
+        self.assertFalse(sheet["own_photo"])
+        self.assertEqual(self.api.get(photo)[0], 200 if sheet["photo"] else 404)      # sans photo de Wikipédia en dessous, la page retrouve la pochette
+
     def test_artist_photo_only_comes_from_wikimedia(self):
         from hub import enrich
 
