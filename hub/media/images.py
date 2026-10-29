@@ -147,6 +147,28 @@ class Images:
             return ""
         return f"|{info.st_size}|{info.st_mtime_ns}"
 
+    def file(self, ref, path, width=0):
+        """(octets, type MIME, étiquette) d'une image posée sur le disque (la photo d'un artiste), réduite et gardée comme les autres ; None si elle n'y est plus."""
+        try:
+            info = Path(path).stat()
+        except OSError:
+            return None
+        width = snap_width(width)
+        key = self._key(f"file:{ref}", f"{info.st_size}|{info.st_mtime_ns}", width)
+        hit = self.cache / f"{key}.jpg"
+        if hit.is_file():
+            data = hit.read_bytes()
+            return data, sniff(data), key
+        source = self._from_image_file(Path(path))
+        if not source:
+            return None
+        data, mime = self.resize(source, width)
+        try:
+            hit.write_bytes(data)
+        except OSError:
+            pass
+        return data, mime, key
+
     def get(self, kind, ident, width=0):
         """(octets, type MIME, étiquette) ou None. `kind` : "item" ou "entry"."""
         width = snap_width(width)

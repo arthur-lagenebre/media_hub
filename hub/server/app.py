@@ -300,6 +300,13 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(413, "corps trop gros")
         return safe_json(self.rfile.read(length).decode("utf-8", "replace") if length else "", {})
 
+    def body_bytes(self, limit):
+        """Le corps de la requête tel quel (un fichier envoyé) ; 413 au-delà de `limit` octets."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > limit:
+            raise HttpError(413, f"fichier trop gros (au plus {limit >> 20} Mo)")
+        return self.rfile.read(length)
+
     # --- Fichiers du site -------------------------------------------------
     def static(self, path):
         web = self.hub.cfg.web.resolve()
@@ -671,30 +678,118 @@ def artist_sheet(info):
     return {"facts": artistinfo.facts(info), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": info.get("links", [])}
 
 
-@route("GET", r"/api/artist/([\w-]+)/(\w+)")
-def api_artist(h, m, q):
-    """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, et ce que MusicBrainz et Wikipédia en disent (une fois les fiches demandées dans Gestion)."""
-    hub = h.hub
-    lib = library_or_404(hub, m.group(1))
+def artist_albums(hub, lib_id, artist_id):
+    """Les albums d'un artiste, du plus ancien au plus récent ; 404 si la bibliothèque n'est pas de la musique ou si l'artiste n'y est pas."""
+    lib = library_or_404(hub, lib_id)
     if lib.kind != "music":
         raise HttpError(404, "pas une bibliothèque de musique")
-    rows = [r for r in hub.db.query("SELECT * FROM items WHERE lib=? AND type='album'", (lib.id,)) if safe_json(r["meta"], {}).get("artist_id") == m.group(2)]
+    rows = [r for r in hub.db.query("SELECT * FROM items WHERE lib=? AND type='album'", (lib.id,)) if safe_json(r["meta"], {}).get("artist_id") == artist_id]
     if not rows:
         raise HttpError(404, "artiste inconnu")
-    rows.sort(key=TITLE_SORTS["music"])
+    return lib, sorted(rows, key=TITLE_SORTS["music"])
+
+
+def artist_kept(hub, rows):
+    """La fiche gardée par « Fiches artistes » (voir enrich.enrich_artists), ou None : celle du premier album qui porte un identifiant MusicBrainz et qui en a une."""
+    for row in rows:
+        mbid = safe_json(row["meta"], {}).get("artist_mbid")
+        kept = hub.db.kv_get(enrich.artist_key(mbid)) if mbid else None
+        if kept:
+            return kept
+    return None
+
+
+PHOTO_UPLOAD_MAX = 10 << 20
+PHOTO_TYPES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"), (b"RIFF", ".webp"))
+
+
+def custom_photos(hub, artist_id):
+    """Les photos que l'utilisateur a envoyées pour cet artiste (une seule en pratique) : data/artists/custom-<id>.<ext>. Elles passent avant celle de Wikipédia et un « Fiches artistes » n'y touche pas."""
+    return sorted((hub.cfg.data / "artists").glob(f"custom-{artist_id}.*"))
+
+
+def artist_photo(hub, artist_id, kept):
+    """Le fichier de la photo d'un artiste : celle qu'on lui a envoyée, sinon celle de Wikipédia (téléchargée par « Fiches artistes ») ; None s'il n'en a pas."""
+    mine = custom_photos(hub, artist_id)
+    if mine:
+        return mine[0]
+    name = ((kept or {}).get("info") or {}).get("photo")
+    path = hub.cfg.data / "artists" / name if name and name == os.path.basename(name) else None
+    return path if path and path.is_file() else None
+
+
+@route("GET", r"/api/artist/([\w-]+)/(\w+)")
+def api_artist(h, m, q):
+    """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent, photo comprise (une fois les fiches demandées dans Gestion)."""
+    hub = h.hub
+    lib, rows = artist_albums(hub, m.group(1), m.group(2))
     seen = seen_counts(hub, lib.id)
     name = rows[0]["grp"] or "Artiste inconnu"
     out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": []}
+    genres = {}
     for row in rows:
-        album = safe_json(row["meta"], {})
         for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
             out["tracks"].append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"]})
-        mbid = album.get("artist_mbid")
-        kept = hub.db.kv_get(enrich.artist_key(mbid)) if mbid and "info" not in out else None
-        if kept:
-            out["info"] = artist_sheet(kept["info"])
+        for genre in safe_json(row["genres"], []):
+            genres[genre] = genres.get(genre, 0) + 1
+    out["genres"] = [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
+    kept = artist_kept(hub, rows)
+    if kept:
+        out["info"] = artist_sheet(kept["info"])
+    out["photo"] = artist_photo(hub, m.group(2), kept) is not None
+    out["own_photo"] = bool(custom_photos(hub, m.group(2)))
     h.send_json(out)
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/photo")
+def api_artist_photo_set(h, m, q):
+    """Remplace la photo d'un artiste par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus)."""
+    hub = h.hub
+    artist_albums(hub, m.group(1), m.group(2))
+    data = h.body_bytes(PHOTO_UPLOAD_MAX)
+    ext = next((ext for magic, ext in PHOTO_TYPES if data.startswith(magic)), None)
+    if not ext or (ext == ".webp" and data[8:12] != b"WEBP"):
+        raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
+    folder = hub.cfg.data / "artists"
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in custom_photos(hub, m.group(2)):
+        old.unlink()
+    (folder / f"custom-{m.group(2)}{ext}").write_bytes(data)
+    h.send_json({"ok": True})
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/photo/delete")
+def api_artist_photo_delete(h, m, q):
+    """Retire la photo envoyée : l'artiste retrouve celle de Wikipédia, ou la pochette de son premier album."""
+    hub = h.hub
+    artist_albums(hub, m.group(1), m.group(2))
+    h.body_json()
+    removed = custom_photos(hub, m.group(2))
+    for old in removed:
+        old.unlink()
+    h.send_json({"ok": True, "removed": len(removed)})
+
+
+@route("GET", r"/img/artist/([\w-]+)/(\w+)")
+def artist_image(h, m, q):
+    """La photo d'un artiste, réduite comme les pochettes ; 404 s'il n'en a pas (la page garde alors la pochette de son premier album)."""
+    hub = h.hub
+    lib, rows = artist_albums(hub, m.group(1), m.group(2))
+    path = artist_photo(hub, m.group(2), artist_kept(hub, rows))
+    try:
+        width = int(q.get("w", 0))
+    except ValueError:
+        width = 0
+    found = hub.images.file(f"artist:{lib.id}:{m.group(2)}", path, width) if path else None
+    if found is None:
+        raise HttpError(404, "pas de photo")
+    data, mime, key = found
+    tag = f'"{key}"'
+    if h.headers.get("If-None-Match") == tag:
+        h.send_body(b"", mime, 304, {"ETag": tag, "Cache-Control": "private, no-cache"})
+        return
+    h.send_body(data, mime, 200, {"ETag": tag, "Cache-Control": "private, no-cache"}, h.command == "HEAD")
 
 
 @route("POST", r"/api/item/(\w+)/seen")

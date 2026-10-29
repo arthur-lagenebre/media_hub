@@ -63,7 +63,11 @@
   // --- Serveur ----------------------------------------------------------------
   H.api = function (path, body, opts) {
     var init = { credentials: 'same-origin', headers: {} };
-    if (body !== undefined && body !== null) {
+    if (opts && opts.raw) {              // un fichier envoyé tel quel (Blob), pas du JSON
+      init.method = 'POST';
+      init.headers['Content-Type'] = body.type || 'application/octet-stream';
+      init.body = body;
+    } else if (body !== undefined && body !== null) {
       init.method = 'POST';
       init.headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);

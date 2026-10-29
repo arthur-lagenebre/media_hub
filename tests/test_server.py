@@ -429,16 +429,65 @@ class TestJobs(ServerCase):
                 "wiki": {"lang": "fr", "title": "Daft Punk", "url": "https://fr.wikipedia.org/wiki/Daft_Punk", "extract": "Duo de musique électronique."}}
         self.hub.db.update_item_meta(album["id"], meta={"artist_mbid": "abc"})
         lib = next(l for l in self.hub.cfg.libraries if l.id == "musique")
-        with mock.patch("hub.enrich.artistinfo.fetch", return_value=info):
+        photo = f"/img/artist/musique/{detail['artist_id']}?w=320"
+        self.assertEqual(self.api.get(photo)[0], 404)                  # pas de photo avant les fiches
+
+        class Download:                                                 # ce que Wikimedia répondrait : une image
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n=-1):
+                return fixtures.PNG
+
+        with mock.patch("hub.enrich.artistinfo.fetch", return_value=info), mock.patch("hub.enrich.photo_urls", return_value=["https://upload.wikimedia.org/x.png"]), \
+                mock.patch("hub.enrich.urlopen", return_value=Download()):
             self.assertEqual(self.api.json("/api/enrich", {"lib": "musique"})[0], 202)         # MusicBrainz ne demande pas de clé
             self.run_.wait_jobs()
         sheet = self.api.json(url)[1]
+        self.assertTrue(sheet["photo"])
+        status, headers, body = self.api.get(photo)
+        self.assertEqual((status, headers["Content-Type"]), (200, "image/jpeg"))
+        self.assertIn("genres", sheet)
         self.assertEqual(sheet["info"]["facts"], "Groupe · France · 1993 – 2021")
         self.assertEqual(sheet["info"]["wiki"]["extract"], "Duo de musique électronique.")
         self.assertEqual(sheet["info"]["members"][0], {"name": "Thomas Bangalter", "roles": ["synthétiseur"], "period": "1993 – 2021"})
         self.assertEqual(sheet["info"]["links"][0]["url"], "https://daftpunk.com")
         self.hub.jobs.scan(lib)
         self.run_.wait_jobs()
+
+    def test_artist_photo_can_be_uploaded_and_removed(self):
+        detail = self.detail(self.item_by_title("musique", "Discovery")["id"])
+        base = f"/api/artist/musique/{detail['artist_id']}"
+        photo = f"/img/artist/musique/{detail['artist_id']}?w=320"
+        self.addCleanup(self.api.json, base + "/photo/delete", {})
+        self.assertFalse(self.api.json(base)[1]["own_photo"])
+        self.assertEqual(self.api.request("POST", base + "/photo", body=b"ceci n'est pas une image", headers={"Content-Type": "image/png"})[0], 415)
+        self.assertEqual(self.api.request("POST", "/api/artist/musique/deadbeef/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})[0], 404)
+        status, _, body = self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})
+        self.assertEqual(status, 200, body)
+        sheet = self.api.json(base)[1]
+        self.assertTrue(sheet["photo"] and sheet["own_photo"])
+        self.assertEqual(self.api.get(photo)[0], 200)
+        self.assertEqual(self.api.json(base + "/photo/delete", {})[1]["removed"], 1)
+        sheet = self.api.json(base)[1]
+        self.assertFalse(sheet["own_photo"])
+        self.assertEqual(self.api.get(photo)[0], 200 if sheet["photo"] else 404)      # sans photo de Wikipédia en dessous, la page retrouve la pochette
+
+    def test_artist_photo_only_comes_from_wikimedia(self):
+        from hub import enrich
+
+        class Wiki:
+            def external(self, url):
+                return {"thumbnail": {"source": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/92/F.jpg/330px-F.jpg?utm_source=fr.wikipedia.org"},
+                        "originalimage": {"source": "https://evil.example/x.jpg", "width": 4000}}
+
+        urls = enrich.photo_urls(Wiki(), {"lang": "fr", "title": "Daft Punk"})
+        self.assertEqual(urls[0], "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/92/F.jpg/960px-F.jpg?utm_source=fr.wikipedia.org")     # la plus grande d'abord
+        self.assertEqual(len(urls), 2)                                  # la vignette en repli ; l'adresse d'un autre site n'est jamais suivie
+        self.assertTrue(all(u.startswith("https://thumb.wikimedia.org/") for u in urls))
 
     def test_enrich_keeps_show_synopsis_seasons_and_cast(self):
         from unittest import mock
