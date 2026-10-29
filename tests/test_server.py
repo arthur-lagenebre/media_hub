@@ -167,6 +167,7 @@ class TestBrowse(ServerCase):
         naruto = self.detail(self.item_by_title("livres", "Naruto")["id"])
         self.assertEqual([e["number"] for e in naruto["entries"]], [1, 2])
         self.assertEqual(naruto["missing"][0]["numbers"], [3])
+        self.assertEqual((naruto["unit"], naruto["units"]), ("tome", "tomes"))      # le singulier et le pluriel : l'interface n'ajoute pas de « s » à un pluriel
 
     def test_books_sections_are_quick_access_facets(self):
         data = self.api.json("/api/library/livres")[1]
