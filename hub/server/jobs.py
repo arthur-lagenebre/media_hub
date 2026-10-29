@@ -5,12 +5,17 @@ Rien ne se lance tout seul (sauf le premier scan d'une bibliothèque vide, et le
 
 from __future__ import annotations
 
+import os
 import queue
+import re
 import threading
 import time
 from collections import deque
 
+from libraries.music import coverfile
+
 from .. import enrich, scan
+from ..scan.common import is_album_cover
 
 LOG_LINES = 400
 
@@ -82,7 +87,7 @@ class Jobs:
     def cleanup(self, apply):
         def run(log):
             return clean_junk(self.cfg.libraries, apply, log)
-        return self._submit("Nettoyage · Thumbs.db" + ("" if apply else " (simulation)"), run)
+        return self._submit("Nettoyage · fichiers parasites" + ("" if apply else " (simulation)"), run)
 
     def snapshot(self, with_log=False):
         return [j.public(with_log) for j in list(self.history)]
@@ -91,21 +96,41 @@ class Jobs:
         return any(j.status in ("waiting", "running") for j in self.history)
 
 
-JUNK = ("thumbs.db", "desktop.ini", ".ds_store")
+JUNK = ("thumbs.db", "desktop.ini", ".ds_store", "albumartsmall.jpg")
+# Lecteur Windows Media : AlbumArt_{identifiant}_Large.jpg et AlbumArt_{identifiant}_Small.jpg, semés dans chaque dossier d'album
+ALBUM_ART = re.compile(r"^albumart_\{[0-9a-f-]{36}\}_(large|small)\.jpg$", re.IGNORECASE)
+SKIP_DIRS = {".zfs"}        # instantanés ZFS : lecture seule, et copies de tout
+CANDIDATES_DIRS = {coverfile.CANDIDATES_DIR.casefold()}      # les pochettes entre lesquelles Cover.py --candidates laisse choisir : elles n'ont pas encore été choisies
+
+
+def is_junk(name, music=False):
+    """Ce nom de fichier est-il un déchet ? Ceux que Windows ou macOS sèment (Thumbs.db, AlbumArt_{...}_Large.jpg...) ; et, en musique, toute image qui n'est pas cover.{ext}, la seule pochette d'un album."""
+    if name.casefold() in JUNK or ALBUM_ART.match(name):
+        return True
+    return music and os.path.splitext(name.casefold())[1] in coverfile.EXTS and not is_album_cover(name)
+
+
+def walk_junk(root, music=False):
+    """Les chemins des fichiers parasites sous `root`, sans suivre les liens symboliques ni entrer dans .zfs."""
+    for folder, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not (music and d.casefold() in CANDIDATES_DIRS)]
+        for name in files:
+            path = os.path.join(folder, name)
+            if is_junk(name, music) and not os.path.islink(path):
+                yield path
 
 
 def clean_junk(libraries, apply, log):
-    """Les fichiers que Windows et macOS sèment dans les dossiers (Thumbs.db...) : comptés, et effacés si `apply`."""
+    """Les fichiers parasites : ceux que Windows et macOS sèment dans les dossiers, et les images de musique autres que cover.{ext} : comptés, et effacés si `apply`."""
     found = removed = 0
     for lib in libraries:
-        for path in lib.path.rglob("*"):
-            if path.is_file() and path.name.casefold() in JUNK:
-                found += 1
-                if apply:
-                    try:
-                        path.unlink()
-                        removed += 1
-                    except OSError as e:
-                        log(f"  impossible d'effacer {path} : {e}")
+        for path in walk_junk(lib.path, lib.kind == "music"):
+            found += 1
+            if apply:
+                try:
+                    os.unlink(path)
+                    removed += 1
+                except OSError as e:
+                    log(f"  impossible d'effacer {path} : {e}")
     log(f"{found} fichier(s) de ce genre" + (f", {removed} effacé(s)." if apply else " (simulation : rien n'a été effacé)."))
     return {"found": found, "removed": removed}

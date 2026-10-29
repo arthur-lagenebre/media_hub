@@ -43,7 +43,13 @@
     back: 'M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20v-2z',
     shuffle: 'M10.6 9.2L5.4 4 4 5.4l5.2 5.2 1.4-1.4zM14.5 4l2.04 2.04L4 18.6 5.4 20l12.56-12.56L20 9.5V4h-5.5zm.5 9.8l-1.4 1.4 3.36 3.36L15 20.5h5.5V15l-2.04 2.04L15 13.8z',
     quality: 'M4 6h16v2H4zm3 5h10v2H7zm3 5h4v2h-4z', refresh: 'M17.65 6.35A8 8 0 1 0 19.74 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z',
-    note: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3z', home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z'
+    note: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3z', home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
+    queue: 'M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z',
+    plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
+    more: 'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
+    up: 'M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z', down: 'M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z',
+    trash: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
+    edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'
   };
   H.icon = function (name, cls) {
     return h('span', { class: 'ic' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true', html: '<svg viewBox="0 0 24 24"><path d="' + (ICONS[name] || '') + '"/></svg>' });
@@ -165,6 +171,21 @@
     });
     if (!options.length) list.appendChild(h('p', { class: 'muted' }, 'Rien à choisir.'));
     H.overlay.open(box);
+  };
+
+  // Une question à une ligne de texte (nom d'une playlist) : `onOk(texte)` est appelé si le texte n'est pas vide.
+  H.prompt = function (title, initial, okLabel, onOk) {
+    var input = h('input', { class: 'f field big', type: 'text', value: initial || '', maxlength: '80', 'aria-label': title, 'data-autofocus': '1', autocomplete: 'off' });
+    function submit() {
+      var text = input.value.replace(/\s+/g, ' ').trim();
+      if (!text) { input.focus(); return; }
+      H.overlay.close(function () { onOk(text); });
+    }
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    var box = h('div', { class: 'menu prompt', role: 'dialog', 'aria-label': title }, h('h3', null, title), input,
+      h('div', { class: 'btns' }, H.button(okLabel || 'Valider', 'check', { class: 'primary', onclick: submit }), H.button('Annuler', null, { onclick: function () { H.overlay.close(); } })));
+    H.overlay.open(box);
+    setTimeout(function () { try { input.focus(); input.select(); } catch (e) { /* tant pis */ } }, 30);
   };
 
   // --- Focus à la télécommande ----------------------------------------------------

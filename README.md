@@ -11,9 +11,9 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 
 | Bibliothèque | Contenu lu | Lecture |
 | --- | --- | --- |
-| Films | `.mkv` (titre, synopsis, casting, jaquette embarqués par `Metadata.py`), sagas | vidéo, sous-titres, reprise |
+| Films | `.mkv` (titre, synopsis, casting, jaquette embarqués par `Metadata.py`), sagas regroupées en une vignette (bouton « Sagas ») | vidéo, sous-titres, reprise |
 | Séries, Animations | dossiers série / saison / épisode, affiche TMDB (avec `TMDB_KEY`) | vidéo, épisode suivant |
-| Musique | `.flac`, `.mp3`, … regroupés en albums, pochettes | barre audio qui continue pendant la navigation |
+| Musique | `.flac`, `.mp3`, … regroupés en albums, pochette = `cover.{ext}` du dossier | barre audio qui continue pendant la navigation |
 | Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens manga, thèmes |
 
 - **Accueil** : « Reprendre » (films, épisodes, livres, albums en cours) et les ajouts récents de chaque bibliothèque.
@@ -60,7 +60,8 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | Route | Rôle |
 | --- | --- |
 | `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche |
-| `GET /api/library/<id>?q&letter&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec lettres et genres |
+| `GET /api/library/<id>?q&letter&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec lettres et genres ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
+| `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
 | `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, saga, casting, progression |
 | `POST /api/play/<entry>` | plan de lecture (url, pistes audio, sous-titres, reprise, suivant) |
 | `GET /media/<entry>/file`, `/media/<entry>/stream` | fichier (Range, `?download=1`) ; flux MP4 fragmenté (remux / transcodage, `?start=`) |
@@ -68,7 +69,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `POST /api/progress`, `/api/item/<id>/seen`, `/api/entry/<id>/seen` | progression, vu / pas vu |
 | `GET /api/book/<id>`, `/book/<id>/page/<n>`, `/book/<id>/epub/<chemin>` | pages d'un `.cbz`, fichiers d'un `.epub` (CSP sans script) |
 | `GET /img/item/<id>?w=`, `/img/entry/<id>?w=` | affiches, pochettes, couvertures (réduites et gardées en cache) |
-| `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`…) |
+| `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}`) |
 
 ## Limites connues
 

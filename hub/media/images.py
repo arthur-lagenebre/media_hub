@@ -3,7 +3,7 @@
 D'où vient l'image d'un item :
   film    folder.jpg à côté du film, sinon la jaquette que Metadata.py a embarquée dans le .mkv ;
   série   l'affiche TMDB gardée par l'enrichissement, sinon folder.jpg, sinon la vignette d'un épisode ;
-  album   cover.jpg du dossier, sinon la pochette embarquée dans les pistes ;
+  album   cover.jpg (ou .png...) du dossier, et rien d'autre : ni folder.jpg, ni la pochette embarquée dans les pistes ;
   livre   la couverture désignée par ComicInfo.xml, sinon la première page / l'image de l'epub.
 
 Réduire se fait avec Pillow s'il est là, sinon avec ffmpeg, sinon on rend l'image telle quelle. Une couverture de comics fait 4 Mo : sur une télé, avec 40 couvertures à l'écran, la réduction n'est pas un luxe.
@@ -19,8 +19,6 @@ import warnings
 from pathlib import Path
 
 from libraries.books import shelf
-from libraries.music import audio as music_audio
-from libraries.music.tags import FRONT_COVER
 from libraries.video import ebml
 
 try:
@@ -96,14 +94,6 @@ class Images:
         found = ebml.read_cover(path)
         return found[0] if found else None
 
-    def _audio_cover(self, path):
-        try:
-            pictures = music_audio.read(path).pictures
-        except Exception:
-            return None
-        front = next((p for p in pictures if p.kind == FRONT_COVER), pictures[0] if pictures else None)
-        return front.data if front else None
-
     def _book_cover(self, path, meta):
         kind = meta.get("format", "")
         volume = shelf.Volume(path, "", "", "", "", 0, 0, kind, meta.get("info") or {})
@@ -113,13 +103,11 @@ class Images:
             return None
 
     def entry_source(self, lib, entry):
-        """Octets de l'image propre à un fichier (vignette d'épisode, couverture d'un tome, pochette d'une piste) ; None s'il n'en a pas."""
+        """Octets de l'image propre à un fichier (vignette d'épisode, couverture d'un tome) ; None s'il n'en a pas."""
         path = self._file(lib, entry["rel"])
         meta = json.loads(entry["meta"])
         if entry["kind"] == "video":
             return self._mkv_cover(path) if path.suffix.lower() == ".mkv" else None
-        if entry["kind"] == "audio":
-            return self._audio_cover(path)
         if entry["kind"] == "book":
             return self._book_cover(path, meta)
         return None
@@ -128,11 +116,8 @@ class Images:
         meta = json.loads(item["meta"])
         entries = self.db.query("SELECT * FROM entries WHERE item_id=? ORDER BY season, disc, number, rel LIMIT 4", (item["id"],))
         base = Path(lib.path)
-        if item["type"] == "album":
-            if meta.get("cover_file"):
-                data = self._from_image_file(base / meta.get("folder", "") / meta["cover_file"])
-                if data:
-                    return data
+        if item["type"] == "album":       # cover.{ext} du dossier, rien d'autre : ni folder.jpg, ni pochette embarquée dans les pistes
+            return self._from_image_file(base / meta.get("folder", "") / meta["cover_file"]) if meta.get("cover_file") else None
         if meta.get("poster_file"):
             data = self._from_image_file(self.cfg.data / "tmdb" / meta["poster_file"])
             if data:

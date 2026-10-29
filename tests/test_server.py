@@ -19,7 +19,9 @@ from hub import config
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
 
-from hub.server.app import make_server  # noqa: E402
+from hub.scan.common import is_album_cover  # noqa: E402
+from hub.scan.music import scan_music  # noqa: E402
+from hub.server.app import TITLE_SORTS, make_server  # noqa: E402
 
 FFMPEG = fixtures.FFMPEG
 CAPS_ALL = {"video": ["h264"], "audio": ["aac", "mp3", "opus", "flac"], "containers": ["mp4", "mkv", "webm"], "channels": 2, "height": 1080}
@@ -64,6 +66,7 @@ class Running:
         env = {"HUB_SRV": str(self.root / "srv"), "HUB_DATA": str(self.root / "data"), "HUB_REPO": str(fixtures.REPO), "HUB_PORT": "0", "HUB_PASSWORD": password,
                "HUB_MAX_STREAMS": str(max_streams)}
         cfg = config.load(env)
+        cfg.tmdb_key = ""       # jamais la vraie clé du .env de media_library : pas d'appel réseau, et les tests ne dépendent pas de la machine
         if not ffmpeg:
             cfg.ffmpeg = cfg.ffprobe = ""
         self.server = make_server(cfg)
@@ -165,6 +168,20 @@ class TestBrowse(ServerCase):
         self.assertEqual([e["number"] for e in naruto["entries"]], [1, 2])
         self.assertEqual(naruto["missing"][0]["numbers"], [3])
 
+    def test_books_sections_are_quick_access_facets(self):
+        data = self.api.json("/api/library/livres")[1]
+        sections = dict(data["sections"])
+        self.assertTrue({"Manga", "Artbook", "Romans"} <= set(sections))
+        self.assertEqual(sum(sections.values()), data["total"])
+        names = [n for n, _ in data["sections"]]
+        self.assertLess(names.index("Manga"), names.index("Artbook"))              # l'ordre de l'étagère
+        manga = self.api.json("/api/library/livres?section=Manga")[1]
+        self.assertEqual(manga["total"], sections["Manga"])
+        self.assertEqual({i["title"] for i in manga["items"]} & {"The Art of Dune", "Le Comte de Monte-Cristo"}, set())
+        self.assertEqual(dict(manga["sections"]), sections)                    # les pastilles gardent leurs comptes sous un filtre
+        self.assertEqual(self.api.json("/api/library/livres?section=Inconnue")[1]["total"], 0)
+        self.assertNotIn("sections", self.api.json("/api/library/films")[1])
+
     def test_global_search_groups_by_library(self):
         status, data = self.api.json("/api/search?q=dark")
         self.assertEqual(status, 200)
@@ -188,6 +205,33 @@ class TestImages(ServerCase):
     def test_album_cover_and_book_cover(self):
         self.assertEqual(self.api.get(f"/img/item/{self.item_by_title('musique', 'Discovery')['id']}")[0], 200)
         self.assertEqual(self.api.get(f"/img/item/{self.item_by_title('livres', 'Naruto')['id']}?w=200")[0], 200)
+
+
+class TestAlbumCover(unittest.TestCase):
+    """La pochette d'un album, c'est cover.{ext} dans son dossier : ni folder.jpg, ni la pochette embarquée dans les pistes."""
+
+    def test_only_cover_dot_ext_is_the_cover(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for artist, other in (("Sans", "folder.jpg"), ("Avec", "Cover.PNG"), ("Rien", "")):
+                fixtures.write_flac(root / artist / "2001 - Album" / "01 - Titre.flac", "Titre", f"Album {artist}", artist, 1, 1)
+                if other:
+                    (root / artist / "2001 - Album" / other).write_bytes(fixtures.PNG)
+            items, _, _ = scan_music(config.Library("musique", "Musique", "music", root), {})
+            covers = {item["title"]: json.loads(item["meta"]) for item in items}
+        self.assertEqual({t: (m["has_cover"], m["cover_file"]) for t, m in covers.items()},
+                         {"Album Sans": (False, ""), "Album Avec": (True, "Cover.PNG"), "Album Rien": (False, "")})
+
+    def test_albums_of_an_artist_go_by_year_then_name(self):
+        rows = [{"grp": grp, "year": year, "sort": sort} for grp, year, sort in (
+            ("Daft Punk", "2013", "random access memories"), ("Daft Punk", "2001", "discovery"), ("Daft Punk", "", "inconnu"), ("Daft Punk", "2001", "alive"),
+            ("Air", "2004", "talkie walkie"), ("", "1999", "sans artiste"))]
+        ordered = [r["sort"] for r in sorted(rows, key=TITLE_SORTS["music"])]
+        self.assertEqual(ordered, ["talkie walkie", "alive", "discovery", "random access memories", "inconnu", "sans artiste"])
+
+    def test_cover_names(self):
+        self.assertTrue(all(is_album_cover(n) for n in ("cover.jpg", "Cover.PNG", "cover.webp")))
+        self.assertFalse(any(is_album_cover(n) for n in ("folder.jpg", "front.png", "albumart.jpg", "cover.txt", "cover", "my cover.jpg")))
 
 
 class TestSecurity(ServerCase):
@@ -294,6 +338,32 @@ class TestJobs(ServerCase):
         self.api.json("/api/cleanup", {"apply": True})
         self.run_.wait_jobs()
         self.assertFalse(junk.exists())
+
+    def test_cleanup_keeps_only_cover_dot_ext_as_a_music_image(self):
+        artist = next((self.run_.libs["musique"]).iterdir())
+        album = next(p for p in artist.iterdir() if p.is_dir())
+        guid = "{164D5496-D54B-4954-8C25-303F4EF577D7}"
+        other = "{264D5496-D54B-4954-8C25-303F4EF577D7}"      # autre identifiant : sous Windows, la casse seule ne distingue pas deux fichiers
+        junk = [album / f"AlbumArt_{guid}_Large.jpg", album / f"AlbumArt_{guid}_Small.jpg", album / "AlbumArtSmall.jpg", album / f"albumart_{other.lower()}_large.JPG",
+                album / "folder.jpg", album / "Front.png", album / "AlbumArt.jpg", album / "AlbumArt_not-a-guid_Large.jpg", artist / "artist.jpg"]
+        candidates = album / "_covers"       # Cover.py --candidates : pas encore choisies, donc pas touchées
+        candidates.mkdir()
+        self.addCleanup(shutil.rmtree, candidates, True)
+        keep = [album / "cover.jpg", album / "cover.png", album / "notes.txt", candidates / "candidate.jpg", *album.glob("*.flac"),
+                self.run_.libs["films"] / "Inception (2010)" / "folder.jpg"]       # hors musique, folder.jpg est une vraie affiche
+        for path in junk + keep:
+            if not path.exists():
+                path.write_bytes(b"x")
+                if path not in junk:
+                    self.addCleanup(path.unlink, True)
+        self.api.json("/api/cleanup", {})       # la simulation ne touche à rien
+        self.run_.wait_jobs()
+        self.assertEqual([p.exists() for p in junk], [True] * len(junk))
+        self.api.json("/api/cleanup", {"apply": True})
+        self.run_.wait_jobs()
+        self.assertEqual([p.exists() for p in junk], [False] * len(junk))
+        self.assertEqual([p.exists() for p in keep], [True] * len(keep))
+        self.assertIn(f"{len(junk)} effacé", "\n".join(self.api.json("/api/jobs?log=1")[1]["jobs"][0]["log"]))
 
     def test_enrich_needs_a_key_and_a_shows_library(self):
         self.assertEqual(self.api.json("/api/enrich", {"lib": "films"})[0], 400)
@@ -464,6 +534,140 @@ class TestPassword(unittest.TestCase):
             run.stop()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestSagas(ServerCase):
+    """Les sagas regroupées dans la bibliothèque Films : une vignette par saga, tous les films au clic."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        films = cls.run_.libs["films"]
+        for i in range(1, 11):
+            fixtures.write_mkv(films / "_Course" / f"{i} - Course {i}.mkv", fixtures.movie_blocks(f"Course {i}", "Ça roule.", f"{2000 + i}-05-01", f"movie/{900 + i}", "Action", ["Réal"], [], collection="Saga Course", part=i), minutes=100)
+        cls.hub.jobs.scan(cls.hub.cfg.library("films"))
+        cls.run_.wait_jobs()
+
+    def sagas(self, **query):
+        return self.items("films", sagas=1, **query)
+
+    def test_without_the_option_every_film_is_listed(self):
+        titles = [i["title"] for i in self.items("films")["items"]]
+        self.assertEqual(len([t for t in titles if t.startswith("Course ")]), 10)
+        self.assertNotIn("Saga Course", titles)
+
+    def test_sagas_become_one_card_and_single_films_stay(self):
+        data = self.sagas()
+        by_title = {i["title"]: i for i in data["items"]}
+        self.assertEqual(sorted(t for t in by_title if by_title[t]["type"] == "saga"), ["Saga Course", "Saga DCEU"])
+        course = by_title["Saga Course"]
+        self.assertEqual((course["n"], course["years"], course["year"]), (10, ["2001", "2010"], "2001"))
+        self.assertEqual(len(course["covers"]), 3)
+        self.assertIn("Inception", by_title)
+        self.assertNotIn("Course 3", by_title)
+        self.assertNotIn("Man of Steel", by_title)
+        self.assertEqual(data["sagas"], 2)
+        self.assertEqual(data["films"], 10 + 2 + len([t for t in by_title if by_title[t]["type"] != "saga"]))
+
+    def test_the_covers_follow_the_order_of_the_saga(self):
+        course = next(i for i in self.sagas()["items"] if i["title"] == "Saga Course")
+        firsts = [self.detail(c)["title"] for c in course["covers"]]
+        self.assertEqual(firsts, ["Course 1", "Course 2", "Course 3"])
+
+    def test_a_saga_page_lists_all_ten_films_in_order(self):
+        data = self.items("films", group="Saga Course", sort="part", limit=50)
+        self.assertEqual([i["title"] for i in data["items"]], [f"Course {i}" for i in range(1, 11)])      # Course 10 après Course 9, pas après Course 1
+        self.assertEqual(data["total"], 10)
+
+    def test_filters_work_on_whole_sagas(self):
+        self.assertEqual([i["title"] for i in self.sagas(q="course 7")["items"]], ["Saga Course"])
+        self.assertEqual([i["title"] for i in self.sagas(genre="Action")["items"] if i["title"] == "Saga Course"], ["Saga Course"])
+        letters = dict(self.sagas()["letters"])
+        self.assertGreaterEqual(letters.get("S", 0), 2)
+        self.assertLessEqual({"Saga Course", "Saga DCEU"}, {i["title"] for i in self.sagas(letter="S")["items"]})
+
+    def test_a_saga_is_unseen_until_every_film_is_seen(self):
+        films = self.items("films", group="Saga Course", sort="part", limit=50)["items"]
+        for film in films[:9]:
+            self.api.json(f"/api/item/{film['id']}/seen", {"done": True})
+        course = next(i for i in self.sagas()["items"] if i["title"] == "Saga Course")
+        self.assertEqual(course["seen"], 9)
+        self.assertIn("Saga Course", [i["title"] for i in self.sagas(filter="unseen")["items"]])
+        self.api.json(f"/api/item/{films[9]['id']}/seen", {"done": True})
+        course = next(i for i in self.sagas()["items"] if i["title"] == "Saga Course")
+        self.assertEqual(course["seen"], 10)
+        self.assertNotIn("Saga Course", [i["title"] for i in self.sagas(filter="unseen")["items"]])
+        for film in films:
+            self.api.json(f"/api/item/{film['id']}/seen", {"done": False})
+
+    def test_movie_detail_gives_the_whole_saga(self):
+        film = self.item_by_title("films", "Course 4")
+        detail = self.detail(film["id"])
+        self.assertEqual([m["title"] for m in detail["saga"]], [f"Course {i}" for i in range(1, 11)])
+
+
+class TestPlaylists(ServerCase):
+    """Les playlists : créées à la main, gardées dans la base, intactes après une mise à jour."""
+
+    def tracks(self):
+        album = self.detail(self.item_by_title("musique", "Discovery")["id"])
+        return album, [e["id"] for e in album["entries"]]
+
+    def test_create_add_move_remove_rename_delete(self):
+        album, ids = self.tracks()
+        status, made = self.api.json("/api/playlists", {"name": "  Route   des vacances ", "entries": ids[:2]})
+        self.assertEqual(status, 201)
+        self.assertEqual((made["name"], made["count"], made["covers"]), ("Route des vacances", 2, [album["id"]]))
+        pid = made["id"]
+        self.assertEqual([t["id"] for t in made["tracks"]], ids[:2])
+        self.assertEqual(made["tracks"][0]["album"], "Discovery")
+        self.assertEqual(made["tracks"][0]["artist"], "Daft Punk")
+        added = self.api.json(f"/api/playlist/{pid}/add", {"entries": [ids[2], ids[0]]})[1]       # un titre peut figurer deux fois
+        self.assertEqual([t["id"] for t in added["tracks"]], [ids[0], ids[1], ids[2], ids[0]])
+        moved = self.api.json(f"/api/playlist/{pid}/move", {"from": 3, "to": 0})[1]
+        self.assertEqual([t["id"] for t in moved["tracks"]], [ids[0], ids[0], ids[1], ids[2]])
+        removed = self.api.json(f"/api/playlist/{pid}/remove", {"index": 1})[1]
+        self.assertEqual([t["id"] for t in removed["tracks"]], [ids[0], ids[1], ids[2]])
+        self.assertEqual(self.api.json(f"/api/playlist/{pid}/rename", {"name": "Été"})[1]["name"], "Été")
+        self.assertIn("Été", [p["name"] for p in self.api.json("/api/playlists")[1]["playlists"]])
+        self.assertEqual(self.api.json(f"/api/playlist/{pid}/delete", {})[0], 200)
+        self.assertEqual(self.api.get(f"/api/playlist/{pid}")[0], 404)
+
+    def test_the_same_name_reuses_the_playlist(self):
+        _, ids = self.tracks()
+        first = self.api.json("/api/playlists", {"name": "Soirée", "entries": ids[:1]})[1]
+        again = self.api.json("/api/playlists", {"name": "SOIRÉE", "entries": ids[1:2]})[1]
+        self.assertEqual(first["id"], again["id"])
+        self.assertEqual(again["count"], 2)
+        self.api.json(f"/api/playlist/{first['id']}/delete", {})
+
+    def test_bad_requests(self):
+        _, ids = self.tracks()
+        self.assertEqual(self.api.json("/api/playlists", {"name": "   "})[0], 400)
+        pid = self.api.json("/api/playlists", {"name": "Essai"})[1]["id"]
+        self.assertEqual(self.api.json(f"/api/playlist/{pid}/add", {"entries": ["inconnu"]})[0], 400)
+        film = self.item_by_title("films", "Inception")
+        film_entry = self.detail(film["id"])["entries"][0]["id"]
+        self.assertEqual(self.api.json(f"/api/playlist/{pid}/add", {"entries": [film_entry]})[0], 400)      # que de la musique
+        self.assertEqual(self.api.json(f"/api/playlist/{pid}/add", {"entries": ids[:1]})[0], 200)
+        self.assertEqual(self.api.json(f"/api/playlist/{pid}/remove", {"index": 5})[0], 400)
+        self.assertEqual(self.api.json(f"/api/playlist/{pid}/move", {"from": 0, "to": 9})[0], 400)
+        self.assertEqual(self.api.json("/api/playlist/zzzz/rename", {"name": "x"})[0], 404)
+        self.api.json(f"/api/playlist/{pid}/delete", {})
+
+    def test_a_playlist_survives_a_rescan_and_hides_vanished_tracks(self):
+        _, ids = self.tracks()
+        pid = self.api.json("/api/playlists", {"name": "Durable", "entries": ids})[1]["id"]
+        self.hub.jobs.scan(self.hub.cfg.library("musique"))
+        self.run_.wait_jobs()
+        self.assertEqual([t["id"] for t in self.api.json(f"/api/playlist/{pid}")[1]["tracks"]], ids)
+        self.hub.db.execute("DELETE FROM entries WHERE id=?", (ids[1],))
+        gone = self.api.json(f"/api/playlist/{pid}")[1]
+        self.assertEqual(([t["id"] for t in gone["tracks"]], gone["missing"]), ([ids[0], ids[2]], 1))
+        self.assertEqual(self.api.json(f"/api/playlist/{pid}/remove", {"index": 1})[1]["count"], 1)      # l'index suit la liste affichée
+        self.api.json(f"/api/playlist/{pid}/delete", {})
+        self.hub.jobs.scan(self.hub.cfg.library("musique"))
+        self.run_.wait_jobs()
 
 
 if __name__ == "__main__":

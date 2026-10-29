@@ -191,5 +191,6 @@ def build_library(root):
     (musique / "Daft Punk" / "2001 - Discovery" / "cover.png").write_bytes(PNG)
     write_cbz(livres / "Manga" / "Naruto" / "Tome 01.cbz", Series="Naruto", Number="1", Count="3", Writer="Kishimoto", Summary="Un ninja.", Genre="Action", Year="1999")
     write_cbz(livres / "Manga" / "Naruto" / "Tome 02.cbz", Series="Naruto", Number="2", Count="3", Writer="Kishimoto")
+    write_cbz(livres / "Artbook" / "The Art of Dune" / "Tome 01.cbz", Series="The Art of Dune", Number="1")
     write_epub(livres / "Romans" / "Dumas" / "Le Comte de Monte-Cristo.epub", "Le Comte de Monte-Cristo", "Alexandre Dumas")
     return {"films": films, "series": series, "animations": anim, "musique": musique, "livres": livres}
