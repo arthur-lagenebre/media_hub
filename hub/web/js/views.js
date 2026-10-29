@@ -246,7 +246,8 @@
       list.forEach(function (it) {
         if ((kind === 'music' || kind === 'books') && st.sort === 'title' && it.grp !== lastGrp) {
           lastGrp = it.grp;
-          frag.appendChild(h('h3', { class: 'grp' }, it.grp || (kind === 'music' ? 'Artiste inconnu' : 'Sans collection')));
+          var heading = it.grp || (kind === 'music' ? 'Artiste inconnu' : 'Sans collection');
+          frag.appendChild(h('h3', { class: 'grp' }, kind === 'music' && it.artist_id ? h('a', { class: 'f head', href: '#/artist/' + libId + '/' + it.artist_id }, heading) : heading));
         }
         frag.appendChild(H.card(it, false));
       });
@@ -330,7 +331,7 @@
       var meta = [];
       if (d.type === 'movie') { if (d.year) meta.push(d.year); var secs = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (secs) meta.push(H.dur(secs)); }
       else if (d.type === 'show') { if (d.year) meta.push(d.year); if (d.seasons && d.seasons.length) meta.push(H.plural(d.seasons.filter(function (s) { return s > 0; }).length || 1, 'saison')); meta.push(H.plural(entries.length, 'épisode')); if (d.status) meta.push(d.status); }
-      else if (d.type === 'album') { if (d.artist) meta.push(d.artist); if (d.year) meta.push(d.year); meta.push(H.plural(entries.length, 'piste')); var t = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (t) meta.push(H.dur(t)); if (d.formats && d.formats.length) meta.push(d.formats.join(' / ')); }
+      else if (d.type === 'album') { if (d.artist && !d.artist_id) meta.push(d.artist); if (d.year) meta.push(d.year); meta.push(H.plural(entries.length, 'piste')); var t = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (t) meta.push(H.dur(t)); if (d.formats && d.formats.length) meta.push(d.formats.join(' / ')); }
       else { meta.push(d.grp || 'Livres'); meta.push(H.plural(entries.length, d.unit || 'volume')); if (d.year) meta.push(d.year); }
       var genres = (d.genres || []).join(', ');
 
@@ -338,6 +339,7 @@
       if (genres) info.appendChild(h('p', { class: 'genres' }, genres));
       if (d.directors && d.directors.length) info.appendChild(h('p', { class: 'credit' }, 'De ' + d.directors.join(', ')));
       if (d.authors && d.authors.length) info.appendChild(h('p', { class: 'credit' }, 'Par ' + d.authors.join(', ')));
+      if (d.type === 'album' && d.artist && d.artist_id) info.appendChild(h('p', { class: 'credit' }, h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + d.artist_id }, d.artist)));
       if (d.summary) info.appendChild(h('p', { class: 'synopsis' }, d.summary));
 
       var actions = h('div', { class: 'actions' });
@@ -543,7 +545,8 @@
         libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
           h('div', { class: 'what' }, h('b', null, l.label), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · mis à jour ' + ago(l.scanned) : 'dossier introuvable')),
           H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } }),
-          l.kind === 'shows' ? H.button('Enrichir (TMDB)', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Enrichissement lancé : ' + l.label); } }) : null));
+          l.kind === 'shows' ? H.button('Enrichir (TMDB)', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Enrichissement lancé : ' + l.label); } }) : null,
+          l.kind === 'music' ? H.button('Fiches artistes', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Fiches artistes demandées : ' + l.label); } }) : null));
       });
       libs.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Tout'), h('span', null, 'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.')),
         H.button('Tout mettre à jour', 'refresh', { class: 'primary', 'data-autofocus': '1', 'data-key': 'scan-all', onclick: function () { start('/api/scan', {}, 'Mise à jour lancée'); } })));
