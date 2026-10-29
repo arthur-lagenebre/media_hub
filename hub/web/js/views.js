@@ -35,8 +35,10 @@
   // --- Vignettes -------------------------------------------------------------
   function initial(title) { var c = (title || '?').replace(/^[^A-Za-zÀ-ÿ0-9]+/, '').charAt(0); return (c || '?').toUpperCase(); }
   H.picture = function (src, title, cls) {
+    var ph = h('span', { class: 'ph', style: '--h:' + H.hue(title || '') }, initial(title));
+    if (!src) return h('div', { class: 'poster ' + (cls || '') }, ph);       // pas d'image à demander : la lettre sur fond de couleur
     var img = h('img', { src: src, alt: '', loading: 'lazy', decoding: 'async', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } });
-    return h('div', { class: 'poster ' + (cls || '') }, h('span', { class: 'ph', style: '--h:' + H.hue(title || '') }, initial(title)), img);
+    return h('div', { class: 'poster ' + (cls || '') }, ph, img);
   };
   function itemSub(it, kind) {
     var parts = [];

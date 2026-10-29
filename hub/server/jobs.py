@@ -12,7 +12,7 @@ import threading
 import time
 from collections import deque
 
-from libraries.music import coverfile
+from libraries.music import coverfile, wanted
 
 from .. import enrich, scan
 from ..scan.common import is_album_cover
@@ -107,10 +107,10 @@ CANDIDATES_DIRS = {coverfile.CANDIDATES_DIR.casefold()}      # les pochettes ent
 
 
 def is_junk(name, music=False):
-    """Ce nom de fichier est-il un déchet ? Ceux que Windows ou macOS sèment (Thumbs.db, AlbumArt_{...}_Large.jpg...) ; et, en musique, toute image qui n'est pas cover.{ext}, la seule pochette d'un album."""
+    """Ce nom de fichier est-il un déchet ? Ceux que Windows ou macOS sèment (Thumbs.db, AlbumArt_{...}_Large.jpg...) ; et, en musique, toute image qui n'est pas cover.{ext}, la seule pochette d'un album, ni la pochette d'un album manquant ("1997 - OK Computer.jpg")."""
     if name.casefold() in JUNK or ALBUM_ART.match(name):
         return True
-    return music and os.path.splitext(name.casefold())[1] in coverfile.EXTS and not is_album_cover(name)
+    return music and os.path.splitext(name.casefold())[1] in coverfile.EXTS and not is_album_cover(name) and wanted.parse(name) is None
 
 
 def walk_junk(root, music=False):

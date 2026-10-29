@@ -459,6 +459,27 @@ class TestJobs(ServerCase):
         self.hub.jobs.scan(lib)
         self.run_.wait_jobs()
 
+    def test_artist_sheet_shows_missing_albums_from_the_images_next_to_their_folders(self):
+        artist = self.run_.libs["musique"] / "Daft Punk"
+        found = [artist / "2013 - Random Access Memories.png", artist / "1997 - Homework.txt", artist / "2001 - Discovery.png"]       # le dernier est possédé : il ne manque pas
+        for path in found:
+            path.write_bytes(fixtures.PNG)
+            self.addCleanup(path.unlink, True)
+        self.hub.jobs.scan(self.hub.cfg.library("musique"))
+        self.run_.wait_jobs()
+        album = self.item_by_title("musique", "Discovery")
+        artist_id = self.detail(album["id"])["artist_id"]
+        _, sheet = self.api.json(f"/api/artist/musique/{artist_id}")
+        self.assertEqual([(w["year"], w["title"], bool(w["cover"])) for w in sheet["wanted"]], [("1997", "Homework", False), ("2013", "Random Access Memories", True)])
+        self.assertEqual([a["title"] for a in sheet["albums"]], ["Discovery"])
+        status, headers, data = self.api.get(sheet["wanted"][1]["cover"] + "?w=160")
+        self.assertEqual((status, headers["Content-Type"].split("/")[0]), (200, "image"))
+        self.assertEqual(self.api.get(f"/img/wanted/musique/{artist_id}/inconnu")[0], 404)
+        self.assertEqual([i["title"] for i in self.items("musique")["items"] if "Homework" in i["title"] or "Random" in i["title"]], [])       # ailleurs que sur la fiche, ils n'existent pas
+        self.api.json("/api/cleanup", {"apply": True})
+        self.run_.wait_jobs()
+        self.assertEqual([p.exists() for p in found], [True] * len(found))       # le nettoyage garde leurs images
+
     def test_artist_photo_can_be_uploaded_and_removed(self):
         detail = self.detail(self.item_by_title("musique", "Discovery")["id"])
         base = f"/api/artist/musique/{detail['artist_id']}"

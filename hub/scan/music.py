@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from libraries.music import library
+from libraries.music import library, wanted
 
 from .common import entry_row, is_album_cover, item_row, unchanged
 from .video import _Counts
@@ -41,5 +41,12 @@ def scan_music(lib, known, enriched=None):
         for track in release.tracks:
             entries.append(entry_row(lib.id, item["id"], track.rel, "audio", title=track.title, disc=track.disc, number=track.number, duration=track.duration,
                                      size=track.size, mtime=track.mtime, meta={"info": track.info, "error": track.error or "", "format": track.kind}))
-    return items, entries, _Counts(reused, read)
+    counts = _Counts(reused, read)
+    counts.kv = {f"wanted:{lib.id}": wanted_sheet(lib.path, wanted.find(lib.path, releases))}       # les albums manquants se rangent à part : ce ne sont pas des items, aucune liste ne doit les compter
+    return items, entries, counts
+
+
+def wanted_sheet(root, found):
+    """{id d'artiste: [{year, title, key, cover}]} : ce que la fiche d'un artiste montre en grisé. `cover` est le chemin de l'image depuis la racine de la bibliothèque, ou ""."""
+    return {artist: [{"year": w.year, "title": w.title, "key": w.key, "cover": w.cover.relative_to(root).as_posix() if w.cover else ""} for w in albums] for artist, albums in found.items()}
 
