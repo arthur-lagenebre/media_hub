@@ -206,6 +206,21 @@ class TestImages(ServerCase):
         self.assertEqual(self.api.get(f"/img/item/{self.item_by_title('musique', 'Discovery')['id']}")[0], 200)
         self.assertEqual(self.api.get(f"/img/item/{self.item_by_title('livres', 'Naruto')['id']}?w=200")[0], 200)
 
+    def test_replaced_album_cover_is_served_without_rescan(self):
+        album = self.item_by_title("musique", "Discovery")
+        meta = json.loads(self.hub.db.one("SELECT meta FROM items WHERE id=?", (album["id"],))["meta"])
+        cover = self.hub.cfg.library("musique").path / meta.get("folder", "") / meta["cover_file"]
+        before = self.api.get(f"/img/item/{album['id']}")
+        self.assertEqual(before[1]["Cache-Control"], "private, no-cache")      # le navigateur revalide : une nouvelle pochette n'attend pas une semaine
+        original = cover.read_bytes()
+        try:
+            cover.write_bytes(original + b"\0" * 7)
+            after = self.api.get(f"/img/item/{album['id']}", headers={"If-None-Match": before[1]["ETag"]})
+            self.assertEqual(after[0], 200)
+            self.assertNotEqual(after[1]["ETag"], before[1]["ETag"])
+        finally:
+            cover.write_bytes(original)
+
 
 class TestAlbumCover(unittest.TestCase):
     """La pochette d'un album, c'est cover.{ext} dans son dossier : ni folder.jpg, ni la pochette embarquée dans les pistes."""
@@ -301,6 +316,20 @@ class TestProgress(ServerCase):
         self.assertEqual(self.items("series", filter="unseen")["total"], self.items("series")["total"] - 1)
         self.api.json(f"/api/item/{dark['id']}/seen", {"done": False})
         self.assertNotIn("seen", self.item_by_title("series", "Dark"))
+
+    def test_dismissed_item_leaves_continue_until_watched_again(self):
+        dark = self.detail(self.item_by_title("series", "Dark")["id"])
+        first = dark["entries"][0]
+        self.api.json("/api/progress", {"entry": first["id"], "position": 600, "duration": 3000})
+        self.continue_for(dark["id"])
+        self.assertTrue(self.api.json(f"/api/item/{dark['id']}/dismiss", {})[1]["ok"])
+        self.assertEqual([c for c in self.api.json("/api/home")[1]["continue"] if c["item"]["id"] == dark["id"]], [])
+        self.assertEqual(self.detail(dark["id"])["resume"], first["id"])        # la progression est intacte
+        self.hub.db.execute("UPDATE progress SET updated=updated+10 WHERE entry_id=?", (first["id"],))   # relancé plus tard
+        self.assertEqual(self.continue_for(dark["id"])["id"], first["id"])
+        self.assertEqual(self.api.json("/api/item/nope/dismiss", {})[0], 404)
+        self.hub.db.execute("DELETE FROM kv WHERE key LIKE 'dismiss:%'")      # la base est partagée entre les tests
+        self.hub.db.execute("DELETE FROM progress WHERE entry_id=?", (first["id"],))
 
     def test_short_positions_do_not_resume_and_done_tail(self):
         movie = self.detail(self.item_by_title("films", "Inception")["id"])["entries"][0]

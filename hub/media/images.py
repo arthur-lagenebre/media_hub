@@ -136,12 +136,27 @@ class Images:
     def _key(self, ref, stamp, width):
         return hashlib.sha1(f"{ref}|{stamp}|{width}".encode()).hexdigest()[:24]
 
+    def _cover_stamp(self, lib, row):
+        """Taille et date de cover.{ext} d'un album : remplacer l'image par une autre du même nom doit invalider le cache."""
+        meta = json.loads(row["meta"])
+        if lib is None or not meta.get("cover_file"):
+            return ""
+        try:
+            info = (Path(lib.path) / meta.get("folder", "") / meta["cover_file"]).stat()
+        except OSError:
+            return ""
+        return f"|{info.st_size}|{info.st_mtime_ns}"
+
     def get(self, kind, ident, width=0):
         """(octets, type MIME, étiquette) ou None. `kind` : "item" ou "entry"."""
         width = snap_width(width)
         if kind == "item":
             row = self.db.one("SELECT * FROM items WHERE id=?", (ident,))
-            stamp = f"{row['added']}|{row['count']}|{row['meta']}" if row else ""
+            stamp = ""
+            if row:
+                stamp = f"{row['added']}|{row['count']}|{row['meta']}"
+                if row["type"] == "album":
+                    stamp += self._cover_stamp(self.cfg.library(row["lib"]), row)
         else:
             row = self.db.one("SELECT * FROM entries WHERE id=?", (ident,))
             stamp = f"{row['size']}|{row['mtime']}" if row else ""

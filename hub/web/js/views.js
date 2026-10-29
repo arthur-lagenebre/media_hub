@@ -92,7 +92,8 @@
   function playHref(entry, start) {
     return (entry.kind === 'book' ? '#/read/' : '#/play/') + entry.id + (start === 0 ? '?t=0' : '');
   }
-  function resumeCard(c) {
+  // `onRemove(card)` : appelée une fois la carte retirée de « Reprendre » (clic sur ✕, clic droit / appui long, touche Suppr ou Menu)
+  function resumeCard(c, onRemove) {
     var href = playHref(c);
     var label;
     if (c.item.type === 'show') label = 'S' + (c.season || 1) + ' · E' + (c.number || '?') + (c.title ? ' · ' + c.title : '');
@@ -105,14 +106,32 @@
     var tryItem = function () { this.onerror = function () { if (this.parentNode) this.parentNode.removeChild(this); }; this.src = '/img/item/' + c.item.id + '?w=480'; };
     pic.appendChild(h('img', { src: '/img/entry/' + c.id + '?w=480', alt: '', loading: 'lazy', onload: function () { this.classList.add('in'); }, onerror: tryItem }));
     if (c.resume && ratio > 0) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(ratio * 100) + '%' })));
-    return h('a', { class: 'card wide f', href: href, 'data-key': 'c' + c.id }, pic, h('div', { class: 't' }, c.item.title), h('div', { class: 's' }, [label, note].filter(Boolean).join(' · ')));
+    var card;
+    function remove() {
+      H.menu('Retirer « ' + c.item.title + ' » de Reprendre ?', [{ label: 'Retirer de Reprendre', detail: 'La progression est gardée', value: 'yes' }, { label: 'Garder', value: 'no' }], 'no', function (v) {
+        if (v !== 'yes') return;
+        H.api('/api/item/' + c.item.id + '/dismiss', {}).then(function () { H.toast('Retiré de Reprendre'); onRemove(card); })
+          .catch(function (e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.'); });
+      });
+    }
+    card = h('a', { class: 'card wide f', href: href, 'data-key': 'c' + c.id,
+      oncontextmenu: function (e) { e.preventDefault(); remove(); },
+      onkeydown: function (e) { if (e.key === 'Delete' || e.key === 'ContextMenu' || e.keyCode === 46 || e.keyCode === 93) { e.preventDefault(); remove(); } } },
+      pic, h('div', { class: 't' }, c.item.title), h('div', { class: 's' }, [label, note].filter(Boolean).join(' · ')));
+    pic.appendChild(h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Retirer de Reprendre', title: 'Retirer de Reprendre',
+      onclick: function (e) { e.preventDefault(); e.stopPropagation(); remove(); } }, H.icon('close'))));
+    return card;
   }
 
   // --- Accueil -------------------------------------------------------------------
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
     var timer = null;
-    function load() {
+    function dismissed(card) {
+      var next = card.nextElementSibling && card.nextElementSibling.classList.contains('card') ? card.nextElementSibling : card.previousElementSibling;
+      load(next && next.getAttribute('data-key'));
+    }
+    function load(focusKey) {
       return H.api('/api/home').then(function (data) {
         H.clear(el);
         var total = data.libraries.reduce(function (n, l) { return n + l.count; }, 0);
@@ -125,7 +144,7 @@
           timer = setTimeout(function () { if (el.isConnected && !document.hidden) load(); }, 4000);
           return;
         }
-        if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(resumeCard)));
+        if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         data.libraries.forEach(function (lib) {
           if (!lib.recent.length) return;
           var more = lib.count > lib.recent.length ? h('a', { class: 'card more f', href: '#/l/' + lib.id }, h('div', null, H.icon('fwd'), h('span', null, 'Tout voir'), h('small', null, H.number(lib.count)))) : null;
@@ -133,6 +152,7 @@
           shelf.setAttribute('data-lib', lib.id);
           el.appendChild(shelf);
         });
+        if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
         if (!a || a === document.body || (a.closest && a.closest('#nav')) && el.style.display !== 'none') H.focus.first();
       }).catch(function (e) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Le serveur ne répond pas'), h('p', null, e.message), h('button', { class: 'btn f', onclick: load, 'data-autofocus': '1' }, 'Réessayer'))); });
