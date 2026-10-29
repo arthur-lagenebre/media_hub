@@ -22,7 +22,8 @@ Tu travailles sur l'interface de **media_hub** (`hub/web/`). Elle est servie tel
 4. **Données non fiables** : titres, synopsis, noms d'artistes viennent des fichiers et d'API externes. Les insérer avec `textContent` ou l'échappement du projet, jamais en `innerHTML` brut. Les liens externes (fiche artiste) : `rel="noopener noreferrer"`.
 5. **La barre audio ne s'arrête jamais** pendant la navigation : ne recrée pas l'élément `<audio>` et ne casse pas `audio.js`.
 6. **Reprise et progression** : lecteur vidéo et liseuse envoient leur position au serveur (`POST /api/progress`) ; ne casse pas ce contrat ni la reprise « au point exact ».
-7. Si tu as besoin d'une donnée que l'API ne fournit pas, dis-le et décris la route à ajouter plutôt que de modifier `hub/server/app.py` de ta propre initiative.
+7. **Cases sans action** (album manquant grisé sur la fiche d'un artiste, `.card.wanted`) : ni focus, ni clic, ni `data-*` de navigation, sinon la télécommande s'y arrête pour rien. `H.picture` accepte une source vide (lettre sur fond de couleur) : ne demande pas d'image qui n'existe pas.
+8. Si tu as besoin d'une donnée que l'API ne fournit pas, dis-le et décris la route à ajouter plutôt que de modifier `hub/server/app.py` de ta propre initiative.
 
 ## Vérifier
 

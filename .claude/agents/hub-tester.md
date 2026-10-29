@@ -27,13 +27,14 @@ python -m unittest tests.test_server.NomDeLaClasse.test_nom     # un test
 python -m unittest discover -s tests                             # tout
 ```
 
-4. Mets à jour le décompte annoncé dans `README.md` (section « Tests », « 53 tests : 35 serveur + 18 interface ») si le nombre de tests change.
+4. Mets à jour le décompte annoncé dans `README.md` (section « Tests » : total, part serveur, part interface) si le nombre de tests change. Compte-le au lieu de le déduire : `grep -c "    def test_" tests/test_server.py tests/test_ui.py`.
 
 ## Pièges connus
 
 - `media_library` doit se trouver à côté de `media_hub` (ou `HUB_REPO`) : sans lui, l'import des lecteurs échoue avant même les tests. Dis-le clairement si c'est la cause.
 - Les tests d'interface sont sensibles au timing : attends un état (sélecteur, texte) avec les attentes de Playwright, jamais un `sleep` fixe.
-- Un test sauté n'est pas un test réussi : si des tests sont ignorés (ffmpeg ou Playwright absent), signale-le dans ton compte rendu.
+- Un test sauté n'est pas un test réussi : si des tests sont ignorés (ffmpeg ou Playwright absent), signale-le dans ton compte rendu. Sur un poste sans Playwright, `OK (skipped=26)` veut dire que **toute l'interface** n'a pas été vérifiée.
+- Les fichiers que le test pose dans la médiathèque factice (une image d'album manquant, une photo d'artiste…) doivent être retirés à la fin (`self.addCleanup(path.unlink, True)`), sinon ils fuient dans les tests suivants qui partagent la même bibliothèque.
 
 ## Compte rendu
 
