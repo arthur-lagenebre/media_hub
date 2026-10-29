@@ -1,4 +1,6 @@
-"""Enrichissement des séries depuis TMDB : synopsis (de la série et de chaque saison), genres, année, casting, affiche.
+"""Enrichissement depuis le web : les séries (TMDB) et les artistes (MusicBrainz, Wikipédia).
+
+Séries : synopsis (de la série et de chaque saison), genres, année, casting, affiche.
 
 Les épisodes portent leur propre fiche, mais pas celle de la série : rien dans un .mkv ne dit de quoi parle « Dark ». Ce passage interroge TMDB (par l'identifiant épinglé dans le nom du dossier, sinon par une recherche sur ce nom) et garde le résultat dans la base ET sur le disque (l'affiche), pour qu'un rescan ne l'efface pas.
 
@@ -10,10 +12,15 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+from datetime import date
 
 from libraries.common import cache as tmdb_cache
 from libraries.video import lookup
+from libraries.music import artistinfo
+from libraries.music.musicbrainz import MusicBrainz, MusicBrainzError
 from libraries.video.tmdb import Tmdb, TmdbAuthError, TmdbError
+
+MB_USER_AGENT = "media_hub/1.0 ( https://github.com/arthur-lagenebre/media_hub )"
 
 
 CAST_SIZE = 20
@@ -95,4 +102,36 @@ def enrich_shows(cfg, db, lib, log=print, force=False):
         except (TmdbError, OSError) as e:
             log(f"  {item['title']} : {e}")
             failed += 1
+    return {"enriched": done, "failed": failed}
+
+
+def artist_key(mbid):
+    return f"artist:{mbid}"
+
+
+def enrich_artists(cfg, db, lib, log=print, force=False):
+    """La fiche de chaque artiste de la bibliothèque de musique qui porte un identifiant MusicBrainz : type, pays, dates, membres, liens, résumé Wikipédia.
+
+    Sans clé (MusicBrainz n'en demande pas), mais à raison d'une requête par seconde : la première passe est longue. Une fiche de moins de 30 jours n'est pas redemandée, sauf `force`. Elle est gardée dans la base : un rescan ne l'efface pas.
+    """
+    mb = MusicBrainz(user_agent=MB_USER_AGENT, cache=tmdb_cache.Cache(folder=cfg.data / "musicbrainz-cache", read=True))
+    artists = {}
+    for row in db.query("SELECT grp, meta FROM items WHERE lib=? AND type='album'", (lib.id,)):
+        mbid = json.loads(row["meta"]).get("artist_mbid")
+        if mbid:
+            artists.setdefault(mbid, row["grp"])
+    done = failed = 0
+    for mbid, name in sorted(artists.items(), key=lambda kv: kv[1].casefold()):
+        kept = db.kv_get(artist_key(mbid))
+        if not force and kept and not artistinfo.stale(kept):
+            continue
+        try:
+            info = artistinfo.fetch(mb, mbid)
+        except MusicBrainzError as e:
+            log(f"  {name} : {e}")
+            failed += 1
+            continue
+        db.kv_set(artist_key(mbid), {"fetched": date.today().isoformat(), "info": info})
+        done += 1
+        log(f"  {name} : {artistinfo.facts(info) or 'fiche vide'}")
     return {"enriched": done, "failed": failed}
