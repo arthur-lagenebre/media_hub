@@ -408,6 +408,38 @@ class TestJobs(ServerCase):
         self.assertEqual(self.api.json("/api/enrich", {"lib": "films"})[0], 400)
         self.assertEqual(self.api.json("/api/enrich", {"lib": "series"})[0], 400)
 
+    def test_artist_sheet_lists_albums_tracks_and_the_fetched_bio(self):
+        from unittest import mock
+
+        album = self.item_by_title("musique", "Discovery")
+        detail = self.detail(album["id"])
+        self.assertTrue(detail["artist_id"])
+        self.assertEqual(album["artist_id"], detail["artist_id"])
+        url = f"/api/artist/musique/{detail['artist_id']}"
+        status, sheet = self.api.json(url)
+        self.assertEqual(status, 200)
+        self.assertEqual((sheet["name"], [a["title"] for a in sheet["albums"]]), ("Daft Punk", ["Discovery"]))
+        self.assertEqual([t["title"] for t in sheet["tracks"]], ["One More Time", "Aerodynamic", "Digital Love"])
+        self.assertNotIn("info", sheet)                                 # pas de fiche tant qu'on ne l'a pas demandée
+        self.assertEqual(self.api.json("/api/artist/musique/deadbeef")[0], 404)
+        self.assertEqual(self.api.json(f"/api/artist/films/{detail['artist_id']}")[0], 404)
+
+        info = {"type": "Group", "area": "France", "begin": "1993", "end": "2021", "ended": True, "disambiguation": "", "links": [{"label": "Site officiel", "url": "https://daftpunk.com"}],
+                "members": [{"name": "Thomas Bangalter", "mbid": "x", "begin": "1993", "end": "2021", "ended": True, "roles": ["synthétiseur"]}],
+                "wiki": {"lang": "fr", "title": "Daft Punk", "url": "https://fr.wikipedia.org/wiki/Daft_Punk", "extract": "Duo de musique électronique."}}
+        self.hub.db.update_item_meta(album["id"], meta={"artist_mbid": "abc"})
+        lib = next(l for l in self.hub.cfg.libraries if l.id == "musique")
+        with mock.patch("hub.enrich.artistinfo.fetch", return_value=info):
+            self.assertEqual(self.api.json("/api/enrich", {"lib": "musique"})[0], 202)         # MusicBrainz ne demande pas de clé
+            self.run_.wait_jobs()
+        sheet = self.api.json(url)[1]
+        self.assertEqual(sheet["info"]["facts"], "Groupe · France · 1993 – 2021")
+        self.assertEqual(sheet["info"]["wiki"]["extract"], "Duo de musique électronique.")
+        self.assertEqual(sheet["info"]["members"][0], {"name": "Thomas Bangalter", "roles": ["synthétiseur"], "period": "1993 – 2021"})
+        self.assertEqual(sheet["info"]["links"][0]["url"], "https://daftpunk.com")
+        self.hub.jobs.scan(lib)
+        self.run_.wait_jobs()
+
     def test_enrich_keeps_show_synopsis_seasons_and_cast(self):
         from unittest import mock
         from libraries.video.tmdb import TmdbError

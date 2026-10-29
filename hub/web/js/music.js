@@ -152,6 +152,55 @@
     return { el: el, nav: '#/l/' + lib, lib: lib, refresh: load };
   });
 
+  // --- La fiche d'un artiste ou d'un groupe ---------------------------------------------
+  H.route(/^\/artist\/([\w-]+)\/(\w+)$/, function (m) {
+    var lib = m[1], id = m[2], data = null;
+    var el = h('section', { class: 'detail artist', 'data-lib': lib });
+    function load() {
+      return H.api('/api/artist/' + lib + '/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
+        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Artiste introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + lib, 'data-autofocus': '1' }, 'Retour à la musique')));
+      });
+    }
+    function render() {
+      var d = data, info = d.info || null, list = d.tracks;
+      var focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      H.clear(el);
+      var meta = [H.plural(d.albums.length, 'album'), H.plural(list.length, 'piste'), d.duration ? H.dur(d.duration) : ''].filter(Boolean).join(' · ');
+      var box = h('div', { class: 'info' }, h('h1', null, d.name));
+      if (info && info.facts) box.appendChild(h('p', { class: 'meta' }, info.facts));
+      if (info && info.disambiguation) box.appendChild(h('p', { class: 'genres' }, info.disambiguation));
+      box.appendChild(h('p', { class: info && info.facts ? 'credit' : 'meta' }, meta));
+      if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, 'Wikipédia')));
+      box.appendChild(h('div', { class: 'actions' },
+        H.button('Tout lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }),
+        H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
+        H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
+        H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } })));
+      var first = d.albums[0];
+      el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + first.id + '?w=300)' }),
+        h('div', { class: 'hero-in' }, H.picture('/img/item/' + first.id + '?w=500', d.name, 'sq big'), box)));
+
+      var body = h('div', { class: 'body' });
+      body.appendChild(h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, d.albums.map(function (a) { return H.card(a, false); }))));
+      if (info && info.members && info.members.length) {
+        body.appendChild(h('section', { class: 'cast' }, h('h2', null, 'Membres'), h('ul', null, info.members.map(function (p) {
+          return h('li', null, h('b', null, p.name), [p.roles.join(', '), p.period].filter(Boolean).length ? h('span', null, [p.roles.join(', '), p.period].filter(Boolean).join(' · ')) : null);
+        }))));
+      }
+      if (info && info.links && info.links.length) {
+        body.appendChild(h('section', { class: 'links-out' }, h('h2', null, 'Liens'), h('div', { class: 'actions' }, info.links.map(function (l) {
+          return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label);
+        }))));
+      }
+      if (!info) body.appendChild(h('p', { class: 'muted' }, 'Pas encore de fiche : lance « Fiches artistes » dans Gestion pour récupérer le résumé, les membres et les liens.'));
+      el.appendChild(body);
+      H.audio.mark();
+      if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
+    }
+    load();
+    return { el: el, nav: '#/l/' + lib, lib: lib, refresh: load };
+  });
+
   // --- Playlists : une playlist --------------------------------------------------------
   H.route(/^\/playlist\/(\w+)$/, function (m) {
     var pid = m[1], lib = M.libId(), data = null;

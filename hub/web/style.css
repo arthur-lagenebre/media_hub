@@ -150,6 +150,10 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .trk .ti { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trk .du { color: var(--mute); font-variant-numeric: tabular-nums; margin-left: 1rem; }
 .trk.now { color: var(--accent); background: var(--s2); font-weight: 700; }
+.grp .head { color: inherit; }
+.info .credit .head { margin-left: -0.6rem; color: var(--mute); }
+.info .synopsis .src { color: var(--mute); white-space: nowrap; }
+.artist .muted { color: var(--mute); }
 .cast ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; }
 .cast li { background: var(--s1); border-radius: 2rem; padding: 0.35rem 0.9rem; margin: 0 0.6rem 0.6rem 0; font-size: 0.9rem; }
 .cast li span { color: var(--mute); margin-left: 0.5rem; }
