@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from libraries.common.text import fold, initial
+from libraries.music import coverfile
 
 from ..db import make_id
 
@@ -40,6 +42,12 @@ def unchanged(row, size, mtime):
 
 IMAGE_NAMES = ("poster", "folder", "cover", "front", "thumb")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def is_album_cover(name):
+    """La seule pochette d'un album : cover.jpg, cover.png... (la casse ne compte pas). Ni folder.jpg, ni la pochette embarquée dans les pistes."""
+    stem, ext = os.path.splitext(name.casefold())
+    return stem == "cover" and ext in coverfile.EXTS
 
 
 def folder_image(folder):

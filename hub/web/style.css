@@ -263,3 +263,66 @@ body.has-audio #toast { bottom: 6rem; }
   * { transition: none !important; scroll-behavior: auto !important; }
   .spin i { animation-duration: 3s; }
 }
+
+/* Sagas : affiches empilées en léger décalé */
+.stack { position: relative; padding-top: 150%; }
+.stack > .poster { position: absolute; width: 84%; padding-top: 126%; box-shadow: 0 0.3rem 0.9rem rgba(0, 0, 0, 0.45); transition: transform 0.12s; }
+.stack > .poster .ph { font-size: 2.4rem; }
+.stack .badge { z-index: 5; }
+.card.saga:focus .stack > .poster, .card.saga:hover .stack > .poster { transform: none; box-shadow: 0 0.3rem 0.9rem rgba(0, 0, 0, 0.45); }
+.card.saga:focus .stack, .card.saga:hover .stack { transform: scale(1.045); }
+body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
+.card.saga .stack { transition: transform 0.12s; }
+.stack-big { width: 100%; }
+.card .part { position: absolute; left: 0.4rem; top: 0.4rem; min-width: 1.5rem; text-align: center; background: rgba(0, 0, 0, 0.78); padding: 0.05rem 0.4rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 700; }
+.card.now .poster { box-shadow: 0 0 0 0.18rem var(--accent); }
+.sagabox h2 { display: flex; align-items: baseline; }
+.sagabox h2 .n { margin-left: 0.8rem; color: var(--mute); font-size: 0.9rem; font-weight: 500; }
+.sagabox .grid.small { --cw: 8.5rem; }
+
+/* Musique : actions sur une pochette, file d'attente, playlists */
+.qa { position: absolute; right: 0.4rem; bottom: 0.4rem; display: flex; opacity: 0; transition: opacity 0.12s; z-index: 4; }
+.card:hover .qa, .card:focus .qa, .card:focus-within .qa { opacity: 1; }
+@media (hover: none) { .qa { opacity: 1; } }
+.qbtn { width: 2.3rem; height: 2.3rem; border: 0; border-radius: 50%; background: rgba(0, 0, 0, 0.72); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; margin-left: 0.4rem; padding: 0; }
+.qbtn:hover { background: var(--accent); color: var(--on-accent); }
+.qbtn .ic svg { width: 1.2em; height: 1.2em; }
+.trkwrap { display: flex; align-items: center; }
+.trkwrap .trk { flex: 1; min-width: 0; }
+.trk .ti { display: flex; flex-direction: column; }
+.trk .ti small { color: var(--mute); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; }
+.btn.trkmore { background: transparent; padding: 0.5rem; margin-left: 0.2rem; }
+#abar .qn { margin-left: 0.3rem; font-size: 0.75rem; color: var(--mute); font-variant-numeric: tabular-nums; }
+.menu.queue { width: min(46rem, 94vw); }
+.qlist { min-height: 4rem; }
+.qrow { display: flex; align-items: center; border-radius: 0.6rem; }
+.qrow.now { background: var(--s2); }
+.qrow.now .ti b { color: var(--accent); }
+.qt { flex: 1; min-width: 0; display: flex; align-items: center; text-align: left; background: transparent; border: 0; color: inherit; padding: 0.55rem 0.6rem; border-radius: 0.6rem; cursor: pointer; }
+.qt .no { width: 2rem; flex: 0 0 2rem; color: var(--mute); font-variant-numeric: tabular-nums; }
+.qt .ti { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.qt .ti b, .qt .ti small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qt .ti small { color: var(--mute); font-size: 0.8rem; }
+.qt .du { color: var(--mute); margin-left: 1rem; font-variant-numeric: tabular-nums; }
+.btn.qb { background: transparent; padding: 0.45rem; }
+.menu .btns { margin-top: 0.8rem; flex-wrap: wrap; }
+.menu .btns .btn { background: var(--s2); }
+.menu .btns .btn.primary { background: var(--accent); }
+.menu.prompt { width: min(34rem, 92vw); }
+.menu.prompt .field { width: 100%; margin: 0.2rem 0 0.4rem; }
+.mosaic { background: var(--s2); }
+.mosaic img { position: absolute; width: 100%; height: 100%; top: 0; left: 0; object-fit: cover; opacity: 0; transition: opacity 0.25s; }
+.mosaic img.in { opacity: 1; }
+.mosaic.n2 img, .mosaic.n3 img, .mosaic.n4 img { width: 50%; height: 50%; }
+.mosaic.n2 img:nth-of-type(2), .mosaic.n3 img:nth-of-type(2), .mosaic.n4 img:nth-of-type(2) { left: 50%; }
+.mosaic.n2 img:nth-of-type(1) { height: 100%; }
+.mosaic.n2 img:nth-of-type(2) { height: 100%; }
+.mosaic img:nth-of-type(3) { top: 50%; }
+.mosaic img:nth-of-type(4) { top: 50%; left: 50%; }
+.mosaic.n3 img:nth-of-type(3) { width: 100%; }
+.playlists .tools .btn { margin-right: 0.7rem; }
+
+/* Livres : accès rapides par section */
+.library .quick { padding: 0.2rem var(--gut) 0.3rem; margin: 0; }
+.chip small { font-weight: 500; opacity: 0.7; font-size: 0.8em; }
+.chip.on small { opacity: 0.85; }

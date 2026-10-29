@@ -68,7 +68,8 @@ FILMS = [
     ("Les Évadés", 1994, "Drame", "Deux détenus se lient d'amitié.", "Frank Darabont", 142, 150),
 ]
 SAGAS = {"Saga Le Seigneur des Anneaux": [("La Communauté de l'Anneau", 2001), ("Les Deux Tours", 2002), ("Le Retour du roi", 2003)],
-         "Saga Matrix": [("Matrix", 1999), ("Matrix Reloaded", 2003), ("Matrix Revolutions", 2003)]}
+         "Saga Matrix": [("Matrix", 1999), ("Matrix Reloaded", 2003), ("Matrix Revolutions", 2003)],
+         "Saga Course Folle": [(f"Course Folle {n}" if n > 1 else "Course Folle", 2000 + n * 2) for n in range(1, 11)]}
 SHOWS = {"Dark": (2017, "Science-Fiction, Mystère", "Dans une petite ville allemande, la disparition d'enfants révèle des liens entre quatre familles.", 170, [3, 2]),
          "Severance": (2022, "Drame, Mystère", "Des employés dont la mémoire est scindée entre travail et vie privée.", 20, [3]),
          "Breaking Bad": (2008, "Drame, Crime", "Un professeur de chimie devient fabricant de drogue.", 30, [2])}
@@ -80,7 +81,7 @@ ALBUMS = [("Daft Punk", "Discovery", 2001, "Electronic", ["One More Time", "Aero
           ("Portishead", "Dummy", 1994, "Trip Hop", ["Mysterons", "Sour Times", "Glory Box"]),
           ("Radiohead", "OK Computer", 1997, "Rock", ["Airbag", "Paranoid Android", "Karma Police"]),
           ("Nina Simone", "I Put a Spell on You", 1965, "Jazz", ["Feeling Good", "Ain't Got No - I Got Life"])]
-BOOKS = [("Manga", "Naruto", 5, "Kishimoto"), ("Manga", "One Piece", 4, "Oda"), ("Comics", "Saga", 3, "Brian K. Vaughan"), ("BD", "Blacksad", 3, "Díaz Canales")]
+BOOKS = [("Manga", "Naruto", 5, "Kishimoto"), ("Manga", "One Piece", 4, "Oda"), ("Comics", "Saga", 3, "Brian K. Vaughan"), ("BD", "Blacksad", 3, "Díaz Canales"), ("Artbook", "The Art of Dune", 2, "Tanya Lapointe")]
 
 
 def write_comic(path, name, number, pages, **info):

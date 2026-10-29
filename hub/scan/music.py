@@ -9,7 +9,7 @@ import json
 
 from libraries.music import library
 
-from .common import entry_row, item_row, unchanged
+from .common import entry_row, is_album_cover, item_row, unchanged
 from .video import _Counts
 
 
@@ -28,10 +28,11 @@ def scan_music(lib, known, enriched=None):
                 library.read_info(track)
                 read += 1
         progress = release.progress()
+        cover = release.cover_file if release.cover_file and is_album_cover(release.cover_file.name) else None     # cover.{ext} seul : folder.jpg et les pochettes embarquées ne comptent pas
         meta = {
             "artist": release.artist, "artist_id": release.artist_id, "artist_mbid": release.artist_mbid, "mbid": release.mbid, "label": release.label,
             "catalog": release.catalog, "formats": release.formats, "tagged": release.tagged, "folder": release.rel,
-            "cover_file": release.cover_file.name if release.cover_file else "", "has_cover": bool(release.cover_file or release.cover_track),
+            "cover_file": cover.name if cover else "", "has_cover": bool(cover),
             "progress": list(progress) if progress else None, "discs": len(release.discs), "duration": release.duration,
         }
         item = item_row(lib.id, release.rel or ".", "album", release.title, year=release.year, genres=release.genres, grp=release.artist, meta=meta,

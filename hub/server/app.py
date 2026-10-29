@@ -23,11 +23,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from libraries.books import shelf
 from libraries.books.archive import BookError
-from libraries.common.text import fold
+from libraries.common.text import fold, initial
 
 from .. import __version__
-from ..db import Database
+from .. import playlists
+from ..db import Database, make_id
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
@@ -483,7 +485,74 @@ SORTS = {
     "added": (lambda r: (r["added"], r["sort"]), True),
     "year": (lambda r: (r["year"] or "0000", r["sort"]), True),
     "year-asc": (lambda r: (r["year"] or "9999", r["sort"]), False),
+    "part": (lambda r: (part_of(r) is None, part_of(r) or 0, r["year"] or "9999", r["sort"]), False),     # l'ordre d'une saga : film 1, film 2...
 }
+# Le tri « Titre » de la musique et des livres range par artiste / collection ; chez un artiste, les albums vont du plus ancien au plus récent, puis par nom (ceux sans année en dernier)
+TITLE_SORTS = {
+    "music": lambda r: (fold(r["grp"]) or "￿", r["year"] or "9999", r["sort"]),
+    "books": lambda r: (fold(r["grp"]), r["sort"]),
+}
+
+
+def part_of(row):
+    return safe_json(row["meta"], {}).get("part")
+
+
+def section_of(row):
+    """La section d'une série de livres (le dossier de premier niveau : Manga, Comics, Artbook…) ; « Autres » quand rien n'est indiqué."""
+    return safe_json(row["meta"], {}).get("section") or "Autres"
+
+
+def sections_json(counts):
+    """Les sections dans l'ordre de l'étagère (Manga, BD, Comics… puis les autres par ordre alphabétique, « Autres » en dernier)."""
+    def rank(name):
+        if name == shelf.LOOSE_SECTION:
+            return (2, 0, "")
+        if name in shelf.SECTION_ORDER:
+            return (0, shelf.SECTION_ORDER.index(name), "")
+        return (1, 0, fold(name))
+    return [[name, counts[name]] for name in sorted(counts, key=rank)]
+
+
+def film_seen(row, seen):
+    return seen.get(row["id"], (0, 0))[0] >= max(1, row["count"])
+
+
+def collapse_sagas(rows, seen):
+    """Les films d'une même saga (au moins deux dans la bibliothèque) deviennent une seule vignette ; les autres films restent seuls.
+
+    Une vignette de saga est un dictionnaire qui a les mêmes clés qu'une ligne de la base, plus `members` : les films, dans l'ordre de la saga.
+    """
+    groups = {}
+    for row in rows:
+        if row["type"] == "movie" and row["grp"]:
+            groups.setdefault(row["grp"], []).append(row)
+    out = [row for row in rows if not (row["type"] == "movie" and row["grp"] and len(groups[row["grp"]]) > 1)]
+    for name, members in groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=SORTS["part"][0])
+        years = sorted(m["year"] for m in members if m["year"])
+        genres = []
+        for m in members:
+            genres += [g for g in safe_json(m["genres"], []) if g not in genres]
+        out.append({"id": make_id(members[0]["lib"], "saga:" + name), "lib": members[0]["lib"], "type": "saga", "title": name, "sort": fold(name), "letter": initial(name),
+                    "year": years[0] if years else "", "years": [years[0], years[-1]] if years else [], "summary": "", "genres": json.dumps(genres, ensure_ascii=False), "grp": "",
+                    "meta": "{}", "added": max(m["added"] for m in members), "count": len(members), "members": members,
+                    "all_seen": all(film_seen(m, seen) for m in members)})
+    return out
+
+
+def saga_json(saga, seen):
+    done = sum(1 for m in saga["members"] if film_seen(m, seen))
+    started = sum(1 for m in saga["members"] if not film_seen(m, seen) and seen.get(m["id"], (0, 0))[1])
+    out = {"id": saga["id"], "lib": saga["lib"], "type": "saga", "title": saga["title"], "year": saga["year"], "years": saga["years"], "grp": "", "n": saga["count"], "letter": saga["letter"],
+           "added": saga["added"], "genres": safe_json(saga["genres"], []), "covers": [m["id"] for m in saga["members"][:3]]}
+    if done:
+        out["seen"] = done
+    if started:
+        out["started"] = started
+    return out
 
 
 @route("GET", r"/api/library/([\w-]+)")
@@ -491,39 +560,58 @@ def api_library(h, m, q):
     hub = h.hub
     lib = library_or_404(hub, m.group(1))
     rows = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
-    letters, genres = {}, {}
+    seen = seen_counts(hub, lib.id)
+    sagas = lib.kind == "movies" and q.get("sagas") == "1" and not q.get("group")
+    if sagas:
+        rows = collapse_sagas(rows, seen)
+    letters, genres, sections, of = {}, {}, {}, {}
+    books = lib.kind == "books"
     for row in rows:
         letters[row["letter"]] = letters.get(row["letter"], 0) + 1
         for genre in safe_json(row["genres"], []):
             genres[genre] = genres.get(genre, 0) + 1
+        if books:
+            of[row["id"]] = section_of(row)
+            sections[of[row["id"]]] = sections.get(of[row["id"]], 0) + 1
+    section = q.get("section", "") if books else ""
     needle = fold(q.get("q", "")).strip()
     letter, genre, group = q.get("letter", ""), q.get("genre", ""), q.get("group", "")
     unseen = q.get("filter") == "unseen"
-    seen = seen_counts(hub, lib.id)
     chosen = []
     for row in rows:
+        is_saga = row["type"] == "saga"
         if letter and row["letter"] != letter:
             continue
         if group and row["grp"] != group:
             continue
+        if section and of.get(row["id"]) != section:
+            continue
         if genre and genre not in safe_json(row["genres"], []):
             continue
-        if needle and needle not in fold(row["title"]) and needle not in fold(row["grp"]):
+        if needle and needle not in fold(row["title"]) and needle not in fold(row["grp"]) and not (is_saga and any(needle in fold(f["title"]) for f in row["members"])):
             continue
-        if unseen and seen.get(row["id"], (0, 0))[0] >= max(1, row["count"]):
+        if unseen and (row["all_seen"] if is_saga else seen.get(row["id"], (0, 0))[0] >= max(1, row["count"])):
             continue
         chosen.append(row)
-    key, reverse = SORTS.get(q.get("sort", "title"), SORTS["title"])
-    if q.get("sort", "title") == "title" and lib.kind in ("music", "books"):
-        key = lambda r: (fold(r["grp"]) or "￿", r["sort"]) if lib.kind == "music" else (fold(r["grp"]), r["sort"])
+    sort = q.get("sort", "title")
+    key, reverse = SORTS.get(sort, SORTS["title"])
+    if sort == "title" and lib.kind in TITLE_SORTS:
+        key = TITLE_SORTS[lib.kind]
     chosen.sort(key=key, reverse=reverse)
     try:
         offset, limit = max(0, int(q.get("offset", 0))), min(600, max(1, int(q.get("limit", 240))))
     except ValueError:
         offset, limit = 0, 240
     page = chosen[offset:offset + limit]
-    h.send_json({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "total": len(chosen), "offset": offset, "items": [with_seen(r, seen) for r in page],
-                 "letters": sorted(letters.items(), key=lambda kv: (kv[0] == "#", kv[0])), "genres": sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:60]})
+    out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "total": len(chosen), "offset": offset,
+           "items": [saga_json(r, seen) if r["type"] == "saga" else with_seen(r, seen) for r in page],
+           "letters": sorted(letters.items(), key=lambda kv: (kv[0] == "#", kv[0])), "genres": sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:60]}
+    if books:
+        out["sections"] = sections_json(sections)
+    if sagas:
+        out["sagas"] = sum(1 for r in chosen if r["type"] == "saga")
+        out["films"] = sum(r["count"] if r["type"] == "saga" else 1 for r in chosen)
+    h.send_json(out)
 
 
 # ---------------------------------------------------------------------------
@@ -585,6 +673,52 @@ def api_item_seen(h, m, q):
             hub.db.execute("DELETE FROM progress WHERE profile=? AND entry_id=?", (PROFILE, row["id"]))
         count += 1
     h.send_json({"ok": True, "count": count})
+
+
+# ---------------------------------------------------------------------------
+# Playlists
+# ---------------------------------------------------------------------------
+def playlist_call(func, *args):
+    try:
+        return func(*args)
+    except playlists.PlaylistError as e:
+        raise HttpError(e.status, e.message)
+
+
+@route("GET", r"/api/playlists")
+def api_playlists(h, m, q):
+    h.send_json({"playlists": playlists.listing(h.hub.db, PROFILE)})
+
+
+@route("POST", r"/api/playlists")
+def api_playlist_create(h, m, q):
+    body = h.body_json()
+    entries = body.get("entries") if isinstance(body.get("entries"), list) else []
+    pid = playlist_call(playlists.create, h.hub.db, PROFILE, body.get("name"), entries)
+    h.send_json(playlist_call(playlists.detail, h.hub.db, PROFILE, pid), 201)
+
+
+@route("GET", r"/api/playlist/(\w+)")
+def api_playlist(h, m, q):
+    h.send_json(playlist_call(playlists.detail, h.hub.db, PROFILE, m.group(1)))
+
+
+@route("POST", r"/api/playlist/(\w+)/(add|remove|move|rename|delete)")
+def api_playlist_edit(h, m, q):
+    db, pid, action, body = h.hub.db, m.group(1), m.group(2), h.body_json()
+    if action == "add":
+        playlist_call(playlists.add, db, PROFILE, pid, body.get("entries") if isinstance(body.get("entries"), list) else [])
+    elif action == "remove":
+        playlist_call(playlists.remove, db, PROFILE, pid, body.get("index"))
+    elif action == "move":
+        playlist_call(playlists.move, db, PROFILE, pid, body.get("from"), body.get("to"))
+    elif action == "rename":
+        playlist_call(playlists.rename, db, PROFILE, pid, body.get("name"))
+    else:
+        playlist_call(playlists.delete, db, PROFILE, pid)
+        h.send_json({"ok": True})
+        return
+    h.send_json(playlist_call(playlists.detail, db, PROFILE, pid))
 
 
 # ---------------------------------------------------------------------------

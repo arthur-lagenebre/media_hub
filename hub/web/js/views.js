@@ -43,13 +43,39 @@
     else { if (it.year) parts.push(it.year); }
     return parts.join(' · ');
   }
-  H.card = function (it, withGroup) {
+  function sagaHref(libId, name) { return '#/saga/' + libId + '?g=' + encodeURIComponent(name); }
+  // Les affiches d'une saga, empilées en léger décalé : la première devant, les suivantes qui dépassent derrière.
+  H.stack = function (ids, title, width) {
+    var box = h('div', { class: 'stack n' + Math.min(3, ids.length) });
+    ids.slice(0, 3).reverse().forEach(function (id, i, list) {
+      var depth = list.length - 1 - i;       // 0 = devant
+      var pic = H.picture('/img/item/' + id + '?w=' + (width || 300), title + depth);
+      pic.setAttribute('style', 'left:' + depth * 8 + '%;top:' + (16 - depth * 5.33).toFixed(2) + '%;z-index:' + (3 - depth));
+      box.appendChild(pic);
+    });
+    return box;
+  };
+  function sagaCard(it) {
+    var a = h('a', { class: 'card saga f', href: sagaHref(it.lib, it.title), 'data-key': it.id, title: it.title });
+    var stack = H.stack(it.covers && it.covers.length ? it.covers : [it.id], it.title);
+    if (it.seen >= it.n && it.seen > 0) stack.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
+    else if (it.seen || it.started) stack.appendChild(h('span', { class: 'badge' }, (it.seen || 0) + '/' + it.n));
+    a.appendChild(stack);
+    a.appendChild(h('div', { class: 't' }, it.title));
+    var years = it.years && it.years.length ? (it.years[0] === it.years[1] ? it.years[0] : it.years[0] + '–' + it.years[1]) : '';
+    a.appendChild(h('div', { class: 's' }, [H.plural(it.n, 'film'), years].filter(Boolean).join(' · ')));
+    return a;
+  }
+  H.card = function (it, withGroup, withPart) {
+    if (it.type === 'saga') return sagaCard(it);
     var square = it.type === 'album';
-    var a = h('a', { class: 'card f' + (square ? ' sq' : ''), href: '#/i/' + it.id, 'data-key': it.id, title: it.title });
+    var a = h('a', { class: 'card f' + (square ? ' sq' : ''), href: '#/i/' + it.id, 'data-key': it.id, 'data-type': it.type, title: it.title });
     var pic = H.picture('/img/item/' + it.id + '?w=300', it.title, square ? 'sq' : '');
     var total = it.n || 1;
     if (it.seen >= total && it.seen > 0) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
     else if (it.seen || it.started) pic.appendChild(h('span', { class: 'badge' }, it.type === 'movie' ? 'En cours' : (it.seen || 0) + '/' + total));
+    if (square && H.music) pic.appendChild(H.music.cardTools(it));
+    if (withPart && it.part !== undefined && it.part !== null) pic.appendChild(h('span', { class: 'part' }, it.part));
     a.appendChild(pic);
     a.appendChild(h('div', { class: 't' }, it.title));
     a.appendChild(h('div', { class: 's' }, (withGroup && it.grp ? it.grp + ' · ' : '') + itemSub(it)));
@@ -125,8 +151,8 @@
     var libId = m[1], lib = H.lib(libId);
     var kind = lib ? lib.kind : 'movies';
     var sorts = SORTS[kind] || SORTS.movies;
-    var st = { q: '', letter: '', genre: '', sort: H.pref('sort.' + libId) || 'title', unseen: false };
-    var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { letters: [], genres: [] };
+    var st = { q: '', letter: '', genre: '', sort: H.pref('sort.' + libId) || 'title', unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '', sagas: kind === 'movies' && H.pref('sagas.' + libId) !== '0' };
+    var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { letters: [], genres: [], sections: [] };
     var grid = h('div', { class: 'grid' + (kind === 'music' ? ' sq' : '') });
     var sentinel = h('div', { class: 'sentinel' });
     var count = h('span', { class: 'count' });
@@ -135,9 +161,12 @@
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
     var bLetter = H.button('', null, { onclick: pickLetter }), bGenre = H.button('', null, { onclick: pickGenre }), bSort = H.button('', null, { onclick: pickSort });
     var bSeen = H.button('Non vus', null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
-    var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, bSort, kind === 'music' ? null : bSeen, count);
+    var bSagas = H.button('Sagas', null, { onclick: function () { st.sagas = !st.sagas; H.pref('sagas.' + libId, st.sagas ? '1' : '0'); reset(); }, 'aria-pressed': 'false' });
+    var bLists = H.button('Playlists', 'queue', { onclick: function () { H.go('#/playlists'); } });
+    var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, bSort, kind === 'music' ? null : bSeen, kind === 'movies' ? bSagas : null, kind === 'music' ? bLists : null, count);
+    var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': 'Accès rapides', hidden: true });
     var empty = h('div', { class: 'blank', hidden: true });
-    var el = h('section', { class: 'library' }, h('h1', null, lib ? lib.label : 'Bibliothèque'), tools, grid, empty, sentinel);
+    var el = h('section', { class: 'library' }, h('h1', null, lib ? lib.label : 'Bibliothèque'), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
 
     function label(btn, name, value) { H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('small', null, name + ' '), value])); }
     function paint() {
@@ -146,9 +175,27 @@
       label(bSort, 'Tri', (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
       bSeen.setAttribute('aria-pressed', st.unseen ? 'true' : 'false');
       bSeen.classList.toggle('on', st.unseen);
+      bSagas.setAttribute('aria-pressed', st.sagas ? 'true' : 'false');
+      bSagas.classList.toggle('on', st.sagas);
       bGenre.hidden = !facets.genres.length;
       var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: 'album', books: 'série' }[kind] || 'élément';
-      count.textContent = total ? H.plural(total, word) : '';
+      count.textContent = total ? (kind === 'movies' && st.sagas && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word)) : '';
+    }
+    // Les accès rapides des livres : une pastille par section (Manga, BD, Comics, Artbook…), avec ce qu'elle contient.
+    function paintQuick() {
+      var list = facets.sections || [];
+      if (st.section && !list.some(function (x) { return x[0] === st.section; })) st.section = '';     // la section a disparu : on revient à tout
+      quick.hidden = list.length < 2;
+      if (quick.hidden) return;
+      var all = list.reduce(function (n, x) { return n + x[1]; }, 0);
+      var focus = quick.contains(document.activeElement) ? document.activeElement.getAttribute('data-section') : null;
+      H.clear(quick);
+      [['', 'Tout', all]].concat(list.map(function (x) { return [x[0], x[0], x[1]]; })).forEach(function (x) {
+        var on = st.section === x[0];
+        quick.appendChild(h('button', { class: 'chip f' + (on ? ' on' : ''), type: 'button', 'data-section': x[0], 'aria-pressed': on ? 'true' : 'false',
+          onclick: function () { st.section = x[0]; H.pref('section.' + libId, x[0] || null); reset(); } }, x[1], h('small', null, ' ' + H.number(x[2]))));
+      });
+      if (focus !== null) { var again = quick.querySelector('[data-section="' + focus.replace(/"/g, '\\"') + '"]'); if (again) H.focus.set(again, true); }
     }
     function pickLetter() {
       var list = [{ label: 'Toutes', value: '' }].concat(facets.letters.map(function (l) { return { label: l[0], detail: String(l[1]), value: l[0] }; }));
@@ -166,7 +213,9 @@
       if (st.q) q.push('q=' + encodeURIComponent(st.q));
       if (st.letter) q.push('letter=' + encodeURIComponent(st.letter));
       if (st.genre) q.push('genre=' + encodeURIComponent(st.genre));
+      if (st.section) q.push('section=' + encodeURIComponent(st.section));
       if (st.unseen) q.push('filter=unseen');
+      if (st.sagas) q.push('sagas=1');
       return '/api/library/' + libId + '?' + q.join('&');
     }
     function append(list) {
@@ -188,7 +237,7 @@
       H.api(query(items.length)).then(function (res) {
         if (mine !== token) return;
         total = res.total;
-        if (first) facets = res;
+        if (first) { facets = res; paintQuick(); }
         append(res.items);
         loading = false;
         paint();
@@ -199,11 +248,11 @@
       }).catch(function (e) { loading = false; empty.hidden = false; H.clear(empty).appendChild(h('p', null, e.message)); });
     }
     function showEmpty() {
-      var filtered = st.q || st.letter || st.genre || st.unseen;
+      var filtered = st.q || st.letter || st.genre || st.unseen || st.section;
       H.clear(empty).appendChild(h('div', null,
         h('h2', null, filtered ? 'Rien ne correspond' : 'Cette bibliothèque est vide'),
         h('p', null, filtered ? 'Change ou retire un filtre.' : 'Vérifie que le dossier est bien monté, puis lance une mise à jour.'),
-        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.letter = st.genre = ''; st.unseen = false; search.value = ''; reset(); } }, 'Retirer les filtres') : h('a', { class: 'btn f', href: '#/admin' }, 'Ouvrir la gestion')));
+        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.letter = st.genre = st.section = ''; st.unseen = false; search.value = ''; H.pref('section.' + libId, null); reset(); } }, 'Retirer les filtres') : h('a', { class: 'btn f', href: '#/admin' }, 'Ouvrir la gestion')));
     }
     function reset() {
       token++; items = []; total = 0; lastGrp = null; loading = false;
@@ -226,7 +275,7 @@
         H.api(query(0).replace('limit=240', 'limit=' + Math.min(600, Math.max(240, keep)))).then(function (res) {
           if (mine !== token) return;
           var focus = document.activeElement && grid.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
-          items = []; lastGrp = null; total = res.total; facets = res; H.clear(grid); append(res.items); paint();
+          items = []; lastGrp = null; total = res.total; facets = res; H.clear(grid); append(res.items); paintQuick(); paint();
           if (focus) H.focus.key(grid, focus);
         }).catch(function () {});
       },
@@ -272,6 +321,9 @@
       if (d.type === 'album') {
         actions.appendChild(H.button('Lire l’album', 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.audio.play(trackList(), 0); } }));
         actions.appendChild(H.button('Aléatoire', 'shuffle', { onclick: function () { H.audio.play(trackList(), 0, true); } }));
+        actions.appendChild(H.button('Jouer ensuite', null, { onclick: function () { H.music.queueTracks(trackList(), 'next', d.title); } }));
+        actions.appendChild(H.button('À la file', 'queue', { onclick: function () { H.music.queueTracks(trackList(), 'end', d.title); } }));
+        actions.appendChild(H.button('Playlist', 'plus', { onclick: function () { H.music.addToPlaylist(trackList().map(function (t) { return t.id; }), d.title); } }));
       } else if (resume) {
         var what = d.type === 'show' ? epLabel(resume) : (d.type === 'series' ? 'tome ' + (resume.label || resume.number || '') : '');
         var main = prog ? 'Reprendre' + (what ? ' ' + what : '') + (resume.kind === 'book' ? ' (page ' + (Math.floor(prog.position) + 1) + ')' : ' à ' + H.time(prog.position)) : (d.type === 'movie' && allDone ? 'Revoir' : 'Lire' + (what ? ' ' + what : ''));
@@ -290,7 +342,12 @@
       else if (d.type === 'series') body.appendChild(volumes(d));
       else if (entries.length > 1) body.appendChild(parts(d));
       if (d.actors && d.actors.length) body.appendChild(h('section', { class: 'cast' }, h('h2', null, 'Distribution'), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); }))));
-      if (d.saga && d.saga.length > 1) body.appendChild(row(d.grp, null, d.saga.map(function (s) { return H.card(s); })));
+      if (d.saga && d.saga.length > 1) {
+        var cards = d.saga.map(function (s) { var c = H.card(s, false, true); if (s.id === d.id) c.classList.add('now'); return c; });
+        body.appendChild(h('section', { class: 'sagabox' },
+          h('h2', null, h('a', { class: 'f head', href: sagaHref(d.library.id, d.grp) }, d.grp), h('span', { class: 'n' }, H.plural(d.saga.length, 'film'))),
+          h('div', { class: 'grid small' }, cards)));
+      }
       el.appendChild(body);
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
@@ -303,8 +360,11 @@
       d.entries.forEach(function (e, i) {
         if (multi && e.disc !== disc) { disc = e.disc; list.appendChild(h('h3', { class: 'grp' }, 'Disque ' + (disc || 1))); }
         var done = e.progress && e.progress.done;
-        list.appendChild(h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { H.audio.play(trackList(), i); } },
-          h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, e.title), done ? h('span', { class: 'seen' }, H.icon('check')) : null, h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')));
+        var track = trackList()[i];
+        list.appendChild(h('div', { class: 'trkwrap' },
+          h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { H.audio.play(trackList(), i); } },
+            h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, e.title), done ? h('span', { class: 'seen' }, H.icon('check')) : null, h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')),
+          H.button('', 'more', { class: 'trkmore', 'aria-label': 'Actions de la piste', 'data-key': 'm' + e.id, onclick: function () { H.music.trackMenu(track); } })));
       });
       var sec = h('section', null, list);
       H.audio.mark(list);
@@ -371,6 +431,41 @@
     }
     load();
     return { el: el, nav: null, refresh: load, get lib() { return data ? data.library.id : ''; } };
+  });
+
+  // --- Saga ------------------------------------------------------------------------
+  H.route(/^\/saga\/([\w-]+)$/, function (m, query) {
+    var libId = m[1], name = query.g || '', data = null;
+    var el = h('section', { class: 'detail sagapage', 'data-lib': libId });
+    function load() {
+      return H.api('/api/library/' + libId + '?group=' + encodeURIComponent(name) + '&sort=part&limit=600').then(function (d) { data = d; render(); }).catch(function (e) {
+        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, 'Retour')));
+      });
+    }
+    function render() {
+      var focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      var films = data.items;
+      H.clear(el);
+      if (!films.length) { el.appendChild(h('div', { class: 'blank' }, h('h1', null, name), h('p', null, 'Cette saga ne contient plus de film.'), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, 'Retour'))); return; }
+      var done = films.filter(function (f) { return f.seen >= Math.max(1, f.n); }).length;
+      var next = films.filter(function (f) { return !(f.seen >= Math.max(1, f.n)); })[0];
+      var years = films.map(function (f) { return f.year; }).filter(Boolean).sort();
+      var meta = [H.plural(films.length, 'film')];
+      if (years.length) meta.push(years[0] === years[years.length - 1] ? years[0] : years[0] + '–' + years[years.length - 1]);
+      if (done) meta.push(done === films.length ? 'Tous vus' : done + '/' + films.length + ' vus');
+      var info = h('div', { class: 'info' }, h('h1', null, name), h('p', { class: 'meta' }, meta.join(' · ')));
+      var actions = h('div', { class: 'actions' });
+      var target = next || films[0];
+      actions.appendChild(H.button(next ? (done ? 'Continuer : ' : 'Commencer : ') + next.title : 'Revoir : ' + films[0].title, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go('#/i/' + target.id); } }));
+      info.appendChild(actions);
+      el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + films[0].id + '?w=300)' }),
+        h('div', { class: 'hero-in' }, h('div', { class: 'stack-big' }, H.stack(films.map(function (f) { return f.id; }), name, 500)), info)));
+      el.appendChild(h('div', { class: 'body' }, h('section', { class: 'sagaall' }, h('h2', null, 'Les films de la saga'),
+        h('div', { class: 'grid' }, films.map(function (f) { return H.card(f, false, true); })))));
+      if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
+    }
+    load();
+    return { el: el, nav: '#/l/' + libId, lib: libId, refresh: load };
   });
 
   // --- Recherche -------------------------------------------------------------------
@@ -440,7 +535,7 @@
       el.appendChild(play);
 
       var tools = h('section', { class: 'panel' }, h('h2', null, 'Entretien'));
-      tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Fichiers parasites'), h('span', null, 'Thumbs.db, desktop.ini et .DS_Store semés par Windows et macOS.')),
+      tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Fichiers parasites'), h('span', null, 'Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.')),
         H.button('Compter', null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, 'Simulation lancée'); } }),
         H.button('Supprimer', null, { 'data-key': 'junk-del', onclick: function () { start('/api/cleanup', { apply: true }, 'Nettoyage lancé'); } })));
       el.appendChild(tools);

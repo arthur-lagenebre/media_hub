@@ -62,6 +62,19 @@ CREATE TABLE IF NOT EXISTS progress(
     PRIMARY KEY(profile, entry_id)
 );
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS playlists(
+    id      TEXT PRIMARY KEY,
+    profile TEXT NOT NULL,
+    name    TEXT NOT NULL,
+    created INTEGER NOT NULL,
+    updated INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS playlist_tracks(
+    playlist_id TEXT NOT NULL,
+    pos         INTEGER NOT NULL,       -- 0, 1, 2... sans trou
+    entry_id    TEXT NOT NULL,          -- un titre peut y figurer deux fois ; il survit aux scans (l'identifiant vient du chemin)
+    PRIMARY KEY(playlist_id, pos)
+);
 """
 
 

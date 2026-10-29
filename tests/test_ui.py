@@ -146,7 +146,12 @@ class TestNavigation(UiCase):
         total = self.view(".grid .card").count()
         self.view("input[type=search]").fill("dceu")
         self.page.wait_for_timeout(700)
-        self.assertEqual(self.view(".grid .card").count(), 2)
+        self.assertEqual(self.view(".grid .card.saga").count(), 1)          # les sagas sont regroupées par défaut : une seule vignette
+        self.view(".tools .btn", has_text="Sagas").click()
+        self.page.wait_for_timeout(500)
+        self.assertEqual(self.view(".grid .card").count(), 2)               # sagas dépliées : les deux films
+        self.view(".tools .btn", has_text="Sagas").click()
+        self.page.wait_for_timeout(500)
         self.view("input[type=search]").fill("")
         self.page.wait_for_timeout(700)
         self.assertEqual(self.view(".grid .card").count(), total)
@@ -194,7 +199,7 @@ class TestDetailPages(UiCase):
     def test_movie_detail_saga_and_cast(self):
         self.open("#/i/" + self.item("films", "Man of Steel")["id"])
         self.view(".hero").wait_for()
-        self.assertEqual(self.view(".shelf .card").count(), 2)       # la saga
+        self.assertEqual(self.view(".sagabox .card").count(), 2)     # la saga
 
     def test_album_plays_in_the_bar_and_moves_to_next_track(self):
         self.open("#/i/" + self.item("musique", "Discovery")["id"])
@@ -326,6 +331,129 @@ class TestReader(UiCase):
         self.open("#/read/" + entry)
         self.page.wait_for_selector(".reader .err:not([hidden])")
         self.assertIn("Télécharger", self.page.inner_text(".reader .err"))
+
+
+class TestSagasInLibrary(UiCase):
+    def test_saga_card_opens_the_saga_page_with_every_film(self):
+        self.open("#/l/films")
+        card = self.view(".grid .card.saga")
+        card.first.wait_for()
+        self.assertIn("film", self.view(".count").inner_text())
+        card.first.click()
+        self.page.wait_for_selector(".sagapage .card")
+        self.assertIn("#/saga/films", self.page.url)
+        self.assertEqual(self.view("h1").inner_text(), "Saga DCEU")
+        self.assertEqual(self.view(".card").count(), 2)
+        self.press("Escape", wait=500)
+        self.assertTrue(self.page.url.endswith("#/l/films"))
+
+    def test_the_sagas_choice_is_remembered(self):
+        self.open("#/l/films")
+        self.view(".grid .card.saga").first.wait_for()
+        self.view(".tools .btn", has_text="Sagas").click()
+        self.page.wait_for_timeout(500)
+        self.assertEqual(self.view(".grid .card.saga").count(), 0)
+        self.page.reload()
+        self.view(".grid .card").first.wait_for()
+        self.assertEqual(self.view(".grid .card.saga").count(), 0)
+
+
+class TestMusicQueueAndPlaylists(UiCase):
+    def open_music(self):
+        self.open("#/l/musique")
+        self.view(".grid .card").first.wait_for()
+
+    def test_card_play_button_starts_the_album(self):
+        self.open_music()
+        card = self.view(".grid .card", has_text="Discovery")
+        card.hover()
+        card.locator(".qbtn").first.click()
+        self.page.wait_for_selector("#abar:not([hidden])")
+        self.assertEqual(self.page.inner_text("#abar .ti"), "One More Time")
+        self.assertIn("#/l/musique", self.page.url)                  # on reste dans la liste
+
+    def test_play_next_and_queue_panel(self):
+        self.open_music()
+        card = self.view(".grid .card", has_text="Discovery")
+        card.hover()
+        card.locator(".qbtn").first.click()
+        self.page.wait_for_selector("#abar:not([hidden])")
+        card.hover()
+        card.locator(".qbtn").nth(1).click()                          # ⋯
+        self.page.locator(".veil .opt", has_text="Jouer ensuite").click()
+        self.page.wait_for_timeout(500)
+        self.page.locator("#abar .qn").wait_for()
+        self.assertEqual(self.page.inner_text("#abar .qn"), "1/6")
+        self.page.locator("#abar [aria-label=\"File d’attente\"]").click()
+        self.page.wait_for_selector(".menu.queue .qrow")
+        self.assertEqual(self.page.locator(".menu.queue .qrow").count(), 6)
+        self.assertEqual(self.page.locator(".menu.queue .qrow.now").count(), 1)
+        self.page.locator(".menu.queue .qrow").nth(2).locator(".qt").click()          # saute à la piste 3
+        self.page.wait_for_function("document.querySelector('#abar .qn').textContent === '3/6'")
+        self.page.locator(".menu.queue [aria-label=\"Retirer de la file\"]").last.click()
+        self.assertEqual(self.page.locator(".menu.queue .qrow").count(), 5)
+
+    def test_queue_survives_a_reload(self):
+        self.open_music()
+        card = self.view(".grid .card", has_text="Discovery")
+        card.hover()
+        card.locator(".qbtn").first.click()
+        self.page.wait_for_selector("#abar:not([hidden])")
+        self.page.reload()
+        self.page.wait_for_selector("#abar:not([hidden])")
+        self.assertEqual(self.page.inner_text("#abar .ti"), "One More Time")
+
+    def test_create_a_playlist_from_an_album_and_play_it(self):
+        self.open("#/i/" + self.item("musique", "Discovery")["id"])
+        self.view(".trk").first.wait_for()
+        self.view(".actions .btn", has_text="Playlist").click()
+        self.page.locator(".veil .opt", has_text="Nouvelle playlist").click()
+        self.page.fill(".menu.prompt input", "Soirée")
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_selector("#toast.on, #toast:not(:empty)")
+        lists = self.api("/api/playlists")["playlists"]
+        self.assertEqual([(p["name"], p["count"]) for p in lists], [("Soirée", 3)])
+        self.open("#/playlists")
+        self.view(".card", has_text="Soirée").click()
+        self.page.wait_for_selector(".playlist .trk")
+        self.assertEqual(self.page.locator(".playlist .trk").count(), 3)
+        self.view(".actions .btn", has_text="Lire").click()
+        self.page.wait_for_selector("#abar:not([hidden])")
+        self.assertEqual(self.page.inner_text("#abar .ti"), "One More Time")
+
+
+class TestBooksQuickAccess(UiCase):
+    def test_section_chips_filter_the_shelf(self):
+        self.open("#/l/livres")
+        self.view(".quick .chip").first.wait_for()
+        names = self.view(".quick .chip").evaluate_all("els => els.map(e => e.getAttribute('data-section'))")
+        self.assertEqual(names[0], "")
+        self.assertTrue({"Manga", "Artbook", "Romans"} <= set(names), names)
+        total = self.view(".grid .card").count()
+        self.view(".quick .chip[data-section=Manga]").click()
+        self.page.wait_for_timeout(500)
+        titles = self.view(".grid .card").evaluate_all("els => els.map(e => e.title)")
+        self.assertEqual(titles, ["Naruto"])
+        self.assertEqual(self.view(".quick .chip.on").get_attribute("data-section"), "Manga")
+        self.page.reload()                                            # le choix est retenu
+        self.view(".quick .chip.on").wait_for()
+        self.assertEqual(self.view(".quick .chip.on").get_attribute("data-section"), "Manga")
+        self.view(".quick .chip[data-section=\"\"]").click()
+        self.page.wait_for_timeout(500)
+        self.assertEqual(self.view(".grid .card").count(), total)
+
+    def test_chips_are_reachable_with_the_remote(self):
+        self.open("#/l/livres")
+        self.view(".quick .chip").first.wait_for()
+        self.press("ArrowDown", wait=200)
+        for _ in range(6):
+            if self.page.evaluate("document.activeElement.classList.contains('chip')"):
+                break
+            self.press("ArrowUp", wait=150)
+        self.assertTrue(self.page.evaluate("document.activeElement.classList.contains('chip')"))
+        self.press("ArrowRight", "Enter", wait=400)
+        self.assertEqual(self.view(".quick .chip.on").count(), 1)
+        self.assertNotEqual(self.view(".quick .chip.on").get_attribute("data-section"), "")
 
 
 class TestLogin(unittest.TestCase):
