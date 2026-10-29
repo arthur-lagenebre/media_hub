@@ -331,7 +331,7 @@
       if (d.type === 'movie') { if (d.year) meta.push(d.year); var secs = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (secs) meta.push(H.dur(secs)); }
       else if (d.type === 'show') { if (d.year) meta.push(d.year); if (d.seasons && d.seasons.length) meta.push(H.plural(d.seasons.filter(function (s) { return s > 0; }).length || 1, 'saison')); meta.push(H.plural(entries.length, 'épisode')); if (d.status) meta.push(d.status); }
       else if (d.type === 'album') { if (d.artist) meta.push(d.artist); if (d.year) meta.push(d.year); meta.push(H.plural(entries.length, 'piste')); var t = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (t) meta.push(H.dur(t)); if (d.formats && d.formats.length) meta.push(d.formats.join(' / ')); }
-      else { meta.push(d.grp || 'Livres'); meta.push(H.plural(entries.length, d.unit || 'volume')); if (d.year) meta.push(d.year); }
+      else { meta.push(d.grp || 'Livres'); meta.push(H.plural(entries.length, d.unit || 'volume', d.units)); if (d.year) meta.push(d.year); }
       var genres = (d.genres || []).join(', ');
 
       var info = h('div', { class: 'info' }, h('h1', null, d.title), h('p', { class: 'meta' }, meta.filter(Boolean).join(' · ')));
@@ -432,7 +432,7 @@
       return sec;
     }
     function volumes(d) {
-      var sec = h('section', { class: 'volumes' }, h('h2', null, d.unit ? d.unit.charAt(0).toUpperCase() + d.unit.slice(1) + 's' : 'Volumes'));
+      var sec = h('section', { class: 'volumes' }, h('h2', null, d.units ? d.units.charAt(0).toUpperCase() + d.units.slice(1) : 'Volumes'));
       var grid = h('div', { class: 'grid small' });
       d.entries.forEach(function (e) {
         var p = entryProgress(e), done = e.progress && e.progress.done;

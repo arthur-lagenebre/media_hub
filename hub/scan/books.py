@@ -33,7 +33,7 @@ def scan_books(lib, known, enriched=None):
             missing = [{"label": label, "numbers": numbers, "total": total} for label, numbers, total in series.missing()]
             meta = {
                 "section": series.section, "collection": series.collection, "label": series.label, "authors": series.authors, "publisher": series.publisher,
-                "missing": missing, "unit": shelf.unit(series.section, 2).split(" ", 1)[1], "tagged": series.tagged,
+                "missing": missing, "unit": shelf.unit(series.section, 1).split(" ", 1)[1], "units": shelf.unit(series.section, 2).split(" ", 1)[1], "tagged": series.tagged,
                 "years": list(years) if years else [],
             }
             item = item_row(lib.id, f"series:{series.id}", "series", series.name, year=years[0] if years else "", summary=summary, genres=series.genres,
