@@ -168,7 +168,8 @@
       var meta = [H.plural(d.albums.length, 'album'), H.plural(list.length, 'piste'), d.duration ? H.dur(d.duration) : ''].filter(Boolean).join(' · ');
       var box = h('div', { class: 'info' }, h('h1', null, d.name));
       if (info && info.facts) box.appendChild(h('p', { class: 'meta' }, info.facts));
-      if (info && info.disambiguation) box.appendChild(h('p', { class: 'genres' }, info.disambiguation));
+      var tags = [info && info.disambiguation ? info.disambiguation : ''].concat(d.genres || []).filter(Boolean).join(', ');
+      if (tags) box.appendChild(h('p', { class: 'genres' }, tags));
       box.appendChild(h('p', { class: info && info.facts ? 'credit' : 'meta' }, meta));
       if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, 'Wikipédia')));
       box.appendChild(h('div', { class: 'actions' },
@@ -176,9 +177,9 @@
         H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
         H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
         H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } })));
-      var first = d.albums[0];
-      el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + first.id + '?w=300)' }),
-        h('div', { class: 'hero-in' }, H.picture('/img/item/' + first.id + '?w=500', d.name, 'sq big'), box)));
+      var first = d.albums[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id;       // la photo de l'artiste, sinon la pochette de son premier album
+      el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320)' }),
+        h('div', { class: 'hero-in' }, H.picture(face + '?w=480', d.name, 'sq big'), box)));
 
       var body = h('div', { class: 'body' });
       body.appendChild(h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, d.albums.map(function (a) { return H.card(a, false); }))));
