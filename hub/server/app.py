@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from libraries.books import shelf
 from libraries.books.archive import BookError
 from libraries.common.text import fold, initial
-from libraries.music import artistinfo
+from libraries.music import artistinfo, musicbrainz
 
 from .. import __version__
 from .. import enrich
@@ -672,10 +672,15 @@ def api_item(h, m, q):
     h.send_json(out)
 
 
-def artist_sheet(info):
+def artist_sheet(info, mbid=""):
     """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo)."""
     members = [{"name": mem["name"], "roles": mem.get("roles", []), "period": artistinfo.period(mem)} for mem in info.get("members") or []]
-    return {"facts": artistinfo.facts(info), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": info.get("links", [])}
+    links = enrich.pick_links(info.get("links", []))       # aussi à l'affichage : les fiches déjà gardées gardent peut-être d'autres liens
+    if (info.get("wiki") or {}).get("url"):
+        links.append({"label": "Wikipédia", "url": info["wiki"]["url"]})
+    if mbid:
+        links.append({"label": "MusicBrainz", "url": musicbrainz.artist_url(mbid)})
+    return {"facts": artistinfo.facts(info), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": links}
 
 
 def artist_albums(hub, lib_id, artist_id):
@@ -695,7 +700,7 @@ def artist_kept(hub, rows):
         mbid = safe_json(row["meta"], {}).get("artist_mbid")
         kept = hub.db.kv_get(enrich.artist_key(mbid)) if mbid else None
         if kept:
-            return kept
+            return {**kept, "mbid": mbid}
     return None
 
 
@@ -736,7 +741,7 @@ def api_artist(h, m, q):
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
     kept = artist_kept(hub, rows)
     if kept:
-        out["info"] = artist_sheet(kept["info"])
+        out["info"] = artist_sheet(kept["info"], kept["mbid"])
     out["photo"] = artist_photo(hub, m.group(2), kept) is not None
     out["own_photo"] = bool(custom_photos(hub, m.group(2)))
     h.send_json(out)
