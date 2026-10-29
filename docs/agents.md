@@ -1,0 +1,91 @@
+# Utiliser les agents Claude Code
+
+Le dépôt contient cinq **sous-agents** dans [.claude/agents/](../.claude/agents/). Un sous-agent est un assistant spécialisé : Claude Code lui confie une tâche, il travaille dans son propre contexte avec ses propres outils, puis ne renvoie que son compte rendu. Cela garde la conversation principale lisible et donne à chaque tâche les bonnes consignes du projet.
+
+## Qui fait quoi
+
+| Agent | À appeler pour… | Peut modifier des fichiers ? |
+| --- | --- | --- |
+| `hub-server` | une route, la base SQLite, un scan, ffmpeg / plan de lecture, TMDB / MusicBrainz, un réglage `HUB_*` | oui |
+| `hub-ui` | une vue, le lecteur, la liseuse, la barre audio, la navigation à la télécommande, l'adaptation PC / téléphone / tablette / TV | oui |
+| `hub-tester` | ajouter un test, reproduire un bug par un test, comprendre un test qui échoue | oui (tests seulement) |
+| `hub-reviewer` | relire un changement avant commit / PR | **non** (lecture seule) |
+| `hub-deploy` | `deploy/` : docker-compose, Tailscale, `.env`, ffmpeg sur le NAS, dépannage | oui |
+
+Règle de partage : `hub-server` ne touche pas à `hub/web`, `hub-ui` ne touche pas à `hub/server`. Quand une tâche demande les deux, chacun décrit ce qu'il attend de l'autre.
+
+## Comment les lancer
+
+Trois façons, dans une conversation Claude Code (terminal ou extension VS Code) :
+
+1. **Par la demande** : nomme l'agent.
+   > Utilise l'agent hub-reviewer pour relire ma branche.
+2. **Par mention** : tape `@` puis choisis l'agent dans la liste (`@agent-hub-reviewer`).
+3. **Automatiquement** : sans les nommer, Claude peut déléguer de lui-même quand la demande correspond à la description d'un agent (« ajoute une route… » → `hub-server`). Nommer l'agent reste plus fiable.
+
+La commande `/agents` liste les agents disponibles, permet de les consulter et de les modifier. Les agents sont chargés au démarrage de la session : après avoir créé ou changé un fichier de `.claude/agents/`, relance la session (ou passe par `/agents`) si l'agent n'apparaît pas.
+
+## Exemples de demandes
+
+Plus la demande est précise, meilleur est le résultat : un agent démarre **sans connaître la conversation**, il ne sait que ce que tu lui écris.
+
+```text
+Utilise hub-server : ajoute une route GET /api/stats qui renvoie le nombre d'éléments
+par bibliothèque. Documente-la dans le README.
+
+Utilise hub-ui : sur la fiche d'un album, le focus à la télécommande saute du bouton
+« Lire » à la dernière piste. Corrige-le pour que ↓ aille à la première piste.
+
+Utilise hub-tester : écris un test qui reproduit « un scan efface les photos d'artistes
+enrichies » (hub/scan), sans corriger le code.
+
+Utilise hub-reviewer : relis le diff de la branche courante contre main.
+
+Utilise hub-deploy : ajoute une bibliothèque « Documentaires » dans le compose et dans le README.
+```
+
+## Enchaînements utiles
+
+**Nouvelle fonctionnalité**
+1. `hub-server` écrit la route et ses tests (ou `hub-tester` si tu préfères séparer).
+2. `hub-ui` branche l'interface sur la route.
+3. `hub-reviewer` relit l'ensemble.
+4. Tu corriges ce qu'il signale, puis commit / PR.
+
+**Bug**
+1. `hub-tester` écrit un test qui échoue pour la bonne raison.
+2. `hub-server` ou `hub-ui` corrige jusqu'à ce que le test passe.
+3. `hub-reviewer` vérifie qu'il n'y a pas de régression.
+
+**Mise en production sur le NAS**
+`hub-deploy` pour le compose et le `.env.example`, puis il te donne la commande exacte à lancer sur le NAS (il n'y a pas accès).
+
+Plusieurs agents peuvent travailler en parallèle s'ils touchent des fichiers différents (par exemple `hub-ui` et `hub-server` sur deux parties indépendantes) : demande-le explicitement.
+
+## Ce qu'ils ne font pas
+
+- **Ils ne commitent pas et n'ouvrent pas de PR** : c'est toi (ou la conversation principale) qui décides.
+- **Ils ne voient pas ta télé ni ton NAS.** Ils testent sur une médiathèque factice ; la lecture réelle (codecs, HDR, son) et le déploiement restent à essayer sur place, et ils doivent le dire dans leur compte rendu.
+- **Les tests sautés ne comptent pas.** Sans Playwright ou ffmpeg, `tests/test_ui.py` est ignoré ; les agents doivent le signaler au lieu d'annoncer « tout passe ».
+- **`media_library` doit être à côté de `media_hub`** (ou désigné par `HUB_REPO`), sinon aucun test ne démarre.
+- Leurs consignes sont tirées de la lecture du code : si un agent applique une règle devenue fausse, corrige son fichier.
+
+## Modifier ou ajouter un agent
+
+Un agent est un fichier Markdown dans `.claude/agents/` :
+
+```markdown
+---
+name: hub-exemple
+description: Quand l'appeler (c'est ce texte qui sert à la délégation automatique).
+tools: Read, Grep, Glob, Edit, Write, Bash
+model: sonnet
+---
+
+Les consignes de l'agent, en Markdown libre.
+```
+
+- `description` : sois concret sur *quand* l'utiliser ; c'est ce que Claude lit pour choisir.
+- `tools` : donne le minimum. Un relecteur n'a pas besoin de `Edit` ni de `Write`.
+- Garde les consignes courtes et vérifiables (invariants du projet, commandes à lancer, format du compte rendu).
+- Ne mets **pas** d'autre fichier `.md` dans `.claude/agents/` : chaque fichier y est lu comme un agent. Cette documentation vit donc dans `docs/`.

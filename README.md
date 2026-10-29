@@ -79,6 +79,10 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 - Google TV n'a pas Chrome : installer un navigateur compatible télécommande (TV Bro, Puffin TV, Silk sur Fire TV). Une appli Android TV native (WebView plein écran) est la suite logique si la télécommande dans un navigateur ne convient pas.
 - Les formats d'image des sous-titres (PGS, VobSub) ne sont pas affichés.
 
+## Développer avec Claude Code
+
+Cinq agents spécialisés (serveur, interface, tests, relecture, déploiement) sont dans `.claude/agents/` : voir [docs/agents.md](docs/agents.md).
+
 ## Tests
 
 ```bash
