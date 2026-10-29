@@ -13,7 +13,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 | --- | --- | --- |
 | Films | `.mkv` (titre, synopsis, casting, jaquette embarqués par `Metadata.py`), sagas regroupées en une vignette (bouton « Sagas ») | vidéo, sous-titres, reprise |
 | Séries, Animations | dossiers série / saison / épisode, affiche TMDB (avec `TMDB_KEY`) | vidéo, épisode suivant |
-| Musique | `.flac`, `.mp3`, … regroupés en albums, pochette = `cover.{ext}` du dossier | barre audio qui continue pendant la navigation |
+| Musique | `.flac`, `.mp3`, … regroupés en albums, pochette = `cover.{ext}` du dossier ; une image `1997 - OK Computer.jpg` dans le dossier de l'artiste déclare un album manquant (grisé, sur sa fiche seulement) | barre audio qui continue pendant la navigation |
 | Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens manga, thèmes |
 
 - **Accueil** : « Reprendre » (films, épisodes, livres, albums en cours) et les ajouts récents de chaque bibliothèque.
@@ -69,7 +69,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `POST /api/progress`, `/api/item/<id>/seen`, `/api/entry/<id>/seen` | progression, vu / pas vu |
 | `GET /api/book/<id>`, `/book/<id>/page/<n>`, `/book/<id>/epub/<chemin>` | pages d'un `.cbz`, fichiers d'un `.epub` (CSP sans script) |
 | `GET /img/item/<id>?w=`, `/img/entry/<id>?w=` | affiches, pochettes, couvertures (réduites et gardées en cache) |
-| `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}`) |
+| `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}` et que les pochettes d'albums manquants) |
 
 ## Limites connues
 

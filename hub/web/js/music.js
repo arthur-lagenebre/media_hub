@@ -153,6 +153,23 @@
   });
 
   // --- La fiche d'un artiste ou d'un groupe ---------------------------------------------
+  // Les albums possédés et ceux qui manquent, rangés ensemble par année puis par titre (les possédés arrivent déjà dans cet ordre ; ceux sans année restent à la fin)
+  function shelf(d) {
+    var out = d.albums.slice();
+    (d.wanted || []).forEach(function (w) {
+      var after = out.findIndex(function (a) { return a.year && (a.year > w.year || (a.year === w.year && a.title.toLowerCase() > w.title.toLowerCase())); });
+      var undated = out.findIndex(function (a) { return !a.year; });
+      var at = after >= 0 ? after : (undated >= 0 ? undated : out.length);
+      out.splice(at, 0, { wanted: true, title: w.title, year: w.year, cover: w.cover });
+    });
+    return out;
+  }
+  // Un album qui manque : sa pochette grisée, rien à ouvrir ni à lire (la case n'est donc pas dans la navigation à la télécommande)
+  function wantedCard(w) {
+    return h('div', { class: 'card wanted', title: w.title + ' (manquant)' },
+      H.picture(w.cover ? w.cover + '?w=300' : '', w.title, 'sq'),
+      h('div', { class: 't' }, w.title), h('div', { class: 's' }, [w.year, 'Manquant'].join(' · ')));
+  }
   H.route(/^\/artist\/([\w-]+)\/(\w+)$/, function (m) {
     var lib = m[1], id = m[2], data = null, stamp = 0;
     var el = h('section', { class: 'detail artist', 'data-lib': lib });
@@ -196,7 +213,7 @@
         h('div', { class: 'hero-in' }, H.picture(face + '?w=480' + v, d.name, 'sq big'), box)));
 
       var body = h('div', { class: 'body' });
-      body.appendChild(h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, d.albums.map(function (a) { return H.card(a, false); }))));
+      body.appendChild(h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, shelf(d).map(function (a) { return a.wanted ? wantedCard(a) : H.card(a, false); }))));
       if (info && info.members && info.members.length) {
         var current = info.members.filter(function (p) { return !p.former; }), former = info.members.filter(function (p) { return p.former; });
         var members = function (title, list) {

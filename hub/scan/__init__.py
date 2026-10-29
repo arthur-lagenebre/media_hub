@@ -28,6 +28,8 @@ def scan_library(db, lib, log=print):
     known = db.known_entries(lib.id)
     items, entries, counts = SCANNERS[lib.kind](lib, known, enriched_for(db, lib.id))
     db.replace_library(lib.id, items, entries)
+    for key, value in getattr(counts, "kv", {}).items():
+        db.kv_set(key, value)
     seconds = round(time.time() - started, 1)
     log(f"[{lib.label}] {len(items)} élément(s), {len(entries)} fichier(s) ({counts.read} lu(s), {counts.reused} repris) en {seconds} s")
     db.kv_set(f"scanned:{lib.id}", int(time.time()))

@@ -704,6 +704,11 @@ def artist_kept(hub, rows):
     return None
 
 
+def wanted_albums(hub, lib_id, artist_id):
+    """Les albums qui manquent à un artiste (voir libraries.music.wanted), tels que le dernier scan les a vus ; vide s'il n'en manque aucun."""
+    return (hub.db.kv_get(f"wanted:{lib_id}") or {}).get(artist_id, [])
+
+
 PHOTO_UPLOAD_MAX = 10 << 20
 PHOTO_TYPES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"), (b"RIFF", ".webp"))
 
@@ -742,6 +747,7 @@ def api_artist(h, m, q):
     kept = artist_kept(hub, rows)
     if kept:
         out["info"] = artist_sheet(kept["info"], kept["mbid"])
+    out["wanted"] = [{"year": w["year"], "title": w["title"], "cover": f"/img/wanted/{lib.id}/{m.group(2)}/{w['key']}" if w["cover"] else ""} for w in wanted_albums(hub, lib.id, m.group(2))]
     out["photo"] = artist_photo(hub, m.group(2), kept) is not None
     out["own_photo"] = bool(custom_photos(hub, m.group(2)))
     h.send_json(out)
@@ -790,6 +796,30 @@ def artist_image(h, m, q):
     if found is None:
         raise HttpError(404, "pas de photo")
     data, mime, key = found
+    tag = f'"{key}"'
+    if h.headers.get("If-None-Match") == tag:
+        h.send_body(b"", mime, 304, {"ETag": tag, "Cache-Control": "private, no-cache"})
+        return
+    h.send_body(data, mime, 200, {"ETag": tag, "Cache-Control": "private, no-cache"}, h.command == "HEAD")
+
+
+@route("GET", r"/img/wanted/([\w-]+)/(\w+)/([\w-]+)")
+def wanted_image(h, m, q):
+    """La pochette d'un album manquant, posée dans le dossier de l'artiste ; 404 s'il n'en a pas (la fiche montre alors une case grisée)."""
+    hub = h.hub
+    lib, _ = artist_albums(hub, m.group(1), m.group(2))
+    found = next((w for w in wanted_albums(hub, lib.id, m.group(2)) if w["key"] == m.group(3) and w["cover"]), None)
+    path = (lib.path / found["cover"]).resolve() if found else None
+    if path is None or lib.path.resolve() not in path.parents:
+        raise HttpError(404, "pas de pochette")
+    try:
+        width = int(q.get("w", 0))
+    except ValueError:
+        width = 0
+    served = hub.images.file(f"wanted:{lib.id}:{m.group(2)}:{m.group(3)}", path, width)
+    if served is None:
+        raise HttpError(404, "pas de pochette")
+    data, mime, key = served
     tag = f'"{key}"'
     if h.headers.get("If-None-Match") == tag:
         h.send_body(b"", mime, 304, {"ETag": tag, "Cache-Control": "private, no-cache"})
