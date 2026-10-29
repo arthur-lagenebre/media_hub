@@ -141,6 +141,7 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .ep .ti b { color: var(--accent); font-weight: 750; }
 .ep .su { color: var(--mute); font-size: 0.88rem; margin-top: 0.2rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ep .du { color: var(--mute); font-size: 0.8rem; margin-top: 0.2rem; }
+.what .ua { display: block; font-size: 0.7rem; opacity: 0.7; word-break: break-all; }
 .seen { color: var(--accent); margin-left: 0.8rem; }
 .seen .ic svg { width: 1.5em; height: 1.5em; }
 .tracks { background: var(--s1); border-radius: 0.8rem; padding: 0.4rem; }
@@ -333,3 +334,16 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .library .quick { padding: 0.2rem var(--gut) 0.3rem; margin: 0; }
 .chip small { font-weight: 500; opacity: 0.7; font-size: 0.8em; }
 .chip.on small { opacity: 0.85; }
+
+/* Selon l'appareil (voir H.applyDevice) : data-device = pc, phone, tablet ou tv */
+/* Télévision : vue de loin, donc plus grand (texte et cartes) */
+html[data-device="tv"] { font-size: 20px; --cw: 10.5rem; }
+@media (min-width: 1100px) { html[data-device="tv"] { font-size: 23px; } }
+@media (min-width: 1700px) { html[data-device="tv"] { font-size: 27px; } }
+@media (min-width: 2500px) { html[data-device="tv"] { font-size: 40px; } }
+html[data-device="tv"] .grid.small { --cw: 8.5rem; }
+/* Hors ordinateur : pas d'effet de survol (le toucher le laisse collé, une télécommande n'en a pas). Le focus, lui, reste. */
+html:not([data-device="pc"]) .card:hover:not(:focus) { z-index: auto; }
+html:not([data-device="pc"]) .card:hover:not(:focus) .poster { transform: none; box-shadow: none; }
+html:not([data-device="pc"]) .card.saga:hover:not(:focus) .stack { transform: none; }
+html[data-device="tv"] .card:hover:not(:focus):not(:focus-within) .qa { opacity: 0; }

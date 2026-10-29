@@ -560,6 +560,15 @@
         H.button('Changer', 'quality', { 'data-key': 'quality', onclick: function () {
           H.menu('Qualité de lecture', ['auto', '1080', '720', '480'].map(function (v) { return { label: qualityLabel(v), value: v }; }), q, function (v) { H.pref('quality', v); render(); H.focus.key(el, 'quality'); });
         } })));
+      var chosen = H.pref('device') || 'auto', names = {};
+      H.devices.forEach(function (d) { names[d[0]] = d[1]; });
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Appareil'),
+        h('span', null, (chosen === 'auto' ? 'Détecté : ' : 'Choisi : ') + names[H.device] + ' — taille du texte, effets de survol, envoi de photo'), h('span', { class: 'ua' }, navigator.userAgent)),
+        H.button('Changer', 'quality', { 'data-key': 'device', onclick: function () {
+          H.menu('Type d’appareil', H.devices.map(function (d) { return { label: d[1], detail: d[0] === 'auto' ? 'Deviné d’après le navigateur (' + names[H.detectDevice()] + ')' : '', value: d[0] }; }), chosen, function (v) {
+            H.pref('device', v === 'auto' ? null : v); H.applyDevice(); render(); H.focus.key(el, 'device');
+          });
+        } })));
       play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Son surround 5.1'), h('span', null, surround ? 'Activé : le 5.1 est envoyé tel quel si l’appareil le lit.' : 'Désactivé : le son est ramené en stéréo (le plus sûr).')),
         H.button(surround ? 'Désactiver' : 'Activer', 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
       el.appendChild(play);
