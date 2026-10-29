@@ -645,7 +645,7 @@ def api_item(h, m, q):
     out = summary(item)
     out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": meta.get("tagged", False)})
     for key in ("directors", "writers", "actors", "artist", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
-                "seasons_total", "tmdb", "missing", "unit", "years", "discs"):
+                "seasons_total", "tmdb", "missing", "unit", "years", "discs", "season_summaries"):
         if meta.get(key) not in (None, "", []):
             out[key] = meta[key]
     out["entries"] = [entry_json(r, progress.get(r["id"])) for r in rows]

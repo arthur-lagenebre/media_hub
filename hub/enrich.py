@@ -1,4 +1,4 @@
-"""Enrichissement des séries depuis TMDB : synopsis, genres, année, affiche.
+"""Enrichissement des séries depuis TMDB : synopsis (de la série et de chaque saison), genres, année, casting, affiche.
 
 Les épisodes portent leur propre fiche, mais pas celle de la série : rien dans un .mkv ne dit de quoi parle « Dark ». Ce passage interroge TMDB (par l'identifiant épinglé dans le nom du dossier, sinon par une recherche sur ce nom) et garde le résultat dans la base ET sur le disque (l'affiche), pour qu'un rescan ne l'efface pas.
 
@@ -16,6 +16,40 @@ from libraries.video import lookup
 from libraries.video.tmdb import Tmdb, TmdbAuthError, TmdbError
 
 
+CAST_SIZE = 20
+
+
+def season_summaries(tmdb, show_id, seasons):
+    """{numéro de saison: synopsis} pour les saisons présentes sur le disque. Une saison que TMDB ne connaît pas est simplement omise."""
+    out = {}
+    for number in seasons:
+        try:
+            overview = tmdb.season(show_id, number).get("overview") or ""
+        except TmdbAuthError:
+            raise
+        except TmdbError:
+            continue
+        if overview:
+            out[str(number)] = overview
+    return out
+
+
+def cast(tmdb, show_id):
+    """Le casting de la série entière : les acteurs les plus présents (par nombre d'épisodes), avec leur rôle principal."""
+    try:
+        people = tmdb.aggregate_credits(show_id).get("cast", [])
+    except TmdbAuthError:
+        raise
+    except TmdbError:
+        return []
+    people = sorted((p for p in people if p.get("name")), key=lambda p: (-(p.get("total_episode_count") or 0), p.get("order", 9999)))
+    out = []
+    for person in people[:CAST_SIZE]:
+        roles = sorted(person.get("roles") or [], key=lambda r: -(r.get("episode_count") or 0))
+        out.append({"name": person["name"], "role": (roles[0].get("character") or "") if roles else ""})
+    return out
+
+
 def enrich_shows(cfg, db, lib, log=print, force=False):
     if not cfg.tmdb_key:
         raise RuntimeError("Pas de clé TMDB : renseigne TMDB_KEY (variable d'environnement, ou .env dans media_library).")
@@ -25,7 +59,8 @@ def enrich_shows(cfg, db, lib, log=print, force=False):
     done = failed = 0
     for item in db.query("SELECT * FROM items WHERE lib=? AND type='show' ORDER BY sort", (lib.id,)):
         key = f"enrich:{lib.id}:{item['id']}"
-        if not force and db.kv_get(key):
+        done_before = db.kv_get(key)
+        if not force and done_before and "season_summaries" in done_before:      # enrichi avant l'ajout des saisons et du casting : on le refait
             continue
         meta = json.loads(item["meta"])
         folder = lib.path / meta.get("folder", "")
@@ -46,6 +81,8 @@ def enrich_shows(cfg, db, lib, log=print, force=False):
                 name = f"{show_id}.jpg"
                 tmdb.save_image(show["poster_path"], "w500", posters / name)
                 data["poster_file"] = name
+            data["season_summaries"] = season_summaries(tmdb, show_id, meta.get("seasons", []))
+            data["actors"] = cast(tmdb, show_id)
             db.kv_set(key, data)
             fields = {"summary": data["summary"], "genres": data["genres"], "meta": {k: v for k, v in data.items() if k not in ("summary", "genres", "year")}}
             if data["year"]:
