@@ -282,10 +282,10 @@
       }
       return H.focus.set(pick(root), true);
     },
-    key: function (root, key) {
+    key: function (root, key, noScroll) {
       var el = null;
       Array.prototype.forEach.call((root || document).querySelectorAll('[data-key]'), function (x) { if (!el && x.getAttribute('data-key') === key) el = x; });
-      return el ? H.focus.set(el) : false;
+      return el ? H.focus.set(el, noScroll) : false;
     },
     move: function (dir) {
       var cur = document.activeElement;

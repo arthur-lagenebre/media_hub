@@ -169,6 +169,7 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 /* Gestion */
 .panel { background: var(--s1); border-radius: 0.9rem; padding: 0.9rem 1.2rem; margin: 0 var(--gut) 1.1rem; }
 .panel h2 { font-size: 1.1rem; margin-bottom: 0.4rem; }
+.panel h2 .busy { margin-left: 0.5rem; color: var(--mute); }
 .line { display: flex; flex-wrap: wrap; align-items: center; padding: 0.7rem 0; border-top: 1px solid var(--line); }
 .line .what { flex: 1; min-width: 12rem; }
 .line .what b::before { content: ""; display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--accent); margin-right: 0.55rem; }
