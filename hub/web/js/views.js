@@ -10,6 +10,7 @@
   H.nav = {
     build: function () {
       var nav = H.clear(document.getElementById('nav'));
+      nav.appendChild(h('button', { class: 'tool f back', 'aria-label': 'Retour', title: 'Retour', hidden: 'hidden', onclick: function () { H.back('#/'); } }, H.icon('back')));
       nav.appendChild(h('a', { class: 'brand f', href: '#/', 'data-nav': '#/' }, H.icon('home'), h('span', { class: 'name' }, 'Médiathèque')));
       var links = h('nav', { class: 'links' });
       H.libs.forEach(function (l) {
@@ -20,6 +21,8 @@
       nav.appendChild(h('a', { class: 'tool f', href: '#/admin', 'data-nav': '#/admin', 'aria-label': 'Gestion' }, H.icon('gear')));
     },
     mark: function (hash) {
+      var back = document.querySelector('#nav .back');
+      if (back) back.hidden = hash === '#/' || hash === '' || !hash;       // rien à remonter depuis l'accueil
       Array.prototype.forEach.call(document.querySelectorAll('#nav [data-nav]'), function (a) {
         var key = a.getAttribute('data-nav');
         var on = key === '#/' ? (hash === '#/' || hash === '' || !hash) : hash.indexOf(key) === 0;
