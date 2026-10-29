@@ -307,6 +307,8 @@
   });
 
   // --- Fiche -----------------------------------------------------------------------
+  // TMDB donne le statut d'une série en anglais, quelle que soit la langue demandée.
+  var SHOW_STATUS = { 'Ended': 'Terminée', 'Returning Series': 'En cours', 'Canceled': 'Annulée', 'In Production': 'En production', 'Planned': 'Prévue', 'Pilot': 'Pilote' };
   function entryProgress(e) { return e.progress && !e.progress.done && e.progress.position >= (e.kind === 'book' ? 1 : 20) ? e.progress : null; }
   function epLabel(e) { return 'S' + (e.season === null || e.season === undefined ? 1 : e.season) + ' · E' + (e.number === null || e.number === undefined ? '?' : e.number); }
 
@@ -329,7 +331,7 @@
       var allDone = entries.length > 0 && entries.every(function (e) { return e.progress && e.progress.done; });
       var meta = [];
       if (d.type === 'movie') { if (d.year) meta.push(d.year); var secs = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (secs) meta.push(H.dur(secs)); }
-      else if (d.type === 'show') { if (d.year) meta.push(d.year); if (d.seasons && d.seasons.length) meta.push(H.plural(d.seasons.filter(function (s) { return s > 0; }).length || 1, 'saison')); meta.push(H.plural(entries.length, 'épisode')); if (d.status) meta.push(d.status); }
+      else if (d.type === 'show') { if (d.year) meta.push(d.year); if (d.seasons && d.seasons.length) meta.push(H.plural(d.seasons.filter(function (s) { return s > 0; }).length || 1, 'saison')); meta.push(H.plural(entries.length, 'épisode')); if (d.status) meta.push(SHOW_STATUS[d.status] || d.status); }
       else if (d.type === 'album') { if (d.artist) meta.push(d.artist); if (d.year) meta.push(d.year); meta.push(H.plural(entries.length, 'piste')); var t = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (t) meta.push(H.dur(t)); if (d.formats && d.formats.length) meta.push(d.formats.join(' / ')); }
       else { meta.push(d.grp || 'Livres'); meta.push(H.plural(entries.length, d.unit || 'volume')); if (d.year) meta.push(d.year); }
       var genres = (d.genres || []).join(', ');
