@@ -117,6 +117,37 @@ def artist_key(mbid):
     return f"artist:{mbid}"
 
 
+WANTED_LINKS = ("Site officiel", "Bandcamp", "SoundCloud", "YouTube")      # les seuls liens que la fiche montre, dans cet ordre
+SHEET_VERSION = 2                                                           # 2 : liens limités ; une fiche plus ancienne est refaite
+
+
+def pick_links(links):
+    """[{'label', 'url'}] ramenés à WANTED_LINKS : un seul lien par libellé (le premier), dans l'ordre de WANTED_LINKS."""
+    first = {}
+    for link in links:
+        if link.get("label") in WANTED_LINKS:
+            first.setdefault(link["label"], link)
+    return [first[label] for label in WANTED_LINKS if label in first]
+
+
+def wanted_links(data):
+    """Les liens voulus d'une fiche MusicBrainz brute. artistinfo.parse s'arrête à 8 liens, souvent pris par les réseaux sociaux : YouTube ou SoundCloud pourraient en sortir avant qu'on filtre."""
+    found = []
+    for rel in data.get("relations") or []:
+        url = (rel.get("url") or {}).get("resource") or ""
+        if rel.get("type") in artistinfo.LINK_TYPES and urlparse(url).scheme in ("http", "https") and urlparse(url).hostname:
+            found.append({"label": artistinfo.LINK_LABELS.get(rel["type"]) or artistinfo.host_label(url), "url": url})
+    return pick_links(found)
+
+
+def fetch_artist(mb, mbid):
+    """La fiche d'un artiste (voir artistinfo.fetch), avec ses liens limités à WANTED_LINKS. La fiche MusicBrainz est déjà en cache : pas de requête de plus."""
+    info = artistinfo.fetch(mb, mbid)
+    info["links"] = wanted_links(mb.artist(mbid))
+    info["sheet"] = SHEET_VERSION
+    return info
+
+
 def photo_urls(mb, wiki):
     """Les adresses possibles de la photo de l'article Wikipédia d'un artiste, la plus grande d'abord ; [] si l'article n'en a pas."""
     try:
@@ -166,10 +197,10 @@ def enrich_artists(cfg, db, lib, log=print, force=False):
     done = failed = 0
     for mbid, name in sorted(artists.items(), key=lambda kv: kv[1].casefold()):
         kept = db.kv_get(artist_key(mbid))
-        if not force and kept and not artistinfo.stale(kept) and "photo" in kept["info"]:        # sans "photo" : fiche d'avant les photos, on la refait
+        if not force and kept and not artistinfo.stale(kept) and "photo" in kept["info"] and kept["info"].get("sheet") == SHEET_VERSION:        # sans "photo" ou d'une version plus ancienne : on la refait
             continue
         try:
-            info = artistinfo.fetch(mb, mbid)
+            info = fetch_artist(mb, mbid)
         except MusicBrainzError as e:
             log(f"  {name} : {e}")
             failed += 1

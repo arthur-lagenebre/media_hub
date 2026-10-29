@@ -424,7 +424,7 @@ class TestJobs(ServerCase):
         self.assertEqual(self.api.json("/api/artist/musique/deadbeef")[0], 404)
         self.assertEqual(self.api.json(f"/api/artist/films/{detail['artist_id']}")[0], 404)
 
-        info = {"type": "Group", "area": "France", "begin": "1993", "end": "2021", "ended": True, "disambiguation": "", "links": [{"label": "Site officiel", "url": "https://daftpunk.com"}],
+        info = {"type": "Group", "area": "France", "begin": "1993", "end": "2021", "ended": True, "disambiguation": "", "sheet": 2, "links": [{"label": "Facebook", "url": "https://facebook.com/daftpunk"}, {"label": "Site officiel", "url": "https://daftpunk.com"}, {"label": "Site officiel", "url": "https://autre.example"}, {"label": "YouTube", "url": "https://youtube.com/daftpunk"}],
                 "members": [{"name": "Thomas Bangalter", "mbid": "x", "begin": "1993", "end": "2021", "ended": True, "roles": ["synthétiseur"]}],
                 "wiki": {"lang": "fr", "title": "Daft Punk", "url": "https://fr.wikipedia.org/wiki/Daft_Punk", "extract": "Duo de musique électronique."}}
         self.hub.db.update_item_meta(album["id"], meta={"artist_mbid": "abc"})
@@ -442,7 +442,7 @@ class TestJobs(ServerCase):
             def read(self, n=-1):
                 return fixtures.PNG
 
-        with mock.patch("hub.enrich.artistinfo.fetch", return_value=info), mock.patch("hub.enrich.photo_urls", return_value=["https://upload.wikimedia.org/x.png"]), \
+        with mock.patch("hub.enrich.fetch_artist", return_value=info), mock.patch("hub.enrich.photo_urls", return_value=["https://upload.wikimedia.org/x.png"]), \
                 mock.patch("hub.enrich.urlopen", return_value=Download()):
             self.assertEqual(self.api.json("/api/enrich", {"lib": "musique"})[0], 202)         # MusicBrainz ne demande pas de clé
             self.run_.wait_jobs()
@@ -454,7 +454,8 @@ class TestJobs(ServerCase):
         self.assertEqual(sheet["info"]["facts"], "Groupe · France · 1993 – 2021")
         self.assertEqual(sheet["info"]["wiki"]["extract"], "Duo de musique électronique.")
         self.assertEqual(sheet["info"]["members"][0], {"name": "Thomas Bangalter", "roles": ["synthétiseur"], "period": "1993 – 2021"})
-        self.assertEqual(sheet["info"]["links"][0]["url"], "https://daftpunk.com")
+        self.assertEqual([(l["label"], l["url"]) for l in sheet["info"]["links"]], [("Site officiel", "https://daftpunk.com"), ("YouTube", "https://youtube.com/daftpunk"),
+                          ("Wikipédia", "https://fr.wikipedia.org/wiki/Daft_Punk"), ("MusicBrainz", "https://musicbrainz.org/artist/abc")])      # ni Facebook ni le doublon ; Wikipédia et MusicBrainz en dernier
         self.hub.jobs.scan(lib)
         self.run_.wait_jobs()
 
@@ -475,6 +476,20 @@ class TestJobs(ServerCase):
         sheet = self.api.json(base)[1]
         self.assertFalse(sheet["own_photo"])
         self.assertEqual(self.api.get(photo)[0], 200 if sheet["photo"] else 404)      # sans photo de Wikipédia en dessous, la page retrouve la pochette
+
+    def test_artist_links_are_limited_to_the_wanted_ones(self):
+        from hub import enrich
+
+        def link(kind, url):
+            return {"type": kind, "url": {"resource": url}}
+
+        data = {"relations": [link("social network", "https://www.facebook.com/x"), link("social network", "https://twitter.com/x"), link("streaming", "https://open.spotify.com/artist/x"),
+                              link("youtube", "https://www.youtube.com/x"), link("soundcloud", "https://soundcloud.com/x"), link("bandcamp", "https://x.bandcamp.com"),
+                              link("official homepage", "https://x.example"), link("official homepage", "https://x2.example"), link("official homepage", "javascript:alert(1)"),
+                              link("social network", "https://youtube.com/c/autre"), link("wikidata", "https://www.wikidata.org/wiki/Q1")]}
+        self.assertEqual([(l["label"], l["url"]) for l in enrich.wanted_links(data)],
+                         [("Site officiel", "https://x.example"), ("Bandcamp", "https://x.bandcamp.com"), ("SoundCloud", "https://soundcloud.com/x"), ("YouTube", "https://www.youtube.com/x")])
+        self.assertEqual(enrich.wanted_links({}), [])
 
     def test_artist_photo_only_comes_from_wikimedia(self):
         from hub import enrich
