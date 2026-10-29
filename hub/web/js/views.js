@@ -586,14 +586,14 @@
       if (state.auth) server.appendChild(h('a', { class: 'btn f', href: '/api/logout' }, 'Se déconnecter'));
       el.appendChild(server);
 
-      var log = h('section', { class: 'panel' }, h('h2', null, 'Tâches', busy ? h('span', { class: 'spin' }, '…') : null));
+      var log = h('section', { class: 'panel' }, h('h2', null, 'Tâches', busy ? h('span', { class: 'busy' }, '…') : null));
       if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, 'Aucune tâche pour l’instant.'));
       jobs.slice(0, 6).forEach(function (j) {
         var status = { waiting: 'en attente', running: 'en cours', done: 'terminée', failed: 'échec' }[j.status];
         log.appendChild(h('div', { class: 'job ' + j.status }, h('div', { class: 'jt' }, h('b', null, j.label), h('span', null, status)), j.log && j.log.length ? h('pre', null, j.log.slice(-8).join('\n')) : null));
       });
       el.appendChild(log);
-      if (focus) H.focus.key(el, focus); else H.focus.first();
+      if (focus) H.focus.key(el, focus, true); else H.focus.first();   // sans défilement : render() tourne aussi toutes les 1,5 s pendant une tâche
     }
     function poll() {
       clearTimeout(timer);
