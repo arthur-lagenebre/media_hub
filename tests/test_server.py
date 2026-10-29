@@ -328,6 +328,15 @@ class TestProgress(ServerCase):
         self.hub.db.execute("UPDATE progress SET updated=updated+10 WHERE entry_id=?", (first["id"],))   # relancé plus tard
         self.assertEqual(self.continue_for(dark["id"])["id"], first["id"])
         self.assertEqual(self.api.json("/api/item/nope/dismiss", {})[0], 404)
+        # le navigateur réutilise sa connexion : la requête qui suit un POST ne doit pas être polluée par son corps
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        try:
+            conn.request("POST", f"/api/item/{dark['id']}/dismiss", body=b"{}", headers={"Content-Type": "application/json"})
+            conn.getresponse().read()
+            conn.request("GET", "/api/home")
+            self.assertEqual(conn.getresponse().status, 200)
+        finally:
+            conn.close()
         self.hub.db.execute("DELETE FROM kv WHERE key LIKE 'dismiss:%'")      # la base est partagée entre les tests
         self.hub.db.execute("DELETE FROM progress WHERE entry_id=?", (first["id"],))
 
