@@ -213,7 +213,9 @@ body.full #abar { display: none; }
 #abar .seek { height: 0.45rem; background: var(--line); border-radius: 0.3rem; margin: 0.5rem 0 0.3rem; cursor: pointer; }
 #abar .seek i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 0.3rem; }
 #abar .tm { color: var(--mute); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
-@media (max-width: 760px) { #abar .pos { display: none; } }
+#abar .vl { display: flex; align-items: center; margin-left: 0.5rem; }
+#abar .vol { width: 6rem; accent-color: var(--accent); cursor: pointer; }
+@media (max-width: 760px) { #abar .pos, #abar .vol { display: none; } }
 
 #toast { position: fixed; left: 50%; bottom: 2rem; transform: translate(-50%, 1rem); background: #1d252d; border: 1px solid var(--line); padding: 0.7rem 1.2rem; border-radius: 0.8rem; max-width: 90vw; opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s; z-index: 80; }
 body.has-audio #toast { bottom: 6rem; }
