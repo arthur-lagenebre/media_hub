@@ -360,6 +360,7 @@
         if (prog) actions.appendChild(H.button('Depuis le début', 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
       }
       if (d.type !== 'album' && entries.length) actions.appendChild(H.button(allDone ? 'Marquer non vu' : 'Marquer comme vu', 'check', { onclick: function () { setSeen(!allDone); } }));
+      (d.links || []).forEach(function (l) { actions.appendChild(h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label)); });
       info.appendChild(actions);
       var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),
         h('div', { class: 'hero-in' }, H.picture('/img/item/' + d.id + '?w=500', d.title, square ? 'sq big' : 'big'), info));
@@ -371,11 +372,6 @@
       else if (d.type === 'series') body.appendChild(volumes(d));
       else if (entries.length > 1) body.appendChild(parts(d));
       if (d.actors && d.actors.length) body.appendChild(h('section', { class: 'cast' }, h('h2', null, 'Distribution'), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); }))));
-      if (d.links && d.links.length) {
-        body.appendChild(h('section', { class: 'links-out' }, h('h2', null, 'Liens'), h('div', { class: 'actions' }, d.links.map(function (l) {
-          return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label);
-        }))));
-      }
       if (d.saga && d.saga.length > 1) {
         var cards = d.saga.map(function (s) { var c = H.card(s, false, true); if (s.id === d.id) c.classList.add('now'); return c; });
         body.appendChild(h('section', { class: 'sagabox' },
