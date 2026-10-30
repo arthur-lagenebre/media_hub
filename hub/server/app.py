@@ -27,6 +27,7 @@ from libraries.books import shelf
 from libraries.books.archive import BookError
 from libraries.common.text import fold, initial
 from libraries.music import artistinfo, musicbrainz
+from libraries.video import tmdb
 
 from .. import __version__
 from .. import enrich
@@ -645,6 +646,20 @@ def resume_target(rows, progress):
     return rows[0]["id"] if rows else None
 
 
+TMDB_TAG_RE = re.compile(r"^(?:(movie|tv)/)?([0-9]+)$", re.IGNORECASE)         # comme le lecteur de l'atelier (libraries.video.mkv) : la casse ne compte pas
+
+
+def video_links(item, meta):
+    """Les liens d'un film ou d'une série : sa fiche TMDB, quand l'identifiant est connu (étiquette du fichier, nom du dossier ou enrichissement) ; vide sinon."""
+    if item["type"] not in ("movie", "show"):
+        return []
+    found = TMDB_TAG_RE.match(str(meta.get("tmdb") or meta.get("tmdb_pinned") or "").strip())      # l'étiquette d'un film s'écrit « movie/27205 » ; l'enrichissement d'une série garde le seul nombre
+    if not found:
+        return []
+    kind = (found.group(1) or ("movie" if item["type"] == "movie" else "tv")).lower()
+    return [{"label": "TMDB", "url": f"{tmdb.WEB_BASE}/{kind}/{found.group(2)}"}]
+
+
 @route("GET", r"/api/item/(\w+)")
 def api_item(h, m, q):
     hub = h.hub
@@ -659,6 +674,9 @@ def api_item(h, m, q):
                 "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries"):
         if meta.get(key) not in (None, "", []):
             out[key] = meta[key]
+    links = video_links(item, meta)
+    if links:
+        out["links"] = links
     out["entries"] = [entry_json(r, progress.get(r["id"])) for r in rows]
     out["resume"] = resume_target(rows, progress)
     if item["type"] == "show":
