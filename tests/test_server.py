@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import errno
 import http.client
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
+import types
 import unittest
+from unittest import mock
 from pathlib import Path
 from urllib.parse import quote
 
@@ -21,6 +25,7 @@ config.use_media_library(fixtures.REPO)
 
 from hub.scan.common import is_album_cover  # noqa: E402
 from hub.scan.music import scan_music  # noqa: E402
+from hub.server import jobs  # noqa: E402
 from hub.server.app import TITLE_SORTS, make_server  # noqa: E402
 
 FFMPEG = fixtures.FFMPEG
@@ -389,6 +394,7 @@ class TestJobs(ServerCase):
         candidates.mkdir()
         self.addCleanup(shutil.rmtree, candidates, True)
         keep = [album / "cover.jpg", album / "cover.png", album / "notes.txt", candidates / "candidate.jpg", *album.glob("*.flac"),
+                artist / "1999 - Un album qui manque.jpg", artist / "2001 - Un autre.PNG",       # pochettes d'albums manquants, posées dans le dossier de l'artiste
                 self.run_.libs["films"] / "Inception (2010)" / "folder.jpg"]       # hors musique, folder.jpg est une vraie affiche
         for path in junk + keep:
             if not path.exists():
@@ -403,6 +409,42 @@ class TestJobs(ServerCase):
         self.assertEqual([p.exists() for p in junk], [False] * len(junk))
         self.assertEqual([p.exists() for p in keep], [True] * len(keep))
         self.assertIn(f"{len(junk)} effacé", "\n".join(self.api.json("/api/jobs?log=1")[1]["jobs"][0]["log"]))
+
+    def test_force_unlink_removes_a_read_only_file(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        junk = folder / "Thumbs.db"
+        junk.write_bytes(b"x")
+        junk.chmod(0o444)
+        jobs.force_unlink(str(junk))
+        self.assertFalse(junk.exists())
+
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0, "root et Windows écrivent dans un dossier non modifiable : rien à forcer")
+    def test_force_unlink_goes_through_a_locked_folder_and_restores_it(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        junk = folder / "Thumbs.db"
+        junk.write_bytes(b"x")
+        folder.chmod(0o555)
+        try:
+            jobs.force_unlink(str(junk))
+            self.assertEqual(folder.stat().st_mode & 0o777, 0o555)
+        finally:
+            folder.chmod(0o755)
+        self.assertFalse(junk.exists())
+
+    def test_cleanup_logs_a_read_only_volume_once_per_library(self):
+        libs = [types.SimpleNamespace(path=str(self.run_.libs[name]), kind=name) for name in ("films", "musique")]
+        for name in ("films", "musique"):
+            (self.run_.libs[name] / "Thumbs.db").write_bytes(b"x")
+            (self.run_.libs[name] / "Desktop.ini").write_bytes(b"x")
+            self.addCleanup(lambda n=name: [(self.run_.libs[n] / f).unlink(missing_ok=True) for f in ("Thumbs.db", "Desktop.ini")])
+        log = []
+        with mock.patch.object(jobs, "force_unlink", side_effect=OSError(errno.EROFS, "ro")):
+            result = jobs.clean_junk(libs, True, log.append)
+        self.assertEqual(result, {"found": 4, "removed": 0})
+        self.assertEqual(sum("lecture seule (retire" in line for line in log), 2)        # une par bibliothèque
+        self.assertEqual(sum("… et 1 autre(s)" in line for line in log), 2)
 
     def test_enrich_needs_a_key_and_a_shows_library(self):
         self.assertEqual(self.api.json("/api/enrich", {"lib": "films"})[0], 400)
