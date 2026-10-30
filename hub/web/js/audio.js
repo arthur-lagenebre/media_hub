@@ -26,12 +26,22 @@
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { el.currentTime = Math.max(0, el.currentTime + (e.key === 'ArrowLeft' ? -10 : 10)); e.preventDefault(); }
     } }, ui.fill);
     ui.time = h('div', { class: 'tm' });
+    ui.mute = H.button('', 'audio', { 'aria-label': 'Couper le son', onclick: function () { el.muted = !el.muted; if (!el.muted && !el.volume) el.volume = 0.5; } });
+    ui.vol = h('input', { type: 'range', class: 'vol f', min: '0', max: '1', step: '0.05', 'aria-label': 'Volume', oninput: function () {
+      el.volume = Number(ui.vol.value);
+      el.muted = el.volume === 0;
+    } });
+    var saved = H.pref('volume');
+    if (saved && typeof saved.v === 'number') { el.volume = Math.min(1, Math.max(0, saved.v)); el.muted = !!saved.m; }
+    el.addEventListener('volumechange', paintVolume);
     bar.appendChild(ui.cover);
     bar.appendChild(h('div', { class: 'txt' }, ui.title, ui.sub));
     bar.appendChild(h('div', { class: 'ctl' }, ui.prev, ui.play, ui.next));
     bar.appendChild(h('div', { class: 'pos' }, ui.seek, ui.time));
+    bar.appendChild(h('div', { class: 'vl' }, ui.mute, ui.vol));
     bar.appendChild(ui.queue);
     bar.appendChild(ui.stop);
+    paintVolume();
     el.addEventListener('timeupdate', paintTime);
     el.addEventListener('play', paintPlay);
     el.addEventListener('pause', paintPlay);
@@ -53,6 +63,15 @@
     var icon = ui.play.querySelector('.ic');
     var fresh = H.icon(el.paused ? 'play' : 'pause');
     if (icon) ui.play.replaceChild(fresh, icon);
+  }
+  function paintVolume() {
+    var silent = el.muted || el.volume === 0;
+    var icon = ui.mute.querySelector('.ic');
+    var fresh = H.icon(silent ? 'mute' : 'audio');
+    if (icon) ui.mute.replaceChild(fresh, icon);
+    ui.mute.setAttribute('aria-label', silent ? 'Remettre le son' : 'Couper le son');
+    ui.vol.value = silent ? 0 : el.volume;
+    H.pref('volume', { v: el.volume, m: el.muted });
   }
   function paintTime() {
     var d = el.duration || (queue[idx] && queue[idx].duration) || 0;
