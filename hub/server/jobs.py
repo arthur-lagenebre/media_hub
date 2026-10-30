@@ -5,9 +5,11 @@ Rien ne se lance tout seul (sauf le premier scan d'une bibliothèque vide, et le
 
 from __future__ import annotations
 
+import errno
 import os
 import queue
 import re
+import stat
 import threading
 import time
 from collections import deque
@@ -123,17 +125,41 @@ def walk_junk(root, music=False):
                 yield path
 
 
+def force_unlink(path):
+    """Efface `path`, comme `rm -f` : si les droits l'interdisent (fichier en lecture seule, dossier non modifiable), les rend le temps d'effacer, puis remet ceux du dossier. Un système de fichiers monté en lecture seule (EROFS) reste, lui, infranchissable."""
+    try:
+        os.unlink(path)
+        return
+    except PermissionError:
+        pass
+    folder = os.path.dirname(path)
+    mode = os.stat(folder).st_mode
+    try:
+        os.chmod(folder, mode | stat.S_IWUSR | stat.S_IXUSR)
+        os.chmod(path, stat.S_IWUSR | stat.S_IRUSR)
+        os.unlink(path)
+    finally:
+        os.chmod(folder, mode)
+
+
 def clean_junk(libraries, apply, log):
-    """Les fichiers parasites : ceux que Windows et macOS sèment dans les dossiers, et les images de musique autres que cover.{ext} : comptés, et effacés si `apply`."""
+    """Les fichiers parasites : ceux que Windows et macOS sèment dans les dossiers, et les images de musique autres que cover.{ext} : comptés, et effacés si `apply` (de force : voir force_unlink)."""
     found = removed = 0
     for lib in libraries:
+        read_only = 0
         for path in walk_junk(lib.path, lib.kind == "music"):
             found += 1
             if apply:
                 try:
-                    os.unlink(path)
+                    force_unlink(path)
                     removed += 1
                 except OSError as e:
-                    log(f"  impossible d'effacer {path} : {e}")
+                    if e.errno != errno.EROFS:
+                        log(f"  impossible d'effacer {path} : {e}")
+                    elif not read_only:         # le volume entier est en lecture seule : une seule ligne par bibliothèque suffit
+                        log(f"  impossible d'effacer {path} : volume en lecture seule (retire « :ro » du volume {lib.path} dans docker-compose.yml)")
+                    read_only += e.errno == errno.EROFS
+        if read_only > 1:
+            log(f"  … et {read_only - 1} autre(s) fichier(s) de {lib.path} sur ce volume en lecture seule.")
     log(f"{found} fichier(s) de ce genre" + (f", {removed} effacé(s)." if apply else " (simulation : rien n'a été effacé)."))
     return {"found": found, "removed": removed}
