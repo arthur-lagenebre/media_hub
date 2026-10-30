@@ -179,10 +179,9 @@
       if (file.size > 10 * 1024 * 1024) { H.toast('Image trop grosse (10 Mo au plus).'); return; }
       H.api('/api/artist/' + lib + '/' + id + '/photo', file, { raw: true }).then(function () { stamp = Date.now(); H.toast('Photo enregistrée'); return load(); }).catch(fail);
     }
-    function removeOwn() {
-      H.menu('Retirer la photo envoyée ?', [{ label: 'Retirer ma photo', detail: 'Retour à celle de Wikipédia, ou à la pochette', value: 'yes' }, { label: 'Garder', value: 'no' }], 'no', function (v) {
-        if (v === 'yes') H.api('/api/artist/' + lib + '/' + id + '/photo/delete', {}).then(function () { stamp = Date.now(); H.toast('Photo retirée'); return load(); }).catch(fail);
-      });
+    function fromWikipedia() {
+      H.toast('Recherche sur Wikipédia…');
+      H.api('/api/artist/' + lib + '/' + id + '/photo/wikipedia', {}).then(function () { stamp = Date.now(); H.toast('Photo de Wikipédia enregistrée'); return load(); }).catch(fail);
     }
     function load() {
       return H.api('/api/artist/' + lib + '/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
@@ -206,7 +205,7 @@
         H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
         H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }),
         H.device === 'tv' ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal
-        d.own_photo ? H.button('Retirer ma photo', 'trash', { 'data-key': 'unphoto', onclick: removeOwn }) : null));
+        info && info.wiki ? H.button('Photo de Wikipédia', 'refresh', { 'data-key': 'wikiphoto', onclick: fromWikipedia }) : null));
       var first = d.albums[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id, v = stamp ? '&v=' + stamp : '';       // la photo de l'artiste, sinon la pochette de son premier album
       el.appendChild(picker);
       el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320' + v + ')' }),

@@ -710,22 +710,11 @@ def wanted_albums(hub, lib_id, artist_id):
 
 
 PHOTO_UPLOAD_MAX = 10 << 20
-PHOTO_TYPES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"), (b"RIFF", ".webp"))
-
-
-def custom_photos(hub, artist_id):
-    """Les photos que l'utilisateur a envoyées pour cet artiste (une seule en pratique) : data/artists/custom-<id>.<ext>. Elles passent avant celle de Wikipédia et un « Fiches artistes » n'y touche pas."""
-    return sorted((hub.cfg.data / "artists").glob(f"custom-{artist_id}.*"))
 
 
 def artist_photo(hub, artist_id, kept):
-    """Le fichier de la photo d'un artiste : celle qu'on lui a envoyée, sinon celle de Wikipédia (téléchargée par « Fiches artistes ») ; None s'il n'en a pas."""
-    mine = custom_photos(hub, artist_id)
-    if mine:
-        return mine[0]
-    name = ((kept or {}).get("info") or {}).get("photo")
-    path = hub.cfg.data / "artists" / name if name and name == os.path.basename(name) else None
-    return path if path and path.is_file() else None
+    """Le fichier de la photo d'un artiste, la seule qu'il ait (elle vient de Wikipédia, via « Fiches artistes », ou de l'utilisateur) ; None s'il n'en a pas."""
+    return enrich.photo_file(hub.cfg.data / "artists", artist_id, (kept or {}).get("mbid", ""))
 
 
 @route("GET", r"/api/artist/([\w-]+)/(\w+)")
@@ -749,37 +738,36 @@ def api_artist(h, m, q):
         out["info"] = artist_sheet(kept["info"], kept["mbid"])
     out["wanted"] = [{"year": w["year"], "title": w["title"], "cover": f"/img/wanted/{lib.id}/{m.group(2)}/{w['key']}" if w["cover"] else ""} for w in wanted_albums(hub, lib.id, m.group(2))]
     out["photo"] = artist_photo(hub, m.group(2), kept) is not None
-    out["own_photo"] = bool(custom_photos(hub, m.group(2)))
     h.send_json(out)
 
 
 @route("POST", r"/api/artist/([\w-]+)/(\w+)/photo")
 def api_artist_photo_set(h, m, q):
-    """Remplace la photo d'un artiste par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus)."""
+    """Remplace la photo d'un artiste, quelle qu'elle soit, par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus)."""
     hub = h.hub
     artist_albums(hub, m.group(1), m.group(2))
     data = h.body_bytes(PHOTO_UPLOAD_MAX)
-    ext = next((ext for magic, ext in PHOTO_TYPES if data.startswith(magic)), None)
-    if not ext or (ext == ".webp" and data[8:12] != b"WEBP"):
+    ext = enrich.image_ext(data)
+    if not ext:
         raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
-    folder = hub.cfg.data / "artists"
-    folder.mkdir(parents=True, exist_ok=True)
-    for old in custom_photos(hub, m.group(2)):
-        old.unlink()
-    (folder / f"custom-{m.group(2)}{ext}").write_bytes(data)
+    enrich.store_photo(hub.cfg.data / "artists", m.group(2), data, ext)
     h.send_json({"ok": True})
 
 
-@route("POST", r"/api/artist/([\w-]+)/(\w+)/photo/delete")
-def api_artist_photo_delete(h, m, q):
-    """Retire la photo envoyée : l'artiste retrouve celle de Wikipédia, ou la pochette de son premier album."""
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/photo/wikipedia")
+def api_artist_photo_wikipedia(h, m, q):
+    """Remplace la photo d'un artiste par celle de son article Wikipédia (celui que sa fiche garde : il faut donc que « Fiches artistes » soit passé)."""
     hub = h.hub
-    artist_albums(hub, m.group(1), m.group(2))
+    _, rows = artist_albums(hub, m.group(1), m.group(2))
     h.body_json()
-    removed = custom_photos(hub, m.group(2))
-    for old in removed:
-        old.unlink()
-    h.send_json({"ok": True, "removed": len(removed)})
+    wiki = ((artist_kept(hub, rows) or {}).get("info") or {}).get("wiki")
+    if not wiki:
+        raise HttpError(404, "pas d'article Wikipédia connu pour cet artiste")
+    try:
+        enrich.wikipedia_photo(hub.cfg, m.group(2), wiki)
+    except OSError as e:
+        raise HttpError(502, f"photo non récupérée : {e}")
+    h.send_json({"ok": True})
 
 
 @route("GET", r"/img/artist/([\w-]+)/(\w+)")
