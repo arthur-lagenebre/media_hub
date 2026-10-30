@@ -81,7 +81,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 
 ## Développer avec Claude Code
 
-Cinq agents spécialisés (serveur, interface, tests, relecture, déploiement) sont dans `.claude/agents/` : voir [docs/agents.md](docs/agents.md).
+Six agents spécialisés (architecture, serveur, interface, tests, relecture, déploiement) sont dans `.claude/agents/` : voir [docs/agents.md](docs/agents.md).
 
 ## Tests
 

@@ -1,6 +1,6 @@
 # Utiliser les agents Claude Code
 
-Le dépôt contient cinq **sous-agents** dans [.claude/agents/](../.claude/agents/). Un sous-agent est un assistant spécialisé : Claude Code lui confie une tâche, il travaille dans son propre contexte avec ses propres outils, puis ne renvoie que son compte rendu. Cela garde la conversation principale lisible et donne à chaque tâche les bonnes consignes du projet.
+Le dépôt contient six **sous-agents** dans [.claude/agents/](../.claude/agents/). Un sous-agent est un assistant spécialisé : Claude Code lui confie une tâche, il travaille dans son propre contexte avec ses propres outils, puis ne renvoie que son compte rendu. Cela garde la conversation principale lisible et donne à chaque tâche les bonnes consignes du projet.
 
 ## Qui fait quoi
 
@@ -11,6 +11,7 @@ Le dépôt contient cinq **sous-agents** dans [.claude/agents/](../.claude/agent
 | `hub-tester` | ajouter un test, reproduire un bug par un test, comprendre un test qui échoue | oui (tests seulement) |
 | `hub-reviewer` | relire un changement avant commit / PR | **non** (lecture seule) |
 | `hub-deploy` | `deploy/` : docker-compose, Tailscale, `.env`, ffmpeg sur le NAS, dépannage | oui |
+| `hub-architect` | discuter de conception : où placer une fonctionnalité, forme d'une API ou d'un schéma, client natif / PWA, compromis | **non** (lecture seule) |
 
 Règle de partage : `hub-server` ne touche pas à `hub/web`, `hub-ui` ne touche pas à `hub/server`. Quand une tâche demande les deux, chacun décrit ce qu'il attend de l'autre.
 
@@ -24,6 +25,16 @@ Trois façons, dans une conversation Claude Code (terminal ou extension VS Code)
 3. **Automatiquement** : sans les nommer, Claude peut déléguer de lui-même quand la demande correspond à la description d'un agent (« ajoute une route… » → `hub-server`). Nommer l'agent reste plus fiable.
 
 La commande `/agents` liste les agents disponibles, permet de les consulter et de les modifier. Les agents sont chargés au démarrage de la session : après avoir créé ou changé un fichier de `.claude/agents/`, relance la session (ou passe par `/agents`) si l'agent n'apparaît pas.
+
+### Discuter avec l'architecte
+
+`hub-architect` est fait pour l'échange, et un sous-agent appelé depuis la conversation ne répond qu'une fois puis disparaît. Pour une vraie discussion en plusieurs tours, lance Claude Code **avec cet agent comme session principale** :
+
+```bash
+claude --agent hub-architect
+```
+
+Toute la conversation se tient alors avec lui (il lit le code, ne modifie rien). Quand une décision est prise, reviens à une session normale et confie l'implémentation à `hub-server`, `hub-ui`… en leur collant le résumé qu'il t'a préparé. Appelé depuis la session normale (`Utilise hub-architect : …`), il convient à un avis ponctuel et autonome.
 
 ## Exemples de demandes
 
@@ -40,6 +51,9 @@ Utilise hub-tester : écris un test qui reproduit « un scan efface les photos d
 enrichies » (hub/scan), sans corriger le code.
 
 Utilise hub-reviewer : relis le diff de la branche courante contre main.
+
+Utilise hub-architect : faut-il une PWA ou une application Android TV native ? Qu'est-ce que l'API actuelle
+doit changer pour l'accepter (authentification, URL de flux pour Chromecast) ?
 
 Utilise hub-deploy : ajoute une bibliothèque « Documentaires » dans le compose et dans le README.
 ```
