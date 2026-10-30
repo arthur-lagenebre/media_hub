@@ -29,6 +29,7 @@ PHOTO_WIDTH = 960               # la photo de l'article, en 960 px quand l'origi
 PHOTO_MAX = 8 * 1024 * 1024
 PHOTO_HOSTS = ("upload.wikimedia.org", "thumb.wikimedia.org")        # l'API de Wikipédia sert ses vignettes depuis le second
 PHOTO_TYPES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"), (b"RIFF", ".webp"))
+PHOTO_EXTS = tuple(ext for _, ext in PHOTO_TYPES)
 
 
 CAST_SIZE = 20
@@ -162,9 +163,48 @@ def photo_urls(mb, wiki):
     return [u for u in urls if urlparse(u).scheme == "https" and urlparse(u).hostname in PHOTO_HOSTS]      # ce qu'on télécharge vient de Wikimedia, rien d'autre
 
 
-def download_photo(urls, folder, mbid):
-    """Garde la première photo qui se télécharge, sous artists/<mbid>.<ext> ; son nom de fichier, ou OSError si aucune ne vient."""
+def image_ext(data):
+    """L'extension (.jpg, .png ou .webp) de l'image que ces octets contiennent, d'après leur début ; None si ce n'en est pas une."""
+    ext = next((ext for magic, ext in PHOTO_TYPES if data.startswith(magic)), None)
+    return None if ext == ".webp" and data[8:12] != b"WEBP" else ext
+
+
+def photo_file(folder, artist_id, mbid=""):
+    """Le fichier de la photo d'un artiste, artists/<id>.<ext> : la seule qu'il ait, qu'elle vienne de Wikipédia ou qu'on l'ait envoyée ; None s'il n'en a pas.
+
+    Avant, il y en avait deux : custom-<id>.<ext> (envoyée) et <mbid>.<ext> (Wikipédia). Elles sont ramenées au nom d'aujourd'hui au passage, l'envoyée d'abord.
+    """
+    def find(stem):
+        return next((p for p in (folder / f"{stem}{ext}" for ext in PHOTO_EXTS) if p.is_file()), None)
+
+    found = find(artist_id)
+    if found:
+        return found
+    for stem in (f"custom-{artist_id}", mbid):
+        old = find(stem) if stem else None
+        if old:
+            try:
+                return old.replace(folder / f"{artist_id}{old.suffix}")
+            except OSError:
+                return old
+    return None
+
+
+def store_photo(folder, artist_id, data, ext):
+    """Pose la photo d'un artiste sous artists/<id>.<ext> à la place de l'ancienne, qui ne disparaît qu'une fois la nouvelle écrite ; son nom de fichier."""
     folder.mkdir(parents=True, exist_ok=True)
+    name = f"{artist_id}{ext}"
+    part = folder / f"{artist_id}.part"
+    part.write_bytes(data)
+    part.replace(folder / name)
+    for other in PHOTO_EXTS:
+        if other != ext:
+            (folder / f"{artist_id}{other}").unlink(missing_ok=True)
+    return name
+
+
+def download_photo(urls, folder, artist_id):
+    """Garde la première photo qui se télécharge, à la place de celle de l'artiste (voir store_photo) ; son nom de fichier, ou OSError si aucune ne vient."""
     error = OSError("photo introuvable")
     for url in urls:
         try:
@@ -173,14 +213,23 @@ def download_photo(urls, folder, mbid):
         except (URLError, OSError) as e:
             error = e if isinstance(e, OSError) else OSError(str(e))
             continue
-        ext = next((ext for magic, ext in PHOTO_TYPES if data.startswith(magic)), None)
+        ext = image_ext(data)
         if ext and len(data) <= PHOTO_MAX:
-            for old in folder.glob(f"{mbid}.*"):
-                old.unlink()
-            (folder / f"{mbid}{ext}").write_bytes(data)
-            return f"{mbid}{ext}"
+            return store_photo(folder, artist_id, data, ext)
         error = OSError("ce n'est pas une image, ou trop grosse")
     raise error
+
+
+def musicbrainz(cfg):
+    return MusicBrainz(user_agent=MB_USER_AGENT, cache=tmdb_cache.Cache(folder=cfg.data / "musicbrainz-cache", read=True))
+
+
+def wikipedia_photo(cfg, artist_id, wiki):
+    """Remplace la photo d'un artiste par celle de son article Wikipédia ; son nom de fichier, ou OSError si l'article n'en a pas ou si elle ne vient pas."""
+    urls = photo_urls(musicbrainz(cfg), wiki)
+    if not urls:
+        raise OSError("l'article n'a pas de photo")
+    return download_photo(urls, cfg.data / "artists", artist_id)
 
 
 def enrich_artists(cfg, db, lib, log=print, force=False):
@@ -188,12 +237,16 @@ def enrich_artists(cfg, db, lib, log=print, force=False):
 
     Sans clé (MusicBrainz n'en demande pas), mais à raison d'une requête par seconde : la première passe est longue. Une fiche de moins de 30 jours n'est pas redemandée, sauf `force`. Elle est gardée dans la base : un rescan ne l'efface pas.
     """
-    mb = MusicBrainz(user_agent=MB_USER_AGENT, cache=tmdb_cache.Cache(folder=cfg.data / "musicbrainz-cache", read=True))
-    artists = {}
+    mb = musicbrainz(cfg)
+    artists, ids = {}, {}
     for row in db.query("SELECT grp, meta FROM items WHERE lib=? AND type='album'", (lib.id,)):
-        mbid = json.loads(row["meta"]).get("artist_mbid")
+        meta = json.loads(row["meta"])
+        mbid = meta.get("artist_mbid")
         if mbid:
             artists.setdefault(mbid, row["grp"])
+            if meta.get("artist_id"):
+                ids.setdefault(mbid, set()).add(meta["artist_id"])
+    folder = cfg.data / "artists"
     done = failed = 0
     for mbid, name in sorted(artists.items(), key=lambda kv: kv[1].casefold()):
         kept = db.kv_get(artist_key(mbid))
@@ -206,10 +259,17 @@ def enrich_artists(cfg, db, lib, log=print, force=False):
             failed += 1
             continue
         urls = photo_urls(mb, info["wiki"]) if info.get("wiki") else []
-        try:
-            info["photo"] = download_photo(urls, cfg.data / "artists", mbid) if urls else ""      # "" : pas de photo, et inutile de la redemander
-        except OSError as e:
-            log(f"  {name} : photo non récupérée ({e})")                                          # pas de clé "photo" : le prochain passage réessaie
+        info["photo"] = ""                                                                          # "" : pas de photo de Wikipédia, et inutile de la redemander
+        for artist_id in sorted(ids.get(mbid, ())):
+            have = photo_file(folder, artist_id, mbid)
+            if have:                                                                                # elle a déjà sa photo, d'où qu'elle vienne : on n'y touche pas
+                info["photo"] = have.name
+                continue
+            try:
+                info["photo"] = download_photo(urls, folder, artist_id) if urls else ""
+            except OSError as e:
+                log(f"  {name} : photo non récupérée ({e})")
+                info.pop("photo", None)                                                             # pas de clé "photo" : le prochain passage réessaie
         db.kv_set(artist_key(mbid), {"fetched": date.today().isoformat(), "info": info})
         done += 1
         log(f"  {name} : {artistinfo.facts(info) or 'fiche vide'}{' · photo' if info.get('photo') else ''}")

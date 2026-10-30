@@ -473,6 +473,7 @@ class TestJobs(ServerCase):
         lib = next(l for l in self.hub.cfg.libraries if l.id == "musique")
         photo = f"/img/artist/musique/{detail['artist_id']}?w=320"
         self.assertEqual(self.api.get(photo)[0], 404)                  # pas de photo avant les fiches
+        self.addCleanup((self.hub.cfg.data / "artists" / f"{detail['artist_id']}.png").unlink, True)
 
         class Download:                                                 # ce que Wikimedia répondrait : une image
             def __enter__(self):
@@ -490,6 +491,7 @@ class TestJobs(ServerCase):
             self.run_.wait_jobs()
         sheet = self.api.json(url)[1]
         self.assertTrue(sheet["photo"])
+        self.assertEqual([p.name for p in (self.hub.cfg.data / "artists").glob("*.png")], [f"{detail['artist_id']}.png"])       # un fichier par artiste, à son nom
         status, headers, body = self.api.get(photo)
         self.assertEqual((status, headers["Content-Type"]), (200, "image/jpeg"))
         self.assertIn("genres", sheet)
@@ -522,23 +524,71 @@ class TestJobs(ServerCase):
         self.run_.wait_jobs()
         self.assertEqual([p.exists() for p in found], [True] * len(found))       # le nettoyage garde leurs images
 
-    def test_artist_photo_can_be_uploaded_and_removed(self):
-        detail = self.detail(self.item_by_title("musique", "Discovery")["id"])
-        base = f"/api/artist/musique/{detail['artist_id']}"
-        photo = f"/img/artist/musique/{detail['artist_id']}?w=320"
-        self.addCleanup(self.api.json, base + "/photo/delete", {})
-        self.assertFalse(self.api.json(base)[1]["own_photo"])
+    def test_artist_photo_is_one_file_that_each_new_photo_replaces(self):
+        from unittest import mock
+
+        album = self.item_by_title("musique", "Discovery")
+        detail = self.detail(album["id"])
+        artist_id = detail["artist_id"]
+        base = f"/api/artist/musique/{artist_id}"
+        photo = f"/img/artist/musique/{artist_id}?w=320"
+        folder = self.hub.cfg.data / "artists"
+        self.addCleanup(lambda: [p.unlink() for p in folder.glob(f"{artist_id}.*")])
+        self.assertNotIn("own_photo", self.api.json(base)[1])
         self.assertEqual(self.api.request("POST", base + "/photo", body=b"ceci n'est pas une image", headers={"Content-Type": "image/png"})[0], 415)
+        self.assertEqual(self.api.request("POST", base + "/photo", body=b"RIFFxxxxWAVE", headers={"Content-Type": "image/webp"})[0], 415)
         self.assertEqual(self.api.request("POST", "/api/artist/musique/deadbeef/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})[0], 404)
         status, _, body = self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})
         self.assertEqual(status, 200, body)
-        sheet = self.api.json(base)[1]
-        self.assertTrue(sheet["photo"] and sheet["own_photo"])
+        self.assertTrue(self.api.json(base)[1]["photo"])
         self.assertEqual(self.api.get(photo)[0], 200)
-        self.assertEqual(self.api.json(base + "/photo/delete", {})[1]["removed"], 1)
-        sheet = self.api.json(base)[1]
-        self.assertFalse(sheet["own_photo"])
-        self.assertEqual(self.api.get(photo)[0], 200 if sheet["photo"] else 404)      # sans photo de Wikipédia en dessous, la page retrouve la pochette
+        self.assertEqual([p.name for p in folder.glob(f"{artist_id}.*")], [f"{artist_id}.png"])
+        self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})
+        self.assertEqual([p.name for p in folder.glob(f"{artist_id}.*")], [f"{artist_id}.png"])       # la nouvelle prend la place de l'ancienne
+
+        self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 404)                        # sans article connu, rien à chercher
+        self.assertEqual(self.api.json(base + "/photo/delete", {})[0], 404)                           # et une photo ne se supprime pas
+        info = {"sheet": 2, "photo": "", "wiki": {"lang": "fr", "title": "Daft Punk", "url": "https://fr.wikipedia.org/wiki/Daft_Punk", "extract": "Duo."}}
+        self.hub.db.update_item_meta(album["id"], meta={"artist_mbid": "abc"})
+        self.addCleanup(self.hub.jobs.scan, next(l for l in self.hub.cfg.libraries if l.id == "musique"))
+        self.addCleanup(self.hub.db.kv_set, "artist:abc", None)         # la fiche posée ici ne doit pas empêcher celle du test des fiches
+        self.hub.db.kv_set("artist:abc", {"fetched": "2099-01-01", "info": info})
+        self.assertIn("wiki", self.api.json(base)[1]["info"])
+
+        class Download:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n=-1):
+                return b"\xff\xd8\xff\xe0 photo de Wikipedia"
+
+        with mock.patch("hub.enrich.photo_urls", return_value=["https://upload.wikimedia.org/x.jpg"]), mock.patch("hub.enrich.urlopen", return_value=Download()):
+            self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 200)
+        self.assertEqual([p.name for p in folder.glob(f"{artist_id}.*")], [f"{artist_id}.jpg"])       # celle de Wikipédia remplace la mienne, sans la laisser à côté
+        with mock.patch("hub.enrich.photo_urls", return_value=[]):
+            self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 502)
+        self.assertEqual([p.name for p in folder.glob(f"{artist_id}.*")], [f"{artist_id}.jpg"])       # un échec ne retire rien
+
+    def test_artist_photos_from_before_are_brought_to_one_file(self):
+        import tempfile
+        from pathlib import Path
+        from hub import enrich
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            self.assertIsNone(enrich.photo_file(folder, "a1", "m1"))
+            (folder / "m1.jpg").write_bytes(b"wikipedia")
+            (folder / "custom-a1.png").write_bytes(b"envoyee")
+            self.assertEqual(enrich.photo_file(folder, "a1", "m1").name, "a1.png")                    # celle qu'on a envoyée l'emporte
+            self.assertEqual(enrich.photo_file(folder, "a1", "m1").read_bytes(), b"envoyee")
+            self.assertFalse((folder / "custom-a1.png").exists())
+            (folder / "m2.jpg").write_bytes(b"wikipedia")
+            self.assertEqual(enrich.photo_file(folder, "a2", "m2").name, "a2.jpg")                    # sinon celle de Wikipédia
+            self.assertEqual(enrich.store_photo(folder, "a2", fixtures.PNG, ".png"), "a2.png")
+            self.assertEqual(sorted(p.name for p in folder.glob("a2.*")), ["a2.png"])
 
     def test_artist_links_are_limited_to_the_wanted_ones(self):
         from hub import enrich
