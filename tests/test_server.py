@@ -160,6 +160,23 @@ class TestBrowse(ServerCase):
         steel = self.detail(self.item_by_title("films", "Man of Steel")["id"])
         self.assertEqual([m["title"] for m in steel["saga"]], ["Man of Steel", "Batman v Superman"])
 
+    def test_movie_and_show_link_to_tmdb(self):
+        inception = self.detail(self.item_by_title("films", "Inception")["id"])
+        self.assertEqual(inception["links"], [{"label": "TMDB", "url": "https://www.themoviedb.org/movie/27205"}])
+        self.assertNotIn("links", self.detail(self.item_by_title("series", "Dark")["id"]))          # pas d'identifiant TMDB tant que la série n'est pas enrichie
+        self.assertNotIn("links", self.detail(self.item_by_title("musique", "Discovery")["id"]))
+
+    def test_video_links_edge_cases(self):
+        from hub.server.app import video_links
+        movie = {"type": "movie"}
+        self.assertEqual(video_links(movie, {}), [])                                                     # pas d'identifiant : pas de lien
+        self.assertEqual(video_links(movie, {"tmdb": "n'importe quoi/../x"}), [])                        # une étiquette mal formée est ignorée
+        self.assertEqual(video_links({"type": "show"}, {"tmdb_pinned": "70523"})[0]["url"], "https://www.themoviedb.org/tv/70523")      # identifiant épinglé dans le nom du dossier, série non enrichie
+        self.assertEqual(video_links(movie, {"tmdb": "70523"})[0]["url"], "https://www.themoviedb.org/movie/70523")                     # nombre seul : le genre vient de l'élément
+        self.assertEqual(video_links(movie, {"tmdb": " MOVIE/27205 "})[0]["url"], "https://www.themoviedb.org/movie/27205")             # la casse et les espaces ne comptent pas
+        self.assertEqual(video_links(movie, {"tmdb": "movie/٢٧"}), [])                                                                    # seuls les chiffres ASCII font un identifiant
+        self.assertEqual(video_links({"type": "album"}, {"tmdb": "1"}), [])
+
     def test_show_detail_orders_seasons_and_episodes(self):
         dark = self.detail(self.item_by_title("series", "Dark")["id"])
         self.assertEqual([(e["season"], e["number"]) for e in dark["entries"]], [(1, 1), (1, 2), (2, 1)])
@@ -647,7 +664,8 @@ class TestJobs(ServerCase):
         self.assertEqual(dark["summary"], "Un enfant disparaît.")
         self.assertEqual(dark["season_summaries"], {"1": "Synopsis de la saison 1."})
         self.assertEqual(dark["actors"][0], {"name": "Louis Hofmann", "role": "Jonas"})
-        self.hub.jobs.scan(lib)                 # un rescan n'efface rien
+        self.assertEqual(dark["links"][0], {"label": "TMDB", "url": "https://www.themoviedb.org/tv/1234"})
+        self.hub.jobs.scan(lib)                # un rescan n'efface rien
         self.run_.wait_jobs()
         again = self.detail(self.item_by_title("series", "Dark")["id"])
         self.assertEqual((again["summary"], again["season_summaries"], again["actors"]), (dark["summary"], dark["season_summaries"], dark["actors"]))
