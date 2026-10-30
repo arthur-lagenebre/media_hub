@@ -534,7 +534,7 @@
     return 'il y a ' + Math.round(s / 86400) + ' j';
   }
   H.route(/^\/admin$/, function () {
-    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, state = null, jobs = [];
+    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, state = null, jobs = [], logPanel = null, lastPage = '', lastTasks = '';
     function qualityLabel(v) { return { auto: 'Qualité d’origine quand c’est possible', '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': '480p · 1,5 Mb/s' }[v] || v; }
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
@@ -542,18 +542,16 @@
     function render() {
       var focus = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
       H.clear(el);
-      var busy = jobs.some(function (j) { return j.status === 'waiting' || j.status === 'running'; });
       el.appendChild(h('h1', null, 'Gestion'));
-      var libs = h('section', { class: 'panel' }, h('h2', null, 'Bibliothèques'));
+      var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, 'Bibliothèques'),
+        H.button('Tout mettre à jour', 'refresh', { class: 'primary', 'data-autofocus': '1', 'data-key': 'scan-all', title: 'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.', onclick: function () { start('/api/scan', {}, 'Mise à jour lancée'); } })));
       state.libraries.forEach(function (l) {
         libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
           h('div', { class: 'what' }, h('b', null, l.label), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · mis à jour ' + ago(l.scanned) : 'dossier introuvable')),
-          H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } }),
           l.kind === 'shows' ? H.button('Enrichir (TMDB)', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Enrichissement lancé : ' + l.label); } }) : null,
-          l.kind === 'music' ? H.button('Fiches artistes', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Fiches artistes demandées : ' + l.label); } }) : null));
+          l.kind === 'music' ? H.button('Fiches artistes', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Fiches artistes demandées : ' + l.label); } }) : null,
+          H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } })));
       });
-      libs.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Tout'), h('span', null, 'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.')),
-        H.button('Tout mettre à jour', 'refresh', { class: 'primary', 'data-autofocus': '1', 'data-key': 'scan-all', onclick: function () { start('/api/scan', {}, 'Mise à jour lancée'); } })));
       el.appendChild(libs);
 
       var play = h('section', { class: 'panel' }, h('h2', null, 'Lecture'));
@@ -588,23 +586,32 @@
       if (state.auth) server.appendChild(h('a', { class: 'btn f', href: '/api/logout' }, 'Se déconnecter'));
       el.appendChild(server);
 
+      logPanel = jobsPanel();
+      el.appendChild(logPanel);
+      if (focus) H.focus.key(el, focus, true); else H.focus.first();   // sans défilement
+    }
+    function jobsPanel() {
+      var busy = jobs.some(function (j) { return j.status === 'waiting' || j.status === 'running'; });
       var log = h('section', { class: 'panel' }, h('h2', null, 'Tâches', busy ? h('span', { class: 'busy' }, '…') : null));
       if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, 'Aucune tâche pour l’instant.'));
       jobs.slice(0, 6).forEach(function (j) {
         var status = { waiting: 'en attente', running: 'en cours', done: 'terminée', failed: 'échec' }[j.status];
         log.appendChild(h('div', { class: 'job ' + j.status }, h('div', { class: 'jt' }, h('b', null, j.label), h('span', null, status)), j.log && j.log.length ? h('pre', null, j.log.slice(-8).join('\n')) : null));
       });
-      el.appendChild(log);
-      if (focus) H.focus.key(el, focus, true); else H.focus.first();   // sans défilement : render() tourne aussi toutes les 1,5 s pendant une tâche
+      return log;
     }
     function poll() {
       clearTimeout(timer);
       return Promise.all([H.api('/api/state'), H.api('/api/jobs?log=1')]).then(function (r) {
+        var page = JSON.stringify(r[0]), tasks = JSON.stringify(r[1].jobs);
         state = r[0]; jobs = r[1].jobs; H.libs = state.libraries;
         var busy = r[1].busy;
         if (wasBusy && !busy) H.toast('Terminé');
         wasBusy = busy;
-        render();
+        // Pendant une tâche on revient ici toutes les 1,5 s : reconstruire la page entière coupait le défilement (molette, tactile). On ne refait que ce qui a changé.
+        if (!logPanel || page !== lastPage) render();
+        else if (tasks !== lastTasks) { var fresh = jobsPanel(); el.replaceChild(fresh, logPanel); logPanel = fresh; }
+        lastPage = page; lastTasks = tasks;
         if (busy) timer = setTimeout(poll, 1500);
       }).catch(function (e) { H.toast(e.message, 5000); });
     }
