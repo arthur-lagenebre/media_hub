@@ -63,7 +63,7 @@ Un film porte la saga que dit son étiquette (la collection TMDB posée par `Met
 {"sagas": [{"name": "Trilogie Cornetto", "films": [747, 4638, 49051]}]}
 ```
 
-L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste est son numéro, même quand on n'a pas ceux qui le précèdent. Un film peut être dans plusieurs sagas : la grille ne lui donne qu'une vignette (celle de la première saga du fichier, avant celle de l'étiquette), et sa fiche les liste toutes. Le fichier est relu dès qu'il change ; absent ou illisible, il ne donne aucune saga. L'administrateur le modifie par l'API (`/api/sagas`, voir `docs/api.md`) : le serveur l'écrit d'un bloc et refuse ce qu'il ne comprend pas.
+L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste est son numéro, même quand on n'a pas ceux qui le précèdent. Un film peut être dans plusieurs sagas : la grille ne lui donne qu'une vignette (celle de la première saga du fichier, avant celle de l'étiquette), et sa fiche les liste toutes. Le fichier est relu dès qu'il change ; absent ou illisible, il ne donne aucune saga. Pas besoin de l'écrire à la main : l'administrateur compose ses sagas dans l'interface, *Gestion* > *Sagas* (créer, renommer, monter ou descendre une saga ou un film, ajouter des films en les cherchant ou toute une saga d'un coup, trier par date de sortie), ou depuis la fiche d'un film avec « Ajouter à une saga ». Le serveur écrit le fichier d'un bloc et refuse ce qu'il ne comprend pas (`/api/sagas`, voir `docs/api.md`). Seuls les films étiquetés avec un identifiant TMDB peuvent y entrer.
 
 ## Comptes
 

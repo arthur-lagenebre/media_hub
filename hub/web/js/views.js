@@ -359,6 +359,7 @@
         if (prog) actions.appendChild(H.button('Depuis le début', 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
       }
       if (d.type !== 'album' && entries.length) actions.appendChild(H.button(allDone ? 'Marquer non vu' : 'Marquer comme vu', 'check', { onclick: function () { setSeen(!allDone); } }));
+      if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) actions.appendChild(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
       (d.links || []).forEach(function (l) { actions.appendChild(h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label)); });
       info.appendChild(actions);
       var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),
@@ -604,6 +605,9 @@
           H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } })));
       });
       if (H.isAdmin()) el.appendChild(libs);
+      if (H.isAdmin()) el.appendChild(h('section', { class: 'panel' }, h('h2', null, 'Sagas'), h('div', { class: 'line' },
+        h('div', { class: 'what' }, h('b', null, 'Sagas composées à la main'), h('span', null, 'Une trilogie que TMDB ne réunit pas, l’ordre du MCU… : des listes de films dans l’ordre de ton choix, en plus de la saga de l’étiquette.')),
+        h('a', { class: 'btn f', href: '#/sagas', 'data-key': 'sagas' }, H.icon('edit'), h('span', { class: 'lbl' }, 'Composer')))));
 
       var play = h('section', { class: 'panel' }, h('h2', null, 'Lecture'));
       var q = H.pref('quality') || 'auto', surround = !!H.pref('surround');
