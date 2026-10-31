@@ -406,8 +406,14 @@
         var r = d.entries.filter(function (e) { return e.id === d.resume; })[0];
         season = r && seasons.indexOf(r.season) >= 0 ? r.season : seasons[0];
       }
-      var list = h('div', { class: 'eps' }), blurb = h('p', { class: 'seasonsum' });
+      var list = h('div', { class: 'eps' }), blurb = h('p', { class: 'seasonsum' }), bSeason = null;
+      function seasonDone() { return d.entries.filter(function (e) { return e.season === season; }).every(function (e) { return e.progress && e.progress.done; }); }
       function fill() {
+        if (bSeason) {          // le bouton annonce ce qu'il va faire de la saison affichée
+          var done = seasonDone();
+          bSeason.classList.toggle('done', done);
+          H.clear(bSeason).appendChild(h('span', null, H.icon('check'), done ? ' Saison vue : la marquer non vue' : ' Marquer la saison vue'));
+        }
         H.clear(list);
         var text = (d.season_summaries || {})[String(season)] || '';
         blurb.textContent = text; blurb.hidden = !text;
@@ -429,10 +435,10 @@
           season = s; Array.prototype.forEach.call(chips.querySelectorAll('.chip'), function (c) { var on = c.getAttribute('data-key') === 's' + s; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on ? 'true' : 'false'); }); fill();
         } }, s === 0 ? 'Spéciaux' : 'Saison ' + s));
       });
-      if (seasons.length > 1) chips.appendChild(h('button', { class: 'chip f ghost', onclick: function () {
-        var all = d.entries.filter(function (e) { return e.season === season; }).every(function (e) { return e.progress && e.progress.done; });
-        setSeen(!all, season);
-      } }, 'Saison vue / non vue'));
+      if (seasons.length > 1) {
+        bSeason = h('button', { class: 'chip f ghost', 'data-key': 'sv', onclick: function () { setSeen(!seasonDone(), season); } });
+        chips.appendChild(bSeason);
+      }
       sec.appendChild(chips); sec.appendChild(blurb); sec.appendChild(list);
       fill();
       return sec;
