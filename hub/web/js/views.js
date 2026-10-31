@@ -71,6 +71,22 @@
     a.appendChild(h('div', { class: 's' }, [H.plural(it.n, 'film'), years].filter(Boolean).join(' · ')));
     return a;
   }
+  // Un film qui manque à une saga : son affiche grisée, rien à ouvrir ni à lire (la case n'est donc pas dans la navigation à la télécommande, comme un album manquant).
+  // `hide` (administrateur, film que seule la collection TMDB compte) : un bouton « Ne pas afficher » sous la case.
+  function missingCard(m, hide) {
+    var pic = H.picture(m.cover ? m.cover + '?w=300' : '', m.title, '');
+    pic.appendChild(h('span', { class: 'part' }, m.rank));
+    var card = h('div', { class: 'card wanted', title: m.title + ' (manquant)' }, pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, 'Manquant'].filter(Boolean).join(' · ')));
+    if (!hide || !m.ignorable) return card;
+    return h('div', { class: 'mcell' }, card, H.button('Ne pas afficher', 'close', { class: 'mhide', 'data-key': 'hide-' + m.tmdb, 'aria-label': 'Ne pas afficher ' + m.title + ' comme manquant', onclick: function () { hide(m); } }));
+  }
+  // Les films qu'on a et ceux qui manquent, rangés ensemble par leur rang dans la saga ; `card(film)` fait la case d'un film qu'on a.
+  function sagaCells(films, absent, card, hide) {
+    var cells = films.map(function (f, i) { return { rank: f.part === undefined || f.part === null ? i + 1 : f.part, node: card(f) }; });
+    (absent || []).forEach(function (m) { cells.push({ rank: m.rank, node: missingCard(m, hide) }); });
+    cells.sort(function (a, b) { return a.rank - b.rank; });
+    return cells.map(function (c) { return c.node; });
+  }
   H.card = function (it, withGroup, withPart) {
     if (it.type === 'saga') return sagaCard(it);
     var square = it.type === 'album';
@@ -372,10 +388,16 @@
       else if (d.type === 'series') body.appendChild(volumes(d));
       else if (entries.length > 1) body.appendChild(parts(d));
       if (d.actors && d.actors.length) body.appendChild(h('section', { class: 'cast' }, h('h2', null, 'Distribution'), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); }))));
-      (d.sagas || []).forEach(function (saga) {
-        var cards = saga.films.map(function (s) { var c = H.card(s, false, true); if (s.id === d.id) c.classList.add('now'); return c; });
+      (d.sagas || []).forEach(function (saga, k) {
+        var cards = sagaCells(saga.films, saga.missing, function (s) {
+          var c = H.card(s, false, true);
+          c.setAttribute('data-key', k + ':' + s.id);                     // le même film peut figurer dans plusieurs sagas de la page
+          if (s.id === d.id) c.classList.add('now');
+          return c;
+        });
+        var absent = (saga.missing || []).length;
         body.appendChild(h('section', { class: 'sagabox' },
-          h('h2', null, h('a', { class: 'f head', href: sagaHref(d.library.id, saga.name) }, saga.name), h('span', { class: 'n' }, H.plural(saga.films.length, 'film'))),
+          h('h2', null, h('a', { class: 'f head', href: sagaHref(d.library.id, saga.name) }, saga.name), h('span', { class: 'n' }, H.plural(saga.films.length, 'film') + (absent ? ' · ' + H.plural(absent, 'manquant') : ''))),
           h('div', { class: 'grid small' }, cards)));
       });
       el.appendChild(body);
@@ -476,19 +498,21 @@
     var libId = m[1], name = query.g || '', data = null;
     var el = h('section', { class: 'detail sagapage', 'data-lib': libId });
     function load() {
+      if (!name) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Introuvable'), h('p', null, 'Aucune saga n’est indiquée.'), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, 'Retour'))); return Promise.resolve(); }
       return H.api('/api/library/' + libId + '?group=' + encodeURIComponent(name) + '&sort=part&limit=600').then(function (d) { data = d; render(); }).catch(function (e) {
         H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, 'Retour')));
       });
     }
     function render() {
       var focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
-      var films = data.items;
+      var films = data.items, absent = data.missing || [];
       H.clear(el);
       if (!films.length) { el.appendChild(h('div', { class: 'blank' }, h('h1', null, name), h('p', null, 'Cette saga ne contient plus de film.'), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, 'Retour'))); return; }
       var done = films.filter(function (f) { return f.seen >= Math.max(1, f.n); }).length;
       var next = films.filter(function (f) { return !(f.seen >= Math.max(1, f.n)); })[0];
       var years = films.map(function (f) { return f.year; }).filter(Boolean).sort();
       var meta = [H.plural(films.length, 'film')];
+      if (absent.length) meta.push(H.plural(absent.length, 'manquant'));
       if (years.length) meta.push(years[0] === years[years.length - 1] ? years[0] : years[0] + '–' + years[years.length - 1]);
       if (done) meta.push(done === films.length ? 'Tous vus' : done + '/' + films.length + ' vus');
       var info = h('div', { class: 'info' }, h('h1', null, name), h('p', { class: 'meta' }, meta.join(' · ')));
@@ -499,8 +523,15 @@
       el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + films[0].id + '?w=300)' }),
         h('div', { class: 'hero-in' }, h('div', { class: 'stack-big' }, H.stack(films.map(function (f) { return f.id; }), name, 500)), info)));
       el.appendChild(h('div', { class: 'body' }, h('section', { class: 'sagaall' }, h('h2', null, 'Les films de la saga'),
-        h('div', { class: 'grid' }, films.map(function (f) { return H.card(f, false, true); })))));
+        h('div', { class: 'grid' }, sagaCells(films, absent, function (f) { return H.card(f, false, true); }, H.isAdmin() ? hide : null)))));
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
+    }
+    // Cache un film que la collection TMDB compte et pas nous : il ne sera plus montré comme manquant (Gestion > Sagas le rétablit).
+    function hide(m) {
+      H.api('/api/sagas/ignore', { tmdb: m.tmdb }).then(function () {
+        H.toast('« ' + m.title + ' » ne sera plus montré comme manquant (Gestion > Sagas pour le rétablir)', 5000);
+        return load();
+      }).catch(function (e) { H.toast(e.message, 5000); });
     }
     load();
     return { el: el, nav: '#/l/' + libId, lib: libId, refresh: load };

@@ -18,12 +18,14 @@ import json
 import os
 import re
 import threading
+import time
 from pathlib import Path
 
-TMDB_RE = re.compile(r"^(?:movie/)?([0-9]+)$", re.IGNORECASE)
+TMDB_RE = re.compile(r"^(?:movie/)?([0-9]{1,12})$", re.IGNORECASE)         # borné : int() refuse les nombres de plus de 4300 chiffres
 MAX_NAME = 80
 MAX_SAGAS = 200
 MAX_FILMS = 2000
+MAX_IGNORED = 5000
 
 
 class SagaError(Exception):
@@ -48,7 +50,7 @@ def parse(text):
     """[(nom, [identifiants TMDB])] d'après le contenu du fichier. Une saga sans nom, un nom déjà pris ou un identifiant illisible sont écartés sans bruit : le reste du fichier compte."""
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return []
     listed = data.get("sagas") if isinstance(data, dict) else None
     sagas, names = [], set()
@@ -61,8 +63,8 @@ def parse(text):
             ident = film_id(value)
             if ident is not None and ident not in films:
                 films.append(ident)
-        if name and name not in names:
-            names.add(name)
+        if name and name.casefold() not in names:          # comme `clean` : deux noms qui ne diffèrent que par la casse sont le même
+            names.add(name.casefold())
             sagas.append((name, films))
     return sagas
 
@@ -71,7 +73,7 @@ def parse_ignore(text):
     """[identifiants TMDB] de `ignore`, sans doublon ; illisible, il est vide."""
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return []
     listed = data.get("ignore") if isinstance(data, dict) else None
     out = []
@@ -80,6 +82,17 @@ def parse_ignore(text):
         if ident is not None and ident not in out:
             out.append(ident)
     return out
+
+
+def damaged(text):
+    """Le texte est-il un sagas.json qu'on ne sait pas relire ? Vide, il ne l'est pas (rien à perdre) ; sinon il doit être un objet JSON dont `sagas` et `ignore`, s'ils y sont, sont des listes. Écrire par-dessus détruirait ce que quelqu'un a mis là, on refuse donc de le faire (voir Sagas._writable)."""
+    if not text.strip():
+        return False
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError):
+        return True
+    return not isinstance(data, dict) or any(key in data and not isinstance(data[key], list) for key in ("sagas", "ignore"))
 
 
 def clean(listed):
@@ -137,7 +150,7 @@ def by_tmdb(movies):
 class Sagas:
     def __init__(self, path):
         self.path = Path(path)
-        self._read = (None, [], "", [])      # (taille et date du fichier, sagas lues, empreinte du contenu, films ignorés)
+        self._read = (None, [], "", [], False)      # (taille et date du fichier, sagas lues, empreinte du contenu, films ignorés, fichier illisible)
         self._lock = threading.Lock()        # une écriture à la fois : lire, changer, écrire
 
     def _load(self):
@@ -150,9 +163,9 @@ class Sagas:
             try:
                 raw = self.path.read_bytes() if stamp else b""
                 text = raw.decode("utf-8")
-                self._read = (stamp, parse(text), hashlib.sha1(raw).hexdigest()[:12] if stamp else "", parse_ignore(text))
+                self._read = (stamp, parse(text), hashlib.sha1(raw).hexdigest()[:12] if stamp else "", parse_ignore(text), damaged(text))
             except (OSError, UnicodeDecodeError):
-                self._read = (stamp, [], "", [])
+                self._read = (stamp, [], "", [], True)
         return self._read
 
     def all(self):
@@ -161,6 +174,10 @@ class Sagas:
     def ignored(self):
         """[identifiants TMDB] des films qu'on ne veut pas voir comme manquants."""
         return self._load()[3]
+
+    def damaged(self):
+        """Vrai quand le fichier existe mais qu'on ne sait pas le relire : on ne l'écrase pas, il faut le corriger (ou le supprimer)."""
+        return self._load()[4]
 
     def version(self):
         """Ce qui change quand le fichier change : l'éditeur la rend à l'enregistrement, et le serveur refuse d'écraser une saga qu'un autre a modifiée entre-temps. Vide quand il n'y a pas de fichier."""
@@ -180,6 +197,7 @@ class Sagas:
         """Remplace toutes les sagas par `sagas` (déjà vérifiées par `clean`). `version` : celle que l'éditeur avait lue ; si le fichier a changé depuis, 409."""
         with self._lock:
             self._check(version)
+            self._writable()
             self._write(sagas, self.ignored())
 
     def add(self, name, ids):
@@ -190,6 +208,7 @@ class Sagas:
         if len(name) > MAX_NAME:
             raise SagaError(400, f"nom trop long (au plus {MAX_NAME} caractères)")
         with self._lock:
+            self._writable()
             sagas = [(n, list(films)) for n, films in self.all()]
             found = next((s for s in sagas if s[0].casefold() == name.casefold()), None)
             if found is None:
@@ -208,14 +227,21 @@ class Sagas:
     def ignore(self, ident, on=True):
         """Cache (ou rend à nouveau visible) un film manquant ; sans effet s'il l'est déjà ou ne l'est pas."""
         with self._lock:
+            self._writable()
             ignored = list(self.ignored())
             if on == (ident in ignored):
                 return
             if on:
+                if len(ignored) >= MAX_IGNORED:
+                    raise SagaError(400, f"{MAX_IGNORED} films cachés au plus")
                 ignored.append(ident)
             else:
                 ignored.remove(ident)
             self._write([(name, list(films)) for name, films in self.all()], ignored)
+
+    def _writable(self):
+        if self.damaged():
+            raise SagaError(409, f"{self.path.name} n'est pas lisible (JSON invalide ?) : corrige-le, ou supprime-le, avant de modifier les sagas ici")
 
     def _check(self, version):
         if version is not None and version != self.version():
@@ -230,8 +256,15 @@ class Sagas:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(text, encoding="utf-8", newline="\n")
-            os.replace(tmp, self.path)          # d'un bloc : un arrêt en cours d'écriture ne laisse pas un fichier tronqué
+            for attempt in range(5):
+                try:
+                    os.replace(tmp, self.path)      # d'un bloc : un arrêt en cours d'écriture ne laisse pas un fichier tronqué
+                    break
+                except PermissionError:             # Windows : le fichier est ouvert en lecture à cet instant
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
         except OSError as e:
             tmp.unlink(missing_ok=True)
             raise SagaError(500, f"impossible d'écrire {self.path.name} : {e.strerror or e}")
-        self._read = (None, [], "", [])
+        self._read = (None, [], "", [], False)

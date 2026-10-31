@@ -51,7 +51,7 @@ def tagged(name, members, info, ignored):
         if row is not None:
             ranks[row["id"]] = rank
         elif ident not in ignored and str(ident) in info["films"]:
-            absent.append(entry(ident, rank, info))
+            absent.append({**entry(ident, rank, info), "ignorable": True})         # la collection TMDB le compte, pas nous : on peut le cacher
     if len(ranks) != len(members):
         return None, []
     return ranks, absent
