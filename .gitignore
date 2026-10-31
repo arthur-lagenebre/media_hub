@@ -31,3 +31,7 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Outils de qualité (ub-mode)
+.metrics/
+target/
