@@ -1149,6 +1149,52 @@ class TestSagasFile(ServerCase):
         self.file.write_text('["pas", "un", "objet"]', encoding="utf-8")
         self.assertEqual(sorted(self.tiles()), ["Saga DCEU"])
 
+    def test_a_huge_tmdb_id_is_unreadable_not_fatal(self):
+        from hub import sagas
+        huge = "9" * 5000
+        self.assertIsNone(sagas.film_id(huge))
+        self.assertEqual(sagas.parse(json.dumps({"sagas": [{"name": "a", "films": [huge, 1]}], "ignore": [huge]})), [("a", [1])])
+        self.file.write_text('{"sagas": [{"name": "a", "films": ["' + huge + '"]}], "ignore": ["' + huge + '"]}', encoding="utf-8")
+        self.assertEqual(self.api.json("/api/library/films")[0], 200)                  # la bibliothèque reste lisible
+        self.assertEqual(self.api.json("/api/sagas/add", {"name": "b", "films": [huge]})[0], 400)
+        self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": huge})[0], 400)
+
+    def test_the_names_that_differ_by_case_only_are_one_saga(self):
+        from hub import sagas
+        self.assertEqual(sagas.parse(json.dumps({"sagas": [{"name": "Saga", "films": [1]}, {"name": "saga", "films": [2]}]})), [("Saga", [1])])
+
+    def test_an_unreadable_file_is_never_overwritten(self):
+        broken = '{"sagas": [{"name": "Mes sagas", "films": [1, 2, 3],}]}'                  # une virgule en trop, après une édition à la main
+        self.file.write_text(broken, encoding="utf-8")
+        data = self.api.json("/api/sagas")[1]
+        self.assertEqual((data["sagas"], data.get("damaged")), ([], True))
+        for status, answer in (self.api.json("/api/sagas/ignore", {"tmdb": 5}), self.api.json("/api/sagas/add", {"name": "x", "films": [1]}),
+                               self.api.json("/api/sagas", {"sagas": [], "version": data["version"]}), self.api.json("/api/sagas", {"sagas": []})):
+            self.assertEqual(status, 409)
+            self.assertIn("pas lisible", answer["error"])
+        self.assertEqual(self.file.read_text(encoding="utf-8"), broken)                    # rien n'a été touché
+        self.file.write_text('{"sagas": 3}', encoding="utf-8")                              # du JSON, mais pas le bon : même refus
+        self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": 5})[0], 409)
+        self.file.write_text('["pas", "un", "objet"]', encoding="utf-8")
+        self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": 5})[0], 409)
+        self.file.write_text("{" * 5000, encoding="utf-8")                                  # imbriqué à l'excès : illisible aussi, sans erreur 500
+        self.assertEqual(self.api.json("/api/sagas")[1].get("damaged"), True)
+
+    def test_a_blank_file_has_nothing_to_lose(self):
+        self.file.write_text("  \n", encoding="utf-8")
+        data = self.api.json("/api/sagas")[1]
+        self.assertNotIn("damaged", data)
+        self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": 5})[0], 200)
+
+    def test_a_file_saga_with_one_film_here_takes_the_name_of_a_tag_saga(self):
+        self.file.write_text(json.dumps({"sagas": [{"name": "Saga DCEU", "films": [27205, 111]}]}), encoding="utf-8")        # Inception + un film absent
+        tiles = [i["title"] for i in self.items("films", sagas=1)["items"] if i["type"] == "saga"]
+        self.assertNotIn("Saga DCEU", tiles)                                                                                # pas de vignette à deux sens
+        self.assertEqual([i["title"] for i in self.items("films", group="Saga DCEU", sort="part")["items"]], ["Inception"])  # la page désigne la saga du fichier
+        steel = self.detail(self.item_by_title("films", "Man of Steel")["id"])
+        self.assertNotIn("sagas", steel)                                                                                    # la fiche ne propose pas une saga que la page ne montrerait pas
+        self.assertEqual(len(steel["saga"]), 2)                                                                             # `saga` (ancien champ) reste ce que dit l'étiquette
+
     def test_parse_keeps_what_is_readable(self):
         from hub import sagas
         text = json.dumps({"sagas": [
@@ -1406,10 +1452,11 @@ class TestMissingFilms(ServerCase):
         self.enrich()
         info = self.hub.db.kv_get("sagainfo")
         self.assertEqual(info["collections"]["Saga DCEU"]["films"], [49521, 1000, 209112, 297762, 141052])         # dans l'ordre de sortie
-        self.assertEqual(sorted(info["films"]), ["1000", "141052", "297762"])                                       # seulement ceux qu'on n'a pas
+        self.assertEqual(sorted(info["films"]), ["1000", "141052", "209112", "297762", "49521"])                    # toute la collection : un film retiré plus tard doit pouvoir apparaître grisé
         self.assertEqual(info["films"]["1000"], {"title": "Film intermédiaire", "date": "2014-01-01", "year": "2014", "poster": "film-1000.jpg"})
         self.assertEqual(info["films"]["141052"]["poster"], "")                                                     # sans affiche
         self.assertTrue((self.hub.cfg.data / "tmdb" / "film-1000.jpg").is_file())
+        self.assertEqual(sorted(p.name for p in (self.hub.cfg.data / "tmdb").glob("film-*.tmp")), [])               # écrites d'un bloc : pas de reste
 
     def test_the_saga_page_numbers_by_the_collection_and_lists_what_is_missing(self):
         self.enrich()
@@ -1466,6 +1513,46 @@ class TestMissingFilms(ServerCase):
         self.assertEqual((absent["tmdb"], absent["item"], absent["title"], absent["year"], absent["date"]), (777, None, "Film du fichier", "2020", "2020-02-02"))
         film = self.detail(self.item_by_title("films", "Inception")["id"])
         self.assertEqual([(s["name"], [f["rank"] for f in s["missing"]]) for s in film["sagas"]], [("Ma saga", [2])])
+
+    def test_a_film_that_leaves_the_library_appears_greyed_at_once(self):
+        self.enrich()
+        self.addCleanup(self.enrich_scan)
+        steel = self.item_by_title("films", "Man of Steel")["id"]                    # il quitte la médiathèque (le scan ne le voit plus)
+        self.hub.db.execute("DELETE FROM items WHERE id=?", (steel,))
+        data = self.group()
+        self.assertEqual([(i["title"], i["part"]) for i in data["items"]], [("Batman v Superman", 3)])
+        self.assertEqual([(f["tmdb"], f["title"], f["rank"]) for f in data["missing"]][:2], [(49521, "Man of Steel", 1), (1000, "Film intermédiaire", 2)])
+
+    def test_a_collection_known_before_the_owned_films_were_described_is_completed(self):
+        self.enrich()
+        info = self.hub.db.kv_get("sagainfo")
+        del info["films"]["49521"]                                                   # ce que la version précédente gardait : seulement les absents
+        self.hub.db.kv_set("sagainfo", info)
+        steel = self.item_by_title("films", "Man of Steel")["id"]
+        self.hub.db.execute("DELETE FROM items WHERE id=?", (steel,))
+        self.addCleanup(self.enrich_scan)
+        FakeTmdb.calls = []
+        self.enrich()                                                                # collection encore fraîche : seul ce film est demandé
+        self.assertEqual(FakeTmdb.calls, ["movie/49521"])
+        self.assertIn("49521", self.hub.db.kv_get("sagainfo")["films"])
+
+    def test_missing_films_of_a_tag_saga_can_be_hidden_but_not_those_of_a_file_saga(self):
+        self.enrich()
+        self.api.json("/api/sagas", {"sagas": [{"name": "Ma saga", "films": [209112, 777]}]})
+        self.enrich()
+        self.assertTrue(all(f.get("ignorable") is True for f in self.group()["missing"]))
+        self.assertTrue(all("ignorable" not in f for f in self.group("Ma saga")["missing"]))
+
+    def test_ignore_wants_a_boolean_and_is_capped(self):
+        self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": 1000, "ignore": 0})[0], 400)
+        self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": 1000, "ignore": "false"})[0], 400)
+        with mock.patch("hub.sagas.MAX_IGNORED", 2):
+            self.assertEqual([self.api.json("/api/sagas/ignore", {"tmdb": i})[0] for i in (1, 2, 3)], [200, 200, 400])
+            self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": 1, "ignore": False})[0], 200)       # en rendre un reste possible
+
+    def enrich_scan(self):
+        self.hub.jobs.scan(self.hub.cfg.library("films"))
+        self.run_.wait_jobs()
 
     def test_a_second_run_asks_nothing_new_unless_forced(self):
         self.enrich()

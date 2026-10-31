@@ -10,9 +10,10 @@ import shutil
 import tempfile
 import unittest
 import urllib.request
+from unittest import mock
 
 from tests import fixtures
-from tests.test_server import Running
+from tests.test_server import FakeTmdb, Running
 
 try:
     from playwright.sync_api import sync_playwright
@@ -105,6 +106,14 @@ class UiCase(unittest.TestCase):
 
     def view(self, selector="", **kw):
         return self.page.locator(f"#views > .view:visible {selector}".strip(), **kw)
+
+    def until(self, condition, tries=40):
+        """Attend (au plus quelques secondes) que `condition()` devienne vraie : l'écran ou le serveur ne suivent pas à l'instant du clic."""
+        for _ in range(tries):
+            if condition():
+                return
+            self.page.wait_for_timeout(100)
+        self.fail("la condition n'est jamais devenue vraie")
 
     def video_time(self):
         return self.page.evaluate("document.querySelector('.player video').currentTime")
@@ -389,34 +398,29 @@ class TestSagaEditor(UiCase):
     def stored(self):
         return {s["name"]: [f["tmdb"] for f in s["films"]] for s in self.api("/api/sagas")["sagas"]}
 
-    def until(self, condition, tries=40):
-        for _ in range(tries):
-            if condition():
-                return
-            self.page.wait_for_timeout(100)
-        self.fail("la condition n'est jamais devenue vraie")
-
     def test_gestion_leads_to_the_editor(self):
         self.open("#/admin")
         self.view("a.btn", has_text="Composer").click()
-        self.view(".sagaedit .line").first.wait_for()
-        self.assertEqual(self.view(".sagaedit .line b").all_inner_texts(), ["Ma saga"])
+        self.view(".line").first.wait_for()                                   # `.sagaedit` est la racine de la vue : on cherche dedans, pas au-dessus
+        self.assertEqual(self.view(".line b").all_inner_texts(), ["Ma saga"])
 
     def test_a_saga_lists_its_films_and_moves_them(self):
         self.open("#/sagas?g=Ma%20saga")
         self.view(".sfilm").first.wait_for()
         self.assertEqual(self.view(".sfilm b").all_inner_texts(), ["Batman v Superman", "Film absent de la médiathèque", "Inception"])
         self.view(".sfilm [data-key=d0]").click()
-        self.until(lambda: self.stored()["Ma saga"] == [999999, 209112, 27205])
+        self.until(lambda: self.view(".sfilm b").first.inner_text() == "Film absent de la médiathèque")           # attendre l'écran : l'envoi suivant est ignoré tant que le précédent n'est pas revenu
+        self.assertEqual(self.stored()["Ma saga"], [999999, 209112, 27205])
         self.view(".sfilm [data-key=r0]").click()
-        self.until(lambda: self.stored()["Ma saga"] == [209112, 27205])
+        self.until(lambda: self.view(".sfilm").count() == 2)
+        self.assertEqual(self.stored()["Ma saga"], [209112, 27205])
 
     def test_the_picker_adds_a_film(self):
         self.open("#/sagas?g=Ma%20saga")
         self.view("[data-key=add]").click()
         self.page.locator(".picker .opt", has_text="Man of Steel").click()
         self.until(lambda: 49521 in self.stored()["Ma saga"])
-        self.assertEqual(self.page.locator(".picker .opt.on").count(), 3)                 # Batman v Superman, Inception et maintenant Man of Steel
+        self.until(lambda: self.page.locator(".picker .opt.on").count() == 3)             # Batman v Superman, Inception et maintenant Man of Steel
         self.page.locator(".picker [data-key=pick-close]").click()
         self.assertEqual(self.view(".sfilm").count(), 4)
 
@@ -431,6 +435,47 @@ class TestSagaEditor(UiCase):
         self.open("#/i/" + self.item("films", "Sans Etiquette")["id"])
         self.view(".hero").wait_for()
         self.assertEqual(self.view("[data-key=saga-add]").count(), 0)
+
+
+class TestMissingFilmsInTheUi(UiCase):
+    """Les films qui manquent à une saga, grisés à leur rang (TMDB est simulé : voir FakeTmdb). « Saga DCEU » : Man of Steel et Batman v Superman, plus trois films absents."""
+
+    def setUp(self):
+        super().setUp()
+        hub = self.run_.hub
+        hub.cfg.tmdb_key = "fake"
+        self.addCleanup(setattr, hub.cfg, "tmdb_key", "")
+        self.addCleanup(hub.db.execute, "DELETE FROM kv WHERE key='sagainfo'")
+        self.addCleanup(lambda: (hub.cfg.data / "sagas.json").unlink(missing_ok=True))
+        with mock.patch("hub.enrich.Tmdb", FakeTmdb):
+            self.api("/api/enrich", {"lib": "films"})
+            self.run_.wait_jobs()
+
+    def test_the_saga_page_greys_out_the_missing_films_at_their_rank(self):
+        self.open("#/saga/films?g=Saga%20DCEU")
+        self.view(".card.wanted").first.wait_for()
+        self.assertEqual(self.view(".sagaall .part").all_inner_texts(), ["1", "2", "3", "4", "5"])
+        self.assertEqual(self.view(".card.wanted").count(), 3)
+        self.assertIn("3 manquants", self.view(".info .meta").inner_text())
+        self.assertEqual(self.view(".card.wanted.f").count(), 0)                           # rien à ouvrir : pas dans la navigation à la télécommande
+
+    def test_a_missing_film_can_be_hidden_and_shown_again(self):
+        self.open("#/saga/films?g=Saga%20DCEU")
+        self.view("[data-key=hide-1000]").click()
+        self.until(lambda: self.view(".card.wanted").count() == 2)
+        self.assertEqual(self.view(".sagaall .part").all_inner_texts(), ["1", "3", "4", "5"])      # le numéro ne bouge pas
+        self.open("#/sagas")
+        self.view("[data-key=show-1000]").click()
+        self.until(lambda: self.view("[data-key=show-1000]").count() == 0)
+        self.open("#/saga/films?g=Saga%20DCEU")
+        self.view(".card.wanted").first.wait_for()
+        self.assertEqual(self.view(".card.wanted").count(), 3)
+
+    def test_the_film_page_shows_them_without_the_hide_button(self):
+        self.open("#/i/" + self.item("films", "Batman v Superman")["id"])
+        self.view(".sagabox").first.wait_for()
+        self.assertIn("3 manquants", self.view(".sagabox h2").first.inner_text())
+        self.assertEqual(self.view(".sagabox .mhide").count(), 0)
 
 
 class TestMusicQueueAndPlaylists(UiCase):

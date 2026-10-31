@@ -63,7 +63,7 @@ Un film porte la saga que dit son étiquette (la collection TMDB posée par `Met
 {"sagas": [{"name": "Trilogie Cornetto", "films": [747, 4638, 49051]}]}
 ```
 
-Les films qui **manquent** à une saga (le 2 d'une trilogie dont on n'a que le 1 et le 3) apparaissent grisés à leur place, avec leur affiche, dans la page de la saga et sur la fiche d'un film ; le film 3 garde son numéro. Ils viennent de TMDB : *Gestion* > bibliothèque *Films* > *Sagas (TMDB)* (avec `TMDB_KEY`) interroge la collection de chaque saga de l'étiquette et décrit les films que ta saga du fichier réclame sans que tu les aies. Ce ne sont pas des éléments : aucun compteur ne les compte. Une collection TMDB trop large (un spin-off, un court-métrage) se règle en cachant le film (`"ignore": [identifiant TMDB]` dans `sagas.json`, ou `POST /api/sagas/ignore`).
+Les films qui **manquent** à une saga (le 2 d'une trilogie dont on n'a que le 1 et le 3) apparaissent grisés à leur place, avec leur affiche, dans la page de la saga et sur la fiche d'un film ; le film 3 garde son numéro. Ils viennent de TMDB : *Gestion* > bibliothèque *Films* > *Sagas (TMDB)* (avec `TMDB_KEY`) interroge la collection de chaque saga de l'étiquette et décrit les films que ta saga du fichier réclame sans que tu les aies. Ce ne sont pas des éléments : aucun compteur ne les compte. Une collection TMDB trop large (un spin-off, un court-métrage) se règle en cachant le film : *Ne pas afficher* sous sa case grisée dans la page de la saga ; *Gestion* > *Sagas* > *Films cachés* le rétablit (`"ignore": [identifiant TMDB]` dans `sagas.json`). Si `sagas.json` devient illisible (une virgule en trop après une édition à la main), le hub n'y écrit plus rien et le dit : corrige-le ou supprime-le.
 
 L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste est son numéro, même quand on n'a pas ceux qui le précèdent. Un film peut être dans plusieurs sagas : la grille ne lui donne qu'une vignette (celle de la première saga du fichier, avant celle de l'étiquette), et sa fiche les liste toutes. Le fichier est relu dès qu'il change ; absent ou illisible, il ne donne aucune saga. Pas besoin de l'écrire à la main : l'administrateur compose ses sagas dans l'interface, *Gestion* > *Sagas* (créer, renommer, monter ou descendre une saga ou un film, ajouter des films en les cherchant ou toute une saga d'un coup, trier par date de sortie), ou depuis la fiche d'un film avec « Ajouter à une saga ». Le serveur écrit le fichier d'un bloc et refuse ce qu'il ne comprend pas (`/api/sagas`, voir `docs/api.md`). Seuls les films étiquetés avec un identifiant TMDB peuvent y entrer.
 
@@ -118,7 +118,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 224 tests : 191 serveur + 33 interface
+python -m unittest discover -s tests          # 236 tests : 200 serveur + 36 interface
 ```
 
-`tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 33 tests) ; il est ignoré si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 36 tests) ; il est ignoré si Playwright ou ffmpeg manquent.

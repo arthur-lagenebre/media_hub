@@ -349,6 +349,10 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .sfilm .what { min-width: 8rem; }
 .sfilm.absent .what b { color: var(--mute); font-style: italic; }
 .btn.ico { padding: 0.55rem; }
+.warn { color: #ffa595; font-weight: 600; }
+.mcell { display: flex; flex-direction: column; align-items: flex-start; }
+.mcell .card { width: 100%; }
+.btn.mhide { margin-top: 0.35rem; padding: 0.35rem 0.7rem; font-size: 0.8rem; font-weight: 600; }
 .menu.picker .field { width: 100%; margin: 0.2rem 0 0.6rem; }
 .menu.picker .picklist { min-height: 6rem; }
 .menu.picker .picklist .muted { padding: 0.4rem 0.6rem; }
