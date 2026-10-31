@@ -6,6 +6,7 @@ import errno
 import http.client
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -837,6 +838,125 @@ class TestPassword(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestNativeToken(unittest.TestCase):
+    """Clients natifs (Android TV, Chromecast) : jeton par /api/token, en Bearer ou en ?token= sur les fichiers."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def start(self, password):
+        run = Running(self.tmp, password=password)
+        self.addCleanup(run.stop)
+        return run, Client(run.port)
+
+    def tokens(self, api):
+        """(jeton, jeton de média) tels que /api/token les donne."""
+        data = json.loads(api.request("POST", "/api/token", body={"password": "secret"})[2])
+        return data["token"], data["media_token"]
+
+    def test_token_with_good_and_bad_password(self):
+        _, api = self.start("secret")
+        status, _, body = api.request("POST", "/api/token", body={"password": "secret"})
+        self.assertEqual(status, 200)
+        token, media = json.loads(body)["token"], json.loads(body)["media_token"]
+        self.assertRegex(token, r"^[0-9a-f]{64}$")
+        self.assertRegex(media, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(token, media)
+        status, _, body = api.request("POST", "/api/token", body={"password": "wrong"})
+        self.assertEqual((status, json.loads(body)), (401, {"error": "mot de passe incorrect"}))
+        self.assertEqual(api.request("POST", "/api/token", body=b"pas du json")[0], 401)
+        self.assertEqual(api.request("POST", "/api/token", body=[1, 2])[0], 401)
+        self.assertEqual(api.request("POST", "/api/token", body={"password": 12})[0], 401)
+
+    def test_bearer(self):
+        run, api = self.start("secret")
+        token, media = self.tokens(api)
+        self.assertEqual(api.get("/api/state", headers={"Authorization": f"Bearer {token}"})[0], 200)
+        self.assertEqual(api.get("/api/state", headers={"Authorization": "Bearer " + "0" * 64})[0], 401)
+        self.assertEqual(api.get("/api/state", headers={"Authorization": "Bearer é"})[0], 401)
+        self.assertEqual(api.get("/api/state", headers={"Authorization": token})[0], 401)
+        self.assertEqual(api.get("/api/state", headers={"Authorization": f"Bearer {media}"})[0], 401)       # le jeton de média n'ouvre pas l'API
+        self.assertEqual(Client(run.port, f"hub={media}").get("/api/state")[0], 401)                       # ni en cookie
+
+    def test_query_token_is_the_media_token_and_only_on_files(self):
+        run, api = self.start("secret")
+        token, media = self.tokens(api)
+        albums = Client(run.port, f"hub={token}").json("/api/library/musique")[1]["items"]
+        item = next(a["id"] for a in albums if a["title"] == "Discovery")       # un album avec pochette
+        file = Client(run.port, f"hub={token}").json(f"/api/item/{item}")[1]["entries"][0]["file"]
+        for url in (f"/img/item/{item}", file):
+            self.assertEqual(api.get(f"{url}?token={media}")[0], 200, url)
+            self.assertEqual(api.get(f"{url}?token={token}")[0], 302, url)             # le jeton principal ne passe pas en URL
+            self.assertEqual(api.get(f"{url}?token={'0' * 64}")[0], 302, url)
+        self.assertEqual(api.get(f"/img/item/{item}?%74oken={media}")[0], 200)         # la clé encodée est la même clé
+        naruto = next(b["id"] for b in Client(run.port, f"hub={token}").json("/api/library/livres")[1]["items"] if b["title"] == "Naruto")
+        volume = Client(run.port, f"hub={token}").json(f"/api/item/{naruto}")[1]["entries"][0]["id"]
+        self.assertEqual(api.get(f"/book/{volume}/page/0?token={media}")[0], 200)      # une page de livre
+        self.assertEqual(api.get(f"/book/{volume}/page/0?token={token}")[0], 302)
+        self.assertEqual(api.get(f"/api/subs/inconnu/e0.vtt?token={media}")[0], 404)       # sous-titres : accès accordé (la piste n'existe pas, mais ce n'est pas un 401)
+        self.assertEqual(api.get(f"/api/subs/inconnu/e0.vtt?token={token}")[0], 401)       # le jeton principal n'y passe pas non plus
+        self.assertEqual(api.get("/api/subs/inconnu/e0.vtt")[0], 401)
+        self.assertEqual(api.request("POST", f"/api/subs/x/../../cleanup?token={media}", body={"apply": True})[0], 404)     # le préfixe n'ouvre pas une autre route
+        self.assertEqual(api.get(f"/api/state?token={media}")[0], 401)
+        self.assertEqual(api.get(f"/api/library/films?token={media}")[0], 401)
+        self.assertEqual(api.request("POST", f"/api/cleanup?token={media}", body={"apply": True})[0], 401)
+        self.assertEqual(api.request("POST", f"/api/scan?token={media}", body={})[0], 401)
+
+    def reuse_connection(self, run, body):
+        """POST /api/token puis GET /api/state sur la MÊME connexion (keep-alive, comme OkHttp ou URLSession) : (état du premier, état du second)."""
+        conn = http.client.HTTPConnection("127.0.0.1", run.port, timeout=30)
+        self.addCleanup(conn.close)
+        conn.request("POST", "/api/token", body=body, headers={"Content-Type": "application/json"})
+        first = conn.getresponse()
+        data = first.read()
+        headers = {"Authorization": "Bearer " + json.loads(data)["token"]} if first.status == 200 else {}
+        conn.request("GET", "/api/state", headers=headers)
+        second = conn.getresponse()
+        second.read()
+        return first.status, second.status
+
+    def test_the_body_is_always_read_so_the_connection_can_be_reused(self):
+        run, _ = self.start("")
+        self.assertEqual(self.reuse_connection(run, json.dumps({"password": "x"})), (200, 200))      # sans mot de passe, le corps est quand même lu
+
+    def test_the_body_is_read_with_a_password_too(self):
+        run, _ = self.start("secret")
+        self.assertEqual(self.reuse_connection(run, json.dumps({"password": "secret"})), (200, 200))
+        self.assertEqual(self.reuse_connection(run, json.dumps({"password": "faux"})), (401, 401))   # 401 « connexion requise », pas 400 : la requête suivante est bien lue
+
+    def test_an_oversized_body_is_refused(self):
+        run, _ = self.start("secret")
+        conn = http.client.HTTPConnection("127.0.0.1", run.port, timeout=30)
+        self.addCleanup(conn.close)
+        conn.request("POST", "/api/token", body=json.dumps({"password": "secret", "pad": "x" * 6000}), headers={"Content-Type": "application/json"})
+        response = conn.getresponse()
+        self.assertEqual((response.status, json.loads(response.read())), (413, {"error": "corps trop gros"}))
+
+    def test_cookie_still_works(self):
+        run, api = self.start("secret")
+        token, _ = self.tokens(api)
+        self.assertEqual(Client(run.port, f"hub={token}").get("/api/state")[0], 200)
+
+    def test_without_password_everything_stays_open(self):
+        _, api = self.start("")
+        self.assertEqual(api.get("/api/state")[0], 200)
+        status, _, body = api.request("POST", "/api/token", body={"password": "quoi que ce soit"})
+        self.assertEqual((status, json.loads(body)), (200, {"token": "", "media_token": ""}))
+
+    def test_tokens_are_masked_in_the_error_log(self):
+        run, api = self.start("secret")
+        token, media = self.tokens(api)
+        with mock.patch("hub.server.app.print") as printed, mock.patch.object(run.hub, "item", side_effect=RuntimeError("boum")):
+            api.get(f"/api/item/x?token={token}", headers={"Authorization": f"Bearer {token}"})
+            api.get(f"/api/item/x?%74oken={media}&a=1", headers={"Authorization": f"Bearer {token}"})       # la clé encodée ne contourne pas le masquage
+        logged = " ".join(str(c.args[0]) for c in printed.call_args_list)
+        self.assertIn("boum", logged)
+        self.assertIn("token=***&a=1", logged)
+        self.assertNotIn(token, logged)
+        self.assertNotIn(media, logged)
+
+
 class TestSagas(ServerCase):
     """Les sagas regroupées dans la bibliothèque Films : une vignette par saga, tous les films au clic."""
 
@@ -907,6 +1027,64 @@ class TestSagas(ServerCase):
         self.assertEqual([m["title"] for m in detail["saga"]], [f"Course {i}" for i in range(1, 11)])
 
 
+class TestApiUrls(ServerCase):
+    """L'API donne elle-même les URLs des images et des fichiers : relatives, sans ?w= ni jeton, et elles mènent bien quelque part."""
+
+    def test_state_announces_the_contract_version(self):
+        self.assertEqual(self.api.json("/api/state")[1]["api"], 1)
+
+    def test_items_carry_their_cover(self):
+        album = self.item_by_title("musique", "Discovery")
+        self.assertEqual(album["cover"], f"/img/item/{album['id']}")
+        self.assertEqual(self.api.get(album["cover"])[0], 200)
+        self.assertEqual(self.api.get(album["cover"] + "?w=160")[0], 200)
+        self.assertEqual(self.detail(album["id"])["cover"], album["cover"])
+        for lib in ("films", "series", "livres"):                 # toute vignette, jamais une saga (qui n'est pas un élément)
+            self.assertTrue(all(i["cover"] == f"/img/item/{i['id']}" for i in self.items(lib)["items"]))
+
+    def test_sagas_have_no_cover_of_their_own_but_list_their_members(self):
+        films = self.items("films", sagas=1)["items"]
+        saga = next((i for i in films if i["type"] == "saga"), None)
+        if saga is None:
+            self.skipTest("pas de saga dans la médiathèque factice")
+        self.assertNotIn("cover", saga)
+        self.assertEqual(saga["cover_urls"], [f"/img/item/{i}" for i in saga["covers"]])
+
+    def test_entries_carry_their_file_and_image(self):
+        book = self.detail(self.item_by_title("livres", "Naruto")["id"])["entries"][0]
+        self.assertEqual((book["file"], book["image"]), (f"/media/{book['id']}/file", f"/img/entry/{book['id']}"))
+        self.assertEqual(self.api.get(book["file"])[0], 200)
+        self.assertEqual(self.api.get(book["image"])[0], 200)
+        track = self.detail(self.item_by_title("musique", "Discovery")["id"])["entries"][0]
+        self.assertEqual(track["file"], f"/media/{track['id']}/file")
+        self.assertNotIn("image", track)                          # une piste n'a pas d'image à elle
+
+    def test_tracks_of_artists_and_playlists_carry_cover_and_file(self):
+        album = self.item_by_title("musique", "Discovery")
+        sheet = self.api.json(f"/api/artist/musique/{album['artist_id']}")[1]
+        for track in sheet["tracks"]:
+            self.assertEqual((track["cover"], track["file"]), (f"/img/item/{album['id']}", f"/media/{track['id']}/file"))
+        self.assertNotIn("image", sheet)                          # pas de photo tant que « Fiches artistes » n'est pas passé
+        made = self.api.json("/api/playlists", {"name": "Adresses", "entries": [sheet["tracks"][0]["id"]]})[1]
+        self.assertEqual(made["cover_urls"], [f"/img/item/{album['id']}"])
+        self.assertEqual((made["tracks"][0]["cover"], made["tracks"][0]["file"]), (f"/img/item/{album['id']}", f"/media/{sheet['tracks'][0]['id']}/file"))
+        listed = next(p for p in self.api.json("/api/playlists")[1]["playlists"] if p["id"] == made["id"])
+        self.assertEqual(listed["cover_urls"], made["cover_urls"])
+
+    def test_artist_photo_url_when_there_is_a_photo(self):
+        album = self.item_by_title("musique", "Discovery")
+        with mock.patch("hub.server.app.artist_photo", return_value=Path(__file__)):
+            sheet = self.api.json(f"/api/artist/musique/{album['artist_id']}")[1]
+        self.assertTrue(sheet["photo"])
+        self.assertEqual(sheet["image"], f"/img/artist/musique/{album['artist_id']}")
+
+    def test_book_info_gives_the_page_template(self):
+        entry = self.detail(self.item_by_title("livres", "Naruto")["id"])["entries"][0]
+        info = self.api.json(f"/api/book/{entry['id']}")[1]
+        self.assertEqual((info["file"], info["page_url"]), (f"/media/{entry['id']}/file", f"/book/{entry['id']}/page/{{n}}"))
+        self.assertEqual(self.api.get(info["page_url"].format(n=0))[0], 200)
+
+
 class TestPlaylists(ServerCase):
     """Les playlists : créées à la main, gardées dans la base, intactes après une mise à jour."""
 
@@ -969,6 +1147,374 @@ class TestPlaylists(ServerCase):
         self.api.json(f"/api/playlist/{pid}/delete", {})
         self.hub.jobs.scan(self.hub.cfg.library("musique"))
         self.run_.wait_jobs()
+
+
+class BearerClient(Client):
+    """Un client natif : aucun cookie, seulement `Authorization: Bearer`."""
+
+    def __init__(self, port, token):
+        super().__init__(port)
+        self.token = token
+
+    def request(self, method, path, body=None, headers=None):
+        return super().request(method, path, body=body, headers={"Authorization": f"Bearer {self.token}", **(headers or {})})
+
+
+NUM = (int, float)
+NULL = type(None)
+ENTRY_FIELDS = {"id": str, "kind": str, "title": str, "summary": str, "season": (int, NULL), "disc": (int, NULL), "number": NUM + (NULL,), "duration": NUM,
+                "format": str, "label": str, "sub": str, "file": str}
+ITEM_FIELDS = {"id": str, "type": str, "title": str, "year": str, "grp": str, "n": int, "letter": str, "added": int, "genres": list, "cover": str}
+ITEM_OPTIONAL = {"part": NUM, "duration": NUM, "artist_id": str, "missing": int, "seen": int, "started": int}
+# `missing` change de type : un entier (tomes manquants) dans les listes, une liste de {label, numbers, total} dans la fiche d'une série de livres (docs/api.md, « Élément »).
+DETAIL_OPTIONAL = {k: v for k, v in ITEM_OPTIONAL.items() if k != "missing"}
+TRACK_FIELDS = {"id": str, "title": str, "artist": str, "album": str, "item": str, "duration": NUM, "cover": str, "file": str}
+LIBRARY_KINDS = {"movies", "shows", "music", "books"}
+
+
+class ContractBase(unittest.TestCase):
+    """Le contrat décrit dans docs/api.md, vu par un client tiers : les champs documentés (présence et type) et les URLs qu'ils portent.
+
+    Un champ ajouté ne casse rien ; un champ perdu, renommé ou d'un autre type casse le test. Le serveur est protégé par mot de passe : seul le Bearer ouvre les URLs.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.run_ = Running(cls.tmp, password="secret")
+        cls.hub = cls.run_.hub
+        token = json.loads(Client(cls.run_.port).request("POST", "/api/token", body={"password": "secret"})[2])["token"]
+        cls.api = BearerClient(cls.run_.port, token)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.run_.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    # --- Outils ------------------------------------------------------------
+    def has(self, obj, fields, where, optional=None):
+        """`obj` porte chacun des `fields` ({nom: type ou types}) ; les champs `optional` sont vérifiés seulement s'ils sont là. D'autres champs sont permis."""
+        self.assertIsInstance(obj, dict, where)
+        for name, kinds in {**fields, **{k: v for k, v in (optional or {}).items() if k in obj}}.items():
+            self.assertIn(name, obj, f"{where} : champ « {name} » perdu ou renommé")
+            kinds = kinds if isinstance(kinds, tuple) else (kinds,)
+            ok = isinstance(obj[name], kinds) and not (isinstance(obj[name], bool) and bool not in kinds)
+            self.assertTrue(ok, f"{where} : « {name} » vaut {obj[name]!r}, attendu {[k.__name__ for k in kinds]}")
+
+    def get(self, path):
+        status, data = self.api.json(path)
+        self.assertEqual(status, 200, f"{path} : {data}")
+        return data
+
+    def served(self, url, where):
+        """Une URL renvoyée par l'API : relative, sans `?w=` ni jeton, et lisible avec le seul Bearer."""
+        self.assertIsInstance(url, str, where)
+        self.assertTrue(url.startswith("/") and "?" not in url, f"{where} : {url!r} n'est pas une URL relative nue")
+        self.assertEqual(self.api.get(url)[0], 200, f"{where} : {url}")
+
+    def item(self, lib, title):
+        found = [i for i in self.get(f"/api/library/{lib}?limit=600")["items"] if i["title"] == title]
+        self.assertTrue(found, f"{title!r} absent de {lib}")
+        return found[0]
+
+    def detail(self, lib, title):
+        return self.get(f"/api/item/{self.item(lib, title)['id']}")
+
+    def check_entry(self, entry, where):
+        self.has(entry, ENTRY_FIELDS, where, {"date": str, "artist": str, "pages": int, "image": str, "progress": dict})
+        if entry["kind"] != "audio":
+            self.assertIn("image", entry, f"{where} : « image » absent d'un fichier qui n'est pas une piste")
+        if "progress" in entry:
+            self.has(entry["progress"], {"position": NUM, "duration": NUM, "done": bool, "updated": int}, where + ".progress")
+
+
+
+class TestApiContract(ContractBase):
+    def test_state(self):
+        data = self.get("/api/state")
+        self.has(data, {"version": str, "api": int, "libraries": list, "ffmpeg": bool, "ffprobe": bool, "tmdb": bool, "auth": bool, "busy": bool, "streams": int, "max_streams": int}, "state")
+        self.assertEqual(data["api"], 1)
+        self.assertTrue(data["auth"])
+        self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "animations", "musique", "livres"])
+        for lib in data["libraries"]:
+            self.has(lib, {"id": str, "label": str, "kind": str, "count": int, "scanned": (int, NULL), "exists": bool}, f"state.libraries[{lib['id']}]")
+            self.assertIn(lib["kind"], LIBRARY_KINDS)
+
+    def test_home(self):
+        film = self.detail("films", "Inception")["entries"][0]["id"]
+        self.assertEqual(self.api.json("/api/progress", {"entry": film, "position": 600, "duration": 8880})[0], 200)
+        self.addCleanup(self.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (film,))
+        data = self.get("/api/home")
+        self.has(data, {"continue": list, "libraries": list}, "home")
+        self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "animations", "musique", "livres"])
+        for lib in data["libraries"]:
+            self.has(lib, {"id": str, "label": str, "kind": str, "count": int, "recent": list}, f"home.libraries[{lib['id']}]")
+            self.assertTrue(lib["recent"], lib["id"])
+            for item in lib["recent"]:
+                self.has(item, ITEM_FIELDS, f"home.recent[{item['title']}]", ITEM_OPTIONAL)
+        card = next(c for c in data["continue"] if c["id"] == film)
+        self.check_entry(card, "home.continue")
+        self.has(card, {"item": dict, "position": NUM, "total": NUM, "resume": bool, "updated": int}, "home.continue")
+        self.has(card["item"], ITEM_FIELDS, "home.continue.item", ITEM_OPTIONAL)
+        self.assertEqual((card["position"], card["resume"]), (600, True))
+        self.served(card["file"], "home.continue.file")
+
+    def test_library(self):
+        for lib in ("films", "series", "animations", "musique", "livres"):
+            data = self.get(f"/api/library/{lib}")
+            self.has(data, {"library": dict, "total": int, "offset": int, "items": list, "letters": list, "genres": list}, f"library[{lib}]")
+            self.has(data["library"], {"id": str, "label": str, "kind": str}, f"library[{lib}].library")
+            self.assertEqual(data["total"], len(data["items"]))
+            for letter, count in data["letters"]:
+                self.assertIsInstance(letter, str)
+                self.assertIsInstance(count, int)
+            for genre, count in data["genres"]:
+                self.assertIsInstance(genre, str)
+                self.assertIsInstance(count, int)
+            for item in data["items"]:
+                self.has(item, ITEM_FIELDS, f"library[{lib}].items[{item['title']}]", ITEM_OPTIONAL)
+                self.assertEqual(item["cover"], f"/img/item/{item['id']}")
+
+    def test_library_sections_and_sagas(self):
+        books = self.get("/api/library/livres")
+        self.assertTrue(books["sections"])
+        for name, count in books["sections"]:
+            self.assertIsInstance(name, str)
+            self.assertIsInstance(count, int)
+        films = self.get("/api/library/films?sagas=1")
+        self.has(films, {"sagas": int, "films": int}, "library[films, sagas=1]")
+        saga = next(i for i in films["items"] if i["type"] == "saga")
+        self.has(saga, {"id": str, "lib": str, "type": str, "title": str, "year": str, "years": list, "grp": str, "n": int, "letter": str, "added": int, "genres": list,
+                        "covers": list, "cover_urls": list}, "library.saga", {"seen": int, "started": int})
+        self.assertEqual(len(saga["covers"]), len(saga["cover_urls"]))
+        members = self.get(f"/api/library/films?group={quote(saga['title'])}&sort=part")["items"]
+        self.assertEqual(len(members), saga["n"])
+
+    def test_item_movie(self):
+        data = self.detail("films", "Inception")
+        self.has(data, {**ITEM_FIELDS, "library": dict, "summary": str, "entries": list, "resume": (str, NULL)}, "item[film]", {**DETAIL_OPTIONAL, "links": list, "directors": list, "actors": list})
+        self.assertEqual(data["type"], "movie")
+        self.assertEqual(data["resume"], data["entries"][0]["id"])
+        for entry in data["entries"]:
+            self.check_entry(entry, "item[film].entries")
+        self.served(data["cover"], "item[film].cover")
+        self.served(data["entries"][0]["image"], "item[film].entries.image")
+        self.served(data["entries"][0]["file"], "item[film].entries.file")
+        for link in data.get("links", []):
+            self.has(link, {"label": str, "url": str}, "item[film].links")
+        saga = self.detail("films", "Man of Steel")
+        self.assertIn(saga["id"], [m["id"] for m in saga["saga"]])                  # toute la saga, le film consulté compris
+        self.assertGreater(len(saga["saga"]), 1)
+        for other in saga["saga"]:
+            self.has(other, ITEM_FIELDS, "item[film].saga", ITEM_OPTIONAL)
+
+    def test_item_show(self):
+        data = self.detail("series", "Dark")
+        self.has(data, {**ITEM_FIELDS, "library": dict, "summary": str, "entries": list, "resume": (str, NULL)}, "item[série]", {**DETAIL_OPTIONAL, "seasons": list, "links": list})
+        self.assertEqual(data["type"], "show")
+        self.assertEqual(len(data["entries"]), 3)
+        for entry in data["entries"]:
+            self.check_entry(entry, "item[série].entries")
+            self.assertEqual(entry["kind"], "video")
+        self.assertEqual([e["season"] for e in data["entries"]], [1, 1, 2])
+        self.served(data["cover"], "item[série].cover")
+        self.served(data["entries"][0]["image"], "item[série].entries.image")      # l'épisode 1 porte une vignette
+        self.served(data["entries"][0]["file"], "item[série].entries.file")
+
+    def test_item_album(self):
+        data = self.detail("musique", "Discovery")
+        self.has(data, {**ITEM_FIELDS, "library": dict, "summary": str, "entries": list, "resume": (str, NULL), "tracks_total": int}, "item[album]", DETAIL_OPTIONAL)
+        self.assertEqual((data["type"], data["tracks_total"], len(data["entries"])), ("album", 3, 3))
+        for entry in data["entries"]:
+            self.check_entry(entry, "item[album].entries")
+            self.assertEqual(entry["kind"], "audio")
+            self.assertNotIn("image", entry)
+            self.assertEqual(entry["artist"], "Daft Punk")
+        self.served(data["cover"], "item[album].cover")
+        self.served(data["entries"][0]["file"], "item[album].entries.file")
+        sheet = self.get(f"/api/artist/musique/{data['artist_id']}")
+        self.has(sheet, {"library": dict, "id": str, "name": str, "albums": list, "tracks": list, "genres": list, "duration": NUM, "wanted": list, "photo": bool}, "artist")
+        for track in sheet["tracks"]:
+            self.has(track, TRACK_FIELDS, "artist.tracks")
+        self.served(sheet["tracks"][0]["cover"], "artist.tracks.cover")
+        self.served(sheet["tracks"][0]["file"], "artist.tracks.file")
+
+    def test_item_book(self):
+        data = self.detail("livres", "Naruto")
+        self.has(data, {**ITEM_FIELDS, "library": dict, "summary": str, "entries": list, "resume": (str, NULL)}, "item[livre]", {**DETAIL_OPTIONAL, "authors": list, "section": str})
+        self.assertEqual(data["type"], "series")
+        self.assertEqual(len(data["entries"]), 2)
+        self.assertEqual(self.item("livres", "Naruto")["missing"], 1)               # dans la liste : le nombre de tomes manquants
+        self.assertIsInstance(data["missing"], list)                                 # dans la fiche : la liste des manques
+        for gap in data["missing"]:
+            self.has(gap, {"label": str, "numbers": list, "total": int}, "item[livre].missing")
+        self.assertEqual(data["missing"][0]["numbers"], [3])
+        for entry in data["entries"]:
+            self.check_entry(entry, "item[livre].entries")
+            self.assertEqual((entry["kind"], entry["format"]), ("book", "cbz"))
+        self.served(data["cover"], "item[livre].cover")
+        self.served(data["entries"][0]["image"], "item[livre].entries.image")
+        self.served(data["entries"][0]["file"], "item[livre].entries.file")
+        info = self.get(f"/api/book/{data['entries'][0]['id']}")
+        self.has(info, {"id": str, "item": str, "title": str, "format": str, "position": NUM, "file": str, "next": (dict, NULL), "pages": int, "page_url": str}, "book")
+        self.has(info["next"], {"id": str, "title": str}, "book.next")
+        self.served(info["file"], "book.file")
+        self.served(info["page_url"].format(n=0), "book.page_url")
+
+    def test_tagged_is_a_boolean(self):
+        """docs/api.md : `tagged` est un booléen sur toute fiche."""
+        for lib, title in (("films", "Inception"), ("series", "Dark"), ("musique", "Discovery"), ("livres", "Naruto")):
+            tagged = self.detail(lib, title)["tagged"]
+            self.assertIsInstance(tagged, bool, f"item[{title}] : « tagged » vaut {tagged!r}")
+
+    def test_search(self):
+        data = self.get("/api/search?q=dark")
+        self.has(data, {"results": list}, "search")
+        self.assertEqual([r["id"] for r in data["results"]], ["series"])
+        for group in data["results"]:
+            self.has(group, {"id": str, "label": str, "kind": str, "items": list}, "search.results")
+            for item in group["items"]:
+                self.has(item, ITEM_FIELDS, f"search.items[{item['title']}]", ITEM_OPTIONAL)
+        self.assertEqual(self.get("/api/search?q=d"), {"results": []})
+
+    def test_playlists(self):
+        tracks = [e["id"] for e in self.detail("musique", "Discovery")["entries"]]
+        made = self.api.json("/api/playlists", {"name": "Contrat", "entries": tracks[:2]})
+        self.assertEqual(made[0], 201)
+        summary_fields = {"id": str, "name": str, "count": int, "duration": NUM, "covers": list, "cover_urls": list, "updated": int}
+        detail_fields = {**summary_fields, "tracks": list, "missing": int}
+        self.has(made[1], detail_fields, "playlist.créée")
+        listed = next(p for p in self.get("/api/playlists")["playlists"] if p["id"] == made[1]["id"])
+        self.has(listed, summary_fields, "playlists")
+        detail = self.get(f"/api/playlist/{made[1]['id']}")
+        self.has(detail, detail_fields, "playlist")
+        self.assertEqual([t["id"] for t in detail["tracks"]], tracks[:2])
+        for track in detail["tracks"]:
+            self.has(track, {**TRACK_FIELDS, "number": NUM + (NULL,)}, "playlist.tracks")
+        self.assertEqual(len(detail["cover_urls"]), len(detail["covers"]))
+        self.served(listed["cover_urls"][0], "playlists.cover_urls")
+        self.served(detail["tracks"][0]["cover"], "playlist.tracks.cover")
+        self.served(detail["tracks"][0]["file"], "playlist.tracks.file")
+
+    def test_urls_need_the_token(self):
+        album = self.item("musique", "Discovery")
+        self.assertEqual(Client(self.run_.port).get(album["cover"])[0], 302)       # sans jeton, hors /api/ : redirection vers /login
+        self.assertEqual(Client(self.run_.port).get("/api/state")[0], 401)
+        self.assertEqual(self.api.get(album["cover"] + "?w=160")[0], 200)           # `?w=` s'ajoute à l'URL renvoyée
+
+
+@unittest.skipUnless(FFMPEG, "ffmpeg absent")
+class TestPlayContract(ContractBase):
+    """`POST /api/play/<entry>` : vraies vidéos, vrai ffprobe. Une série de deux épisodes de 30 s donne `next` et `resume`."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        for n, title in enumerate(("Un", "Deux"), 1):
+            fixtures.write_video(cls.run_.libs["series"] / "Contrat" / "Saison 1" / f"{n:02d} - {title}.mkv", seconds=30)
+        cls.hub.jobs.scan(cls.hub.cfg.library("series"))
+        cls.run_.wait_jobs()
+
+    def play(self, entry, **body):
+        status, data = self.api.json(f"/api/play/{entry}", body)
+        self.assertEqual(status, 200, data)
+        self.has(data, {"entry": str, "item": str, "title": str, "show": str, "season": (int, NULL), "number": NUM + (NULL,), "mode": str, "why": list, "url": str, "seekable": bool,
+                        "duration": NUM, "resume": NUM, "warning": str, "audio": list, "subs": list, "video": (dict, NULL), "next": (dict, NULL)}, "play")
+        self.assertIn(data["mode"], ("direct", "remux", "transcode"))
+        for track in data["audio"]:
+            self.has(track, {"index": int, "label": str, "lang": str, "selected": bool, "commentary": bool}, "play.audio")
+        for sub in data["subs"]:
+            self.has(sub, {"id": str, "label": str, "lang": str, "forced": bool, "default": bool, "text": bool, "where": str, "url": str}, "play.subs")
+        if data["video"]:
+            self.has(data["video"], {"codec": str, "width": int, "height": int, "hdr": bool}, "play.video")
+        return data
+
+    def film(self, title):
+        return self.detail("films", title)["entries"][0]["id"]
+
+    def test_direct_plan_for_a_compatible_file(self):
+        entry = self.film("Compatible")
+        plan = self.play(entry, caps=CAPS_ALL)
+        self.assertEqual((plan["mode"], plan["seekable"], plan["url"], plan["why"]), ("direct", True, f"/media/{entry}/file", []))
+        self.assertEqual((plan["show"], plan["resume"], plan["next"]), ("", 0, None))
+        self.assertEqual([(t["selected"], t["index"]) for t in plan["audio"]], [(True, 0)])
+        self.assertEqual(plan["video"]["codec"], "h264")
+        self.served(plan["url"], "play.url (direct)")
+
+    def test_remux_plan_gives_a_stream_url_audio_tracks_and_subtitles(self):
+        entry = self.film("Vrai Film")
+        plan = self.play(entry, caps=CAPS_ALL)
+        self.assertEqual((plan["mode"], plan["seekable"]), ("remux", False))
+        self.assertTrue(plan["url"].startswith(f"/media/{entry}/stream?m=remux"))
+        self.assertTrue(plan["why"])
+        self.assertEqual([(t["index"], t["selected"]) for t in plan["audio"]], [(0, True)])
+        self.assertEqual([(s["where"], s["text"]) for s in plan["subs"]], [("mkv", True)])
+        self.assertEqual(self.api.get(plan["subs"][0]["url"])[0], 200)
+        status, headers, _ = self.api.get(plan["url"] + "&start=1")                 # on avance en redemandant avec ?start=
+        self.assertEqual((status, headers["Content-Type"]), (200, "video/mp4"))
+
+    def test_transcode_plan(self):
+        plan = self.play(self.film("Vrai Film"), caps={**CAPS_ALL, "video": ["vp9"]}, max_height=90)
+        self.assertEqual(plan["mode"], "transcode")
+        self.assertIn("m=transcode", plan["url"])
+        self.assertEqual(self.api.get(plan["url"])[0], 200)
+
+    def test_next_and_resume(self):
+        show = self.detail("series", "Contrat")
+        first, second = show["entries"][0], show["entries"][1]
+        self.assertEqual(self.api.json("/api/progress", {"entry": first["id"], "position": 25, "duration": 30})[1], {"ok": True, "done": False})
+        self.addCleanup(self.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (first["id"],))
+        plan = self.play(first["id"], caps=CAPS_ALL)
+        self.assertEqual((plan["show"], plan["season"], plan["number"], plan["resume"]), ("Contrat", 1, 1, 25))
+        self.has(plan["next"], {"id": str, "title": str, "season": (int, NULL), "number": NUM + (NULL,)}, "play.next")
+        self.assertEqual((plan["next"]["id"], plan["next"]["title"]), (second["id"], second["title"]))
+        self.assertIsNone(self.play(second["id"], caps=CAPS_ALL)["next"])
+
+
+class TestDocumentedRoutes(unittest.TestCase):
+    """Chaque route du tableau « Interface HTTP » du README se retrouve, avec sa méthode, dans docs/api.md."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    @staticmethod
+    def shape(text):
+        return re.sub(r"<[^>]*>", "<>", text)          # `<id>` et `<entry>` désignent la même chose
+
+    def readme_routes(self):
+        text = (self.ROOT / "README.md").read_text(encoding="utf-8")
+        table = text.split("## Interface HTTP", 1)[1].split("\n## ", 1)[0]
+        routes = []
+        for row in table.splitlines():
+            if not row.startswith("|") or row.startswith("| ---") or row.startswith("| Route"):
+                continue
+            method = "GET"
+            for token in re.findall(r"`([^`]+)`", re.split(r"(?<!\\)\|", row)[1]):
+                if not re.match(r"(GET|POST|/)", token):
+                    continue                 # une variable (`HUB_PASSWORD`), pas une route
+                found = re.match(r"((?:GET|POST)(?:/(?:GET|POST))?) (.*)", token)
+                if found:
+                    method, token = found.group(1), found.group(2)
+                token = re.sub(r"<[^>]*>", lambda m: m.group().replace("\\|", "\0"), token)       # un « | » entre chevrons ne sépare pas des variantes
+                variants = token.split("\\|")
+                paths = [variants[0]] + [variants[0].rsplit("/", 1)[0] + "/" + v for v in variants[1:]]
+                for path in paths:
+                    for verb in method.split("/"):
+                        routes.append((verb, path.replace("\0", "|").split("?")[0]))
+        return routes
+
+    def test_every_route_of_the_readme_is_in_the_api_document(self):
+        routes = self.readme_routes()
+        self.assertGreaterEqual(len(routes), 25, routes)          # le tableau a bien été lu
+        doc = self.shape((self.ROOT / "docs" / "api.md").read_text(encoding="utf-8"))
+        missing = [f"{verb} {path}" for verb, path in routes if f"{verb} {self.shape(path)}" not in doc]
+        self.assertEqual(missing, [], "routes du README absentes de docs/api.md")
+
+    def test_the_readme_reader_understands_the_table(self):
+        routes = self.readme_routes()
+        for expected in (("GET", "/api/state"), ("GET", "/api/search"), ("POST", "/api/playlists"), ("GET", "/api/playlists"), ("POST", "/api/playlist/<id>/rename"),
+                         ("GET", "/api/subs/<entry>/<e|s><n>.vtt"), ("GET", "/media/<entry>/stream"), ("POST", "/api/entry/<id>/seen"), ("GET", "/book/<id>/epub/<chemin>"),
+                         ("GET", "/img/entry/<id>"), ("POST", "/api/token"), ("GET", "/api/jobs"), ("POST", "/api/cleanup")):
+            self.assertIn(expected, routes)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,8 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 
 ## Interface HTTP
 
+Le contrat complet pour un client tiers (champs, codes d'erreur, authentification, plan de lecture) est dans [docs/api.md](docs/api.md). Résumé :
+
 | Route | Rôle |
 | --- | --- |
 | `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche |
@@ -69,6 +71,8 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `POST /api/progress`, `/api/item/<id>/seen`, `/api/entry/<id>/seen` | progression, vu / pas vu |
 | `GET /api/book/<id>`, `/book/<id>/page/<n>`, `/book/<id>/epub/<chemin>` | pages d'un `.cbz`, fichiers d'un `.epub` (CSP sans script) |
 | `GET /img/item/<id>?w=`, `/img/entry/<id>?w=` | affiches, pochettes, couvertures (réduites et gardées en cache) |
+| `POST /api/token` | pour un client natif (Android TV, iOS, Chromecast) : corps `{"password": "…"}`, réponse `{"token": "…", "media_token": "…"}` (401 `{"error": "mot de passe incorrect"}` sinon ; jetons vides si aucun mot de passe n'est configuré). Les deux jetons sont uniques, communs à tous les appareils |
+| Authentification (si `HUB_PASSWORD` est défini) | trois façons de se présenter : cookie `hub=` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton principal : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage. Le jeton est masqué dans le journal |
 | `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}` et que les pochettes d'albums manquants) |
 
 ## Limites connues
@@ -86,7 +90,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 89 tests : 63 serveur + 26 interface
+python -m unittest discover -s tests          # 122 tests : 96 serveur + 26 interface
 ```
 
 `tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 26 tests) ; il est ignoré si Playwright ou ffmpeg manquent.
