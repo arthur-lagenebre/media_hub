@@ -19,16 +19,18 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 | Corps des requêtes | `POST` en JSON (`Content-Type: application/json`), 1 Mo au plus (sinon 413). Une requête `POST` sans corps utile envoie `{}`. |
 | Réponses | JSON compact avec `Cache-Control: no-store`, sauf images, fichiers, sous-titres. Pas d'en-têtes CORS : un client web d'une autre origine ne peut pas lire l'API ; les balises `<img>` / `<video>` fonctionnent. |
 | Erreurs | `{"error": "message lisible"}` avec le code HTTP. Voir « Codes d'erreur ». |
-| Profil | Un seul (« default ») : la progression est commune à tous les clients. |
+| Profil | Un par compte : la progression, les playlists et « Reprendre » (`continue`) sont ceux du compte qui s'est connecté. Les bibliothèques, les fiches enrichies et les albums manquants sont communs. Serveur ouvert (`"auth": false`) : un profil unique, `default`, administrateur. |
 
 ### Codes d'erreur
 
 | Code | Sens |
 | --- | --- |
 | 400 | requête invalide (paramètre, corps, fichier d'un autre genre que celui demandé) |
-| 401 | `connexion requise` (routes `/api/*`) ; `mot de passe incorrect` pour `/api/token` |
+| 401 | `connexion requise` (routes `/api/*`) ; `mot de passe incorrect` ou `nom d'utilisateur requis` pour `/api/token` |
+| 403 | `réservé à l'administrateur` : scan, enrichissement, nettoyage, photos d'artistes et gestion des comptes demandés par un compte `user` |
 | 302 | **hors `/api/`**, une requête non authentifiée n'a pas de 401 : elle est redirigée vers `/login`. Un client natif qui lit `/media/…`, `/img/…` ou `/book/…` sans jeton reçoit donc `302`, pas `401`. |
 | 404 | identifiant inconnu, image absente, route inconnue (`introuvable`). Une route existante appelée avec la mauvaise méthode donne aussi 404. |
+| 409 | ce nom de compte est déjà pris |
 | 413 | corps trop gros |
 | 415 | image refusée (photo d'artiste) |
 | 416 | `Range` hors du fichier |
@@ -40,26 +42,28 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 
 ## Authentification
 
-Si le serveur n'a pas de mot de passe (`"auth": false` dans `/api/state`), tout est ouvert. Sinon, le serveur connaît **deux jetons**, communs à tous les appareils et stables tant que la base du serveur n'est pas effacée :
+Si le serveur n'a aucun compte (`"auth": false` dans `/api/state`), tout est ouvert : il n'y a alors qu'un profil, `default`, administrateur. Dès qu'un compte existe, le serveur connaît deux sortes de jetons :
 
-- le **jeton** (`token`) ouvre **tout** : l'API, les fichiers, et aussi les tâches de gestion (scan, nettoyage avec suppression de fichiers) ;
-- le **jeton de média** (`media_token`) ne sert que dans l'URL des fichiers (`/media/`, `/img/`, `/book/`) : si une URL de pochette fuit (journal d'un proxy, historique, récepteur Cast), son jeton n'ouvre ni l'API ni les tâches de gestion (scan, nettoyage), mais il donne la **lecture de tous les fichiers** de la médiathèque (films, livres, images, flux convertis dans la limite de `max_streams`). Il ne se déduit pas du jeton principal. Il n'y a pas de rotation : seul l'effacement du secret du serveur (clé `secret` de la base) révoque les jetons, tous à la fois.
+- le **jeton de session** (`token`), propre à un compte : il ouvre **tout** ce que les droits du compte permettent : l'API, les fichiers, et pour un administrateur les tâches de gestion (scan, nettoyage avec suppression de fichiers) et les comptes. C'est `<identifiant du compte>.<mac>` (64 caractères hexadécimaux après le point) ; **à traiter comme opaque**. Il ne se périme pas, mais il cesse de valoir quand le mot de passe du compte change ou que le compte est supprimé ;
+- le **jeton de média** (`media_token`), **commun à tout le serveur** : il ne sert que dans l'URL des fichiers (`/media/`, `/img/`, `/book/`, `/api/subs/`) : si une URL de pochette fuit (journal d'un proxy, historique, récepteur Cast), son jeton n'ouvre ni l'API ni les tâches de gestion, mais il donne la **lecture de tous les fichiers** de la médiathèque (films, livres, images, flux convertis dans la limite de `max_streams`), sans identifier personne. Il ne se déduit pas du jeton de session. Il n'y a pas de rotation : seul l'effacement du secret du serveur (clé `secret` de la base) le révoque, et révoque aussi tous les jetons de session.
+
+Les comptes sont créés par un administrateur (`POST /api/users`, ou `python -m hub user add` sur le serveur) : **il n'y a pas d'inscription publique**. Au tout premier démarrage, `HUB_PASSWORD` crée le compte administrateur (nom `HUB_ADMIN`, `admin` par défaut) tant que la base n'a aucun compte ; ensuite cette variable est ignorée. Ce premier compte reprend la progression et les playlists d'avant les comptes.
 
 Trois façons de se présenter :
 
-1. **Cookie** `hub=<jeton>` : posé par le formulaire `POST /api/login` (réponse 303). C'est le mode du navigateur.
-2. **`Authorization: Bearer <jeton>`** : valable sur toutes les routes. C'est le mode d'un client natif. Le jeton de média y est refusé (401).
-3. **`?token=<media_token>`** dans l'URL : **seulement** pour les chemins `/media/`, `/img/`, `/book/` et `/api/subs/` (les sous-titres, lecture seule), nulle part ailleurs sur `/api/`. Pour les balises `<img>`, `<video>`, `<track>` et le Cast, qui n'envoient pas toujours d'en-tête. **Le jeton principal y est refusé** (302 sur `/media/`, `/img/` et `/book/` ; 401 sur `/api/subs/`). Le serveur masque le jeton dans son journal ; un proxy placé devant ne le fait pas forcément.
+1. **Cookie** `hub=<jeton de session>` : posé par le formulaire `POST /api/login` (réponse 303). C'est le mode du navigateur.
+2. **`Authorization: Bearer <jeton de session>`** : valable sur toutes les routes. C'est le mode d'un client natif. Le jeton de média y est refusé (401).
+3. **`?token=<media_token>`** dans l'URL : **seulement** pour les chemins `/media/`, `/img/`, `/book/` et `/api/subs/` (les sous-titres, lecture seule), nulle part ailleurs sur `/api/`. Pour les balises `<img>`, `<video>`, `<track>` et le Cast, qui n'envoient pas toujours d'en-tête. **Le jeton de session y est refusé** (302 sur `/media/`, `/img/` et `/book/` ; 401 sur `/api/subs/`). Le serveur masque le jeton dans son journal ; un proxy placé devant ne le fait pas forcément.
 
 ### `POST /api/token`
 
-Échange le mot de passe contre les deux jetons. Aucune authentification requise.
+Échange un compte et son mot de passe contre les deux jetons. Aucune authentification requise.
 
-- Corps : `{"password": "…"}`.
-- 200 : `{"token": "…", "media_token": "…"}` (64 caractères hexadécimaux chacun). Sans mot de passe configuré : `{"token": "", "media_token": ""}`.
-- 401 : `{"error": "mot de passe incorrect"}` (aussi pour un corps illisible). La réponse prend au moins 0,4 s : pas de force brute rapide.
+- Corps : `{"user": "…", "password": "…"}`. `user` (le nom du compte, sans tenir compte de la casse) est **facultatif quand le serveur n'a qu'un seul compte** ; avec plusieurs comptes, il est obligatoire.
+- 200 : `{"token": "…", "media_token": "…", "user": {"id", "name", "role"}}`. Sans compte (serveur ouvert) : `{"token": "", "media_token": ""}` (pas de `user`).
+- 401 : `{"error": "mot de passe incorrect"}` (mot de passe faux, nom inconnu ou corps illisible : même message), ou `{"error": "nom d'utilisateur requis"}` (plusieurs comptes et pas de `user`). La réponse prend au moins 0,4 s : pas de force brute rapide, et pas de verrouillage de compte.
 
-`POST /api/login` (formulaire `password=…` ou JSON) pose le cookie mais répond par une **redirection 303** (`/` ou `/login?error=1`) : à éviter hors navigateur. `GET /api/logout` efface le cookie (303).
+`POST /api/login` (formulaire `user=…&password=…` ou JSON ; `user` facultatif de la même façon) pose le cookie mais répond par une **redirection 303** (`/` ou `/login?error=1`) : à éviter hors navigateur. `GET /api/logout` efface le cookie (303). Le formulaire `/login` demande le nom quand il y a plusieurs comptes.
 
 ## Un client en quatre appels
 
@@ -74,11 +78,12 @@ Trois façons de se présenter :
 
 ```json
 {"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true}],
- "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": false, "busy": false, "streams": 0, "max_streams": 2}
+ "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin"}, "busy": false, "streams": 0, "max_streams": 2}
 ```
 
 - `libraries[].kind` : `movies` | `shows` | `music` | `books`. `scanned` : horodatage du dernier scan, ou `null`. `exists` : le dossier est présent.
 - `ffmpeg` / `ffprobe` : disponibles sur le serveur (sans eux : lecture directe seulement).
+- `auth` : le serveur a des comptes. `user` : **le compte de la requête** (`role` : `admin` ou `user`) ; serveur ouvert : `{"id": "default", "name": <HUB_ADMIN>, "role": "admin"}`. Un client masque les actions d'administration quand `role` n'est pas `admin`.
 - `busy` : une tâche de fond tourne. `streams` / `max_streams` : conversions en cours / maximum.
 - **Ambigu** : la route demande l'authentification ; `api` n'est donc lisible qu'après avoir obtenu le jeton.
 
@@ -216,8 +221,24 @@ Musique seulement (404 sinon, ou si l'artiste n'a pas d'album).
 - `photo` : booléen (inchangé). **`image`** (optionnel) : URL de la photo, **présente seulement si `photo` est vrai** ; sinon utiliser la pochette du premier album.
 - `info` (optionnel, après « Fiches artistes » côté serveur) : `{"facts": "Groupe · France · 1993 – 2021", "disambiguation": "", "wiki": {"lang", "title", "url", "extract"} ou null, "members": [{"name", "roles", "period", "former"}], "links": [{"label", "url"}]}`.
 - `wanted` : albums de l'artiste qui manquent dans la médiathèque ; `cover` est une URL relative, ou `""` s'il n'y a pas d'image. Ce ne sont ni des éléments ni des fichiers : rien à lire.
-- Administration (usage interne de l'interface) : `POST /api/artist/<lib>/<id>/photo` (corps = image JPEG / PNG / WebP, 10 Mo au plus → `{"ok": true}`, 415 sinon) et `POST …/photo/wikipedia` (404 sans article connu, 502 si Wikipédia ne répond pas).
+- Administration (usage interne de l'interface, **administrateur seulement**, 403 sinon) : `POST /api/artist/<lib>/<id>/photo` (corps = image JPEG / PNG / WebP, 10 Mo au plus → `{"ok": true}`, 415 sinon) et `POST …/photo/wikipedia` (404 sans article connu, 502 si Wikipédia ne répond pas).
 - `GET /img/artist/<lib>/<id>?w=` : la photo (404 s'il n'y en a pas). `GET /img/wanted/<lib>/<artist_id>/<clé>?w=` : pochette d'un album manquant.
+
+## Comptes
+
+Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la casse), un mot de passe (8 à 200 caractères) et un rôle : `admin` ou `user`. Le premier compte est toujours administrateur. Serveur ouvert (aucun compte) : `GET /api/users` répond une liste vide et les autres routes ci-dessous répondent 400 (`le serveur est ouvert, sans compte…`) ; les comptes se créent alors sur le serveur (`HUB_PASSWORD` au premier démarrage, ou `python -m hub user add`).
+
+| Route | Corps | Réponse |
+| --- | --- | --- |
+| `GET /api/users` | | `{"users": [<compte>]}` (du plus ancien au plus récent). Administrateur seulement. |
+| `POST /api/users` | `{"name": "…", "password": "…", "role": "user"}` (`role` facultatif, `user` par défaut) | **201**, `<compte>`. 400 (nom, mot de passe ou rôle invalide), 409 `ce nom est déjà pris`. Administrateur seulement. |
+| `POST /api/user/<id>/password` | `{"password": "…"}` ; pour **son propre** compte : `{"password": "…", "current": "…"}` | `{"ok": true}`. L'administrateur donne un nouveau mot de passe à un autre compte, sans connaître l'ancien ; les sessions de ce compte sont fermées. Pour son propre compte (`<id>` = celui de l'appelant), `current` (le mot de passe actuel) est **obligatoire** comme pour `POST /api/me/password` : 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) s'il manque ou s'il est faux, et rien n'est changé ; la réponse porte alors le nouveau jeton (`{"ok": true, "token": "…"}`, plus un `Set-Cookie`). 404 `compte inconnu`. Administrateur seulement. |
+| `POST /api/user/<id>/delete` | `{}` | `{"ok": true}`. Supprime le compte, sa progression, ses playlists et ses entrées « retirer de Reprendre ». 400 `impossible de supprimer le dernier administrateur` ; 404 `compte inconnu`. Administrateur seulement. Un administrateur peut supprimer son propre compte tant qu'il en reste un autre. **Le jeton de média est global** : le compte supprimé perd son jeton de session, mais s'il a gardé des URLs `?token=<media_token>`, elles continuent de donner la lecture des fichiers (`/media/`, `/img/`, `/book/`, `/api/subs/`) tant que le secret du serveur n'a pas changé. |
+| `POST /api/me/password` | `{"current": "…", "new": "…"}` | `{"ok": true, "token": "<nouveau jeton de session>"}`, avec un `Set-Cookie` qui renouvelle le cookie du navigateur. Tout compte. 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) ou mot de passe neuf invalide. |
+
+- `<compte>` : `{"id", "name", "role", "created"}` (`created` : horodatage Unix). Le haché du mot de passe ne sort jamais. L'`id` est opaque ; celui du premier compte est `default`.
+- **Changer un mot de passe ferme toutes les sessions du compte** (le jeton est lié à une version du mot de passe) : un jeton `Bearer` ou un cookie détenu par un autre appareil répond alors 401. `POST /api/me/password` (et `POST /api/user/<son id>/password`, avec `current`) renvoie le nouveau jeton, qu'un client natif doit garder ; le jeton de média ne change pas.
+- Pas de changement de rôle par l'API pour l'instant.
 
 ## Playlists (musique)
 
@@ -348,11 +369,12 @@ Le sous-titre en WebVTT (`text/vtt`). `e<n>` : piste n° `n` du fichier ; `s<n>`
 
 ## Tâches de fond (gestion)
 
-Une seule tâche tourne à la fois, les autres attendent. Redemander une tâche déjà en attente ou en cours renvoie celle-ci.
+Une seule tâche tourne à la fois, les autres attendent. `POST /api/scan`, `/api/enrich` et `/api/cleanup` sont **réservés à l'administrateur** (403 `réservé à l'administrateur` sinon) ; `GET /api/jobs?log=1` (avec le journal des tâches) l'est aussi ; `GET /api/jobs` sans `log` reste ouvert à tout compte (c'est lui qui dit si le serveur est occupé). Redemander une tâche déjà en attente ou en cours renvoie celle-ci.
 
 | Route | Corps | Réponse |
 | --- | --- | --- |
-| `GET /api/jobs?log=1` | | `{"jobs": [<tâche>], "busy": bool}` (30 dernières ; `log=1` ajoute le journal) |
+| `GET /api/jobs` | | `{"jobs": [<tâche>], "busy": bool}` (30 dernières, sans journal). Tout compte. |
+| `GET /api/jobs?log=1` | | Idem, avec le journal de chaque tâche (`log`). Administrateur seulement : 403 sinon. |
 | `POST /api/scan` | `{"lib": "<id>"}` (sans `lib` : tout) | **202** `{"job": <tâche>}` |
 | `POST /api/enrich` | `{"lib": "<id>", "force": false}` | **202** `{"job": <tâche>}`. Séries / animations : TMDB (400 `pas de clé TMDB…` sans clé) ; musique : fiches artistes ; autre genre : 400 |
 | `POST /api/cleanup` | `{"apply": false}` | **202** `{"job": <tâche>}` ; sans `apply`, simule |

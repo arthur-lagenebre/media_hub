@@ -24,14 +24,13 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
   3. *transcodage* : l'image est ré-encodée en H.264 (1080p max par défaut) quand le codec n'est pas lisible.
   Si une lecture échoue côté navigateur, le lecteur retombe tout seul sur le mode suivant.
 - **Sous-titres** : fichiers `.srt` / `.vtt` / `.ass` à côté de la vidéo et pistes texte du `.mkv`, affichés par le lecteur (PGS / VobSub : listés, grisés).
-- **Progression** partagée (un seul profil) : vu / pas vu, reprise au point exact, livre rouvert à la bonne page.
+- **Progression** propre à chaque compte : vu / pas vu, reprise au point exact, livre rouvert à la bonne page.
 - **Télécommande** : toute l'interface se pilote aux flèches (navigation spatiale), OK / Entrée, Retour. Dans le lecteur : ← → pour avancer ou reculer, OK pour pause, lecture / pause du clavier média. Souris et tactile marchent aussi (téléphone compris).
 
 ## Lancer en local (essai)
 
 ```bash
-python tools/make_demo.py ./demo                  # une petite médiathèque factice (ffmpeg requis)
-HUB_SRV=./demo HUB_DATA=./demo-data python -m hub # http://127.0.0.1:8080
+HUB_SRV=/chemin/vers/medias HUB_DATA=./demo-data python -m hub # http://127.0.0.1:8080
 ```
 
 `media_library` doit se trouver à côté de `media_hub` (ou être désigné par `HUB_REPO`) : le serveur réutilise ses lecteurs de MKV, FLAC, MP3, CBZ, EPUB.
@@ -49,11 +48,25 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_DATA` | base SQLite et cache d'images | `./data` |
 | `HUB_REPO` | dossier `media_library` | `../media_library`, `/app/media_library` |
 | `HUB_BIND` / `HUB_PORT` | adresse et port d'écoute | `127.0.0.1` / `8080` |
-| `HUB_PASSWORD` | mot de passe (cookie signé) ; **à mettre dès que `HUB_BIND` n'est pas local** | aucun |
+| `HUB_PASSWORD` | amorçage : tant qu'aucun compte n'existe, crée le compte administrateur avec ce mot de passe (ensuite il est ignoré : les comptes se gèrent par `python -m hub user …` ou dans l'interface) ; **à mettre dès que `HUB_BIND` n'est pas local** | aucun (serveur ouvert, sans compte) |
+| `HUB_ADMIN` | nom du compte créé par `HUB_PASSWORD` | `admin` |
 | `HUB_FFMPEG` | dossier (ou fichier) de `ffmpeg` / `ffprobe` | `PATH`, puis `HUB_DATA/bin` |
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) | `0` |
 | `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting) ; lue aussi dans le `.env` de `media_library` | aucune |
+
+## Comptes
+
+Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques sont communes. Au premier démarrage, `HUB_PASSWORD` crée l'administrateur (`HUB_ADMIN`, « admin » par défaut) et reprend la progression d'avant les comptes ; ensuite on gère les comptes depuis l'interface (administrateur) ou en ligne de commande, serveur arrêté ou non :
+
+```bash
+python -m hub user list
+python -m hub user add <nom> [--admin]     # mot de passe demandé (8 caractères au moins) ; le premier compte est toujours administrateur
+python -m hub user passwd <nom>
+python -m hub user rm <nom>                # supprime aussi sa progression et ses playlists ; jamais le dernier administrateur
+```
+
+Seul l'administrateur lance les mises à jour (scan, enrichissement, nettoyage), change les photos d'artistes et gère les comptes. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert à tous. Pas d'inscription publique.
 
 ## Interface HTTP
 
@@ -71,13 +84,15 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `POST /api/progress`, `/api/item/<id>/seen`, `/api/entry/<id>/seen` | progression, vu / pas vu |
 | `GET /api/book/<id>`, `/book/<id>/page/<n>`, `/book/<id>/epub/<chemin>` | pages d'un `.cbz`, fichiers d'un `.epub` (CSP sans script) |
 | `GET /img/item/<id>?w=`, `/img/entry/<id>?w=` | affiches, pochettes, couvertures (réduites et gardées en cache) |
-| `POST /api/token` | pour un client natif (Android TV, iOS, Chromecast) : corps `{"password": "…"}`, réponse `{"token": "…", "media_token": "…"}` (401 `{"error": "mot de passe incorrect"}` sinon ; jetons vides si aucun mot de passe n'est configuré). Les deux jetons sont uniques, communs à tous les appareils |
-| Authentification (si `HUB_PASSWORD` est défini) | trois façons de se présenter : cookie `hub=` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton principal : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage. Le jeton est masqué dans le journal |
-| `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}` et que les pochettes d'albums manquants) |
+| `POST /api/token` | pour un client natif (Android TV, iOS, Chromecast) : corps `{"user": "…", "password": "…"}` (`user` facultatif s'il n'y a qu'un compte), réponse `{"token": "…", "media_token": "…", "user": {…}}` (401 `{"error": "mot de passe incorrect"}` sinon ; jetons vides si le serveur est ouvert, sans compte). Le jeton est celui du compte ; le jeton de média est commun à tout le serveur |
+| `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete` | comptes (administrateur seulement) : lister, créer, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
+| `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
+| Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte ; le jeton de média, lui, ne change pas |
+| `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | (les trois `POST`, comme les photos d'artistes et `GET /api/jobs?log=1` (le journal des tâches), sont réservés à l'administrateur : 403 sinon ; `GET /api/jobs` sans `log` reste ouvert à tout compte) mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}` et que les pochettes d'albums manquants) |
 
 ## Limites connues
 
-- **Un seul profil** (« default ») : la progression est commune à tous les lecteurs.
+- **Pas d'inscription publique** : seul un administrateur crée les comptes. Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques, les fiches enrichies et les albums manquants sont communs. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert (profil unique `default`).
 - Les films ne sont indexés qu'en **`.mkv`** (c'est ce que `media_library` produit : `Mp4_To_Mkv.py`, `Avi_To_Mkv.py`).
 - **Pas de carte vidéo capable d'encoder** (GT 730) : le transcodage est logiciel. Un 1080p H.264 passe sans peine sur un i3-13100F ; un 4K HEVC en transcodage est à éviter (le plan de lecture le signale). Le mieux reste la lecture directe : un Chromecast / Fire TV 4K lit H.264, HEVC et AV1 selon le modèle.
 - Google TV n'a pas Chrome : installer un navigateur compatible télécommande (TV Bro, Puffin TV, Silk sur Fire TV). Une appli Android TV native (WebView plein écran) est la suite logique si la télécommande dans un navigateur ne convient pas.
@@ -90,7 +105,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 122 tests : 96 serveur + 26 interface
+python -m unittest discover -s tests          # 175 tests : 149 serveur + 26 interface
 ```
 
 `tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 26 tests) ; il est ignoré si Playwright ou ffmpeg manquent.

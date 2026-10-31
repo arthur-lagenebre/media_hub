@@ -89,6 +89,23 @@
     });
   };
 
+  // Qui est connecté : rempli à partir de /api/state (démarrage, page Gestion). Serveur ouvert (`auth` faux) : un seul profil, administrateur.
+  // Masquer une action n'est qu'un confort : le serveur refuse (403) ce que le rôle ne permet pas.
+  H.session = { auth: false, user: null };
+  H.setSession = function (state) {
+    H.session = { auth: !!(state && state.auth), user: (state && state.user) || null };
+  };
+  // Ce navigateur peut servir à plusieurs comptes : ce qui est propre à un compte (la file audio) ne doit pas passer de l'un à l'autre.
+  // On retient l'id du dernier compte vu ; s'il change, on purge. Serveur ouvert : pas de compte, rien à purger. À appeler au démarrage, avant de relire la file.
+  H.syncAccount = function () {
+    var me = H.session.auth && H.session.user;
+    if (!me) return;
+    if (H.pref('account') !== me.id) H.pref('queue', null);
+    H.pref('account', me.id);
+  };
+  H.forgetAccount = function () { H.pref('queue', null); H.pref('account', null); };     // déconnexion, compte supprimé
+  H.isAdmin = function () { return !H.session.auth || !H.session.user || H.session.user.role === 'admin'; };
+
   H.pref = function (key, value) {
     try {
       if (value === undefined) { var v = localStorage.getItem('hub.' + key); return v === null ? null : JSON.parse(v); }

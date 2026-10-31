@@ -1,0 +1,240 @@
+"""Les comptes : qui se connecte, avec quel mot de passe, et avec quels droits.
+
+Un compte a un identifiant, un nom (unique, sans tenir compte de la casse), un mot de passe haché et un rôle (`admin` ou `user`). L'identifiant est le « profil » de la progression, des playlists et des clés `dismiss:` de `kv` ;
+le premier compte créé reçoit l'identifiant `default` : c'est celui d'avant les comptes, il garde donc ce que le profil unique avait accumulé.
+
+Le jeton de session n'est pas gardé : c'est `HMAC(secret, "session:<identifiant>:<token_version>")`, présenté sous la forme `<identifiant>.<mac>`. Changer un mot de passe incrémente `token_version`, ce qui invalide d'un coup tous les jetons du compte.
+Le jeton de média (`?token=`) reste unique pour tout le serveur : voir `Hub.media_token`.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import re
+import secrets
+import threading
+import time
+
+FIRST_ID = "default"
+ROLES = ("admin", "user")
+MIN_PASSWORD = 8
+MAX_PASSWORD = 200                  # scrypt coûte du temps et de la mémoire : pas de mot de passe de plusieurs Mo
+MAX_NAME = 40
+SCRYPT = (1 << 14, 8, 1)            # n, r, p : ~16 Mo et quelques dizaines de ms
+SCRYPT_MAXMEM = 64 << 20
+PBKDF2_ROUNDS = 600_000             # repli quand l'OpenSSL de Python n'a pas scrypt
+TOKEN_FORM = re.compile(r"\w{1,64}\.[0-9a-f]{64}", re.ASCII)       # `<identifiant>.<mac>` : rien d'autre n'est un jeton de session
+
+
+class AccountError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status, self.message = status, message
+
+
+# ---------------------------------------------------------------------------
+# Mots de passe
+# ---------------------------------------------------------------------------
+def hash_password(password):
+    """`scrypt$n$r$p$sel$hach` (ou `pbkdf2$tours$sel$hach`), en hexadécimal ; un sel neuf à chaque appel."""
+    raw, salt = password.encode("utf-8", "replace"), secrets.token_bytes(16)
+    if hasattr(hashlib, "scrypt"):
+        n, r, p = SCRYPT
+        try:
+            digest = hashlib.scrypt(raw, salt=salt, n=n, r=r, p=p, maxmem=SCRYPT_MAXMEM, dklen=32)
+            return f"scrypt${n}${r}${p}${salt.hex()}${digest.hex()}"
+        except (ValueError, OSError, MemoryError):
+            pass                                    # scrypt annoncé mais absent de cet OpenSSL : on se rabat sur pbkdf2
+    digest = hashlib.pbkdf2_hmac("sha256", raw, salt, PBKDF2_ROUNDS, 32)
+    return f"pbkdf2${PBKDF2_ROUNDS}${salt.hex()}${digest.hex()}"
+
+
+_verifying = threading.Semaphore(2)     # au plus deux vérifications à la fois : chacune coûte ~16 Mo et du processeur, et /api/login et /api/token sont ouverts à qui n'est pas connecté
+
+
+def verify_password(password, stored):
+    raw = password.encode("utf-8", "replace") if isinstance(password, str) else b""
+    with _verifying:
+        return _verify(raw, stored)
+
+
+def _verify(raw, stored):
+    try:
+        parts = stored.split("$")
+        if parts[0] == "scrypt":
+            n, r, p = int(parts[1]), int(parts[2]), int(parts[3])
+            digest = hashlib.scrypt(raw, salt=bytes.fromhex(parts[4]), n=n, r=r, p=p, maxmem=SCRYPT_MAXMEM, dklen=32)
+            return hmac.compare_digest(digest, bytes.fromhex(parts[5]))
+        if parts[0] == "pbkdf2":
+            digest = hashlib.pbkdf2_hmac("sha256", raw, bytes.fromhex(parts[2]), int(parts[1]), 32)
+            return hmac.compare_digest(digest, bytes.fromhex(parts[3]))
+    except (ValueError, IndexError, OSError, AttributeError, MemoryError):     # hach illisible, ou scrypt absent alors que le compte en dépend
+        pass
+    return False
+
+
+_dummy = []
+
+
+def _dummy_hash():
+    """Un haché qui ne correspond à rien : un nom inconnu coûte autant de temps qu'un mauvais mot de passe."""
+    if not _dummy:
+        _dummy.append(hash_password(secrets.token_hex(8)))
+    return _dummy[0]
+
+
+def check_password(password):
+    if not isinstance(password, str) or not MIN_PASSWORD <= len(password) <= MAX_PASSWORD:
+        raise AccountError(400, f"le mot de passe doit faire de {MIN_PASSWORD} à {MAX_PASSWORD} caractères")
+    return password
+
+
+def clean_name(name):
+    name = " ".join(str(name).split()) if isinstance(name, str) else ""
+    if not name or len(name) > MAX_NAME or not name.isprintable():
+        raise AccountError(400, f"le nom doit faire de 1 à {MAX_NAME} caractères")
+    return name
+
+
+# ---------------------------------------------------------------------------
+# Lecture
+# ---------------------------------------------------------------------------
+def rows(db):
+    return db.query("SELECT * FROM users ORDER BY created, name COLLATE NOCASE")
+
+
+def exist(db):
+    return db.one("SELECT 1 FROM users LIMIT 1") is not None
+
+
+def by_id(db, uid):
+    return db.one("SELECT * FROM users WHERE id=?", (uid,))
+
+
+def by_name(db, name):
+    wanted = " ".join(name.split()).casefold() if isinstance(name, str) else ""
+    return next((r for r in rows(db) if r["name"].casefold() == wanted), None) if wanted else None
+
+
+def public(row):
+    """Ce que l'API dit d'un compte (jamais le haché ni la version du jeton)."""
+    return {"id": row["id"], "name": row["name"], "role": row["role"]}
+
+
+def listing(row):
+    return {**public(row), "created": row["created"]}
+
+
+def authenticate(db, name, password):
+    """Le compte désigné par `name` (ou le seul compte, si `name` est absent) quand le mot de passe est bon ; sinon 401. Le même message pour un nom inconnu et un mauvais mot de passe."""
+    if name is None or name == "":
+        everyone = rows(db)
+        if len(everyone) != 1:
+            raise AccountError(401, "nom d'utilisateur requis")
+        row = everyone[0]
+    else:
+        row = by_name(db, name)
+    good = verify_password(password, row["pass_hash"] if row else _dummy_hash())
+    if row is None or not good:
+        raise AccountError(401, "mot de passe incorrect")
+    return row
+
+
+# ---------------------------------------------------------------------------
+# Jeton de session
+# ---------------------------------------------------------------------------
+def _mac(secret, uid, version):
+    return hmac.new(secret.encode(), f"session:{uid}:{version}".encode(), hashlib.sha256).hexdigest()
+
+
+def session_token(secret, row):
+    return f"{row['id']}.{_mac(secret, row['id'], row['token_version'])}"
+
+
+def user_for_token(db, secret, token):
+    """Le compte qui porte ce jeton (`<identifiant>.<mac>`), ou None : jeton mal formé, compte supprimé, mot de passe changé depuis."""
+    if not TOKEN_FORM.fullmatch(token):
+        return None
+    uid, _, mac = token.partition(".")
+    row = by_id(db, uid)
+    if row is None or not hmac.compare_digest(mac.encode("utf-8", "replace"), _mac(secret, uid, row["token_version"]).encode()):
+        return None
+    return row
+
+
+# ---------------------------------------------------------------------------
+# Écriture
+# ---------------------------------------------------------------------------
+def create(db, name, password, role="user", check=True):
+    """Crée un compte. Le premier de la base est administrateur et s'appelle `default` (identifiant) ; les suivants ont un identifiant aléatoire.
+    `check=False` : pas de longueur minimale (le mot de passe de HUB_PASSWORD existait avant les comptes)."""
+    name = clean_name(name)
+    if role not in ROLES:
+        raise AccountError(400, "rôle inconnu (admin ou user)")
+    if check:
+        check_password(password)
+    elif not isinstance(password, str) or not password:
+        raise AccountError(400, "mot de passe vide")
+    hashed = hash_password(password)
+    with db.write_lock:
+        conn = db.connection()
+        try:
+            if any(r["name"].casefold() == name.casefold() for r in conn.execute("SELECT name FROM users")):
+                raise AccountError(409, "ce nom est déjà pris")
+            first = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone() is None
+            uid, role = (FIRST_ID, "admin") if first else (secrets.token_hex(8), role)
+            now = int(time.time())
+            conn.execute("INSERT INTO users(id, name, pass_hash, role, token_version, created) VALUES(?,?,?,?,1,?)", (uid, name, hashed, role, now))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return by_id(db, uid)
+
+
+def set_password(db, uid, password, check=True):
+    """Nouveau mot de passe ; les jetons de session du compte cessent de valoir (`token_version` + 1). Renvoie le compte à jour."""
+    if check:
+        check_password(password)
+    hashed = hash_password(password)
+    with db.write_lock:
+        conn = db.connection()
+        cursor = conn.execute("UPDATE users SET pass_hash=?, token_version=token_version+1 WHERE id=?", (hashed, uid))
+        conn.commit()
+    if cursor.rowcount == 0:
+        raise AccountError(404, "compte inconnu")
+    return by_id(db, uid)
+
+
+def delete(db, uid):
+    """Supprime le compte, sa progression, ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction."""
+    with db.write_lock:
+        conn = db.connection()
+        try:
+            row = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+            if row is None:
+                raise AccountError(404, "compte inconnu")
+            if row["role"] == "admin" and conn.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0] <= 1:
+                raise AccountError(400, "impossible de supprimer le dernier administrateur")
+            conn.execute("DELETE FROM progress WHERE profile=?", (uid,))
+            conn.execute("DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE profile=?)", (uid,))
+            conn.execute("DELETE FROM playlists WHERE profile=?", (uid,))
+            prefix = f"dismiss:{uid}:"
+            conn.execute("DELETE FROM kv WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
+            conn.execute("DELETE FROM users WHERE id=?", (uid,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return row
+
+
+def seed(db, cfg):
+    """Au démarrage : sans aucun compte, `HUB_PASSWORD` crée l'administrateur (`HUB_ADMIN`, « admin » par défaut) sous l'identifiant `default`. Ensuite `HUB_PASSWORD` est ignoré."""
+    if cfg.password and not exist(db):
+        try:
+            create(db, cfg.admin, cfg.password, "admin", check=False)
+        except AccountError as e:
+            raise SystemExit(f"HUB_ADMIN invalide : {e.message}")
+    _dummy_hash()                   # calculé ici, pas à la première connexion ratée : sinon cette première réponse se distinguerait des suivantes

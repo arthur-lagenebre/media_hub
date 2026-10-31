@@ -1,13 +1,76 @@
-"""python -m hub : lance le serveur."""
+"""python -m hub : lance le serveur.
+
+    python -m hub user list
+    python -m hub user add <nom> [--admin]     (le premier compte est toujours administrateur)
+    python -m hub user passwd <nom>
+    python -m hub user rm <nom>
+
+Les comptes se gèrent sans le serveur (il peut tourner pendant ce temps) : seule la base de HUB_DATA est lue. Pas d'inscription publique.
+"""
 
 from __future__ import annotations
 
+import argparse
+import getpass
 import sys
 
-from . import __version__, config
+from . import __version__, accounts, config
+
+
+def read_secret(prompt):
+    """getpass au clavier (rien ne s'affiche) ; depuis un tube, une ligne de l'entrée standard par saisie : le mot de passe est demandé deux fois, donc `printf 'mdp\\nmdp\\n' | python -m hub user add <nom>`."""
+    if sys.stdin.isatty():
+        return getpass.getpass(prompt)
+    return sys.stdin.readline().rstrip("\r\n")
+
+
+def ask_password(label="Mot de passe"):
+    first = read_secret(f"{label} : ")
+    if first != read_secret("Encore une fois : "):
+        raise SystemExit("les deux saisies ne correspondent pas.")
+    return first
+
+
+def user_command(argv):
+    parser = argparse.ArgumentParser(prog="python -m hub user", description="Gère les comptes de media_hub.")
+    sub = parser.add_subparsers(dest="action", required=True)
+    sub.add_parser("list", help="liste les comptes")
+    add = sub.add_parser("add", help="crée un compte")
+    add.add_argument("name", help="nom du compte")
+    add.add_argument("--admin", action="store_true", help="en fait un administrateur (le premier compte l'est toujours)")
+    sub.add_parser("passwd", help="change le mot de passe d'un compte").add_argument("name")
+    sub.add_parser("rm", help="supprime un compte, sa progression et ses playlists").add_argument("name")
+    args = parser.parse_args(argv)
+
+    from .db import Database
+    db = Database(config.load().data / "hub.db")
+    try:
+        if args.action == "list":
+            for row in accounts.rows(db):
+                print(f"{row['name']:<24} {row['role']:<6} {row['id']}")
+            return
+        if args.action == "add":
+            first = not accounts.exist(db)
+            row = accounts.create(db, args.name, ask_password(), "admin" if args.admin else "user")
+            print(f"compte « {row['name']} » créé ({row['role']}" + (", il reprend la progression et les playlists d'avant les comptes" if first else "") + ").")
+            return
+        row = accounts.by_name(db, args.name)
+        if row is None:
+            raise SystemExit(f"compte inconnu : {args.name}")
+        if args.action == "passwd":
+            accounts.set_password(db, row["id"], ask_password("Nouveau mot de passe"))
+            print(f"mot de passe de « {row['name']} » changé ; ses sessions ouvertes sont fermées.")
+        else:
+            accounts.delete(db, row["id"])
+            print(f"compte « {row['name']} » supprimé, avec sa progression et ses playlists.")
+    except accounts.AccountError as e:
+        raise SystemExit(e.message)
 
 
 def main():
+    if sys.argv[1:2] == ["user"]:
+        user_command(sys.argv[2:])
+        return
     cfg = config.load()
     config.use_media_library(cfg.repo)
     from .server.app import make_server
@@ -20,8 +83,8 @@ def main():
         print("  aucune bibliothèque : monte tes dossiers sous HUB_SRV (Films, Series, Animations, Musique, Livres) ou décris-les dans HUB_LIBRARIES.", file=sys.stderr)
     if not cfg.ffmpeg:
         print("  ffmpeg introuvable : lecture directe uniquement (voir deploy/README.md).", file=sys.stderr)
-    if cfg.bind not in ("127.0.0.1", "localhost", "::1") and not cfg.password:
-        print("  ATTENTION : écoute sur le réseau sans mot de passe (HUB_PASSWORD).", file=sys.stderr)
+    if cfg.bind not in ("127.0.0.1", "localhost", "::1") and not hub.auth():
+        print("  ATTENTION : écoute sur le réseau sans compte (HUB_PASSWORD, ou python -m hub user add).", file=sys.stderr)
     hub.first_scan()
     hub.autoscan()
     try:

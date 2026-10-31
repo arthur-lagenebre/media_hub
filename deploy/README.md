@@ -39,11 +39,39 @@ Sans ffmpeg, le serveur ne sait que lire directement (fichiers compatibles) ; il
 ## 3. Installer l'application
 
 1. Tailscale > Settings > Keys : crée une clé d'authentification (inutile si `tailscale/` contient déjà un état connecté).
-2. Copie `.env.example` en `.env`, à côté de `docker-compose.yml`, et remplis `TS_AUTHKEY`, `HUB_PASSWORD`, `TMDB_KEY` (facultative), `APPS`, `MEDIA`.
+2. Copie `.env.example` en `.env`, à côté de `docker-compose.yml`, et remplis `TS_AUTHKEY`, `HUB_ADMIN` (nom du premier compte, `admin` par défaut), `HUB_PASSWORD` (son mot de passe), `TMDB_KEY` (facultative), `APPS`, `MEDIA`.
 3. TrueNAS : Apps > Discover Apps > Custom App > *Install via YAML* : colle `docker-compose.yml` (en remplaçant les `${...}` par leurs valeurs si l'éditeur ne lit pas le `.env`).
 4. Au premier démarrage, le serveur indexe les bibliothèques (quelques minutes pour des milliers de fichiers) ; l'avancement est dans le journal du conteneur et dans la page *Gestion* de l'interface.
 
-Vérification : `http://192.168.0.42:8080` demande le mot de passe, puis affiche les bibliothèques.
+Vérification : `http://192.168.0.42:8080` demande le nom et le mot de passe (`HUB_ADMIN` / `HUB_PASSWORD`), puis affiche les bibliothèques.
+
+## Comptes
+
+Chaque personne a son compte (progression, playlists, « Reprendre » à elle) ; les bibliothèques sont communes. `HUB_ADMIN` et `HUB_PASSWORD` ne servent qu'**une fois** : au démarrage, si la base n'a aucun compte, ils créent le premier (administrateur, identifiant `default`). Ensuite ils sont ignorés : changer `HUB_PASSWORD` dans le `.env` ne change plus le mot de passe (utilise `passwd` ci-dessous).
+
+**Mise à jour depuis une version sans comptes.** Remplace le dossier `media_hub`, ajoute `HUB_ADMIN` au `.env` (et à `docker-compose.yml` si tu le colles à la main), puis redémarre l'application. Le premier compte créé reprend la progression et les playlists existantes, rien n'est perdu. Chaque appareil (navigateur, télé, clients natifs) doit se reconnecter **une fois** avec le nom et le mot de passe ; les anciens jetons ne valent plus.
+
+**Ajouter ou gérer des comptes.** Dans l'interface (page *Gestion*, en administrateur), ou dans le shell du NAS (le conteneur s'appelle `media-hub` ; `-it` est nécessaire pour saisir le mot de passe sans l'afficher) :
+
+```bash
+docker exec -it media-hub python -m hub user list
+docker exec -it media-hub python -m hub user add alice            # mot de passe demandé, 8 caractères au moins
+docker exec -it media-hub python -m hub user add bob --admin      # un deuxième administrateur
+docker exec -it media-hub python -m hub user passwd alice
+docker exec -it media-hub python -m hub user rm alice             # supprime aussi sa progression et ses playlists
+```
+
+Depuis le shell web de TrueNAS (Apps > media-hub > Shell), lance seulement `python -m hub user …`. Le serveur peut tourner pendant ce temps. Il n'y a pas d'inscription publique.
+
+**Sauvegarde.** Les comptes (noms, hachés de mots de passe), la progression et les playlists sont dans `hub.db`, sous `HUB_DATA` (ici `/mnt/tank/apps/media/media_hub-data`). Sauvegarde ce dossier (un snapshot du dataset suffit) ; sans lui, il faudrait recréer les comptes. Aucun mot de passe en clair n'y figure.
+
+**Hachage des mots de passe.** Le serveur utilise `scrypt` si l'OpenSSL de Python le fournit (c'est le cas de l'image `python:3.13-slim`). Vérifie-le :
+
+```bash
+docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt'))"
+```
+
+`True` : rien à faire. `False` : repli sur `pbkdf2` (600 000 tours), correct mais plus lent, environ 0,3 s à chaque connexion.
 
 ## 4. Sur la télé
 
@@ -63,7 +91,7 @@ Vérification : `http://192.168.0.42:8080` demande le mot de passe, puis affiche
 
 ## Sécurité
 
-- `HUB_BIND=0.0.0.0` expose le serveur sur le réseau local : garde `HUB_PASSWORD`. Sur Internet, seul Tailscale (tailnet privé) est exposé ; n'active pas Funnel.
+- `HUB_BIND=0.0.0.0` expose le serveur sur le réseau local : garde un `HUB_PASSWORD` (au moins pour le premier démarrage : sans compte, le serveur est ouvert à tous). Sur Internet, seul Tailscale (tailnet privé) est exposé ; n'active pas Funnel.
 - Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data`.
 - `.env` contient des secrets : ne le publie pas.
 
@@ -75,4 +103,5 @@ Vérification : `http://192.168.0.42:8080` demande le mot de passe, puis affiche
 | Image qui saccade en transcodage | `HUB_MAX_STREAMS=1`, ou lire en direct (H.264) : le plan de lecture annonce la raison |
 | 503 « trop de flux » | `HUB_MAX_STREAMS` atteint ; attendre ou l'augmenter |
 | Bibliothèque vide | le dossier doit s'appeler `Films`, `Series`, `Animations`, `Musique` ou `Livres` sous `/srv` (sinon `HUB_LIBRARIES`) |
+| Mot de passe refusé alors que `HUB_PASSWORD` est bon | `HUB_PASSWORD` n'amorce que le premier compte ; ensuite : `docker exec -it media-hub python -m hub user passwd <nom>` |
 | `https://nas…` ne répond pas | `docker logs media-hub-tailscale` : clé expirée, HTTPS non activé dans la console Tailscale |
