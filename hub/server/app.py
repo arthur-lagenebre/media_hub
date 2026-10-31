@@ -159,8 +159,6 @@ def summary(row, seen=None):
     meta = safe_json(row["meta"], {})
     out = {"id": row["id"], "type": row["type"], "title": row["title"], "year": row["year"], "grp": row["grp"], "n": row["count"], "letter": row["letter"],
            "added": row["added"], "genres": safe_json(row["genres"], []), "cover": urls.item_cover(row["id"])}
-    if meta.get("part") is not None:
-        out["part"] = meta["part"]
     if row["type"] == "album" and meta.get("duration"):
         out["duration"] = meta["duration"]
     if row["type"] == "album" and meta.get("artist_id"):
@@ -703,7 +701,7 @@ SORTS = {
     "added": (lambda r: (r["added"], r["sort"]), True),
     "year": (lambda r: (r["year"] or "0000", r["sort"]), True),
     "year-asc": (lambda r: (r["year"] or "9999", r["sort"]), False),
-    "part": (lambda r: (part_of(r) is None, part_of(r) or 0, r["year"] or "9999", r["sort"]), False),     # l'ordre d'une saga : film 1, film 2...
+    "part": (lambda r: release_key(r), False),      # l'ordre d'une saga
 }
 # Le tri « Titre » de la musique et des livres range par artiste / collection ; chez un artiste, les albums vont du plus ancien au plus récent, puis par nom (ceux sans année en dernier)
 TITLE_SORTS = {
@@ -712,8 +710,18 @@ TITLE_SORTS = {
 }
 
 
-def part_of(row):
-    return safe_json(row["meta"], {}).get("part")
+def release_key(row):
+    """L'ordre d'une saga : par date de sortie. Le numéro posé sur le disque peut être celui d'un dossier de rangement (le MCU : Ant-Man 12, 20, 31), il ne départage que deux films sortis le même jour."""
+    meta = safe_json(row["meta"], {})
+    part = meta.get("part")
+    return (meta.get("date") or row["year"] or "9999", part is None, part or 0, row["sort"])
+
+
+def number_films(films, start=1):
+    """Le numéro affiché sur l'affiche d'un film de saga : sa place dans la saga, de 1 à N."""
+    for n, film in enumerate(films, start):
+        film["part"] = n
+    return films
 
 
 def section_of(row):
@@ -829,6 +837,8 @@ def api_library(h, m, q):
            "letters": sorted(letters.items(), key=lambda kv: (kv[0] == "#", kv[0])), "genres": sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:60]}
     if books:
         out["sections"] = sections_json(sections)
+    if group and sort == "part":
+        number_films(out["items"], offset + 1)
     if sagas:
         out["sagas"] = sum(1 for r in chosen if r["type"] == "saga")
         out["films"] = sum(r["count"] if r["type"] == "saga" else 1 for r in chosen)
@@ -885,9 +895,9 @@ def api_item(h, m, q):
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
     if item["type"] == "movie" and item["grp"]:                 # la saga : les autres films qui la composent
-        saga = hub.db.query("SELECT * FROM items WHERE lib=? AND grp=? ORDER BY sort", (item["lib"], item["grp"]))
+        saga = sorted(hub.db.query("SELECT * FROM items WHERE lib=? AND grp=?", (item["lib"], item["grp"])), key=release_key)
         seen = seen_counts(hub, h.user["id"], lib.id)
-        out["saga"] = sorted((with_seen(r, seen) for r in saga), key=lambda r: (r.get("part") is None, r.get("part") or 0, r["title"]))
+        out["saga"] = number_films([with_seen(r, seen) for r in saga])
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
     h.send_json(out)
