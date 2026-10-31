@@ -412,7 +412,7 @@
         if (bSeason) {          // le bouton annonce ce qu'il va faire de la saison affichée
           var done = seasonDone();
           bSeason.classList.toggle('done', done);
-          H.clear(bSeason).appendChild(h('span', null, H.icon(done ? 'close' : 'check'), done ? ' Saison vue : la marquer non vue' : ' Marquer la saison vue'));
+          H.clear(bSeason).appendChild(h('span', null, H.icon(done ? 'close' : 'check'), done ? ' Marquer la saison non vue' : ' Marquer la saison vue'));
         }
         H.clear(list);
         var text = (d.season_summaries || {})[String(season)] || '';
