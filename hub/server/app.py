@@ -30,6 +30,7 @@ from libraries.music import artistinfo, musicbrainz
 from libraries.video import tmdb
 
 from .. import __version__
+from .. import accounts
 from .. import enrich
 from .. import playlists
 from .. import urls
@@ -41,7 +42,6 @@ from ..media.images import Images, sniff
 from .jobs import Jobs
 
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
-PROFILE = "default"
 CHUNK = 256 * 1024
 SESSION_DAYS = 90
 WATCHED_AT = 0.92          # au-delà de cette part, ou à moins d'une minute et demie de la fin, le film est vu
@@ -58,6 +58,13 @@ class HttpError(Exception):
     def __init__(self, status, message):
         super().__init__(message)
         self.status, self.message = status, message
+
+
+def require_admin(h):
+    """Les tâches de gestion (scan, enrichissement, nettoyage) et les photos d'artistes modifient l'index ou le disque : réservées au rôle admin."""
+    if h.user is None or h.user["role"] != "admin":
+        h.discard_body()
+        raise HttpError(403, "réservé à l'administrateur")
 
 
 def safe_json(text, default):
@@ -79,6 +86,7 @@ class Hub:
         self.active = 0
         self.secret = self._secret()
         self.started = time.time()
+        accounts.seed(self.db, cfg)
 
     def _secret(self):
         value = self.db.kv_get("secret")
@@ -87,8 +95,17 @@ class Hub:
             self.db.kv_set("secret", value)
         return value
 
-    def token(self):
-        return hmac.new(self.secret.encode(), b"hub-session", hashlib.sha256).hexdigest()
+    def session_token(self, row):
+        """Le jeton de session d'un compte (cookie `hub=` ou `Authorization: Bearer`) : `<identifiant>.<mac>`, voir accounts.py."""
+        return accounts.session_token(self.secret, row)
+
+    def auth(self):
+        """Vrai dès qu'il existe un compte. Sans compte (ni HUB_PASSWORD au premier démarrage), le serveur est ouvert à tous."""
+        return accounts.exist(self.db)
+
+    def open_user(self):
+        """Qui est « connecté » quand le serveur est ouvert : le profil `default`, administrateur (c'est lui que le premier compte reprendra)."""
+        return {"id": accounts.FIRST_ID, "name": self.cfg.admin, "role": "admin"}
 
     def media_token(self):
         """Le jeton qui voyage dans les URLs (`?token=`) : il ne vaut que sur /media, /img, /book et /api/subs (sous-titres, lecture seule), nulle part ailleurs sur /api/ ;
@@ -186,6 +203,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = f"media_hub/{__version__}"
     timeout = 120
     hub: Hub = None
+    user: dict = None                          # le compte de la requête en cours (voir authorized)
     routes: list = []
 
     def log_message(self, fmt, *args):         # le journal ne garde que les erreurs (voir _fail)
@@ -259,20 +277,25 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- Aiguillage -------------------------------------------------------
     def authorized(self, path, query):
-        """Trois façons de se présenter : le jeton en cookie (navigateur) ou en `Authorization: Bearer` (clients natifs),
-        le jeton de média en `?token=` (balises <img> / <video>, Cast), celui-ci seulement sur les fichiers et les sous-titres (/api/subs/), nulle part ailleurs sur /api/."""
-        if not self.hub.cfg.password:
+        """Trois façons de se présenter : le jeton de session (`<identifiant>.<mac>`) en cookie (navigateur) ou en `Authorization: Bearer` (clients natifs),
+        le jeton de média en `?token=` (balises <img> / <video>, Cast), celui-ci seulement sur les fichiers et les sous-titres (/api/subs/), nulle part ailleurs sur /api/.
+
+        Le compte reconnu est posé sur `self.user` (`{"id", "name", "role"}`) : c'est lui, et lui seul, qui désigne le profil de la progression et des playlists.
+        Avec le jeton de média, `self.user` reste None : les routes de fichiers n'en ont pas besoin."""
+        self.user = None
+        if not self.hub.auth():
+            self.user = self.hub.open_user()
             return True
         if path in ("/login", "/api/login", "/api/token", "/favicon.svg", "/icon.svg"):
             return True
-        token = self.hub.token().encode()
         cookie = self.headers.get("Cookie", "")
-        found = re.search(r"(?:^|;\s*)hub=([0-9a-f]+)", cookie)
-        if found and hmac.compare_digest(found.group(1).encode(), token):
-            return True
+        found = re.search(r"(?:^|;\s*)hub=(\w{1,64}\.[0-9a-f]{64})\s*(?:;|$)", cookie, re.ASCII)       # valeur entière, sans rien derrière : `hub=<id>.<mac>.junk` ne passe pas
         bearer = re.fullmatch(r"Bearer\s+(\S+)", self.headers.get("Authorization", "").strip(), re.IGNORECASE)
-        if bearer and hmac.compare_digest(bearer.group(1).encode("utf-8", "replace"), token):
-            return True
+        for token in (found.group(1) if found else None, bearer.group(1) if bearer else None):
+            row = accounts.user_for_token(self.hub.db, self.hub.secret, token) if token else None
+            if row is not None:
+                self.user = accounts.public(row)
+                return True
         if path.startswith(("/media/", "/img/", "/book/", "/api/subs/")) and "token" in query:
             return hmac.compare_digest(query["token"].encode("utf-8", "replace"), self.hub.media_token().encode())
         return False
@@ -281,6 +304,7 @@ class Handler(BaseHTTPRequestHandler):
         split = urlsplit(self.path)
         path = unquote(split.path)
         query = {k: v[-1] for k, v in parse_qs(split.query).items()}
+        self.body_taken = False                       # le corps du POST a-t-il été lu ? sinon _fail le jette (connexion persistante)
         try:
             if not self.authorized(path, query):
                 if path.startswith("/api/"):
@@ -312,6 +336,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": message}, status)
         except OSError:
             self.close_connection = True
+        if self.command == "POST" and not self.body_taken:      # refus avant toute lecture (401, 404, route qui lève trop tôt) : le corps ne doit pas coller à la requête suivante
+            try:
+                self.discard_body()
+            except OSError:
+                self.close_connection = True
         if status == 500 or status > 501:
             split = urlsplit(self.path)             # le jeton ne va pas dans le journal : masqué d'après les clés décodées (`?%74oken=` aussi)
             pairs = [(k, "***" if k == "token" else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
@@ -319,15 +348,31 @@ class Handler(BaseHTTPRequestHandler):
             print(f"{status} {self.command} {shown} : {message}", file=sys.stderr)
 
     def body_json(self):
+        self.body_taken = True
         length = int(self.headers.get("Content-Length") or 0)
         if length > 1 << 20:
+            self.close_connection = True            # corps non lu : la connexion ne peut plus servir
             raise HttpError(413, "corps trop gros")
         return safe_json(self.rfile.read(length).decode("utf-8", "replace") if length else "", {})
 
+    def discard_body(self):
+        """Lit et jette le corps d'une requête qu'on refuse sans l'avoir lue : sinon il reste sur la connexion persistante et colle à la requête suivante. Trop gros pour cela : on coupe la connexion."""
+        self.body_taken = True
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > 1 << 20:
+            self.close_connection = True
+        elif length:
+            self.rfile.read(length)
+
     def body_bytes(self, limit):
-        """Le corps de la requête tel quel (un fichier envoyé) ; 413 au-delà de `limit` octets."""
+        """Le corps de la requête tel quel (un fichier envoyé) ; 413 au-delà de `limit` octets (la connexion est alors coupée : le corps n'est pas lu)."""
+        self.body_taken = True
         length = int(self.headers.get("Content-Length") or 0)
         if length > limit:
+            self.close_connection = True
             raise HttpError(413, f"fichier trop gros (au plus {limit >> 20} Mo)")
         return self.rfile.read(length)
 
@@ -369,45 +414,157 @@ LOGIN_PAGE = """<!doctype html><html lang="fr"><meta charset="utf-8"><meta name=
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1115;color:#e8e8ea;font:18px system-ui,sans-serif}form{display:grid;gap:14px;width:min(360px,86vw)}
 h1{font-size:26px;margin:0 0 8px}input,button{font:inherit;padding:14px 16px;border-radius:12px;border:1px solid #2a2c34;background:#1c1e26;color:inherit}button{background:#7cc4ff;color:#0b1220;border:0;font-weight:700;cursor:pointer}
 input:focus,button:focus{outline:3px solid #7cc4ff}p{color:#ff8b8b;margin:0;min-height:1.2em}</style>
-<form method="post" action="/api/login"><h1>Médiathèque</h1><input type="password" name="password" placeholder="Mot de passe" autofocus autocomplete="current-password"><button>Entrer</button><p>%s</p></form></html>"""
+<form method="post" action="/api/login"><h1>Médiathèque</h1>%s<input type="password" name="password" placeholder="Mot de passe" autofocus autocomplete="current-password"><button>Entrer</button><p>%s</p></form></html>"""
+LOGIN_USER_FIELD = '<input type="text" name="user" placeholder="Nom" autocomplete="username" autofocus>'     # seulement quand il y a plusieurs comptes
 
 
 @route("GET", r"/login")
 def login_page(h, m, q):
-    h.send_body((LOGIN_PAGE % ("Mot de passe incorrect." if q.get("error") else "")).encode("utf-8"), "text/html; charset=utf-8", 200, {"Cache-Control": "no-store"}, h.command == "HEAD")
+    field = LOGIN_USER_FIELD if len(accounts.rows(h.hub.db)) > 1 else ""
+    h.send_body((LOGIN_PAGE % (field, "Nom ou mot de passe incorrect." if q.get("error") else "")).encode("utf-8"), "text/html; charset=utf-8", 200, {"Cache-Control": "no-store"}, h.command == "HEAD")
+
+
+def session_cookie(hub, row):
+    return f"hub={hub.session_token(row)}; Path=/; Max-Age={SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax"
 
 
 @route("POST", r"/api/login")
 def login(h, m, q):
+    h.body_taken = True
     length = int(h.headers.get("Content-Length") or 0)
+    if length > 4096:
+        h.close_connection = True                   # le reste du corps ne sera pas lu : la connexion ne peut plus servir
     raw = h.rfile.read(min(length, 4096)).decode("utf-8", "replace")
-    password = parse_qs(raw).get("password", [""])[0] if "=" in raw and not raw.lstrip().startswith("{") else safe_json(raw, {}).get("password", "")
+    if "=" in raw and not raw.lstrip().startswith("{"):
+        form = parse_qs(raw)
+        password, name = form.get("password", [""])[0], form.get("user", [""])[0]
+    else:
+        body = safe_json(raw, {})
+        body = body if isinstance(body, dict) else {}
+        password, name = body.get("password", ""), body.get("user")
     time.sleep(0.4)       # un essai coûte du temps : pas de force brute à pleine vitesse
-    if h.hub.cfg.password and hmac.compare_digest(password.encode(), h.hub.cfg.password.encode()):
-        cookie = f"hub={h.hub.token()}; Path=/; Max-Age={SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax"
-        h.send_body(b"", "text/plain", 303, {"Location": "/", "Set-Cookie": cookie})
+    try:
+        row = accounts.authenticate(h.hub.db, name, password) if h.hub.auth() else None
+    except accounts.AccountError:
+        row = None
+    if row is not None:
+        h.send_body(b"", "text/plain", 303, {"Location": "/", "Set-Cookie": session_cookie(h.hub, row)})
     else:
         h.send_body(b"", "text/plain", 303, {"Location": "/login?error=1"})
 
 
 @route("POST", r"/api/token")
 def api_token(h, m, q):
-    """Pour un client natif : le mot de passe en JSON contre le jeton (à renvoyer en `Authorization: Bearer`) et le jeton de média (`?token=`)."""
+    """Pour un client natif : le nom (facultatif s'il n'y a qu'un compte) et le mot de passe en JSON contre le jeton (à renvoyer en `Authorization: Bearer`) et le jeton de média (`?token=`)."""
+    h.body_taken = True
     length = int(h.headers.get("Content-Length") or 0)
     if length > 4096:
         h.close_connection = True                   # le corps ne sera pas lu : la connexion ne peut plus servir à une autre requête
         raise HttpError(413, "corps trop gros")
     raw = h.rfile.read(length)                      # toujours lu, même sans mot de passe : sinon il se retrouve en tête de la requête suivante (connexion persistante)
-    if not h.hub.cfg.password:
+    if not h.hub.auth():
         h.send_json({"token": "", "media_token": ""})       # rien à protéger : aucun jeton n'est demandé
         return
     body = safe_json(raw.decode("utf-8", "replace"), {})
-    password = body.get("password") if isinstance(body, dict) else None
+    body = body if isinstance(body, dict) else {}
+    password, name = body.get("password"), body.get("user")
     time.sleep(0.4)       # même ralentissement que /api/login
-    if isinstance(password, str) and hmac.compare_digest(password.encode(), h.hub.cfg.password.encode()):
-        h.send_json({"token": h.hub.token(), "media_token": h.hub.media_token()})
-    else:
+    if not isinstance(password, str) or not (name is None or isinstance(name, str)):
         raise HttpError(401, "mot de passe incorrect")
+    try:
+        row = accounts.authenticate(h.hub.db, name, password)
+    except accounts.AccountError as e:
+        raise HttpError(e.status, e.message)
+    h.send_json({"token": h.hub.session_token(row), "media_token": h.hub.media_token(), "user": accounts.public(row)})
+
+
+# ---------------------------------------------------------------------------
+# Comptes
+# ---------------------------------------------------------------------------
+def account_call(func, *args, **kw):
+    try:
+        return func(*args, **kw)
+    except accounts.AccountError as e:
+        raise HttpError(e.status, e.message)
+
+
+def body_dict(h):
+    body = h.body_json()
+    return body if isinstance(body, dict) else {}
+
+
+def need_accounts(h):
+    """Sans compte (serveur ouvert), il n'y a ni mot de passe à changer ni compte à gérer : en créer un par l'API fermerait la porte derrière celui qui l'a créé, sans qu'il ait de jeton."""
+    if not h.hub.auth():
+        h.discard_body()
+        raise HttpError(400, "le serveur est ouvert, sans compte : définis HUB_PASSWORD avant le premier démarrage, ou crée un compte avec « python -m hub user add »")
+
+
+def check_current(h, current):
+    """Le mot de passe actuel du compte de la requête, redemandé avant d'en changer : 400 s'il est faux. Renvoie le compte."""
+    time.sleep(0.4)       # même ralentissement qu'à la connexion
+    row = accounts.by_id(h.hub.db, h.user["id"])
+    if row is None or not isinstance(current, str) or not accounts.verify_password(current, row["pass_hash"]):
+        raise HttpError(400, "mot de passe actuel incorrect")
+    return row
+
+
+def renewed_session(h, row):
+    """Après un changement de son propre mot de passe, l'ancien jeton ne vaut plus : le nouveau, dans la réponse et en cookie (le navigateur reste connecté)."""
+    token = h.hub.session_token(row)
+    return {"ok": True, "token": token}, {"Set-Cookie": session_cookie(h.hub, row)}
+
+
+@route("GET", r"/api/users")
+def api_users(h, m, q):
+    require_admin(h)
+    h.send_json({"users": [accounts.listing(r) for r in accounts.rows(h.hub.db)]})
+
+
+@route("POST", r"/api/users")
+def api_user_create(h, m, q):
+    require_admin(h)
+    need_accounts(h)
+    body = body_dict(h)
+    row = account_call(accounts.create, h.hub.db, body.get("name"), body.get("password"), body.get("role", "user"))
+    h.send_json(accounts.listing(row), 201)
+
+
+@route("POST", r"/api/user/(\w+)/password")
+def api_user_password(h, m, q):
+    """L'administrateur donne un nouveau mot de passe à un autre compte sans connaître l'ancien. Pour le sien, il doit redonner l'actuel (`current`, comme `/api/me/password`) :
+    un jeton de session volé ne suffit pas à prendre le compte."""
+    require_admin(h)
+    need_accounts(h)
+    body = body_dict(h)
+    if m.group(1) == h.user["id"]:
+        check_current(h, body.get("current"))
+    row = account_call(accounts.set_password, h.hub.db, m.group(1), body.get("password"))
+    if row["id"] == h.user["id"]:
+        out, headers = renewed_session(h, row)
+        h.send_json(out, 200, headers)
+    else:
+        h.send_json({"ok": True})
+
+
+@route("POST", r"/api/user/(\w+)/delete")
+def api_user_delete(h, m, q):
+    require_admin(h)
+    need_accounts(h)
+    h.body_json()
+    account_call(accounts.delete, h.hub.db, m.group(1))
+    h.send_json({"ok": True}, 200, {"Set-Cookie": "hub=; Path=/; Max-Age=0"} if m.group(1) == h.user["id"] else None)
+
+
+@route("POST", r"/api/me/password")
+def api_me_password(h, m, q):
+    """Chacun change son mot de passe, en donnant l'actuel."""
+    need_accounts(h)
+    body = body_dict(h)
+    row = check_current(h, body.get("current"))
+    row = account_call(accounts.set_password, h.hub.db, row["id"], body.get("new"))
+    out, headers = renewed_session(h, row)
+    h.send_json(out, 200, headers)
 
 
 @route("GET", r"/api/logout")
@@ -425,11 +582,11 @@ def library_or_404(hub, lib_id):
     return lib
 
 
-def seen_counts(hub, lib_id=None):
+def seen_counts(hub, profile, lib_id=None):
     """{item_id: (fichiers vus, fichiers entamés)} : de quoi afficher « vu » ou « 3/12 » sur une vignette."""
     sql = ("SELECT e.item_id AS item, SUM(p.done) AS seen, COUNT(*) AS touched FROM progress p JOIN entries e ON e.id=p.entry_id "
            "WHERE p.profile=? AND e.kind != 'audio'" + (" AND e.lib=?" if lib_id else "") + " GROUP BY e.item_id")
-    params = (PROFILE, lib_id) if lib_id else (PROFILE,)
+    params = (profile, lib_id) if lib_id else (profile,)
     return {r["item"]: (r["seen"] or 0, r["touched"]) for r in hub.db.query(sql, params)}
 
 
@@ -450,7 +607,7 @@ def api_state(h, m, q):
         count = hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]
         libs.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir()})
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
-                 "auth": bool(hub.cfg.password), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
+                 "auth": hub.auth(), "user": h.user, "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
 
 
 def next_entry(hub, entry):
@@ -462,21 +619,21 @@ def next_entry(hub, entry):
     return None
 
 
-def dismiss_key(item_id):
-    return f"dismiss:{PROFILE}:{item_id}"
+def dismiss_key(profile, item_id):
+    return f"dismiss:{profile}:{item_id}"
 
 
-def continue_row(hub):
+def continue_row(hub, profile):
     """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant."""
     rows = hub.db.query(
         "SELECT p.entry_id, p.position, p.duration AS pduration, p.done, p.updated, e.* FROM progress p JOIN entries e ON e.id=p.entry_id "
-        "WHERE p.profile=? AND e.kind IN ('video','book') ORDER BY p.updated DESC LIMIT 200", (PROFILE,))
+        "WHERE p.profile=? AND e.kind IN ('video','book') ORDER BY p.updated DESC LIMIT 200", (profile,))
     seen_items, out = set(), []
     for row in rows:
         if row["item_id"] in seen_items:
             continue
         seen_items.add(row["item_id"])
-        if row["updated"] <= hub.db.kv_get(dismiss_key(row["item_id"]), -1):
+        if row["updated"] <= hub.db.kv_get(dismiss_key(profile, row["item_id"]), -1):
             continue
         item = hub.db.one("SELECT * FROM items WHERE id=?", (row["item_id"],))
         if item is None:
@@ -488,7 +645,7 @@ def continue_row(hub):
             following = next_entry(hub, row)
             if following is None:
                 continue
-            progress = hub.db.progress_for(PROFILE, [following["id"]]).get(following["id"])
+            progress = hub.db.progress_for(profile, [following["id"]]).get(following["id"])
             if progress is not None and progress["done"]:
                 continue
             entry, resume = following, False
@@ -508,13 +665,13 @@ def continue_row(hub):
 @route("GET", r"/api/home")
 def api_home(h, m, q):
     hub = h.hub
-    seen = seen_counts(hub)
+    seen = seen_counts(hub, h.user["id"])
     rows = []
     for lib in hub.cfg.libraries:
         recent = hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))
         rows.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": [with_seen(r, seen) for r in recent],
                      "count": hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]})
-    h.send_json({"continue": continue_row(hub), "libraries": rows})
+    h.send_json({"continue": continue_row(hub, h.user["id"]), "libraries": rows})
 
 
 @route("GET", r"/api/search")
@@ -524,7 +681,7 @@ def api_search(h, m, q):
         h.send_json({"results": []})
         return
     hub = h.hub
-    seen = seen_counts(hub)
+    seen = seen_counts(hub, h.user["id"])
     results = []
     for lib in hub.cfg.libraries:
         found = []
@@ -622,7 +779,7 @@ def api_library(h, m, q):
     hub = h.hub
     lib = library_or_404(hub, m.group(1))
     rows = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
-    seen = seen_counts(hub, lib.id)
+    seen = seen_counts(hub, h.user["id"], lib.id)
     sagas = lib.kind == "movies" and q.get("sagas") == "1" and not q.get("group")
     if sagas:
         rows = collapse_sagas(rows, seen)
@@ -710,7 +867,7 @@ def api_item(h, m, q):
     item = hub.item(m.group(1))
     lib = library_or_404(hub, item["lib"])
     rows = sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (item["id"],)), key=order_key)
-    progress = hub.db.progress_for(PROFILE, [r["id"] for r in rows])
+    progress = hub.db.progress_for(h.user["id"], [r["id"] for r in rows])
     meta = safe_json(item["meta"], {})
     out = summary(item)
     out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
@@ -727,7 +884,7 @@ def api_item(h, m, q):
         out["seasons"] = meta.get("seasons", [])
     if item["type"] == "movie" and item["grp"]:                 # la saga : les autres films qui la composent
         saga = hub.db.query("SELECT * FROM items WHERE lib=? AND grp=? ORDER BY sort", (item["lib"], item["grp"]))
-        seen = seen_counts(hub, lib.id)
+        seen = seen_counts(hub, h.user["id"], lib.id)
         out["saga"] = sorted((with_seen(r, seen) for r in saga), key=lambda r: (r.get("part") is None, r.get("part") or 0, r["title"]))
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
@@ -784,7 +941,7 @@ def api_artist(h, m, q):
     """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent, photo comprise (une fois les fiches demandées dans Gestion)."""
     hub = h.hub
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
-    seen = seen_counts(hub, lib.id)
+    seen = seen_counts(hub, h.user["id"], lib.id)
     name = rows[0]["grp"] or "Artiste inconnu"
     out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": []}
     genres = {}
@@ -808,7 +965,8 @@ def api_artist(h, m, q):
 
 @route("POST", r"/api/artist/([\w-]+)/(\w+)/photo")
 def api_artist_photo_set(h, m, q):
-    """Remplace la photo d'un artiste, quelle qu'elle soit, par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus)."""
+    """Remplace la photo d'un artiste, quelle qu'elle soit, par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). Administrateur seulement."""
+    require_admin(h)
     hub = h.hub
     artist_albums(hub, m.group(1), m.group(2))
     data = h.body_bytes(PHOTO_UPLOAD_MAX)
@@ -821,7 +979,8 @@ def api_artist_photo_set(h, m, q):
 
 @route("POST", r"/api/artist/([\w-]+)/(\w+)/photo/wikipedia")
 def api_artist_photo_wikipedia(h, m, q):
-    """Remplace la photo d'un artiste par celle de son article Wikipédia (celui que sa fiche garde : il faut donc que « Fiches artistes » soit passé)."""
+    """Remplace la photo d'un artiste par celle de son article Wikipédia (celui que sa fiche garde : il faut donc que « Fiches artistes » soit passé). Administrateur seulement."""
+    require_admin(h)
     hub = h.hub
     _, rows = artist_albums(hub, m.group(1), m.group(2))
     h.body_json()
@@ -893,9 +1052,9 @@ def api_item_seen(h, m, q):
         if season is not None and row["season"] != season:
             continue
         if done:
-            hub.db.save_progress(PROFILE, row["id"], row["duration"], row["duration"], True)
+            hub.db.save_progress(h.user["id"], row["id"], row["duration"], row["duration"], True)
         else:
-            hub.db.execute("DELETE FROM progress WHERE profile=? AND entry_id=?", (PROFILE, row["id"]))
+            hub.db.execute("DELETE FROM progress WHERE profile=? AND entry_id=?", (h.user["id"], row["id"]))
         count += 1
     h.send_json({"ok": True, "count": count})
 
@@ -912,38 +1071,38 @@ def playlist_call(func, *args):
 
 @route("GET", r"/api/playlists")
 def api_playlists(h, m, q):
-    h.send_json({"playlists": playlists.listing(h.hub.db, PROFILE)})
+    h.send_json({"playlists": playlists.listing(h.hub.db, h.user["id"])})
 
 
 @route("POST", r"/api/playlists")
 def api_playlist_create(h, m, q):
     body = h.body_json()
     entries = body.get("entries") if isinstance(body.get("entries"), list) else []
-    pid = playlist_call(playlists.create, h.hub.db, PROFILE, body.get("name"), entries)
-    h.send_json(playlist_call(playlists.detail, h.hub.db, PROFILE, pid), 201)
+    pid = playlist_call(playlists.create, h.hub.db, h.user["id"], body.get("name"), entries)
+    h.send_json(playlist_call(playlists.detail, h.hub.db, h.user["id"], pid), 201)
 
 
 @route("GET", r"/api/playlist/(\w+)")
 def api_playlist(h, m, q):
-    h.send_json(playlist_call(playlists.detail, h.hub.db, PROFILE, m.group(1)))
+    h.send_json(playlist_call(playlists.detail, h.hub.db, h.user["id"], m.group(1)))
 
 
 @route("POST", r"/api/playlist/(\w+)/(add|remove|move|rename|delete)")
 def api_playlist_edit(h, m, q):
-    db, pid, action, body = h.hub.db, m.group(1), m.group(2), h.body_json()
+    db, pid, action, body, profile = h.hub.db, m.group(1), m.group(2), h.body_json(), h.user["id"]
     if action == "add":
-        playlist_call(playlists.add, db, PROFILE, pid, body.get("entries") if isinstance(body.get("entries"), list) else [])
+        playlist_call(playlists.add, db, profile, pid, body.get("entries") if isinstance(body.get("entries"), list) else [])
     elif action == "remove":
-        playlist_call(playlists.remove, db, PROFILE, pid, body.get("index"))
+        playlist_call(playlists.remove, db, profile, pid, body.get("index"))
     elif action == "move":
-        playlist_call(playlists.move, db, PROFILE, pid, body.get("from"), body.get("to"))
+        playlist_call(playlists.move, db, profile, pid, body.get("from"), body.get("to"))
     elif action == "rename":
-        playlist_call(playlists.rename, db, PROFILE, pid, body.get("name"))
+        playlist_call(playlists.rename, db, profile, pid, body.get("name"))
     else:
-        playlist_call(playlists.delete, db, PROFILE, pid)
+        playlist_call(playlists.delete, db, profile, pid)
         h.send_json({"ok": True})
         return
-    h.send_json(playlist_call(playlists.detail, db, PROFILE, pid))
+    h.send_json(playlist_call(playlists.detail, db, profile, pid))
 
 
 # ---------------------------------------------------------------------------
@@ -970,7 +1129,7 @@ def api_progress(h, m, q):
     if entry["kind"] == "audio":                 # la musique n'a pas de reprise : seulement « écouté »
         done = done or (duration > 0 and position / duration > 0.8)
         position = 0 if done else position
-    h.hub.db.save_progress(PROFILE, entry["id"], duration if done and entry["kind"] != "book" else position, duration, done)
+    h.hub.db.save_progress(h.user["id"], entry["id"], duration if done and entry["kind"] != "book" else position, duration, done)
     h.send_json({"ok": True, "done": done})
 
 
@@ -980,8 +1139,8 @@ def api_item_dismiss(h, m, q):
     hub = h.hub
     h.body_json()                 # le corps doit être lu, même vide de sens : sinon il reste sur la connexion et colle à la requête suivante (501)
     item = hub.item(m.group(1))
-    latest = hub.db.one("SELECT MAX(p.updated) AS t FROM progress p JOIN entries e ON e.id=p.entry_id WHERE p.profile=? AND e.item_id=?", (PROFILE, item["id"]))
-    hub.db.kv_set(dismiss_key(item["id"]), latest["t"] or 0)
+    latest = hub.db.one("SELECT MAX(p.updated) AS t FROM progress p JOIN entries e ON e.id=p.entry_id WHERE p.profile=? AND e.item_id=?", (h.user["id"], item["id"]))
+    hub.db.kv_set(dismiss_key(h.user["id"], item["id"]), latest["t"] or 0)
     h.send_json({"ok": True})
 
 
@@ -990,9 +1149,9 @@ def api_entry_seen(h, m, q):
     hub = h.hub
     entry = hub.entry(m.group(1))
     if h.body_json().get("done", True):
-        hub.db.save_progress(PROFILE, entry["id"], entry["duration"], entry["duration"], True)
+        hub.db.save_progress(h.user["id"], entry["id"], entry["duration"], entry["duration"], True)
     else:
-        hub.db.execute("DELETE FROM progress WHERE profile=? AND entry_id=?", (PROFILE, entry["id"]))
+        hub.db.execute("DELETE FROM progress WHERE profile=? AND entry_id=?", (h.user["id"], entry["id"]))
     h.send_json({"ok": True})
 
 
@@ -1070,7 +1229,7 @@ def api_play(h, m, q):
     warning = ""
     if decision["mode"] == "transcode" and video.get("height", 0) >= 2000 and video.get("codec") in ("hevc", "av1"):
         warning = "Image 4K à convertir : le serveur n'a pas de carte vidéo pour cela, la lecture risque de saccader. Le débit demandé peut être baissé."
-    progress = hub.db.progress_for(PROFILE, [entry["id"]]).get(entry["id"])
+    progress = hub.db.progress_for(h.user["id"], [entry["id"]]).get(entry["id"])
     resume = progress["position"] if progress and not progress["done"] and progress["position"] >= RESUME_MIN else 0
     following = next_entry(hub, entry)
     duration = probe["duration"] or entry["duration"]
@@ -1219,7 +1378,7 @@ def api_book(h, m, q):
         raise HttpError(400, "ce fichier n'est pas un livre")
     lib, path = hub.path_of(entry)
     kind = safe_json(entry["meta"], {}).get("format", "")
-    progress = hub.db.progress_for(PROFILE, [entry["id"]]).get(entry["id"])
+    progress = hub.db.progress_for(h.user["id"], [entry["id"]]).get(entry["id"])
     out = {"id": entry["id"], "item": entry["item_id"], "title": entry["title"], "format": kind, "position": progress["position"] if progress and not progress["done"] else 0,
            "next": None, "file": urls.entry_file(entry["id"])}
     try:
@@ -1274,11 +1433,14 @@ def book_epub(h, m, q):
 # ---------------------------------------------------------------------------
 @route("GET", r"/api/jobs")
 def api_jobs(h, m, q):
+    if q.get("log") == "1":                     # le journal des tâches est réservé à l'administrateur ; l'état « occupé » reste ouvert à tout compte
+        require_admin(h)
     h.send_json({"jobs": h.hub.jobs.snapshot(with_log=q.get("log") == "1"), "busy": h.hub.jobs.busy()})
 
 
 @route("POST", r"/api/scan")
 def api_scan(h, m, q):
+    require_admin(h)
     body = h.body_json()
     jobs = h.hub.jobs
     job = jobs.scan(library_or_404(h.hub, body["lib"])) if body.get("lib") else jobs.scan_all()
@@ -1287,6 +1449,7 @@ def api_scan(h, m, q):
 
 @route("POST", r"/api/enrich")
 def api_enrich(h, m, q):
+    require_admin(h)
     body = h.body_json()
     lib = library_or_404(h.hub, str(body.get("lib", "")))
     if lib.kind == "music":                     # MusicBrainz et Wikipédia : pas de clé
@@ -1301,6 +1464,7 @@ def api_enrich(h, m, q):
 
 @route("POST", r"/api/cleanup")
 def api_cleanup(h, m, q):
+    require_admin(h)
     h.send_json({"job": h.hub.jobs.cleanup(bool(h.body_json().get("apply"))).public()}, 202)
 
 

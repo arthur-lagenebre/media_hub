@@ -46,7 +46,8 @@ services:
       HUB_FFMPEG: /opt/ffmpeg          # dossier qui contient ffmpeg et ffprobe (voir fetch-ffmpeg.sh)
       HUB_BIND: 0.0.0.0                # écoute aussi le réseau local : mets alors un mot de passe
       HUB_PORT: "8080"
-      HUB_PASSWORD: ${HUB_PASSWORD}
+      HUB_PASSWORD: ${HUB_PASSWORD}    # amorce le premier compte (administrateur) si la base n'en a aucun ; ensuite ignoré
+      HUB_ADMIN: ${HUB_ADMIN:-admin}   # nom de ce premier compte (« admin » si absent du .env)
       HUB_MAX_STREAMS: "2"             # transcodages simultanés (i3-13100F : 2 flux 1080p sans souci)
       HUB_AUTOSCAN_HOURS: "6"
       TMDB_KEY: ${TMDB_KEY}

@@ -1,9 +1,11 @@
 (function () {
   'use strict';
   var H = window.Hub;
-  H.audio.init();
   H.api('/api/state').then(function (state) {
     H.libs = state.libraries;
+    H.setSession(state);
+    H.syncAccount();      // avant que la barre audio ne relise la file enregistrée : elle appartient peut-être à un autre compte
+    H.audio.init();
     H.nav.build();
     H.start();
   }).catch(function (e) {

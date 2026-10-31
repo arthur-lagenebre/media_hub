@@ -143,8 +143,8 @@
         if (!total) {
           el.appendChild(h('div', { class: 'blank' },
             h('h1', null, 'Ta médiathèque est vide pour l’instant'),
-            h('p', null, H.libs.length ? 'Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.' : 'Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Animations, Musique, Livres), ou décris-les avec HUB_LIBRARIES.'),
-            h('a', { class: 'btn f primary', href: '#/admin', 'data-autofocus': '1' }, 'Ouvrir la gestion')));
+            h('p', null, !H.isAdmin() ? 'Rien n’est encore indexé : l’administrateur doit lancer une mise à jour de la médiathèque.' : H.libs.length ? 'Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.' : 'Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Animations, Musique, Livres), ou décris-les avec HUB_LIBRARIES.'),
+            H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/admin', 'data-autofocus': '1' }, 'Ouvrir la gestion') : null));
           clearTimeout(timer);
           timer = setTimeout(function () { if (el.isConnected && !document.hidden) load(); }, 4000);
           return;
@@ -278,7 +278,7 @@
       H.clear(empty).appendChild(h('div', null,
         h('h2', null, filtered ? 'Rien ne correspond' : 'Cette bibliothèque est vide'),
         h('p', null, filtered ? 'Change ou retire un filtre.' : 'Vérifie que le dossier est bien monté, puis lance une mise à jour.'),
-        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.letter = st.genre = st.section = ''; st.unseen = false; search.value = ''; H.pref('section.' + libId, null); reset(); } }, 'Retirer les filtres') : h('a', { class: 'btn f', href: '#/admin' }, 'Ouvrir la gestion')));
+        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.letter = st.genre = st.section = ''; st.unseen = false; search.value = ''; H.pref('section.' + libId, null); reset(); } }, 'Retirer les filtres') : H.isAdmin() ? h('a', { class: 'btn f', href: '#/admin' }, 'Ouvrir la gestion') : null));
     }
     function reset() {
       token++; items = []; total = 0; lastGrp = null; loading = false;
@@ -534,8 +534,53 @@
     if (s < 129600) return 'il y a ' + Math.round(s / 3600) + ' h';
     return 'il y a ' + Math.round(s / 86400) + ' j';
   }
+  // Une fenêtre à champs (comptes) : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password', auto}], extra: [éléments sous les champs],
+  // ok: libellé du bouton, danger, submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse, done(résultat) une fois la fenêtre fermée}.
+  // Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
+  function dialog(o) {
+    var inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
+    var box = h('div', { class: 'menu prompt form', role: 'dialog', 'aria-label': o.title }, h('h3', null, o.title));
+    box.addEventListener('focusin', function (e) { try { e.target.scrollIntoView({ block: 'nearest' }); } catch (x) { /* tant pis */ } });   // petit écran ou télé : la fenêtre défile jusqu'au bouton atteint
+    (o.lead || []).forEach(function (t) { box.appendChild(h('p', { class: 'lead' }, t)); });
+    function show(text) { err.textContent = text || ''; }
+    function send() {
+      if (busy) return;
+      var values = {};
+      o.fields.forEach(function (f) { var v = inputs[f.key].value; values[f.key] = f.type === 'password' ? v : v.replace(/\s+/g, ' ').trim(); });
+      var r = o.submit(values);
+      if (typeof r === 'string') { show(r); return; }
+      busy = true; show('');
+      r.then(function (res) { H.overlay.close(function () { if (o.done) o.done(res); }); },
+        function (e) { busy = false; show(e.message); });
+    }
+    o.fields.forEach(function (f, i) {
+      var input = h('input', { class: 'f field big', type: f.type === 'password' ? 'password' : 'text', maxlength: f.type === 'password' ? '200' : '40', autocomplete: f.auto || 'off',
+        'data-autofocus': i === 0 ? '1' : null,
+        onkeydown: function (e) {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          if (list[i + 1]) list[i + 1].focus(); else send();
+        } });
+      inputs[f.key] = input; list.push(input);
+      box.appendChild(h('label', { class: 'flab' }, f.label, input));
+    });
+    (o.extra || []).forEach(function (x) { box.appendChild(x); });
+    box.appendChild(err);
+    ok = H.button(o.ok || 'Valider', o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: send });
+    box.appendChild(h('div', { class: 'btns' }, ok, H.button('Annuler', null, { 'data-autofocus': o.fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));
+    H.overlay.open(box);
+    if (o.fields.length) setTimeout(function () { try { list[0].focus(); } catch (e) { /* tant pis */ } }, 30);
+  }
+  var ROLES = { admin: 'Administrateur', user: 'Utilisateur' };
+  function checkPassword(pw, again) {
+    if (pw.length < 8) return 'Le mot de passe doit faire au moins 8 caractères.';
+    if (pw.length > 200) return 'Le mot de passe est trop long (200 caractères au plus).';
+    if (pw !== again) return 'Les deux mots de passe ne sont pas identiques.';
+    return '';
+  }
+
   H.route(/^\/admin$/, function () {
-    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, state = null, jobs = [], logPanel = null, lastPage = '', lastTasks = '';
+    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '';
     function qualityLabel(v) { return { auto: 'Qualité d’origine quand c’est possible', '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': '480p · 1,5 Mb/s' }[v] || v; }
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
@@ -553,7 +598,7 @@
           l.kind === 'music' ? H.button('Fiches artistes', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Fiches artistes demandées : ' + l.label); } }) : null,
           H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } })));
       });
-      el.appendChild(libs);
+      if (H.isAdmin()) el.appendChild(libs);
 
       var play = h('section', { class: 'panel' }, h('h2', null, 'Lecture'));
       var q = H.pref('quality') || 'auto', surround = !!H.pref('surround');
@@ -578,18 +623,102 @@
       tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Fichiers parasites'), h('span', null, 'Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.')),
         H.button('Compter', null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, 'Simulation lancée'); } }),
         H.button('Supprimer', null, { 'data-key': 'junk-del', onclick: function () { start('/api/cleanup', { apply: true }, 'Nettoyage lancé'); } })));
-      el.appendChild(tools);
+      el.appendChild(accountPanel());
+      if (H.session.auth && H.isAdmin()) el.appendChild(usersPanel());
+      if (H.isAdmin()) el.appendChild(tools);
 
       var server = h('section', { class: 'panel' }, h('h2', null, 'Serveur'));
       var facts = [['Version', state.version], ['ffmpeg', state.ffmpeg ? 'présent' : 'absent : lecture directe uniquement'], ['TMDB', state.tmdb ? 'clé configurée' : 'pas de clé (TMDB_KEY)'],
         ['Conversions', state.streams + ' en cours sur ' + state.max_streams], ['Accès', state.auth ? 'protégé par mot de passe' : 'sans mot de passe']];
       server.appendChild(h('dl', null, facts.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })));
-      if (state.auth) server.appendChild(h('a', { class: 'btn f', href: '/api/logout' }, 'Se déconnecter'));
       el.appendChild(server);
 
-      logPanel = jobsPanel();
-      el.appendChild(logPanel);
-      if (focus) H.focus.key(el, focus, true); else H.focus.first();   // sans défilement
+      logPanel = H.isAdmin() ? jobsPanel() : null;                      // le journal des tâches est réservé à l'administrateur (le serveur refuse ?log=1 aux autres)
+      if (logPanel) el.appendChild(logPanel);
+      if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
+      if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
+    }
+    // Le compte connecté : nom, rôle, changement de mot de passe, déconnexion. Serveur ouvert : comment créer le premier compte.
+    function accountPanel() {
+      var panel = h('section', { class: 'panel' }, h('h2', null, 'Compte'));
+      var me = H.session.user;
+      if (!H.session.auth || !me) {
+        panel.appendChild(h('p', { class: 'muted' }, 'Aucun compte n’existe : le serveur est ouvert, et toute personne qui peut l’atteindre voit et gère tout. Pour le protéger, crée le premier compte (il sera administrateur) sur le serveur avec ',
+          h('code', null, 'python -m hub user add <nom>'), ', ou définis ', h('code', null, 'HUB_PASSWORD'), ' avant de démarrer le serveur. Les comptes suivants se gèrent ensuite ici.'));
+        return panel;
+      }
+      panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, me.name), h('span', null, ROLES[me.role] || me.role)),
+        H.button('Changer mon mot de passe', 'edit', { 'data-key': 'mypw', onclick: changeMine }),
+        h('a', { class: 'btn f', href: '/api/logout', 'data-key': 'logout', onclick: function () { H.forgetAccount(); } }, 'Se déconnecter')));
+      return panel;
+    }
+    function changeMine() {
+      dialog({ title: 'Changer mon mot de passe', ok: 'Changer',
+        fields: [{ key: 'current', label: 'Mot de passe actuel', type: 'password', auto: 'current-password' }, { key: 'next', label: 'Nouveau mot de passe (8 caractères au moins)', type: 'password', auto: 'new-password' }, { key: 'again', label: 'Nouveau mot de passe, encore une fois', type: 'password', auto: 'new-password' }],
+        submit: function (v) {
+          if (!v.current) return 'Saisis ton mot de passe actuel.';
+          var bad = checkPassword(v.next, v.again);
+          if (bad) return bad;
+          return H.api('/api/me/password', { current: v.current, 'new': v.next });   // le serveur renouvelle le cookie : rien à garder ici
+        },
+        done: function () { H.toast('Mot de passe changé. Les autres appareils devront se reconnecter.', 5000); H.focus.key(el, 'mypw'); } });
+    }
+    // Gestion des comptes (administrateur, serveur avec comptes).
+    function usersPanel() {
+      var panel = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, 'Comptes'),
+        H.button('Ajouter un compte', 'plus', { 'data-key': 'user-add', onclick: addUser })));
+      if (usersError) panel.appendChild(h('p', { class: 'muted' }, usersError));
+      else if (!users) panel.appendChild(h('p', { class: 'muted' }, 'Chargement…'));
+      (users || []).forEach(function (u) {
+        var mine = H.session.user && u.id === H.session.user.id;
+        panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' (toi)' : '')), h('span', null, (ROLES[u.role] || u.role) + ' · créé le ' + new Date(u.created * 1000).toLocaleDateString('fr-FR'))),
+          H.button('Mot de passe', 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': 'Changer le mot de passe de ' + u.name, onclick: function () { passwordOf(u, mine); } }),
+          H.button('Supprimer', 'trash', { 'data-key': 'del-' + u.id, 'aria-label': 'Supprimer le compte de ' + u.name, onclick: function () { deleteUser(u, mine); } })));
+      });
+      return panel;
+    }
+    function addUser() {
+      var role = 'user', toggle = H.button('Rôle : ' + ROLES.user, null, { 'data-key': 'new-role', 'aria-label': 'Rôle du nouveau compte, à changer', onclick: function () {
+        role = role === 'user' ? 'admin' : 'user';
+        toggle.querySelector('.lbl').textContent = 'Rôle : ' + ROLES[role];
+      } });
+      dialog({ title: 'Ajouter un compte', ok: 'Créer le compte',
+        lead: ['Un administrateur gère la médiathèque et les comptes ; un utilisateur lit, avec sa propre progression et ses propres playlists.'],
+        fields: [{ key: 'name', label: 'Nom (40 caractères au plus)', type: 'text' }, { key: 'pw', label: 'Mot de passe (8 caractères au moins)', type: 'password', auto: 'new-password' }, { key: 'again', label: 'Mot de passe, encore une fois', type: 'password', auto: 'new-password' }],
+        extra: [toggle],
+        submit: function (v) {
+          if (!v.name) return 'Donne un nom au compte.';
+          var bad = checkPassword(v.pw, v.again);
+          if (bad) return bad;
+          return H.api('/api/users', { name: v.name, password: v.pw, role: role });
+        },
+        done: function (u) { H.toast('Compte créé : ' + u.name); refreshUsers('user-add'); } });
+    }
+    function passwordOf(u, mine) {
+      if (mine) { changeMine(); return; }                              // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)
+      dialog({ title: 'Mot de passe de ' + u.name, ok: 'Changer',
+        lead: ['Les sessions ouvertes de ce compte seront fermées ; la personne se reconnectera avec le nouveau mot de passe.'],
+        fields: [{ key: 'pw', label: 'Nouveau mot de passe (8 caractères au moins)', type: 'password', auto: 'new-password' }, { key: 'again', label: 'Encore une fois', type: 'password', auto: 'new-password' }],
+        submit: function (v) {
+          var bad = checkPassword(v.pw, v.again);
+          if (bad) return bad;
+          return H.api('/api/user/' + encodeURIComponent(u.id) + '/password', { password: v.pw });
+        },
+        done: function () { H.toast('Mot de passe changé : ' + u.name); H.focus.key(el, 'pw-' + u.id); } });
+    }
+    function deleteUser(u, mine) {
+      var lead = ['Supprimer le compte « ' + u.name + ' » ? Sa progression de lecture, ses playlists et ses éléments retirés de « Reprendre » seront perdus, et cela ne s’annule pas. Les fichiers de la médiathèque ne sont pas touchés.'];
+      if (mine) lead.push('C’est le compte avec lequel tu es connecté : tu seras déconnecté. Il doit rester au moins un autre administrateur.');
+      dialog({ title: 'Supprimer le compte de ' + u.name, ok: 'Supprimer définitivement', danger: true, lead: lead, fields: [],
+        submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/delete', {}); },
+        done: function () {
+          if (mine) { H.forgetAccount(); location.href = '/login'; return; }
+          H.toast('Compte supprimé : ' + u.name);
+          refreshUsers('user-add');
+        } });
+    }
+    function refreshUsers(key) {
+      poll().then(function () { if (!(key && H.focus.key(el, key))) H.focus.first(); });
     }
     function jobsPanel() {
       var busy = jobs.some(function (j) { return j.status === 'waiting' || j.status === 'running'; });
@@ -603,15 +732,21 @@
     }
     function poll() {
       clearTimeout(timer);
-      return Promise.all([H.api('/api/state'), H.api('/api/jobs?log=1')]).then(function (r) {
-        var page = JSON.stringify(r[0]), tasks = JSON.stringify(r[1].jobs);
+      // Un non-administrateur n'interroge que l'état « occupé » (sans journal). Si son rôle a changé depuis le démarrage, le 403 se rattrape par un appel sans journal.
+      var jobsCall = H.isAdmin() ? H.api('/api/jobs?log=1').catch(function (e) { if (e.status === 403) return H.api('/api/jobs'); throw e; }) : H.api('/api/jobs');
+      return Promise.all([H.api('/api/state'), jobsCall]).then(function (r) {
+        H.setSession(r[0]);
+        if (!(r[0].auth && H.isAdmin())) { users = null; usersError = ''; return r; }
+        return H.api('/api/users').then(function (res) { users = res.users; usersError = ''; return r; }, function (e) { users = null; usersError = e.message; return r; });
+      }).then(function (r) {
+        var page = JSON.stringify([r[0], users, usersError]), tasks = JSON.stringify(r[1].jobs);
         state = r[0]; jobs = r[1].jobs; H.libs = state.libraries;
         var busy = r[1].busy;
         if (wasBusy && !busy) H.toast('Terminé');
         wasBusy = busy;
         // Pendant une tâche on revient ici toutes les 1,5 s : reconstruire la page entière coupait le défilement (molette, tactile). On ne refait que ce qui a changé.
-        if (!logPanel || page !== lastPage) render();
-        else if (tasks !== lastTasks) { var fresh = jobsPanel(); el.replaceChild(fresh, logPanel); logPanel = fresh; }
+        if (page !== lastPage || (H.isAdmin() && !logPanel) || (!H.isAdmin() && logPanel)) render();
+        else if (logPanel && tasks !== lastTasks) { var fresh = jobsPanel(); el.replaceChild(fresh, logPanel); logPanel = fresh; }
         lastPage = page; lastTasks = tasks;
         if (busy) timer = setTimeout(poll, 1500);
       }).catch(function (e) { H.toast(e.message, 5000); });

@@ -23,7 +23,7 @@ Tu es l'architecte de **media_hub**, le serveur de médiathèque (films, séries
 - **Serveur** : `hub/server/app.py` (`ThreadingHTTPServer`, routage par `@route`, authentification, routes `/api`, `/media`, `/img`, `/book`), `hub/server/jobs.py` (tâches de fond, une seule à la fois), `hub/db.py` (SQLite, WAL, `SCHEMA_VERSION`), `hub/scan/` (un scanner par type de bibliothèque), `hub/media/` (ffprobe, plan de lecture, sous-titres WebVTT, images, livres), `hub/enrich.py` (TMDB, MusicBrainz, Wikipédia), `hub/playlists.py`, `hub/config.py` (variables `HUB_*`).
 - **Interface** : `hub/web`, JavaScript sans framework ni build, scripts chargés dans l'ordre de `index.html`. Elle n'est qu'un client de l'API JSON ; la navigation fonctionne à la souris, au tactile et à la télécommande (`data-device` : pc, phone, tablet, tv).
 - **Lecture vidéo** : `POST /api/play/<id>` décide du mode d'après les capacités du client (`caps`) : *direct*, puis *remux* (le son passe en AAC), puis *transcodage*. Cet ordre est voulu. `HUB_MAX_STREAMS` borne les flux ffmpeg.
-- **Authentification** : un mot de passe unique, un cookie de session dont le jeton est dérivé d'un secret du serveur ; un seul profil (`default`).
+- **Authentification** : des comptes (nom + mot de passe haché `scrypt`, rôles `admin` / `user`, `hub/accounts.py`), un jeton de session sans état `<uid>.<mac>` dérivé d'un secret du serveur, un jeton de média global pour les URLs ; progression et playlists par compte, bibliothèque commune. `HUB_PASSWORD` ne sert plus qu'à amorcer le premier compte (id `default`).
 - **Déploiement** : TrueNAS Scale, deux conteneurs (`tailscale` pour le HTTPS à distance, `media_hub` en `python:3.13-slim`), `hub/` monté en lecture seule, voir `deploy/`. Clients : navigateurs de télé (Android TV, Google TV, Fire TV), téléphones, PC.
 
 ## Invariants à défendre
@@ -35,7 +35,7 @@ Tu es l'architecte de **media_hub**, le serveur de médiathèque (films, séries
 5. Toute route passe par l'authentification ; chemins résolus puis bornés à leur racine ; SQL paramétré ; `subprocess` sans `shell=True`.
 6. Le plan de lecture préfère direct, puis remux, puis transcodage.
 7. Textes affichés et messages d'erreur en français.
-8. Un seul profil ; pas de multi-utilisateur sans demande explicite.
+8. Les comptes sont des profils de lecture (progression, playlists) sur une médiathèque commune ; pas de restriction par bibliothèque ni de jeton de média par compte sans demande explicite.
 
 Si une recommandation oblige à en lever un, dis-le clairement : c'est une décision de l'utilisateur, pas un détail.
 

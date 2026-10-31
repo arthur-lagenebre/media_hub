@@ -204,8 +204,8 @@
         H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
         H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
         H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }),
-        H.device === 'tv' ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal
-        info && info.wiki ? H.button('Photo de Wikipédia', 'refresh', { 'data-key': 'wikiphoto', onclick: fromWikipedia }) : null));
+        H.device === 'tv' || !H.isAdmin() ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
+        info && info.wiki && H.isAdmin() ? H.button('Photo de Wikipédia', 'refresh', { 'data-key': 'wikiphoto', onclick: fromWikipedia }) : null));
       var first = d.albums[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id, v = stamp ? '&v=' + stamp : '';       // la photo de l'artiste, sinon la pochette de son premier album
       el.appendChild(picker);
       el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320' + v + ')' }),
@@ -229,7 +229,7 @@
           return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label);
         }))));
       }
-      if (!info) body.appendChild(h('p', { class: 'muted' }, 'Pas encore de fiche : lance « Fiches artistes » dans Gestion pour récupérer le résumé, les membres et les liens.'));
+      if (!info) body.appendChild(h('p', { class: 'muted' }, H.isAdmin() ? 'Pas encore de fiche : lance « Fiches artistes » dans Gestion pour récupérer le résumé, les membres et les liens.' : 'Pas encore de fiche pour cet artiste.'));
       el.appendChild(body);
       H.audio.mark();
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();

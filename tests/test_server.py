@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import http.client
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -19,7 +21,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from tests import fixtures
-from hub import config
+from hub import accounts, config
 
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
@@ -27,7 +29,7 @@ config.use_media_library(fixtures.REPO)
 from hub.scan.common import is_album_cover  # noqa: E402
 from hub.scan.music import scan_music  # noqa: E402
 from hub.server import jobs  # noqa: E402
-from hub.server.app import TITLE_SORTS, make_server  # noqa: E402
+from hub.server.app import TITLE_SORTS, Handler, make_server  # noqa: E402
 
 FFMPEG = fixtures.FFMPEG
 CAPS_ALL = {"video": ["h264"], "audio": ["aac", "mp3", "opus", "flac"], "containers": ["mp4", "mkv", "webm"], "channels": 2, "height": 1080}
@@ -62,15 +64,20 @@ class Client:
 
 
 class Running:
-    def __init__(self, root, password="", ffmpeg=True, max_streams=2):
+    def __init__(self, root, password="", ffmpeg=True, max_streams=2, admin="", reuse=False):
+        """`password` : HUB_PASSWORD (amorçage du compte administrateur), `admin` : HUB_ADMIN ; `reuse` : redémarre sur la médiathèque et la base déjà là (rien n'est refabriqué)."""
         self.root = Path(root)
-        self.libs = fixtures.build_library(self.root / "srv")
-        video = self.root / "srv" / "Films" / "Vrai Film (2020)" / "Vrai Film (2020).mkv"
-        if FFMPEG:
-            fixtures.write_video(video, seconds=4, acodec="ac3", channels=6, subtitle="1\n00:00:00,000 --> 00:00:02,000\nBonjour\n")
-            fixtures.write_video(self.root / "srv" / "Films" / "Compatible (2021)" / "Compatible (2021).mkv", seconds=3)
+        if reuse:
+            names = {"films": "Films", "series": "Series", "animations": "Animations", "musique": "Musique", "livres": "Livres"}
+            self.libs = {lib: self.root / "srv" / name for lib, name in names.items()}
+        else:
+            self.libs = fixtures.build_library(self.root / "srv")
+            video = self.root / "srv" / "Films" / "Vrai Film (2020)" / "Vrai Film (2020).mkv"
+            if FFMPEG:
+                fixtures.write_video(video, seconds=4, acodec="ac3", channels=6, subtitle="1\n00:00:00,000 --> 00:00:02,000\nBonjour\n")
+                fixtures.write_video(self.root / "srv" / "Films" / "Compatible (2021)" / "Compatible (2021).mkv", seconds=3)
         env = {"HUB_SRV": str(self.root / "srv"), "HUB_DATA": str(self.root / "data"), "HUB_REPO": str(fixtures.REPO), "HUB_PORT": "0", "HUB_PASSWORD": password,
-               "HUB_MAX_STREAMS": str(max_streams)}
+               "HUB_ADMIN": admin, "HUB_MAX_STREAMS": str(max_streams)}
         cfg = config.load(env)
         cfg.tmdb_key = ""       # jamais la vraie clé du .env de media_library : pas d'appel réseau, et les tests ne dépendent pas de la machine
         if not ffmpeg:
@@ -860,7 +867,7 @@ class TestNativeToken(unittest.TestCase):
         status, _, body = api.request("POST", "/api/token", body={"password": "secret"})
         self.assertEqual(status, 200)
         token, media = json.loads(body)["token"], json.loads(body)["media_token"]
-        self.assertRegex(token, r"^[0-9a-f]{64}$")
+        self.assertRegex(token, r"^default\.[0-9a-f]{64}$")        # <identifiant du compte>.<mac> ; le premier compte s'appelle « default »
         self.assertRegex(media, r"^[0-9a-f]{64}$")
         self.assertNotEqual(token, media)
         status, _, body = api.request("POST", "/api/token", body={"password": "wrong"})
@@ -1158,6 +1165,792 @@ class BearerClient(Client):
 
     def request(self, method, path, body=None, headers=None):
         return super().request(method, path, body=body, headers={"Authorization": f"Bearer {self.token}", **(headers or {})})
+
+
+def entry_of(api, lib, title):
+    """(identifiant de l'élément, ses fichiers) pour le titre `title` de la bibliothèque `lib`."""
+    item = next(i for i in api.json(f"/api/library/{lib}?limit=600")[1]["items"] if i["title"] == title)
+    return item["id"], api.json(f"/api/item/{item['id']}")[1]["entries"]
+
+
+class AccountsCase(unittest.TestCase):
+    """Les comptes sur un vrai serveur : HUB_PASSWORD (« secret ») crée l'administrateur `admin`, qui crée les autres par l'API. Un serveur neuf par test (environ une seconde)."""
+
+    PASSWORD = "motdepasse1"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.start("secret")
+        self.admin = self.session_for("admin")
+
+    def start(self, password="secret", **kw):
+        run = Running(self.tmp, password=password, **kw)
+        self.addCleanup(run.stop)
+        self.run_, self.hub, self.anon = run, run.hub, Client(run.port)
+        return run
+
+    def sign_in(self, name, password):
+        """Un client natif connecté en tant que `name` ; `.session` garde la réponse de /api/token."""
+        status, _, body = self.anon.request("POST", "/api/token", body={"user": name, "password": password})
+        self.assertEqual(status, 200, body)
+        client = BearerClient(self.run_.port, json.loads(body)["token"])
+        client.session = json.loads(body)
+        return client
+
+    def session_for(self, name):
+        """Comme `sign_in`, sans passer par /api/token (qui se fait attendre 0,4 s) : les tests qui ne portent pas sur la connexion vont plus vite. La connexion a ses propres tests."""
+        row = accounts.by_name(self.hub.db, name)
+        client = BearerClient(self.run_.port, self.hub.session_token(row))
+        client.session = {"token": client.token, "media_token": self.hub.media_token(), "user": accounts.public(row)}
+        return client
+
+    def new_user(self, name, role="user", password=PASSWORD):
+        """Crée le compte par l'API (en administrateur) et rend un client connecté ; `.account` garde la réponse de la création."""
+        status, made = self.admin.json("/api/users", {"name": name, "password": password, "role": role})
+        self.assertEqual(status, 201, made)
+        client = self.session_for(name)
+        client.account = made
+        return client
+
+    def watch(self, api, entry, position=600):
+        self.assertEqual(api.json("/api/progress", {"entry": entry, "position": position, "duration": 3000})[0], 200)
+
+    def continue_ids(self, api):
+        return [c["item"]["id"] for c in api.json("/api/home")[1]["continue"]]
+
+    def rows(self, sql, *params):
+        return self.hub.db.query(sql, params)
+
+    def count(self, sql, *params):
+        return self.rows(sql, *params)[0]["n"]
+
+
+class TestAccountSeed(AccountsCase):
+    def test_hub_password_creates_the_default_admin(self):
+        users = self.admin.json("/api/users")[1]["users"]
+        self.assertEqual([(u["id"], u["name"], u["role"]) for u in users], [("default", "admin", "admin")])       # HUB_ADMIN absent : « admin »
+        self.assertEqual(self.admin.session["user"], {"id": "default", "name": "admin", "role": "admin"})
+        state = self.admin.json("/api/state")[1]
+        self.assertEqual((state["auth"], state["user"]), (True, {"id": "default", "name": "admin", "role": "admin"}))
+
+    def test_hub_admin_names_the_account_and_the_password_may_be_short(self):
+        other = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, other, True)
+        run = Running(other, password="court", admin="  Chef de   famille ")        # six caractères : HUB_PASSWORD existait avant la longueur minimale
+        self.addCleanup(run.stop)
+        api = Client(run.port)
+        status, _, body = api.request("POST", "/api/token", body={"password": "court"})       # un seul compte : le nom est facultatif
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["user"], {"id": "default", "name": "Chef de famille", "role": "admin"})
+        for user in ("CHEF DE FAMILLE", " chef de famille "):                                  # la casse et les espaces ne comptent pas
+            self.assertEqual(api.request("POST", "/api/token", body={"user": user, "password": "court"})[0], 200, user)
+        status, _, body = api.request("POST", "/api/token", body={"user": "admin", "password": "court"})
+        self.assertEqual((status, json.loads(body)), (401, {"error": "mot de passe incorrect"}))
+
+    def test_hub_password_is_ignored_once_an_account_exists(self):
+        self.run_.stop()
+        self.start("autre-mot-de-passe", admin="Autre", reuse=True)
+        self.assertEqual([(u["id"], u["name"]) for u in self.rows("SELECT id, name FROM users")], [("default", "admin")])
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"password": "autre-mot-de-passe"})[0], 401)
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"password": "secret"})[0], 200)
+
+    def test_progress_and_playlists_from_before_the_accounts_go_to_the_first_account(self):
+        import sqlite3
+
+        self.run_.stop()
+        conn = sqlite3.connect(Path(self.tmp) / "data" / "hub.db")
+        conn.execute("DELETE FROM users")                           # retour au serveur d'avant les comptes : ouvert, profil unique
+        conn.commit()
+        conn.close()
+        api = Client(self.start("", reuse=True).port)
+        self.assertEqual(api.json("/api/state")[1]["auth"], False)
+        dark, episodes = entry_of(api, "series", "Dark")
+        film, movie = entry_of(api, "films", "Inception")
+        self.watch(api, episodes[0]["id"])
+        self.watch(api, movie[0]["id"], position=1000)
+        api.json(f"/api/item/{dark}/dismiss", {})                   # `dismiss:default:<élément>` : Dark ne se reprend plus
+        tracks = [e["id"] for e in entry_of(api, "musique", "Discovery")[1]]
+        playlist = api.json("/api/playlists", {"name": "Ancienne", "entries": tracks[:2]})[1]["id"]
+        self.run_.stop()
+        conn = sqlite3.connect(Path(self.tmp) / "data" / "hub.db")
+        conn.execute("DROP TABLE users")                            # une base de la version 1 : pas de table des comptes
+        conn.execute("UPDATE kv SET value='1' WHERE key='schema'")
+        conn.commit()
+        conn.close()
+        self.start("secret", reuse=True)
+        self.assertEqual(self.hub.db.kv_get("schema"), 2)
+        first = self.sign_in("admin", "secret")
+        self.assertEqual(first.session["user"]["id"], "default")
+        self.assertEqual(self.continue_ids(first), [film])           # le film entamé est repris, la série écartée le reste
+        self.assertEqual(first.json("/api/item/" + dark)[1]["entries"][0]["progress"]["position"], 600)
+        found = first.json("/api/playlists")[1]["playlists"]
+        self.assertEqual([(p["id"], p["name"], p["count"]) for p in found], [(playlist, "Ancienne", 2)])
+        self.admin = first
+        newcomer = self.new_user("alice")                           # un compte ultérieur part de zéro
+        self.assertEqual((self.continue_ids(newcomer), newcomer.json("/api/playlists")[1]["playlists"]), ([], []))
+
+
+class TestAccountLogin(AccountsCase):
+    def setUp(self):
+        super().setUp()
+        self.alice, self.bob = self.new_user("alice"), self.new_user("Bob")
+
+    def test_token_needs_the_user_name_when_there_are_several_accounts(self):
+        status, _, body = self.anon.request("POST", "/api/token", body={"password": "secret"})
+        self.assertEqual((status, json.loads(body)), (401, {"error": "nom d'utilisateur requis"}))
+        for user in ("", None, "   "):
+            status, _, body = self.anon.request("POST", "/api/token", body={"user": user, "password": "secret"})
+            self.assertEqual(status, 401, user)
+            self.assertIn("error", json.loads(body))
+
+    def test_unknown_name_and_wrong_password_look_the_same(self):
+        for body in ({"user": "inconnu", "password": self.PASSWORD}, {"user": "alice", "password": "faux"}, {"user": "alice", "password": "secret"},
+                     {"user": "alice", "password": 12}, {"user": 12, "password": self.PASSWORD}, {"user": ["alice"], "password": self.PASSWORD}):
+            status, _, answer = self.anon.request("POST", "/api/token", body=body)
+            self.assertEqual((status, json.loads(answer)), (401, {"error": "mot de passe incorrect"}), body)
+
+    def test_token_gives_each_account_its_own_session_token(self):
+        for client, name, role in ((self.alice, "alice", "user"), (self.bob, "Bob", "user"), (self.admin, "admin", "admin")):
+            uid = client.session["user"]["id"]
+            self.assertEqual(client.session["user"], {"id": uid, "name": name, "role": role})
+            self.assertRegex(client.session["token"], rf"^{uid}\.[0-9a-f]{{64}}$")
+            self.assertEqual(client.json("/api/state")[1]["user"]["name"], name)
+        self.assertEqual(len({c.session["token"] for c in (self.alice, self.bob, self.admin)}), 3)
+        self.assertEqual(len({c.session["media_token"] for c in (self.alice, self.bob, self.admin)}), 1)          # le jeton de média est celui du serveur
+        again = json.loads(self.anon.request("POST", "/api/token", body={"user": "ALICE", "password": self.PASSWORD})[2])
+        self.assertEqual(again["token"], self.alice.session["token"])                                                # la casse du nom ne compte pas, le jeton est stable
+        self.assertEqual((again["user"], again["media_token"]), (self.alice.session["user"], self.alice.session["media_token"]))
+
+    def test_forged_tokens_are_refused(self):
+        uid, mac = self.alice.session["token"].split(".")
+        tampered = mac[:-1] + ("1" if mac[-1] == "0" else "0")
+        for token in (f"{self.bob.account['id']}.{mac}", f"{uid}.{'0' * 64}", f"{uid}.{tampered}", f"{uid}.", f".{mac}", uid, mac, f"inconnu.{mac}", f"{uid}.{mac[:-2]}"):
+            self.assertEqual(BearerClient(self.run_.port, token).get("/api/state")[0], 401, token)
+            self.assertEqual(Client(self.run_.port, f"hub={token}").get("/api/state")[0], 401, token)
+        self.assertEqual(BearerClient(self.run_.port, f"{uid}.{mac}.x").get("/api/state")[0], 401)
+        self.assertEqual(BearerClient(self.run_.port, self.alice.session["token"]).get("/api/state")[0], 200)
+
+    def test_the_session_cookie_must_be_exactly_the_token(self):
+        token = self.alice.session["token"]
+        state = lambda cookie: Client(self.run_.port, cookie).get("/api/state")[0]      # noqa: E731
+        for cookie in (f"hub={token}.junk", f"hub={token}zz", f"hub={token}x=1", f"hub={token}0", f"hub={token}=", f"xhub={token}", f"hub={token[:-1]}", f"hub=.{token}", "hub=", f"hub={token.upper()}"):
+            self.assertEqual(state(cookie), 401, cookie)
+        for cookie in (f"hub={token}", f"hub={token};", f"hub={token}; x=1", f"hub={token};x=1", f"a=b; hub={token}; c=d", f"a=b;hub={token};c=d", f"a=b; hub={token}", f"hub={token} ; c=d"):
+            self.assertEqual(state(cookie), 200, cookie)
+        self.assertEqual(Client(self.run_.port, f"hub={token}").get("/api/library/films")[0], 200)
+
+    def test_the_bearer_token_must_be_exactly_the_token(self):
+        token = self.alice.session["token"]
+        for suffix in (".junk", "zz", "x=1", "0", ";x=1", " x"):
+            self.assertEqual(BearerClient(self.run_.port, token + suffix).get("/api/state")[0], 401, suffix)
+        self.assertEqual(self.anon.get("/api/state", headers={"Authorization": f"Bearer {token}0"})[0], 401)
+        for scheme in ("Bearer", "bearer", "BEARER", "Bearer  "):
+            self.assertEqual(self.anon.get("/api/state", headers={"Authorization": f"{scheme} {token}"})[0], 200, scheme)
+        self.assertEqual(self.anon.get("/api/state", headers={"Authorization": f"Basic {token}"})[0], 401)
+        self.assertEqual(self.anon.get("/api/state", headers={"Authorization": token})[0], 401)
+        for text, ok in ((token, True), (token + ".junk", False), (token + "zz", False), (token + "\n", False), (token.upper(), False), ("é" + token[token.index("."):], False),
+                         (f"{'a' * 64}.{'0' * 64}", True), (f"{'a' * 65}.{'0' * 64}", False), (f".{'0' * 64}", False)):
+            self.assertEqual(accounts.TOKEN_FORM.fullmatch(text) is not None, ok, text)
+
+    def test_login_form_sets_a_cookie_for_the_named_account(self):
+        form = {"Content-Type": "application/x-www-form-urlencoded"}
+        status, headers, _ = self.anon.request("POST", "/api/login", body=b"user=alice&password=" + self.PASSWORD.encode(), headers=form)
+        self.assertEqual((status, headers["Location"]), (303, "/"))
+        self.assertIn("HttpOnly", headers["Set-Cookie"])
+        cookie = Client(self.run_.port, headers["Set-Cookie"].split(";")[0])
+        self.assertEqual(cookie.json("/api/state")[1]["user"]["name"], "alice")
+        for body in (b"password=" + self.PASSWORD.encode(), b"user=inconnu&password=" + self.PASSWORD.encode(), b"user=alice&password=faux", b"user=alice"):
+            status, headers, _ = self.anon.request("POST", "/api/login", body=body, headers=form)
+            self.assertEqual((status, headers["Location"]), (303, "/login?error=1"), body)
+            self.assertNotIn("Set-Cookie", headers)
+
+    def test_login_accepts_json_too(self):
+        status, headers, _ = self.anon.request("POST", "/api/login", body={"user": "BOB", "password": self.PASSWORD})
+        self.assertEqual((status, headers["Location"]), (303, "/"))
+        self.assertEqual(Client(self.run_.port, headers["Set-Cookie"].split(";")[0]).json("/api/state")[1]["user"]["name"], "Bob")
+        for body in ({"password": self.PASSWORD}, {"user": 7, "password": self.PASSWORD}, [1, 2], {"user": "bob"}):
+            status, headers, _ = self.anon.request("POST", "/api/login", body=body)
+            self.assertEqual((status, headers["Location"]), (303, "/login?error=1"), body)
+
+    def test_login_page_asks_for_the_name_only_with_several_accounts(self):
+        self.assertIn(b'name="user"', self.anon.get("/login")[2])
+        self.admin.json(f"/api/user/{self.alice.account['id']}/delete", {})
+        self.admin.json(f"/api/user/{self.bob.account['id']}/delete", {})
+        self.assertNotIn(b'name="user"', self.anon.get("/login")[2])
+
+    def test_the_media_token_does_not_open_the_api_and_names_nobody(self):
+        media = self.alice.session["media_token"]
+        self.assertEqual(BearerClient(self.run_.port, media).get("/api/state")[0], 401)
+        self.assertEqual(Client(self.run_.port, f"hub={media}").get("/api/state")[0], 401)
+        self.assertEqual(self.anon.get(f"/api/state?token={media}")[0], 401)
+        self.assertEqual(self.anon.get(f"/api/users?token={media}")[0], 401)
+        item = next(a["id"] for a in self.alice.json("/api/library/musique")[1]["items"] if a["title"] == "Discovery")
+        seen = []
+        original = Handler.authorized
+
+        def spy(handler, path, query):
+            ok = original(handler, path, query)
+            seen.append((ok, handler.user and handler.user["name"]))
+            return ok
+
+        with mock.patch.object(Handler, "authorized", spy):
+            conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)           # une seule connexion : le même gestionnaire sert les trois requêtes
+            self.addCleanup(conn.close)
+            for headers in ({"Authorization": f"Bearer {self.alice.token}"}, {"__media": True}, {"Authorization": f"Bearer {self.bob.token}"}):
+                url = f"/img/item/{item}" + (f"?token={media}" if headers.pop("__media", False) else "")
+                conn.request("GET", url, headers=headers)
+                response = conn.getresponse()
+                response.read()
+                self.assertEqual(response.status, 200, url)
+        self.assertEqual(seen, [(True, "alice"), (True, None), (True, "Bob")])        # avec le jeton de média personne n'est connu, et le compte d'avant ne reste pas collé
+
+
+class TestAccountIsolation(AccountsCase):
+    def setUp(self):
+        super().setUp()
+        self.alice, self.bob = self.new_user("alice"), self.new_user("bob")
+        self.dark, self.episodes = entry_of(self.alice, "series", "Dark")
+
+    def test_progress_and_continue_belong_to_one_account(self):
+        first = self.episodes[0]["id"]
+        self.watch(self.alice, first)
+        self.assertEqual((self.continue_ids(self.alice), self.continue_ids(self.bob), self.continue_ids(self.admin)), ([self.dark], [], []))
+        row = self.alice.json("/api/home")[1]["continue"][0]
+        self.assertEqual((row["id"], row["position"], row["resume"]), (first, 600, True))
+        started = lambda api: [i.get("started") for i in api.json("/api/library/series")[1]["items"] if i["id"] == self.dark]      # noqa: E731
+        self.assertEqual((started(self.alice), started(self.bob)), ([1], [None]))
+        self.assertEqual(self.alice.json(f"/api/item/{self.dark}")[1]["entries"][0]["progress"]["position"], 600)
+        self.assertNotIn("progress", self.bob.json(f"/api/item/{self.dark}")[1]["entries"][0])
+        self.bob.json(f"/api/item/{self.dark}/seen", {"done": True})                                              # « tout vu » de Bob ne touche pas Alice
+        self.assertEqual((self.continue_ids(self.alice), self.continue_ids(self.bob)), ([self.dark], []))
+        self.assertEqual(started(self.alice), [1])
+        self.bob.json(f"/api/item/{self.dark}/seen", {"done": False})
+        self.assertEqual(self.alice.json(f"/api/item/{self.dark}")[1]["entries"][0]["progress"]["position"], 600)
+
+    def test_dismissing_from_continue_is_per_account(self):
+        first = self.episodes[0]["id"]
+        self.watch(self.alice, first)
+        self.watch(self.bob, first)
+        self.assertEqual(self.alice.json(f"/api/item/{self.dark}/dismiss", {})[0], 200)
+        self.assertEqual((self.continue_ids(self.alice), self.continue_ids(self.bob)), ([], [self.dark]))
+        self.assertEqual([r["key"] for r in self.rows("SELECT key FROM kv WHERE key LIKE 'dismiss:%'")], [f"dismiss:{self.alice.account['id']}:{self.dark}"])
+
+    def test_playlists_belong_to_one_account(self):
+        ids = [e["id"] for e in entry_of(self.alice, "musique", "Discovery")[1]]
+        pid = self.alice.json("/api/playlists", {"name": "Route", "entries": ids[:2]})[1]["id"]
+        self.assertEqual([p["name"] for p in self.alice.json("/api/playlists")[1]["playlists"]], ["Route"])
+        self.assertEqual((self.bob.json("/api/playlists")[1]["playlists"], self.admin.json("/api/playlists")[1]["playlists"]), ([], []))
+        self.assertEqual(self.bob.get(f"/api/playlist/{pid}")[0], 404)
+        for action, body in (("add", {"entries": ids[2:]}), ("remove", {"index": 0}), ("move", {"from": 0, "to": 1}), ("rename", {"name": "Volée"}), ("delete", {})):
+            self.assertEqual(self.bob.json(f"/api/playlist/{pid}/{action}", body)[0], 404, action)
+        again = self.bob.json("/api/playlists", {"name": "route", "entries": ids[2:]})[1]          # même nom chez Bob : sa propre playlist, pas celle d'Alice
+        self.assertNotEqual(again["id"], pid)
+        self.assertEqual(again["count"], 1)
+        mine = self.alice.json(f"/api/playlist/{pid}")[1]
+        self.assertEqual(([t["id"] for t in mine["tracks"]], mine["name"]), (ids[:2], "Route"))
+
+
+class TestAccountPermissions(AccountsCase):
+    def setUp(self):
+        super().setUp()
+        self.bob = self.new_user("bob")
+        self.artist = next(i for i in self.bob.json("/api/library/musique")[1]["items"] if i["title"] == "Discovery")["artist_id"]
+
+    def restricted(self):
+        """Ce qu'un compte `user` n'a pas le droit de faire : (méthode, chemin, corps)."""
+        admin = self.admin.session["user"]["id"]
+        return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/cleanup", {"apply": True}),
+                ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG), ("POST", f"/api/artist/musique/{self.artist}/photo/wikipedia", {}),
+                ("GET", "/api/users", None), ("POST", "/api/users", {"name": "intrus", "password": self.PASSWORD}),
+                ("POST", f"/api/user/{admin}/password", {"password": "piratage-1"}), ("POST", f"/api/user/{admin}/delete", {})]
+
+    def test_a_plain_account_gets_403_on_every_administration_route(self):
+        junk = self.run_.libs["films"] / "Inception (2010)" / "Thumbs.db"
+        junk.write_bytes(b"x")
+        self.addCleanup(junk.unlink, True)
+        for method, path, body in self.restricted():
+            status, _, data = self.bob.request(method, path, body=body)
+            self.assertEqual((status, json.loads(data)), (403, {"error": "réservé à l'administrateur"}), path)
+        self.assertEqual(len(self.bob.json("/api/jobs")[1]["jobs"]), len(self.hub.cfg.libraries))      # seuls les scans du démarrage : rien de lancé depuis
+        self.assertTrue(junk.exists())
+        self.assertEqual([u["name"] for u in self.admin.json("/api/users")[1]["users"]], ["admin", "bob"])
+        self.assertEqual(self.admin.get("/api/state")[0], 200)                            # le compte de l'administrateur est intact : même jeton, même mot de passe
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "admin", "password": "secret"})[0], 200)
+
+    def test_a_plain_account_keeps_everything_else(self):
+        self.assertEqual(self.bob.json("/api/state")[1]["user"], {"id": self.bob.account["id"], "name": "bob", "role": "user"})
+        for path in ("/api/home", "/api/library/films", "/api/jobs", "/api/playlists", f"/api/artist/musique/{self.artist}", "/api/search?q=dark"):
+            self.assertEqual(self.bob.get(path)[0], 200, path)
+
+    def test_the_jobs_log_is_for_the_administrator_only(self):
+        for log in ("1", "1&x=2"):
+            status, _, data = self.bob.request("GET", f"/api/jobs?log={log}")
+            self.assertEqual((status, json.loads(data)), (403, {"error": "réservé à l'administrateur"}), log)
+        self.assertEqual(self.anon.get("/api/jobs?log=1")[0], 401)
+        for path in ("/api/jobs", "/api/jobs?log=0", "/api/jobs?log="):                 # sans journal, l'état des tâches reste ouvert à tout compte
+            status, data = self.bob.json(path)
+            self.assertEqual(status, 200, path)
+            self.assertTrue(data["jobs"] and all("log" not in j for j in data["jobs"]), path)
+            self.assertIn("busy", data)
+        status, data = self.admin.json("/api/jobs?log=1")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["jobs"] and all(isinstance(j["log"], list) for j in data["jobs"]))
+
+    def test_an_administrator_made_by_the_api_has_the_same_rights(self):
+        second = self.new_user("deuxieme", role="admin")
+        self.assertEqual(second.get("/api/users")[0], 200)
+        self.assertEqual(second.json("/api/cleanup", {})[0], 202)
+        self.run_.wait_jobs()
+        self.assertEqual(second.json("/api/state")[1]["user"]["role"], "admin")
+
+    def test_a_refusal_does_not_desynchronise_a_kept_alive_connection(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        headers = {"Authorization": f"Bearer {self.bob.session['token']}", "Content-Type": "application/json"}
+        for method, path, body in self.restricted():
+            if method != "POST":
+                continue
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            conn.request("POST", path, body=data + b" " * 20000, headers=headers)        # un corps que le refus n'a pas besoin de lire, mais qui est là
+            first = conn.getresponse()
+            first.read()
+            self.assertEqual(first.status, 403, path)
+            conn.request("GET", "/api/state", headers=headers)                              # la requête suivante, sur la même connexion
+            second = conn.getresponse()
+            self.assertEqual((second.status, json.loads(second.read())["user"]["name"]), (200, "bob"), path)
+
+    def test_a_refusal_with_a_huge_body_closes_the_connection(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        conn.putrequest("POST", "/api/scan")
+        conn.putheader("Authorization", f"Bearer {self.bob.session['token']}")
+        conn.putheader("Content-Length", str(5 << 20))
+        conn.endheaders()                                                                  # l'en-tête annonce 5 Mo qui ne viendront pas
+        response = conn.getresponse()
+        response.read()
+        self.assertEqual(response.status, 403)
+        conn.sock.settimeout(10)
+        self.assertEqual(conn.sock.recv(1), b"")                                           # le serveur a coupé : le corps annoncé ne peut plus être resynchronisé
+
+
+class TestAccountManagement(AccountsCase):
+    def test_create_lists_and_never_shows_the_hash(self):
+        status, made = self.admin.json("/api/users", {"name": "  Barbara   Martin ", "password": self.PASSWORD})
+        self.assertEqual(status, 201)
+        self.assertEqual((made["name"], made["role"]), ("Barbara Martin", "user"))
+        self.assertRegex(made["id"], r"^[0-9a-f]{16}$")
+        self.assertIsInstance(made["created"], int)
+        self.assertEqual(set(made), {"id", "name", "role", "created"})
+        boss = self.admin.json("/api/users", {"name": "Chef", "password": self.PASSWORD, "role": "admin"})[1]
+        self.assertEqual(boss["role"], "admin")
+        users = self.admin.json("/api/users")[1]["users"]
+        self.assertEqual([u["name"] for u in users], ["admin", "Barbara Martin", "Chef"])           # du plus ancien au plus récent
+        self.assertEqual({k for u in users for k in u}, {"id", "name", "role", "created"})
+        self.assertNotIn("scrypt", json.dumps(users))
+        self.assertEqual(self.sign_in("barbara martin", self.PASSWORD).session["user"]["id"], made["id"])
+
+    def test_create_refuses_bad_names_passwords_and_roles(self):
+        good = {"name": "alice", "password": self.PASSWORD}
+        self.admin.json("/api/users", good)
+        self.admin.json("/api/users", {"name": "Élodie", "password": self.PASSWORD})
+        for body, status in (({**good, "name": "ALICE"}, 409), ({**good, "name": " alice  "}, 409), ({**good, "name": "Admin"}, 409), ({**good, "name": "ÉLODIE"}, 409),
+                             ({**good, "name": "x", "password": "court"}, 400), ({**good, "name": "x", "password": "é" * 201}, 400), ({"name": "x"}, 400), ({"name": "x", "password": 12345678}, 400),
+                             ({**good, "name": "x", "role": "root"}, 400), ({**good, "name": "x", "role": ["admin"]}, 400), ({**good, "name": ""}, 400), ({**good, "name": "   "}, 400),
+                             ({**good, "name": "x" * 41}, 400), ({**good, "name": "a\x00b"}, 400), ({**good, "name": 12}, 400), ({"password": self.PASSWORD}, 400)):
+            answer = self.admin.json("/api/users", body)
+            self.assertEqual(answer[0], status, body)
+            self.assertIn("error", answer[1])
+        self.assertEqual(self.admin.json("/api/users", [1, 2])[0], 400)
+        self.assertEqual(self.admin.json("/api/users", {"name": "x" * 40, "password": "12345678"})[0], 201)       # les bornes elles-mêmes passent
+        self.assertEqual(self.admin.json("/api/users", {"name": "y", "password": "é" * 200})[0], 201)
+        self.assertEqual(sorted(u["name"] for u in self.admin.json("/api/users")[1]["users"]), sorted(["admin", "alice", "Élodie", "x" * 40, "y"]))
+
+    def test_the_administrator_gives_another_account_a_new_password(self):
+        bob = self.new_user("bob")
+        status, answer = self.admin.json(f"/api/user/{bob.account['id']}/password", {"password": "nouveau-mdp-1"})
+        self.assertEqual((status, answer), (200, {"ok": True}))                                    # pas de jeton : ce n'est pas son compte
+        self.assertEqual(bob.get("/api/state")[0], 401)                                           # ses sessions sont fermées
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "bob", "password": self.PASSWORD})[0], 401)
+        self.assertEqual(self.sign_in("bob", "nouveau-mdp-1").get("/api/state")[0], 200)
+        self.assertEqual(self.admin.get("/api/state")[0], 200)
+        self.assertEqual(self.admin.json(f"/api/user/{bob.account['id']}/password", {"password": "court"})[0], 400)
+        self.assertEqual(self.admin.json(f"/api/user/{bob.account['id']}/password", {})[0], 400)
+        self.assertEqual(self.sign_in("bob", "nouveau-mdp-1").get("/api/state")[0], 200)          # les refus n'ont rien changé
+        status, answer = self.admin.json("/api/user/inconnu/password", {"password": "nouveau-mdp-1"})
+        self.assertEqual((status, answer), (404, {"error": "compte inconnu"}))
+
+    def test_the_administrator_changing_its_own_password_gets_a_new_token(self):
+        status, headers, data = self.admin.request("POST", "/api/user/default/password", body={"current": "secret", "password": "administrateur-2"})
+        answer = json.loads(data)
+        self.assertEqual((status, answer["ok"]), (200, True))
+        self.assertEqual(self.admin.get("/api/state")[0], 401)
+        self.assertIn(f"hub={answer['token']}", headers["Set-Cookie"])
+        self.assertEqual(BearerClient(self.run_.port, answer["token"]).get("/api/state")[0], 200)
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"password": "secret"})[0], 401)
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"password": "administrateur-2"})[0], 200)
+
+    def test_the_administrator_must_give_its_current_password_to_change_its_own(self):
+        for body in ({"password": "administrateur-2"}, {"current": "faux", "password": "administrateur-2"}, {"current": 12, "password": "administrateur-2"},
+                     {"current": None, "password": "administrateur-2"}, {"current": ["secret"], "password": "administrateur-2"}, {"current": "", "password": "administrateur-2"}):
+            status, answer = self.admin.json("/api/user/default/password", body)
+            self.assertEqual((status, answer), (400, {"error": "mot de passe actuel incorrect"}), body)
+        self.assertEqual(self.admin.get("/api/state")[0], 200)                           # la session n'a pas bougé...
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"password": "secret"})[0], 200)          # ...ni le mot de passe
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"password": "administrateur-2"})[0], 401)
+        status, answer = self.admin.json("/api/user/default/password", {"current": "secret", "password": "court"})          # le bon `current` ne dispense pas de la longueur minimale
+        self.assertEqual(status, 400)
+        self.assertNotIn("actuel", answer["error"])
+
+    def test_the_administrator_changes_another_password_without_giving_current(self):
+        bob = self.new_user("bob")
+        status, answer = self.admin.json(f"/api/user/{bob.account['id']}/password", {"password": "nouveau-mdp-1"})        # ni `current` ni compte à vérifier : celui de Bob n'est pas le sien
+        self.assertEqual((status, answer), (200, {"ok": True}))
+        self.assertEqual(self.admin.get("/api/state")[0], 200)
+        self.assertEqual(self.sign_in("bob", "nouveau-mdp-1").get("/api/state")[0], 200)
+
+    def test_a_user_changes_its_own_password(self):
+        bob = self.new_user("bob")
+        for body in ({"current": "faux", "new": "nouveau-mdp-1"}, {"new": "nouveau-mdp-1"}, {"current": 12, "new": "nouveau-mdp-1"}, {"current": "secret", "new": "nouveau-mdp-1"}):
+            status, answer = bob.json("/api/me/password", body)
+            self.assertEqual((status, answer), (400, {"error": "mot de passe actuel incorrect"}), body)
+        status, answer = bob.json("/api/me/password", {"current": self.PASSWORD, "new": "court"})
+        self.assertEqual(status, 400)
+        self.assertNotIn("actuel", answer["error"])
+        self.assertEqual(bob.get("/api/state")[0], 200)                                           # rien n'a changé
+        status, headers, data = bob.request("POST", "/api/me/password", body={"current": self.PASSWORD, "new": "nouveau-mdp-1"})
+        answer = json.loads(data)
+        self.assertEqual((status, answer["ok"]), (200, True))
+        self.assertRegex(answer["token"], rf"^{bob.account['id']}\.[0-9a-f]{{64}}$")
+        self.assertNotEqual(answer["token"], bob.session["token"])
+        self.assertEqual(bob.get("/api/state")[0], 401)                                           # l'ancien jeton est refusé...
+        self.assertEqual(Client(self.run_.port, f"hub={bob.session['token']}").get("/api/state")[0], 401)       # ...en cookie aussi
+        self.assertEqual(BearerClient(self.run_.port, answer["token"]).get("/api/state")[0], 200)
+        cookie = headers["Set-Cookie"]                                                            # le navigateur reste connecté
+        self.assertTrue(cookie.startswith(f"hub={answer['token']};") and "HttpOnly" in cookie, cookie)
+        self.assertEqual(Client(self.run_.port, cookie.split(";")[0]).get("/api/state")[0], 200)
+        renewed = self.sign_in("bob", "nouveau-mdp-1")
+        self.assertEqual(renewed.session["token"], answer["token"])
+        self.assertEqual(renewed.session["media_token"], bob.session["media_token"])              # le jeton de média ne change pas
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "bob", "password": self.PASSWORD})[0], 401)
+
+    def connection(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        return conn
+
+    def answer(self, conn):
+        response = conn.getresponse()
+        return response.status, response.read()
+
+    def assert_next_request_is_served(self, conn):
+        """La requête suivante, sur la même connexion, reçoit une vraie réponse (pas un reste de corps pris pour une requête)."""
+        conn.request("GET", "/api/state", headers={"Authorization": f"Bearer {self.admin.session['token']}"})
+        status, data = self.answer(conn)
+        self.assertEqual((status, json.loads(data)["user"]["name"]), (200, "admin"))
+
+    def assert_connection_closed(self, conn):
+        conn.sock.settimeout(10)
+        self.assertEqual(conn.sock.recv(1), b"")
+
+    def test_a_closed_session_answers_401_without_desynchronising_the_connection(self):
+        bob = self.new_user("bob")
+        self.admin.json(f"/api/user/{bob.account['id']}/password", {"password": "nouveau-mdp-1"})        # la session de Bob est fermée, son navigateur ne le sait pas encore
+        conn = self.connection()
+        conn.request("POST", "/api/progress", body=json.dumps({"entry": "x", "position": 1}), headers={"Authorization": f"Bearer {bob.session['token']}", "Content-Type": "application/json"})
+        self.assertEqual(self.answer(conn)[0], 401)
+        self.assert_next_request_is_served(conn)
+
+    def test_a_route_that_fails_before_reading_its_body_does_not_desynchronise_the_connection(self):
+        conn = self.connection()
+        headers = {"Authorization": f"Bearer {self.admin.session['token']}"}
+        for _ in range(2):
+            conn.request("POST", "/api/artist/musique/zzz/photo", body=fixtures.PNG * 50, headers=headers)      # l'artiste n'existe pas : 404 levé avant `body_bytes`
+            self.assertEqual(self.answer(conn)[0], 404)
+            self.assert_next_request_is_served(conn)
+
+    def test_a_refused_body_with_a_bad_or_huge_length_closes_the_connection(self):
+        bob = self.new_user("bob")
+        self.admin.json(f"/api/user/{bob.account['id']}/password", {"password": "nouveau-mdp-1"})
+        admin = f"Bearer {self.admin.session['token']}"
+        for path, auth, length, status in (("/api/progress", f"Bearer {bob.session['token']}", "abc", 401), ("/api/progress", f"Bearer {bob.session['token']}", str(5 << 20), 401),
+                                           ("/api/progress", f"Bearer {bob.session['token']}", "-1", 401), ("/api/artist/musique/zzz/photo", admin, "abc", 404),
+                                           ("/api/artist/musique/zzz/photo", admin, str(5 << 20), 404)):
+            conn = self.connection()
+            conn.putrequest("POST", path)
+            conn.putheader("Authorization", auth)
+            conn.putheader("Content-Length", length)
+            conn.endheaders()                                                              # l'en-tête annonce un corps qui ne viendra pas
+            self.assertEqual(self.answer(conn)[0], status, (path, length))
+            self.assert_connection_closed(conn)
+        self.assertEqual(self.admin.get("/api/state")[0], 200)                           # le serveur, lui, n'a rien perdu
+
+    def test_deleting_an_account_closes_its_sessions(self):
+        bob = self.new_user("bob")
+        self.assertEqual(self.admin.json(f"/api/user/{bob.account['id']}/delete", {}), (200, {"ok": True}))
+        self.assertEqual(bob.get("/api/state")[0], 401)
+        self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "bob", "password": self.PASSWORD})[0], 401)
+        self.assertEqual([u["name"] for u in self.admin.json("/api/users")[1]["users"]], ["admin"])
+        self.assertEqual(self.admin.json(f"/api/user/{bob.account['id']}/delete", {}), (404, {"error": "compte inconnu"}))
+        again = self.new_user("bob")                                                              # le nom est libre, le nouveau compte n'hérite pas de l'ancien jeton
+        self.assertNotEqual(again.account["id"], bob.account["id"])
+        self.assertEqual(bob.get("/api/state")[0], 401)
+
+    def test_deleting_removes_progress_playlists_and_dismissals_of_that_account_only(self):
+        alice, bob = self.new_user("alice"), self.new_user("bob")
+        dark, episodes = entry_of(alice, "series", "Dark")
+        ids = [e["id"] for e in entry_of(alice, "musique", "Discovery")[1]]
+        for who in (alice, bob):
+            self.watch(who, episodes[0]["id"])
+            self.watch(who, episodes[1]["id"])
+            who.json(f"/api/item/{dark}/dismiss", {})
+            who.json("/api/playlists", {"name": "Liste", "entries": ids})
+            who.json("/api/playlists", {"name": "Autre", "entries": ids[:1]})
+        mine, theirs = alice.account["id"], bob.account["id"]
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM playlist_tracks"), 8)
+        self.assertEqual(self.admin.json(f"/api/user/{mine}/delete", {})[0], 200)
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM progress WHERE profile=?", mine), 0)
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM playlists WHERE profile=?", mine), 0)
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM kv WHERE key LIKE ? || '%'", f"dismiss:{mine}:"), 0)
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM users WHERE id=?", mine), 0)
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM playlist_tracks"), 4)                 # les pistes de ses playlists sont parties avec elles
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM progress WHERE profile=?", theirs), 2)       # celles de Bob sont intactes
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM playlists WHERE profile=?", theirs), 2)
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM kv WHERE key LIKE ? || '%'", f"dismiss:{theirs}:"), 1)
+        self.assertEqual(sorted(len(bob.json(f"/api/playlist/{p['id']}")[1]["tracks"]) for p in bob.json("/api/playlists")[1]["playlists"]), [1, 3])
+
+    def test_the_last_administrator_cannot_be_deleted(self):
+        refused = (400, {"error": "impossible de supprimer le dernier administrateur"})
+        self.assertEqual(self.admin.json("/api/user/default/delete", {}), refused)
+        bob = self.new_user("bob")                                                                # un compte ordinaire n'est pas un administrateur de rechange
+        self.assertEqual(self.admin.json("/api/user/default/delete", {}), refused)
+        self.assertEqual(self.admin.get("/api/state")[0], 200)
+        second = self.new_user("deuxieme", role="admin")
+        status, headers, data = self.admin.request("POST", "/api/user/default/delete", body={})      # un administrateur peut se supprimer s'il en reste un autre
+        self.assertEqual((status, json.loads(data)), (200, {"ok": True}))
+        self.assertIn("Max-Age=0", headers["Set-Cookie"])                                         # et son cookie est effacé
+        self.assertEqual(self.admin.get("/api/state")[0], 401)
+        self.assertEqual(second.json(f"/api/user/{second.account['id']}/delete", {}), refused)
+        self.assertEqual(second.json(f"/api/user/{bob.account['id']}/delete", {})[0], 200)
+        self.assertEqual([u["name"] for u in second.json("/api/users")[1]["users"]], ["deuxieme"])
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def run_cli(tmp, *args, stdin=""):
+    """`python -m hub user …` dans un sous-processus, sur la base de `tmp/data` (le HUB_DATA de Running) ; le mot de passe arrive par l'entrée standard."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+    env.update({"HUB_DATA": str(Path(tmp) / "data"), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+    return subprocess.run([sys.executable, "-m", "hub", "user", *args], input=stdin, capture_output=True, text=True, encoding="utf-8", cwd=ROOT, env=env, timeout=120)
+
+
+class TestOpenServer(unittest.TestCase):
+    """Sans HUB_PASSWORD ni compte : tout est ouvert, avec un profil unique."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.run_ = Running(self.tmp, admin="Maison")
+        self.addCleanup(self.run_.stop)
+        self.api = Client(self.run_.port)
+
+    def test_state_says_there_is_no_auth_and_who_the_profile_is(self):
+        state = self.api.json("/api/state")[1]
+        self.assertEqual((state["auth"], state["user"]), (False, {"id": "default", "name": "Maison", "role": "admin"}))
+        self.assertEqual(self.api.json("/api/users"), (200, {"users": []}))
+        self.assertEqual(self.api.get("/login")[0], 200)
+
+    def test_everything_is_reachable_including_administration(self):
+        self.assertEqual(self.api.get("/api/home")[0], 200)
+        self.assertEqual(self.api.json("/api/scan", {"lib": "films"})[0], 202)
+        self.run_.wait_jobs()
+        self.assertEqual(self.api.json("/api/cleanup", {})[0], 202)
+        self.run_.wait_jobs()
+        self.assertEqual(self.api.json("/api/progress", {"entry": "nope", "position": 1})[0], 404)
+
+    def test_account_routes_answer_400_and_create_nothing(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        for path, body in (("/api/users", {"name": "intrus", "password": "motdepasse1"}), ("/api/user/default/password", {"password": "motdepasse1"}),
+                           ("/api/user/default/delete", {}), ("/api/me/password", {"current": "x", "new": "motdepasse1"})):
+            conn.request("POST", path, body=json.dumps(body), headers={"Content-Type": "application/json"})
+            response = conn.getresponse()
+            data = json.loads(response.read())
+            self.assertEqual(response.status, 400, path)
+            self.assertIn("ouvert", data["error"])
+            conn.request("GET", "/api/state")                                                       # même connexion : le corps refusé a bien été lu
+            follow = conn.getresponse()
+            follow.read()
+            self.assertEqual(follow.status, 200, path)
+        self.assertFalse(self.run_.hub.auth())
+        self.assertEqual(self.run_.hub.db.query("SELECT id FROM users"), [])
+
+    def cli(self, *args, password):
+        done = run_cli(self.tmp, *args, stdin=f"{password}\n{password}\n")
+        self.assertEqual(done.returncode, 0, f"{args} : {done.stdout!r} {done.stderr!r}")
+
+    def test_the_first_account_closes_the_server_and_keeps_the_single_profile(self):
+        dark, episodes = entry_of(self.api, "series", "Dark")
+        self.api.json("/api/progress", {"entry": episodes[0]["id"], "position": 600, "duration": 3000})
+        self.cli("add", "alice", password="motdepasse1")                                            # le serveur tourne pendant ce temps
+        self.assertEqual(self.api.get("/api/state")[0], 401)                                        # fermé dès qu'un compte existe
+        self.assertEqual(self.api.get("/api/users")[0], 401)
+        self.assertEqual(self.api.get("/media/abc/file")[0], 302)
+        status, _, body = self.api.request("POST", "/api/token", body={"password": "motdepasse1"})
+        session = json.loads(body)
+        self.assertEqual((status, session["user"]), (200, {"id": "default", "name": "alice", "role": "admin"}))
+        alice = BearerClient(self.run_.port, session["token"])
+        self.assertEqual([c["item"]["id"] for c in alice.json("/api/home")[1]["continue"]], [dark])      # elle reprend la progression d'avant
+        self.cli("passwd", "alice", password="autre-mot-de-passe")                                  # changer le mot de passe en ligne de commande...
+        self.assertEqual(alice.get("/api/state")[0], 401)                                           # ...ferme les sessions du serveur qui tourne
+        self.cli("add", "bob", password="motdepasse1")
+        self.assertEqual(self.api.request("POST", "/api/token", body={"password": "autre-mot-de-passe"})[0], 401)      # deux comptes : le nom devient obligatoire
+        self.assertEqual(self.api.request("POST", "/api/token", body={"user": "alice", "password": "autre-mot-de-passe"})[0], 200)
+
+
+class TestAccountCommandLine(unittest.TestCase):
+    PASSWORD = "motdepasse1"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def cli(self, *args, password=PASSWORD, ok=True):
+        done = run_cli(self.tmp, *args, stdin=f"{password}\n{password}\n")
+        self.assertEqual(done.returncode == 0, ok, f"{args} : {done.stdout!r} {done.stderr!r}")
+        return done
+
+    def database(self):
+        from hub.db import Database
+        return Database(Path(self.tmp) / "data" / "hub.db")
+
+    def test_add_list_passwd_and_rm(self):
+        self.assertEqual(self.cli("list").stdout, "")
+        first = self.cli("add", "alice")
+        self.assertIn("créé (admin", first.stdout)
+        self.assertIn("reprend la progression", first.stdout)                                        # le premier compte hérite du profil d'avant
+        self.assertIn("créé (user)", self.cli("add", "Bob").stdout)
+        self.assertIn("créé (admin)", self.cli("add", "carole", "--admin").stdout)
+        lines = [line.split() for line in self.cli("list").stdout.splitlines()]
+        self.assertEqual([line[:2] for line in lines], [["alice", "admin"], ["Bob", "user"], ["carole", "admin"]])
+        self.assertEqual(lines[0][2], "default")
+        db = self.database()
+        self.assertEqual(accounts.authenticate(db, "bob", self.PASSWORD)["role"], "user")
+        self.assertIn("mot de passe de « Bob » changé", self.cli("passwd", "BOB", password="nouveau-mdp-1").stdout)
+        self.assertEqual(accounts.authenticate(db, "bob", "nouveau-mdp-1")["name"], "Bob")
+        with self.assertRaises(accounts.AccountError):
+            accounts.authenticate(db, "bob", self.PASSWORD)
+        self.assertIn("supprimé", self.cli("rm", "bob").stdout)
+        self.assertEqual([r["name"] for r in accounts.rows(db)], ["alice", "carole"])
+
+    def test_refusals_say_why(self):
+        self.cli("add", "alice")
+        for args, password, message in ((("add", "ALICE"), self.PASSWORD, "déjà pris"), (("add", "bob"), "court", "le mot de passe doit faire"),
+                                         (("passwd", "inconnu"), self.PASSWORD, "compte inconnu"), (("rm", "inconnu"), self.PASSWORD, "compte inconnu"),
+                                         (("rm", "alice"), self.PASSWORD, "dernier administrateur")):
+            self.assertIn(message, self.cli(*args, password=password, ok=False).stderr, args)
+        mismatch = run_cli(self.tmp, "add", "bob", stdin="motdepasse1\nmotdepasse2\n")
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn("ne correspondent pas", mismatch.stderr)
+        self.assertEqual([line.split()[0] for line in self.cli("list").stdout.splitlines()], ["alice"])        # rien d'autre n'a été créé
+        self.assertNotEqual(run_cli(self.tmp, "bidule").returncode, 0)
+
+    def test_rm_takes_the_progress_and_playlists_along(self):
+        self.cli("add", "alice")
+        self.cli("add", "bob")
+        db = self.database()
+        bob = db.one("SELECT id FROM users WHERE name='bob'")["id"]
+        db.execute("INSERT INTO progress(profile, entry_id, position, duration, done, updated) VALUES(?, 'e1', 5, 10, 0, 1)", (bob,))
+        db.execute("INSERT INTO playlists(id, profile, name, created, updated) VALUES('p1', ?, 'Liste', 1, 1)", (bob,))
+        db.execute("INSERT INTO playlist_tracks(playlist_id, pos, entry_id) VALUES('p1', 0, 'e1')")
+        db.kv_set(f"dismiss:{bob}:x", 1)
+        self.cli("rm", "bob")
+        for sql in ("SELECT COUNT(*) AS n FROM progress", "SELECT COUNT(*) AS n FROM playlists", "SELECT COUNT(*) AS n FROM playlist_tracks", "SELECT COUNT(*) AS n FROM kv WHERE key LIKE 'dismiss:%'"):
+            self.assertEqual(db.one(sql)["n"], 0, sql)
+
+
+class TestAccountPasswords(unittest.TestCase):
+    """Le hachage de hub/accounts.py, sans serveur : scrypt, et pbkdf2 quand l'OpenSSL de Python n'a pas scrypt."""
+
+    def setUp(self):
+        patch = mock.patch.object(accounts, "PBKDF2_ROUNDS", 1000)               # le repli coûte 600 000 tours en vrai : pas dans un test
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def without_scrypt(self):
+        patch = mock.patch.object(hashlib, "scrypt")
+        patch.start()
+        self.addCleanup(patch.stop)
+        del hashlib.scrypt                                                         # `hasattr(hashlib, "scrypt")` devient faux ; le patch le remet à la fin
+        return patch
+
+    def test_scrypt_hashes_use_a_new_salt_each_time(self):
+        first, second = accounts.hash_password("motdepasse1"), accounts.hash_password("motdepasse1")
+        self.assertTrue(first.startswith("scrypt$"), first)
+        self.assertNotEqual(first, second)
+        self.assertTrue(accounts.verify_password("motdepasse1", first) and accounts.verify_password("motdepasse1", second))
+        self.assertFalse(accounts.verify_password("motdepasse2", first))
+        self.assertNotIn("motdepasse1", first)
+
+    def test_pbkdf2_replaces_scrypt_when_hashlib_has_none(self):
+        self.without_scrypt()
+        stored = accounts.hash_password("motdepasse1")
+        self.assertRegex(stored, r"^pbkdf2\$1000\$[0-9a-f]{32}\$[0-9a-f]{64}$")
+        self.assertTrue(accounts.verify_password("motdepasse1", stored))
+        self.assertFalse(accounts.verify_password("motdepasse2", stored))
+        self.assertNotEqual(stored, accounts.hash_password("motdepasse1"))
+
+    def test_pbkdf2_replaces_scrypt_when_openssl_refuses_it(self):
+        with mock.patch.object(hashlib, "scrypt", side_effect=ValueError("scrypt non disponible")):
+            stored = accounts.hash_password("motdepasse1")
+        self.assertTrue(stored.startswith("pbkdf2$"), stored)
+
+    def test_hashes_stay_readable_across_both_schemes(self):
+        scrypt = accounts.hash_password("motdepasse1")
+        patch = self.without_scrypt()
+        pbkdf2 = accounts.hash_password("motdepasse1")
+        self.assertFalse(accounts.verify_password("motdepasse1", scrypt))                # scrypt absent : refus net, pas d'exception
+        patch.stop()
+        self.assertTrue(accounts.verify_password("motdepasse1", pbkdf2))                 # un compte créé avec le repli vaut encore quand scrypt est là
+        self.assertTrue(accounts.verify_password("motdepasse1", scrypt))
+
+    def test_at_most_two_verifications_run_at_once(self):
+        lock, state = threading.Lock(), {"now": 0, "peak": 0, "done": 0}
+
+        def slow(raw, stored):
+            with lock:
+                state["now"] += 1
+                state["peak"] = max(state["peak"], state["now"])
+            time.sleep(0.05)
+            with lock:
+                state["now"] -= 1
+                state["done"] += 1
+            return True
+
+        results = []
+        with mock.patch.object(accounts, "_verify", slow):
+            threads = [threading.Thread(target=lambda: results.append(accounts.verify_password("motdepasse1", "x"))) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(30)
+        self.assertEqual((state["done"], results), (8, [True] * 8))                      # toutes ont abouti, mais...
+        self.assertEqual(state["peak"], 2)                                               # ...jamais plus de deux en même temps
+
+    def test_a_failing_verification_gives_its_place_back(self):
+        with mock.patch.object(accounts, "_verify", side_effect=RuntimeError("panne")):
+            for _ in range(4):                                                           # plus que les deux places : un oubli de libération bloquerait ici
+                with self.assertRaises(RuntimeError):
+                    accounts.verify_password("motdepasse1", "x")
+        self.assertTrue(accounts.verify_password("motdepasse1", accounts.hash_password("motdepasse1")))
+
+    def test_unreadable_hashes_and_passwords_never_match(self):
+        for stored in ("", "x", "scrypt$", "scrypt$a$b$c$d$e", "pbkdf2$1000$zz$zz", "inconnu$1$2", "scrypt$16384$8$1$00$00"):
+            self.assertFalse(accounts.verify_password("motdepasse1", stored), stored)
+        stored = accounts.hash_password("motdepasse1")
+        for password in (None, 12, b"motdepasse1"):
+            self.assertFalse(accounts.verify_password(password, stored), repr(password))
 
 
 NUM = (int, float)

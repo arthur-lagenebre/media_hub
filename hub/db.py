@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2          # 2 : table `users` (comptes) ; une base en version 1 la gagne au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS playlist_tracks(
     entry_id    TEXT NOT NULL,          -- un titre peut y figurer deux fois ; il survit aux scans (l'identifiant vient du chemin)
     PRIMARY KEY(playlist_id, pos)
 );
+CREATE TABLE IF NOT EXISTS users(
+    id            TEXT PRIMARY KEY,         -- « default » pour le premier compte (il garde la progression et les playlists d'avant les comptes), aléatoire ensuite ; c'est le `profile` de progress / playlists
+    name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    pass_hash     TEXT NOT NULL,            -- voir accounts.py (scrypt ou pbkdf2, un sel par compte)
+    role          TEXT NOT NULL DEFAULT 'user',   -- admin | user
+    token_version INTEGER NOT NULL DEFAULT 1,     -- change à chaque nouveau mot de passe : les jetons de session de ce compte cessent de valoir
+    created       INTEGER NOT NULL
+);
 """
 
 
@@ -91,7 +99,7 @@ class Database:
         self.write_lock = threading.Lock()
         with self.write_lock:
             self.connection().executescript(SCHEMA)
-            self.connection().execute("INSERT OR IGNORE INTO kv(key, value) VALUES('schema', ?)", (str(SCHEMA_VERSION),))
+            self.connection().execute("INSERT INTO kv(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA_VERSION),))
             self.connection().commit()
 
     def connection(self):

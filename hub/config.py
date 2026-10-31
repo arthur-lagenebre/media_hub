@@ -8,7 +8,8 @@ Tout a une valeur par défaut qui marche sur le NAS (dossiers montés sous /srv)
     HUB_REPO       dépôt media_library (ses lecteurs de tags)     ../media_library, /app/media_library
     HUB_BIND       adresse d'écoute                               127.0.0.1
     HUB_PORT       port                                           8080
-    HUB_PASSWORD   mot de passe, s'il faut en demander un         (aucun)
+    HUB_PASSWORD   mot de passe du premier compte (amorçage)      (aucun : mode ouvert, sans compte)
+    HUB_ADMIN      nom de ce premier compte (administrateur)      admin
     HUB_FFMPEG     chemin de ffmpeg / ffprobe                     cherchés dans le PATH, puis HUB_DATA/bin
     HUB_MAX_STREAMS   transcodages simultanés                     2
     HUB_AUTOSCAN_HOURS  rescan périodique (0 = jamais)            0
@@ -51,7 +52,8 @@ class Config:
     repo: Path | None = None
     bind: str = "127.0.0.1"
     port: int = 8080
-    password: str = ""
+    password: str = ""          # amorçage seulement : sert à créer le compte administrateur tant qu'aucun compte n'existe (voir accounts.py)
+    admin: str = "admin"
     ffmpeg: str = ""
     ffprobe: str = ""
     max_streams: int = 2
@@ -138,6 +140,7 @@ def load(env=None):
         bind=env.get("HUB_BIND", "127.0.0.1"),
         port=int(env.get("HUB_PORT", "8080")),
         password=env.get("HUB_PASSWORD", ""),
+        admin=env.get("HUB_ADMIN", "").strip() or "admin",
         ffmpeg=_find_tool("ffmpeg", env, data),
         ffprobe=_find_tool("ffprobe", env, data),
         max_streams=max(1, int(env.get("HUB_MAX_STREAMS", "2"))),
