@@ -325,7 +325,8 @@
   };
 
   var ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', 37: 'left', 39: 'right', 38: 'up', 40: 'down' };
-  var BACKS = { Escape: 1, BrowserBack: 1, GoBack: 1, XF86Back: 1, 27: 1, 4: 1, 10009: 1, 461: 1, 166: 1 };
+  var BACK_KEYS = { Escape: 1, BrowserBack: 1, GoBack: 1, XF86Back: 1 };
+  var BACK_CODES = { 27: 1, 4: 1, 10009: 1, 461: 1, 166: 1 };      // deux tables : chercher la touche « 4 » (e.key === '4') parmi les codes fermait toute fenêtre à la frappe du chiffre 4
   document.addEventListener('keydown', function (e) {
     document.body.classList.remove('mouse');
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -341,7 +342,7 @@
       if (H.focus.move(dir)) e.preventDefault(); else if (dir === 'left' || dir === 'right') e.preventDefault();
       return;
     }
-    if (BACKS[key] || BACKS[code] || (key === 'Backspace' && !typing)) {
+    if (BACK_KEYS[key] || BACK_CODES[code] || (key === 'Backspace' && !typing)) {
       if (typing && key === 'Escape') { t.blur(); e.preventDefault(); return; }
       e.preventDefault();
       H.back();
