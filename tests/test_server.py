@@ -1161,6 +1161,107 @@ class TestSagasFile(ServerCase):
         self.assertEqual(sagas.parse('{"sagas": 3}'), [])
 
 
+class TestSagasEditor(ServerCase):
+    """Les routes qui écrivent `sagas.json` (administrateur) : lire, tout remplacer, ajouter des films, chercher des films à ajouter."""
+
+    @property
+    def file(self):
+        return self.hub.cfg.data / "sagas.json"
+
+    def tearDown(self):
+        self.file.unlink(missing_ok=True)
+
+    def save(self, sagas, **extra):
+        return self.api.json("/api/sagas", {"sagas": [{"name": n, "films": f} for n, f in sagas], **extra})
+
+    def add(self, name, **films):
+        return self.api.json("/api/sagas/add", {"name": name, **films})
+
+    def stored(self):
+        return json.loads(self.file.read_text(encoding="utf-8"))["sagas"]
+
+    def test_without_the_file_there_is_no_saga(self):
+        self.assertEqual(self.api.json("/api/sagas"), (200, {"version": "", "sagas": []}))
+
+    def test_saving_writes_the_file_and_the_hub_uses_it_at_once(self):
+        status, data = self.save([("Ma saga", [209112, 999999, 27205])])
+        self.assertEqual(status, 200)
+        self.assertEqual(self.stored(), [{"name": "Ma saga", "films": [209112, 999999, 27205]}])
+        films = data["sagas"][0]["films"]
+        self.assertEqual([(f["tmdb"], f["item"] and f["item"]["title"]) for f in films], [(209112, "Batman v Superman"), (999999, None), (27205, "Inception")])
+        self.assertEqual([f["date"] for f in films], ["2016-03-23", "", "2010-07-21"])
+        self.assertEqual(self.api.json("/api/sagas")[1], data)
+        self.assertEqual([(i["title"], i["part"]) for i in self.items("films", group="Ma saga", sort="part")["items"]], [("Batman v Superman", 1), ("Inception", 3)])
+        self.assertEqual(sorted(p.name for p in self.file.parent.glob("sagas.json*")), ["sagas.json"])          # pas de fichier temporaire resté
+
+    def test_an_empty_list_removes_every_saga(self):
+        self.save([("Ma saga", [27205])])
+        self.assertEqual(self.save([])[1]["sagas"], [])
+        self.assertEqual(self.items("films", group="Ma saga")["total"], 0)
+
+    def test_a_save_from_an_outdated_page_is_refused(self):
+        version = self.save([("A", [27205])])[1]["version"]
+        self.assertTrue(version)
+        self.assertEqual(self.save([("B", [27205])], version=version)[0], 200)                 # à jour : accepté
+        status, data = self.save([("C", [27205])], version=version)                            # un autre est passé par là
+        self.assertEqual(status, 409)
+        self.assertIn("recharge", data["error"])
+        self.assertEqual([s["name"] for s in self.api.json("/api/sagas")[1]["sagas"]], ["B"])
+        self.assertEqual(self.save([("C", [27205])])[0], 200)                                  # sans version : on écrase
+
+    def test_what_is_not_readable_is_refused_not_dropped(self):
+        before = self.save([("Garde", [27205])])[1]
+        for sagas, message in (([("", [1])], "nom"), ([("A", [1]), ("a", [2])], "s'appellent"), ([("A", ["abc"])], "illisible"), ([("x" * 81, [1])], "trop long")):
+            status, data = self.save(sagas)
+            self.assertEqual(status, 400, sagas)
+            self.assertIn(message, data["error"])
+        self.assertEqual(self.api.json("/api/sagas/add", {"name": "A", "films": ["abc"]})[0], 400)
+        for body in ({"sagas": "pas une liste"}, {"sagas": ["texte"]}, {"sagas": [{"name": "A", "films": "pas une liste"}]}, {}, {"sagas": [], "version": 3}):
+            self.assertEqual(self.api.json("/api/sagas", body)[0], 400, body)
+        self.assertEqual(self.api.json("/api/sagas")[1], before)                                   # rien n'a été touché
+
+    def test_ids_are_cleaned_up(self):
+        self.save([("  Ma   saga ", ["movie/27205", "27205", 209112, 209112])])
+        self.assertEqual(self.stored(), [{"name": "Ma saga", "films": [27205, 209112]}])
+
+    def test_adding_appends_to_a_saga_and_creates_it(self):
+        inception, steel = (self.item_by_title("films", t)["id"] for t in ("Inception", "Batman v Superman"))
+        status, data = self.add("Ma saga", items=[inception])
+        self.assertEqual((status, data["name"]), (200, "Ma saga"))
+        self.assertEqual(self.stored(), [{"name": "Ma saga", "films": [27205]}])
+        status, data = self.add("MA SAGA", items=[inception, steel], films=[1234])               # même saga (la casse ne compte pas), sans doublon
+        self.assertEqual((status, data["name"]), (200, "Ma saga"))
+        self.assertEqual(self.stored(), [{"name": "Ma saga", "films": [27205, 1234, 209112]}])          # `films` d'abord, puis `items`
+        self.assertEqual([f["tmdb"] for f in data["sagas"][0]["films"]], [27205, 1234, 209112])
+
+    def test_adding_a_film_without_tmdb_id_or_unknown_is_refused(self):
+        bare = next(i for i in self.items("films")["items"] if i["year"] == "1999")
+        status, data = self.add("Ma saga", items=[bare["id"]])
+        self.assertEqual(status, 400)
+        self.assertIn("TMDB", data["error"])
+        self.assertEqual(self.add("Ma saga", items=["deadbeef"])[0], 404)
+        self.assertEqual(self.add("Ma saga", items=[self.item_by_title("musique", "Discovery")["id"]])[0], 404)         # pas un film
+        self.assertEqual(self.add("Ma saga")[0], 400)
+        self.assertEqual(self.add("", films=[1])[0], 400)
+        self.assertFalse(self.file.exists())
+
+    def test_the_picker_lists_films_with_a_tmdb_id(self):
+        data = self.api.json("/api/sagas/films")[1]
+        titles = [f["item"]["title"] for f in data["films"]]
+        self.assertIn("Inception", titles)
+        self.assertEqual(len(titles), data["total"])
+        self.assertTrue(all(f["tmdb"] for f in data["films"]))
+        self.assertFalse([f for f in data["films"] if f["item"]["year"] == "1999"])               # le film sans étiquette n'a pas d'identifiant : il ne peut pas être choisi
+        by_name = self.api.json("/api/sagas/films?q=BATMAN")[1]["films"]
+        self.assertEqual([(f["tmdb"], f["date"]) for f in by_name], [(209112, "2016-03-23")])
+        self.assertEqual([f["item"]["title"] for f in self.api.json("/api/sagas/films?q=saga%20dceu")[1]["films"]], ["Batman v Superman", "Man of Steel"])
+        self.assertEqual(len(self.api.json("/api/sagas/films?limit=1")[1]["films"]), 1)
+
+    def test_the_picker_gives_a_saga_of_the_tag_in_release_order(self):
+        films = self.api.json("/api/sagas/films?group=" + quote("Saga DCEU"))[1]["films"]
+        self.assertEqual([(f["item"]["title"], f["tmdb"]) for f in films], [("Man of Steel", 49521), ("Batman v Superman", 209112)])
+
+
 class TestApiUrls(ServerCase):
     """L'API donne elle-même les URLs des images et des fichiers : relatives, sans ?w= ni jeton, et elles mènent bien quelque part."""
 
@@ -1589,6 +1690,7 @@ class TestAccountPermissions(AccountsCase):
         admin = self.admin.session["user"]["id"]
         return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/cleanup", {"apply": True}),
                 ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG), ("POST", f"/api/artist/musique/{self.artist}/photo/wikipedia", {}),
+                ("GET", "/api/sagas", None), ("POST", "/api/sagas", {"sagas": []}), ("POST", "/api/sagas/add", {"name": "intrus", "films": [1]}), ("GET", "/api/sagas/films", None),
                 ("GET", "/api/users", None), ("POST", "/api/users", {"name": "intrus", "password": self.PASSWORD}),
                 ("POST", f"/api/user/{admin}/password", {"password": "piratage-1"}), ("POST", f"/api/user/{admin}/delete", {})]
 

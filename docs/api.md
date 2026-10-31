@@ -241,6 +241,19 @@ Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la cass
 - **Changer un mot de passe ferme toutes les sessions du compte** (le jeton est lié à une version du mot de passe) : un jeton `Bearer` ou un cookie détenu par un autre appareil répond alors 401. `POST /api/me/password` (et `POST /api/user/<son id>/password`, avec `current`) renvoie le nouveau jeton, qu'un client natif doit garder ; le jeton de média ne change pas.
 - Pas de changement de rôle par l'API pour l'instant.
 
+## Sagas composées à la main
+
+Des listes ordonnées de films, gardées dans `sagas.json` sous `HUB_DATA` (voir le README) ; elles s'ajoutent à la saga de l'étiquette (`saga` et `sagas` d'un film, `group=` d'une bibliothèque). Un film y est désigné par son identifiant TMDB. **Toutes ces routes sont réservées à l'administrateur** (403 `réservé à l'administrateur` sinon).
+
+Un **film de saga** est `{"tmdb": 209112, "date": "2016-03-23", "item": <élément>}` ; `item` vaut `null` (et `date` `""`) quand le film n'est pas dans la médiathèque : il garde sa place dans la liste et son numéro.
+
+| Appel | Corps | Réponse |
+| --- | --- | --- |
+| `GET /api/sagas` | | `{"version": "…", "sagas": [{"name": "Trilogie Cornetto", "films": [<film de saga>]}]}` ; `version` est vide tant qu'il n'y a pas de fichier |
+| `POST /api/sagas` | `{"sagas": [{"name": "…", "films": [747, 4638]}], "version": "…"}` : remplace **toutes** les sagas (l'ordre des listes est l'ordre des sagas). `version` (celle du dernier `GET`) est facultative | comme `GET`. 400 (nom vide, trop long ou en double sans tenir compte de la casse, identifiant illisible : rien n'est écarté en silence ; 200 sagas et 2000 films au plus), 409 `les sagas ont changé…` si le fichier a changé depuis cette `version` |
+| `POST /api/sagas/add` | `{"name": "…", "films": [747], "items": ["<id d'élément>"]}` : ajoute à la fin de la saga (créée au besoin ; la casse du nom ne compte pas), sans doublon, `films` d'abord puis `items` | comme `GET`, plus `name` (le nom de la saga, tel qu'elle s'écrit). 400 (aucun film, nom vide, film sans identifiant TMDB), 404 (élément inconnu ou qui n'est pas un film) |
+| `GET /api/sagas/films?q=&group=&limit=` | | `{"films": [<film de saga>], "total": 3}` : les films de la médiathèque qui portent un identifiant TMDB (les seuls qu'une saga puisse recevoir), ceux dont le titre ou la saga contient `q`, ou ceux de la saga de l'étiquette `group`, dans l'ordre de sortie. `limit` : 40 par défaut, 600 au plus |
+
 ## Playlists (musique)
 
 Une playlist ne retient que des identifiants de pistes ; une piste dont le fichier a disparu n'apparaît plus (et revient avec le fichier).
