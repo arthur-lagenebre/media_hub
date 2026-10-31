@@ -21,7 +21,7 @@ import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, unquote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlsplit
 
 from libraries.books import shelf
 from libraries.books.archive import BookError
@@ -32,6 +32,7 @@ from libraries.video import tmdb
 from .. import __version__
 from .. import enrich
 from .. import playlists
+from .. import urls
 from ..db import Database, make_id
 from ..media import books as bookmedia
 from ..media import probe as prober
@@ -39,6 +40,7 @@ from ..media import subs as subtitles
 from ..media.images import Images, sniff
 from .jobs import Jobs
 
+API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
 PROFILE = "default"
 CHUNK = 256 * 1024
 SESSION_DAYS = 90
@@ -88,6 +90,11 @@ class Hub:
     def token(self):
         return hmac.new(self.secret.encode(), b"hub-session", hashlib.sha256).hexdigest()
 
+    def media_token(self):
+        """Le jeton qui voyage dans les URLs (`?token=`) : il ne vaut que sur /media, /img, /book et /api/subs (sous-titres, lecture seule), nulle part ailleurs sur /api/ ;
+        une URL de pochette qui fuit ne donne donc ni le nettoyage ni le scan."""
+        return hmac.new(self.secret.encode(), b"hub-media", hashlib.sha256).hexdigest()
+
     def path_of(self, entry):
         lib = self.cfg.library(entry["lib"])
         if lib is None:
@@ -134,7 +141,7 @@ class Hub:
 def summary(row, seen=None):
     meta = safe_json(row["meta"], {})
     out = {"id": row["id"], "type": row["type"], "title": row["title"], "year": row["year"], "grp": row["grp"], "n": row["count"], "letter": row["letter"],
-           "added": row["added"], "genres": safe_json(row["genres"], [])}
+           "added": row["added"], "genres": safe_json(row["genres"], []), "cover": urls.item_cover(row["id"])}
     if meta.get("part") is not None:
         out["part"] = meta["part"]
     if row["type"] == "album" and meta.get("duration"):
@@ -151,7 +158,10 @@ def summary(row, seen=None):
 def entry_json(row, progress=None):
     meta = safe_json(row["meta"], {})
     out = {"id": row["id"], "kind": row["kind"], "title": row["title"], "summary": row["summary"], "season": row["season"], "disc": row["disc"],
-           "number": row["number"], "duration": row["duration"], "format": meta.get("format", ""), "label": meta.get("label", ""), "sub": meta.get("sub", "")}
+           "number": row["number"], "duration": row["duration"], "format": meta.get("format", ""), "label": meta.get("label", ""), "sub": meta.get("sub", ""),
+           "file": urls.entry_file(row["id"])}
+    if row["kind"] != "audio":                 # une piste n'a pas d'image à elle : sa pochette est celle de l'album (voir `cover` des pistes)
+        out["image"] = urls.entry_image(row["id"])
     info = meta.get("info") or {}
     if row["kind"] == "video" and info.get("date"):
         out["date"] = info["date"]
@@ -248,21 +258,31 @@ class Handler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
     # --- Aiguillage -------------------------------------------------------
-    def authorized(self, path):
+    def authorized(self, path, query):
+        """Trois façons de se présenter : le jeton en cookie (navigateur) ou en `Authorization: Bearer` (clients natifs),
+        le jeton de média en `?token=` (balises <img> / <video>, Cast), celui-ci seulement sur les fichiers et les sous-titres (/api/subs/), nulle part ailleurs sur /api/."""
         if not self.hub.cfg.password:
             return True
-        if path in ("/login", "/api/login", "/favicon.svg", "/icon.svg"):
+        if path in ("/login", "/api/login", "/api/token", "/favicon.svg", "/icon.svg"):
             return True
+        token = self.hub.token().encode()
         cookie = self.headers.get("Cookie", "")
         found = re.search(r"(?:^|;\s*)hub=([0-9a-f]+)", cookie)
-        return bool(found) and hmac.compare_digest(found.group(1), self.hub.token())
+        if found and hmac.compare_digest(found.group(1).encode(), token):
+            return True
+        bearer = re.fullmatch(r"Bearer\s+(\S+)", self.headers.get("Authorization", "").strip(), re.IGNORECASE)
+        if bearer and hmac.compare_digest(bearer.group(1).encode("utf-8", "replace"), token):
+            return True
+        if path.startswith(("/media/", "/img/", "/book/", "/api/subs/")) and "token" in query:
+            return hmac.compare_digest(query["token"].encode("utf-8", "replace"), self.hub.media_token().encode())
+        return False
 
     def dispatch(self):
         split = urlsplit(self.path)
         path = unquote(split.path)
         query = {k: v[-1] for k, v in parse_qs(split.query).items()}
         try:
-            if not self.authorized(path):
+            if not self.authorized(path, query):
                 if path.startswith("/api/"):
                     raise HttpError(401, "connexion requise")
                 self.send_body(b"", "text/plain", 302, {"Location": "/login"})
@@ -293,7 +313,10 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self.close_connection = True
         if status == 500 or status > 501:
-            print(f"{status} {self.command} {self.path} : {message}", file=sys.stderr)
+            split = urlsplit(self.path)             # le jeton ne va pas dans le journal : masqué d'après les clés décodées (`?%74oken=` aussi)
+            pairs = [(k, "***" if k == "token" else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
+            shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
+            print(f"{status} {self.command} {shown} : {message}", file=sys.stderr)
 
     def body_json(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -367,6 +390,26 @@ def login(h, m, q):
         h.send_body(b"", "text/plain", 303, {"Location": "/login?error=1"})
 
 
+@route("POST", r"/api/token")
+def api_token(h, m, q):
+    """Pour un client natif : le mot de passe en JSON contre le jeton (à renvoyer en `Authorization: Bearer`) et le jeton de média (`?token=`)."""
+    length = int(h.headers.get("Content-Length") or 0)
+    if length > 4096:
+        h.close_connection = True                   # le corps ne sera pas lu : la connexion ne peut plus servir à une autre requête
+        raise HttpError(413, "corps trop gros")
+    raw = h.rfile.read(length)                      # toujours lu, même sans mot de passe : sinon il se retrouve en tête de la requête suivante (connexion persistante)
+    if not h.hub.cfg.password:
+        h.send_json({"token": "", "media_token": ""})       # rien à protéger : aucun jeton n'est demandé
+        return
+    body = safe_json(raw.decode("utf-8", "replace"), {})
+    password = body.get("password") if isinstance(body, dict) else None
+    time.sleep(0.4)       # même ralentissement que /api/login
+    if isinstance(password, str) and hmac.compare_digest(password.encode(), h.hub.cfg.password.encode()):
+        h.send_json({"token": h.hub.token(), "media_token": h.hub.media_token()})
+    else:
+        raise HttpError(401, "mot de passe incorrect")
+
+
 @route("GET", r"/api/logout")
 def logout(h, m, q):
     h.send_body(b"", "text/plain", 303, {"Location": "/login", "Set-Cookie": "hub=; Path=/; Max-Age=0"})
@@ -407,7 +450,7 @@ def api_state(h, m, q):
         count = hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]
         libs.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir()})
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
-                 "auth": bool(hub.cfg.password), "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
+                 "auth": bool(hub.cfg.password), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
 
 
 def next_entry(hub, entry):
@@ -565,7 +608,8 @@ def saga_json(saga, seen):
     done = sum(1 for m in saga["members"] if film_seen(m, seen))
     started = sum(1 for m in saga["members"] if not film_seen(m, seen) and seen.get(m["id"], (0, 0))[1])
     out = {"id": saga["id"], "lib": saga["lib"], "type": "saga", "title": saga["title"], "year": saga["year"], "years": saga["years"], "grp": "", "n": saga["count"], "letter": saga["letter"],
-           "added": saga["added"], "genres": safe_json(saga["genres"], []), "covers": [m["id"] for m in saga["members"][:3]]}
+           "added": saga["added"], "genres": safe_json(saga["genres"], []), "covers": [m["id"] for m in saga["members"][:3]],
+           "cover_urls": [urls.item_cover(m["id"]) for m in saga["members"][:3]]}
     if done:
         out["seen"] = done
     if started:
@@ -669,7 +713,7 @@ def api_item(h, m, q):
     progress = hub.db.progress_for(PROFILE, [r["id"] for r in rows])
     meta = safe_json(item["meta"], {})
     out = summary(item)
-    out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": meta.get("tagged", False)})
+    out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
     for key in ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
                 "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries"):
         if meta.get(key) not in (None, "", []):
@@ -746,7 +790,8 @@ def api_artist(h, m, q):
     genres = {}
     for row in rows:
         for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
-            out["tracks"].append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"]})
+            out["tracks"].append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"],
+                                "cover": urls.item_cover(row["id"]), "file": urls.entry_file(entry["id"])})
         for genre in safe_json(row["genres"], []):
             genres[genre] = genres.get(genre, 0) + 1
     out["genres"] = [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
@@ -756,6 +801,8 @@ def api_artist(h, m, q):
         out["info"] = artist_sheet(kept["info"], kept["mbid"])
     out["wanted"] = [{"year": w["year"], "title": w["title"], "cover": f"/img/wanted/{lib.id}/{m.group(2)}/{w['key']}" if w["cover"] else ""} for w in wanted_albums(hub, lib.id, m.group(2))]
     out["photo"] = artist_photo(hub, m.group(2), kept) is not None
+    if out["photo"]:
+        out["image"] = urls.artist_image(lib.id, m.group(2))
     h.send_json(out)
 
 
@@ -1174,10 +1221,11 @@ def api_book(h, m, q):
     kind = safe_json(entry["meta"], {}).get("format", "")
     progress = hub.db.progress_for(PROFILE, [entry["id"]]).get(entry["id"])
     out = {"id": entry["id"], "item": entry["item_id"], "title": entry["title"], "format": kind, "position": progress["position"] if progress and not progress["done"] else 0,
-           "next": None}
+           "next": None, "file": urls.entry_file(entry["id"])}
     try:
         if kind == "cbz":
             out["pages"] = len(bookmedia.cbz_pages(path))
+            out["page_url"] = f"/book/{entry['id']}/page/{{n}}"          # `{n}` : le numéro de page, à partir de 0
         elif kind == "epub":
             spine = bookmedia.epub_spine(path)
             out["chapters"] = [f"/book/{entry['id']}/epub/{c}" for c in spine["spine"]]

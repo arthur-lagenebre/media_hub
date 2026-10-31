@@ -9,6 +9,7 @@ import json
 import secrets
 import time
 
+from . import urls
 from .db import Database
 
 MAX_NAME = 80
@@ -59,7 +60,8 @@ def audio_entries(db: Database, entry_ids):
 
 def track_json(row):
     info = (json.loads(row["meta"] or "{}").get("info")) or {}
-    return {"id": row["id"], "title": row["title"], "artist": info.get("artist", ""), "album": row["album"], "item": row["album_id"], "duration": row["duration"], "number": row["number"]}
+    return {"id": row["id"], "title": row["title"], "artist": info.get("artist", ""), "album": row["album"], "item": row["album_id"], "duration": row["duration"], "number": row["number"],
+            "cover": urls.item_cover(row["album_id"]), "file": urls.entry_file(row["id"])}
 
 
 def exists(db: Database, profile, pid):
@@ -73,7 +75,7 @@ def summary(db: Database, row):
     entries = audio_entries(db, _order(db, row["id"]))
     ordered = [entries[e] for e in _order(db, row["id"]) if e in entries]
     covers = list(dict.fromkeys(r["album_id"] for r in ordered))[:4]
-    return {"id": row["id"], "name": row["name"], "count": len(ordered), "duration": sum(r["duration"] for r in ordered), "covers": covers, "updated": row["updated"]}
+    return {"id": row["id"], "name": row["name"], "count": len(ordered), "duration": sum(r["duration"] for r in ordered), "covers": covers, "cover_urls": [urls.item_cover(c) for c in covers], "updated": row["updated"]}
 
 
 def listing(db: Database, profile):
