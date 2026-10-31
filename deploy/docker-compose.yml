@@ -34,6 +34,17 @@ services:
     network_mode: service:tailscale    # même réseau que tailscale : 127.0.0.1:8080 est joignable par `tailscale serve`
     depends_on:
       - tailscale
+    # Le conteneur tourne en root : on lui ôte ce qu'il n'utilise pas. `no-new-privileges` empêche tout processus (ffmpeg, pip) de gagner des privilèges.
+    # Deux capacités sont gardées : DAC_OVERRIDE (écrire ou effacer un fichier que root ne possède pas, ou dont les droits l'interdisent) et FOWNER (chmod / utime
+    # sur un fichier d'un autre utilisateur du NAS : ce que fait « Supprimer » les fichiers parasites, et les scripts de media_library). Sans elles, avec un
+    # `cap_drop: ALL` seul, ces opérations échoueraient dès que les fichiers appartiennent à un autre compte que root.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - FOWNER
     working_dir: /app/media_hub
     # Pillow est facultatif (pochettes plus légères) : installé une fois dans le dossier de données, puis réutilisé.
     command: ["sh", "-c", "pip install -q --disable-pip-version-check --target /data/pylib pillow >/dev/null 2>&1; exec python -m hub"]
@@ -44,9 +55,9 @@ services:
       HUB_DATA: /data
       HUB_REPO: /app/media_library
       HUB_FFMPEG: /opt/ffmpeg          # dossier qui contient ffmpeg et ffprobe (voir fetch-ffmpeg.sh)
-      HUB_BIND: 0.0.0.0                # écoute aussi le réseau local : mets alors un mot de passe
+      HUB_BIND: 0.0.0.0                # écoute aussi le réseau local : d'où le mot de passe obligatoire ci-dessous
       HUB_PORT: "8080"
-      HUB_PASSWORD: ${HUB_PASSWORD}    # amorce le premier compte (administrateur) si la base n'en a aucun ; ensuite ignoré
+      HUB_PASSWORD: "${HUB_PASSWORD:?définis HUB_PASSWORD dans le fichier .env (sinon le serveur serait ouvert à tout le réseau local)}"    # amorce le premier compte (administrateur) si la base n'en a aucun ; ensuite ignoré. Obligatoire : sans lui, `docker compose up` refuse de démarrer
       HUB_ADMIN: ${HUB_ADMIN:-admin}   # nom de ce premier compte (« admin » si absent du .env)
       HUB_MAX_STREAMS: "2"             # transcodages simultanés (i3-13100F : 2 flux 1080p sans souci)
       HUB_AUTOSCAN_HOURS: "6"

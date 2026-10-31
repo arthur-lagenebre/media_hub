@@ -39,7 +39,7 @@ Sans ffmpeg, le serveur ne sait que lire directement (fichiers compatibles) ; il
 ## 3. Installer l'application
 
 1. Tailscale > Settings > Keys : crée une clé d'authentification (inutile si `tailscale/` contient déjà un état connecté).
-2. Copie `.env.example` en `.env`, à côté de `docker-compose.yml`, et remplis `TS_AUTHKEY`, `HUB_ADMIN` (nom du premier compte, `admin` par défaut), `HUB_PASSWORD` (son mot de passe), `TMDB_KEY` (facultative), `APPS`, `MEDIA`.
+2. Copie `.env.example` en `.env`, à côté de `docker-compose.yml`, et remplis `TS_AUTHKEY`, `HUB_ADMIN` (nom du premier compte, `admin` par défaut), `HUB_PASSWORD` (son mot de passe, **obligatoire** : sans lui `docker compose up` refuse de démarrer, plutôt que de servir une médiathèque ouverte à tout le réseau local ; il ne sert qu'à créer ce premier compte), `TMDB_KEY` (facultative), `APPS`, `MEDIA`.
 3. TrueNAS : Apps > Discover Apps > Custom App > *Install via YAML* : colle `docker-compose.yml` (en remplaçant les `${...}` par leurs valeurs si l'éditeur ne lit pas le `.env`).
 4. Au premier démarrage, le serveur indexe les bibliothèques (quelques minutes pour des milliers de fichiers) ; l'avancement est dans le journal du conteneur et dans la page *Gestion* de l'interface.
 
@@ -91,7 +91,8 @@ docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt')
 
 ## Sécurité
 
-- `HUB_BIND=0.0.0.0` expose le serveur sur le réseau local : garde un `HUB_PASSWORD` (au moins pour le premier démarrage : sans compte, le serveur est ouvert à tous). Sur Internet, seul Tailscale (tailnet privé) est exposé ; n'active pas Funnel.
+- `HUB_BIND=0.0.0.0` expose le serveur sur le réseau local : `HUB_PASSWORD` est obligatoire dans le compose (sans compte, le serveur est ouvert à tous). Sur Internet, seul Tailscale (tailnet privé) est exposé ; n'active pas Funnel.
+- Le conteneur `media_hub` n'a pas de nouveaux privilèges (`no-new-privileges`) et ne garde que deux capacités Linux : `DAC_OVERRIDE` et `FOWNER`, que « Supprimer » les fichiers parasites et les scripts de `media_library` demandent quand les fichiers appartiennent à un autre compte que root. Après un redéploiement, essaie *Gestion* > *Entretien* > *Compter* puis *Supprimer* (avec un volume sans `:ro`) : si une erreur de droits apparaît, retire `cap_drop` du compose.
 - Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data`.
 - `.env` contient des secrets : ne le publie pas.
 
