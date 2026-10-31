@@ -155,6 +155,18 @@ class TestBrowse(ServerCase):
         self.assertEqual((len(page["items"]), page["offset"]), (1, 1))
         self.assertGreater(page["total"], 1)
 
+    def test_music_letter_is_the_artist_and_sort_is_fixed(self):
+        album = self.item_by_title("musique", "Discovery")
+        self.hub.db.execute("UPDATE items SET grp='Zebra' WHERE id=?", (album["id"],))
+        try:
+            data = self.items("musique")
+            self.assertIn(["Z", 1], data["letters"])
+            self.assertNotIn(["D", 1], data["letters"])                    # « Discovery » commence par D, mais l'artiste par Z
+            self.assertEqual([i["title"] for i in self.items("musique", letter="Z")["items"]], ["Discovery"])
+            self.assertEqual(self.items("musique", letter="D")["items"], [])
+        finally:
+            self.hub.db.execute("UPDATE items SET grp='Daft Punk' WHERE id=?", (album["id"],))
+
     def test_unknown_library_and_item_are_404(self):
         self.assertEqual(self.api.get("/api/library/nope")[0], 404)
         self.assertEqual(self.api.get("/api/item/deadbeef")[0], 404)

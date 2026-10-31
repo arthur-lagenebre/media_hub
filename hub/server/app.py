@@ -785,8 +785,10 @@ def api_library(h, m, q):
         rows = collapse_sagas(rows, seen)
     letters, genres, sections, of = {}, {}, {}, {}
     books = lib.kind == "books"
+    music = lib.kind == "music"
+    letter_of = (lambda r: initial(r["grp"])) if music else (lambda r: r["letter"])      # la musique se range par artiste, pas par titre d'album
     for row in rows:
-        letters[row["letter"]] = letters.get(row["letter"], 0) + 1
+        letters[letter_of(row)] = letters.get(letter_of(row), 0) + 1
         for genre in safe_json(row["genres"], []):
             genres[genre] = genres.get(genre, 0) + 1
         if books:
@@ -799,7 +801,7 @@ def api_library(h, m, q):
     chosen = []
     for row in rows:
         is_saga = row["type"] == "saga"
-        if letter and row["letter"] != letter:
+        if letter and letter_of(row) != letter:
             continue
         if group and row["grp"] != group:
             continue
@@ -812,7 +814,7 @@ def api_library(h, m, q):
         if unseen and (row["all_seen"] if is_saga else seen.get(row["id"], (0, 0))[0] >= max(1, row["count"])):
             continue
         chosen.append(row)
-    sort = q.get("sort", "title")
+    sort = "title" if music else q.get("sort", "title")                 # la musique n'a qu'un ordre : par artiste
     key, reverse = SORTS.get(sort, SORTS["title"])
     if sort == "title" and lib.kind in TITLE_SORTS:
         key = TITLE_SORTS[lib.kind]
