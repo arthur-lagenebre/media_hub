@@ -175,6 +175,15 @@ class TestNavigation(UiCase):
         self.page.wait_for_selector(".view:visible .results .card")
         self.assertEqual(self.view(".results .card").first.get_attribute("title"), "Dark")
 
+    def test_typing_the_digit_4_is_not_the_back_key(self):
+        # Une vraie frappe (keydown) : `fill()` n'en envoie pas. « 4 » est un code de la touche Retour de certaines télécommandes, pas le caractère.
+        self.open("#/search")
+        field = self.page.locator(".view:visible input[type=search]")
+        field.click()
+        self.page.keyboard.type("4 mariages", delay=30)
+        self.assertEqual(self.page.evaluate("location.hash"), "#/search")
+        self.assertEqual(field.input_value(), "4 mariages")
+
     def test_no_horizontal_overflow_on_phone(self):
         self.context.close()
         self.context = self.browser.new_context(viewport={"width": 390, "height": 800}, has_touch=True)
