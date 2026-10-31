@@ -32,7 +32,7 @@ python -m unittest tests.test_ui          # navigation, lecture, reprise, liseus
 python -m unittest discover -s tests      # toute la suite
 ```
 
-Pour voir le résultat : `python tools/make_demo.py ./demo` puis `HUB_SRV=./demo HUB_DATA=./demo-data python -m hub` (http://127.0.0.1:8080). Les tests d'interface sont sautés sans Playwright ou ffmpeg : dis-le au lieu de les compter comme réussis. Ce qui ne se teste pas ici (rendu réel sur ta télé, codecs, HDR) est à signaler comme « à essayer sur place ».
+Pour voir le résultat : construis une médiathèque factice avec `tests/fixtures.build_library` dans un dossier temporaire, puis `HUB_SRV=<dossier> HUB_DATA=<dossier-données> python -m hub` (http://127.0.0.1:8080). Les tests d'interface sont sautés sans Playwright ou ffmpeg : dis-le au lieu de les compter comme réussis. Ce qui ne se teste pas ici (rendu réel sur ta télé, codecs, HDR) est à signaler comme « à essayer sur place ».
 
 ## Compte rendu
 

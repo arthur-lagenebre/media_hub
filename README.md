@@ -30,8 +30,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 ## Lancer en local (essai)
 
 ```bash
-python tools/make_demo.py ./demo                  # une petite médiathèque factice (ffmpeg requis)
-HUB_SRV=./demo HUB_DATA=./demo-data python -m hub # http://127.0.0.1:8080
+HUB_SRV=/chemin/vers/medias HUB_DATA=./demo-data python -m hub # http://127.0.0.1:8080
 ```
 
 `media_library` doit se trouver à côté de `media_hub` (ou être désigné par `HUB_REPO`) : le serveur réutilise ses lecteurs de MKV, FLAC, MP3, CBZ, EPUB.
