@@ -1262,6 +1262,90 @@ class TestSagasEditor(ServerCase):
         self.assertEqual([(f["item"]["title"], f["tmdb"]) for f in films], [("Man of Steel", 49521), ("Batman v Superman", 209112)])
 
 
+class TestScanResilience(ServerCase):
+    """Un scan ne détruit rien de ce qu'on ne peut pas retrouver : ni la progression quand le volume est vide un instant, ni le scan entier à cause d'un fichier abîmé."""
+
+    def scan(self):
+        job = self.hub.jobs.scan(self.hub.cfg.library("films"))
+        self.run_.wait_jobs()
+        return job
+
+    def inception(self):
+        return self.item_by_title("films", "Inception")["id"]
+
+    def touch_inception(self):
+        """Un scan ne relit pas un fichier dont la date n'a pas bougé : on la change, comme si le fichier avait été remplacé."""
+        path = self.run_.libs["films"] / "Inception (2010)" / "Inception (2010).mkv"
+        stat = path.stat()
+        os.utime(path, (stat.st_atime, stat.st_mtime + 10))
+
+    def progress_rows(self, entry):
+        return self.hub.db.query("SELECT * FROM progress WHERE entry_id=?", (entry,))
+
+    def test_an_empty_library_for_one_scan_keeps_the_progress(self):
+        entry = self.detail(self.inception())["entries"][0]["id"]
+        self.assertEqual(self.api.json("/api/progress", {"entry": entry, "position": 600, "duration": 8880})[0], 200)
+        films = self.run_.libs["films"]
+        stash = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, stash, True)
+        for child in list(films.iterdir()):                      # le volume est monté, mais vide
+            shutil.move(str(child), str(stash / child.name))
+        try:
+            job = self.scan()
+            self.assertEqual((job.status, self.items("films")["total"]), ("done", 0))
+            self.assertTrue(any("ATTENTION" in line for line in job.log), list(job.log))
+            self.assertEqual(len(self.progress_rows(entry)), 1)             # la progression n'a pas bougé
+        finally:
+            for child in list(stash.iterdir()):
+                shutil.move(str(child), str(films / child.name))
+        self.scan()
+        card = next(c for c in self.api.json("/api/home")[1]["continue"] if c["id"] == entry)
+        self.assertEqual((card["position"], card["resume"]), (600, True))     # le film est revenu, avec sa progression
+        self.addCleanup(self.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (entry,))
+
+    def test_the_progress_of_a_file_gone_for_a_long_time_is_dropped_but_not_a_recent_one(self):
+        now = int(time.time())
+        for name, age in (("orphelin-ancien", 100 * 86400), ("orphelin-recent", 2 * 86400)):
+            self.hub.db.execute("INSERT INTO progress(profile, entry_id, position, duration, done, updated) VALUES('default', ?, 5, 10, 0, ?)", (name, now - age))
+        self.addCleanup(self.hub.db.execute, "DELETE FROM progress WHERE entry_id LIKE 'orphelin-%'")
+        self.scan()
+        self.assertEqual(self.progress_rows("orphelin-ancien"), [])
+        self.assertEqual(len(self.progress_rows("orphelin-recent")), 1)
+
+    def test_a_damaged_file_does_not_stop_the_scan(self):
+        from libraries.video import ebml
+        real = ebml.read_metadata
+
+        def damaged(path, ordered=False):
+            if "Inception" in str(path):
+                raise OverflowError("fichier abîmé")                # ce que le lecteur ne rattrape pas
+            return real(path, ordered=ordered)
+        self.touch_inception()
+        with mock.patch.object(ebml, "read_metadata", damaged):
+            job = self.scan()
+        self.addCleanup(self.scan)
+        self.assertEqual(job.status, "done")
+        inception = self.detail(self.inception())
+        self.assertEqual((inception["title"], inception["year"], inception["tagged"]), ("Inception", "2010", False))           # sans ses tags, sous le nom de son dossier
+        self.assertTrue(self.detail(self.item_by_title("films", "Man of Steel")["id"])["tagged"])                                # les autres films sont indexés
+
+    def test_a_failed_read_is_made_again_at_the_next_scan(self):
+        from libraries.video import ebml
+        real = ebml.read_metadata
+        self.touch_inception()
+        with mock.patch.object(ebml, "read_metadata", lambda path, ordered=False: (None, None) if "Inception" in str(path) else real(path, ordered=ordered)):
+            self.scan()                                          # une erreur d'E/S passagère
+        self.assertEqual(self.detail(self.inception())["tagged"], False)
+        job = self.scan()                                        # le fichier n'a pas changé, mais la lecture ratée n'a pas été gardée
+        self.assertEqual(job.result["read"], 1)
+        self.assertEqual(self.detail(self.inception())["summary"], "Un voleur s'introduit dans les rêves.")
+        self.assertEqual(self.scan().result["read"], 0)          # lue : on ne la relit plus
+
+    def test_a_file_without_tags_is_not_read_again(self):
+        self.scan()
+        self.assertEqual(self.scan().result["read"], 0)          # « Sans Etiquette » n'a pas de tags : ce n'est pas une erreur
+
+
 class FakeTmdb:
     """TMDB pour les sagas : « Saga DCEU » (collection 9000) compte cinq films dont trois qu'on n'a pas ; 777 est un film que seul `sagas.json` réclame."""
     calls = []

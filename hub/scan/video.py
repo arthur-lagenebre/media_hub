@@ -41,10 +41,18 @@ def _split_actor(text):
 
 
 def read_file(path):
-    """(infos tirées des tags, durée en secondes) d'un fichier vidéo. Un fichier qui n'est pas un .mkv, ou qui ne se lit pas, n'a pas de tags."""
+    """(infos tirées des tags, durée en secondes) d'un fichier vidéo. Un fichier qui n'est pas un .mkv, ou qui n'a pas de tags, rend {}.
+
+    Un .mkv qu'on n'arrive pas à lire (erreur d'E/S sur le NAS, fichier tronqué ou abîmé) rend `{"unreadable": True}` : il apparaît quand même, sous le nom de son dossier, et sera relu au scan suivant (voir Reader) au lieu de rester « non étiqueté » pour toujours. Il ne fait jamais échouer le scan.
+    """
     if path.suffix.lower() != ".mkv":
         return {}, 0
-    tags, minutes = ebml.read_metadata(path, ordered=True)
+    try:
+        tags, minutes = ebml.read_metadata(path, ordered=True)
+    except Exception:           # le lecteur ne rattrape que les erreurs d'E/S : un fichier abîmé peut lever bien autre chose
+        tags = minutes = None
+    if tags is None:
+        return {"unreadable": True}, 0
     if not tags:
         return {}, (minutes or 0) * 60
     info = {
@@ -93,7 +101,7 @@ class Reader:
         row = self.known.get(rel)
         if unchanged(row, size, mtime):
             meta = json.loads(row["meta"])
-            if "info" in meta:
+            if "info" in meta and not meta["info"].get("unreadable"):          # une lecture ratée se refait
                 self.reused += 1
                 return size, mtime, meta["info"], row["duration"]
         self.read += 1

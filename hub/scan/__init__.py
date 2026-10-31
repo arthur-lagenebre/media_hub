@@ -27,6 +27,8 @@ def scan_library(db, lib, log=print):
         return {"lib": lib.id, "error": "dossier introuvable", "items": 0, "entries": 0}
     known = db.known_entries(lib.id)
     items, entries, counts = SCANNERS[lib.kind](lib, known, enriched_for(db, lib.id))
+    if not items and known:
+        log(f"[{lib.label}] ATTENTION : plus aucun élément alors que la bibliothèque en avait {len(known)} : volume démonté ? La progression de lecture est gardée.")
     db.replace_library(lib.id, items, entries)
     for key, value in getattr(counts, "kv", {}).items():
         db.kv_set(key, value)
