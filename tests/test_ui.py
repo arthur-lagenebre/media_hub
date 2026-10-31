@@ -169,6 +169,17 @@ class TestNavigation(UiCase):
         self.assertTrue(titles and all(t.upper().startswith(letter) for t in titles), (letter, titles))
         self.assertEqual(self.page.locator(".veil").count(), 0)
 
+    def test_filter_typing_keeps_focus_in_field(self):
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+        field = self.view("input[type=search]")
+        field.click()
+        self.page.keyboard.type("dc", delay=150)
+        self.page.wait_for_timeout(700)                                     # le filtre a relancé la liste
+        self.assertTrue(field.evaluate("el => el === document.activeElement"))
+        self.page.keyboard.type("eu")
+        self.assertEqual(field.input_value(), "dceu")
+
     def test_search_page(self):
         self.open("#/search")
         self.page.fill(".view:visible input[type=search]", "dark")

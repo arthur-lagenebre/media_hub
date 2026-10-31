@@ -169,14 +169,13 @@
   // --- Bibliothèque ----------------------------------------------------------------
   var SORTS = {
     movies: [['title', 'Titre'], ['added', 'Ajouts récents'], ['year', 'Plus récents'], ['year-asc', 'Plus anciens']],
-    music: [['title', 'Artiste'], ['added', 'Ajouts récents'], ['year', 'Plus récents'], ['year-asc', 'Plus anciens']],
     books: [['title', 'Collection'], ['added', 'Ajouts récents'], ['year', 'Plus récents'], ['year-asc', 'Plus anciens']]
   };
   H.route(/^\/l\/([\w-]+)$/, function (m) {
     var libId = m[1], lib = H.lib(libId);
     var kind = lib ? lib.kind : 'movies';
     var sorts = SORTS[kind] || SORTS.movies;
-    var st = { q: '', letter: '', genre: '', sort: H.pref('sort.' + libId) || 'title', unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '', sagas: kind === 'movies' && H.pref('sagas.' + libId) !== '0' };
+    var st = { q: '', letter: '', genre: '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '', sagas: kind === 'movies' && H.pref('sagas.' + libId) !== '0' };
     var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { letters: [], genres: [], sections: [] };
     var grid = h('div', { class: 'grid' + (kind === 'music' ? ' sq' : '') });
     var sentinel = h('div', { class: 'sentinel' });
@@ -188,7 +187,7 @@
     var bSeen = H.button('Non vus', null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
     var bSagas = H.button('Sagas', null, { onclick: function () { st.sagas = !st.sagas; H.pref('sagas.' + libId, st.sagas ? '1' : '0'); reset(); }, 'aria-pressed': 'false' });
     var bLists = H.button('Playlists', 'queue', { onclick: function () { H.go('#/playlists'); } });
-    var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, bSort, kind === 'music' ? null : bSeen, kind === 'movies' ? bSagas : null, kind === 'music' ? bLists : null, count);
+    var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bSeen, kind === 'movies' ? bSagas : null, kind === 'music' ? bLists : null, count);
     var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': 'Accès rapides', hidden: true });
     var empty = h('div', { class: 'blank', hidden: true });
     var el = h('section', { class: 'library' }, h('h1', null, lib ? lib.label : 'Bibliothèque'), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
@@ -224,7 +223,7 @@
     }
     function pickLetter() {
       var list = [{ label: 'Toutes', value: '' }].concat(facets.letters.map(function (l) { return { label: l[0], detail: String(l[1]), value: l[0] }; }));
-      H.menu('Commence par', list, st.letter, function (v) { st.letter = v; reset(); });
+      H.menu(kind === 'music' ? 'Artiste commençant par' : 'Commence par', list, st.letter, function (v) { st.letter = v; reset(); });
     }
     function pickGenre() {
       var list = [{ label: 'Tous les genres', value: '' }].concat(facets.genres.map(function (g) { return { label: g[0], detail: String(g[1]), value: g[0] }; }));
@@ -269,7 +268,7 @@
         paint();
         empty.hidden = items.length > 0;
         if (!items.length) showEmpty();
-        if (first && !H.overlay.isOpen() && el.isConnected && el.style.display !== 'none' && (document.activeElement === document.body || el.contains(document.activeElement))) H.focus.set(grid.querySelector('.card') || search, true);
+        if (first && !H.overlay.isOpen() && el.isConnected && el.style.display !== 'none' && document.activeElement !== search && (document.activeElement === document.body || el.contains(document.activeElement))) H.focus.set(grid.querySelector('.card') || search, true);
         if (items.length < total && sentinel.getBoundingClientRect().top < window.innerHeight + 600) fetchMore(false);
       }).catch(function (e) { loading = false; empty.hidden = false; H.clear(empty).appendChild(h('p', null, e.message)); });
     }
