@@ -20,7 +20,7 @@ import time
 from datetime import date
 from urllib.error import URLError
 from urllib.parse import quote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from libraries.common import cache as tmdb_cache
 from libraries.video import lookup
@@ -267,6 +267,23 @@ def image_ext(data):
     """L'extension (.jpg, .png ou .webp) de l'image que ces octets contiennent, d'après leur début ; None si ce n'en est pas une."""
     ext = next((ext for magic, ext in PHOTO_TYPES if data.startswith(magic)), None)
     return None if ext == ".webp" and data[8:12] != b"WEBP" else ext
+
+
+class _SameHosts(HTTPRedirectHandler):
+    """Une redirection ne sort pas de PHOTO_HOSTS, en https : la liste ne vaut que pour l'adresse de départ si urlopen suit les redirections où elles mènent (une adresse interne du réseau, par exemple)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urlparse(newurl)
+        if target.scheme != "https" or (target.hostname or "") not in PHOTO_HOSTS:
+            raise URLError(f"redirection refusée vers {target.hostname or newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = build_opener(_SameHosts)
+
+
+def urlopen(request, timeout=30):
+    return _OPENER.open(request, timeout=timeout)
 
 
 def photo_file(folder, artist_id, mbid=""):

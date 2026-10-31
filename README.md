@@ -69,7 +69,7 @@ L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste es
 
 ## Comptes
 
-Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques sont communes. Au premier démarrage, `HUB_PASSWORD` crée l'administrateur (`HUB_ADMIN`, « admin » par défaut) et reprend la progression d'avant les comptes ; ensuite on gère les comptes depuis l'interface (administrateur) ou en ligne de commande, serveur arrêté ou non :
+Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques sont communes. Au premier démarrage, `HUB_PASSWORD` crée l'administrateur (`HUB_ADMIN`, « admin » par défaut) et reprend la progression d'avant les comptes ; ensuite on gère les comptes depuis l'interface (administrateur) ou en ligne de commande, serveur arrêté ou non : Les essais de connexion ratés d'une même adresse sont ralentis (jusqu'à 5 s), puis plus rien n'est vérifié pendant 5 minutes après 10 échecs (réponse 429) ; un essai réussi remet le compteur à zéro.
 
 ```bash
 python -m hub user list
@@ -118,7 +118,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 247 tests : 210 serveur + 37 interface
+python -m unittest discover -s tests          # 259 tests : 222 serveur + 37 interface
 ```
 
 `tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 37 tests) ; il est ignoré si Playwright ou ffmpeg manquent.

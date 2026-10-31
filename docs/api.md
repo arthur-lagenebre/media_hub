@@ -32,6 +32,7 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 | 404 | identifiant inconnu, image absente, route inconnue (`introuvable`). Une route existante appelée avec la mauvaise méthode donne aussi 404. |
 | 409 | ce nom de compte est déjà pris |
 | 413 | corps trop gros |
+| 429 | trop d'essais de connexion depuis cette adresse (`/api/token`) |
 | 415 | image refusée (photo d'artiste) |
 | 416 | `Range` hors du fichier |
 | 422 | livre illisible |
@@ -61,9 +62,9 @@ Trois façons de se présenter :
 
 - Corps : `{"user": "…", "password": "…"}`. `user` (le nom du compte, sans tenir compte de la casse) est **facultatif quand le serveur n'a qu'un seul compte** ; avec plusieurs comptes, il est obligatoire.
 - 200 : `{"token": "…", "media_token": "…", "user": {"id", "name", "role"}}`. Sans compte (serveur ouvert) : `{"token": "", "media_token": ""}` (pas de `user`).
-- 401 : `{"error": "mot de passe incorrect"}` (mot de passe faux, nom inconnu ou corps illisible : même message), ou `{"error": "nom d'utilisateur requis"}` (plusieurs comptes et pas de `user`). La réponse prend au moins 0,4 s : pas de force brute rapide, et pas de verrouillage de compte.
+- 401 : `{"error": "mot de passe incorrect"}` (mot de passe faux, nom inconnu ou corps illisible : même message), ou `{"error": "nom d'utilisateur requis"}` (plusieurs comptes et pas de `user`). La réponse prend au moins 0,4 s, et de plus en plus après chaque échec depuis la même adresse (jusqu'à 5 s) ; après 10 échecs en 5 minutes, plus rien n'est vérifié : **429** `{"error": "trop d'essais : réessaie dans N s"}`, même avec le bon mot de passe. Pas de verrouillage de compte : l'attente est par adresse, et se vide d'elle-même ou dès qu'un essai réussit (derrière un proxy, toutes les adresses n'en font qu'une).
 
-`POST /api/login` (formulaire `user=…&password=…` ou JSON ; `user` facultatif de la même façon) pose le cookie mais répond par une **redirection 303** (`/` ou `/login?error=1`) : à éviter hors navigateur. `GET /api/logout` efface le cookie (303). Le formulaire `/login` demande le nom quand il y a plusieurs comptes.
+`POST /api/login` (formulaire `user=…&password=…` ou JSON ; `user` facultatif de la même façon) pose le cookie mais répond par une **redirection 303** (`/`, `/login?error=1` ou `/login?error=2` quand il y a trop d'essais) : à éviter hors navigateur. `GET /api/logout` efface le cookie (303). Le formulaire `/login` demande le nom quand il y a plusieurs comptes.
 
 ## Un client en quatre appels
 

@@ -69,6 +69,7 @@ class Images:
         self.cfg, self.db = cfg, db
         self.cache = cfg.data / "img"
         self.cache.mkdir(parents=True, exist_ok=True)
+        self.convert = threading.BoundedSemaphore(max(1, cfg.max_streams))      # sans Pillow, chaque réduction lance un ffmpeg : 40 pochettes à l'écran n'en lancent pas 40 d'un coup
 
     # --- Réduction ---------------------------------------------------------
     def resize(self, data, width):
@@ -89,8 +90,9 @@ class Images:
                 return data, sniff(data)
         if self.cfg.ffmpeg:
             try:
-                done = subprocess.run([self.cfg.ffmpeg, "-v", "error", "-nostdin", "-i", "pipe:0", "-vf", f"scale='min({width},iw)':-2", "-frames:v", "1", "-q:v", "4", "-f", "mjpeg", "pipe:1"],
-                                      input=data, capture_output=True, timeout=30)
+                with self.convert:
+                    done = subprocess.run([self.cfg.ffmpeg, "-v", "error", "-nostdin", "-i", "pipe:0", "-vf", f"scale='min({width},iw)':-2", "-frames:v", "1", "-q:v", "4", "-f", "mjpeg", "pipe:1"],
+                                          input=data, capture_output=True, timeout=30)
                 if done.returncode == 0 and done.stdout:
                     return done.stdout, "image/jpeg"
             except (OSError, subprocess.SubprocessError):
