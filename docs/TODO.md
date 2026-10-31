@@ -1,0 +1,34 @@
+# À faire
+
+État au 1er novembre 2026, après la fusion des sagas (ordre de sortie, `sagas.json`, éditeur, films manquants), de la relecture de tout le code (scan, durcissement, robustesse), du déploiement et des tests d'interface. Tout le code prévu est dans `main` : ce qui reste demande soit d'essayer sur place, soit une décision.
+
+## À faire de votre côté
+
+- [ ] **Redéployer** le compose. Vérifier d'abord que `HUB_PASSWORD` est dans le `.env` : il est obligatoire, sans lui `docker compose up` refuse de démarrer (il ne sert qu'à créer le premier compte, les comptes existants ne changent pas).
+- [ ] **Retirer le `:ro`** des volumes `Animations` et `Musique` dans le compose pour que le nettoyage des fichiers parasites puisse effacer.
+- [ ] **Avant de « Supprimer » en musique** : compter les `folder.*` sur le NAS (`find /mnt/tank/media/Musique -iname 'folder.*' | wc -l`). En musique, le nettoyage efface toute image autre que `cover.{ext}`, `folder.jpg` compris.
+- [ ] **Après le redéploiement** : *Gestion* > *Entretien* > *Compter*, puis *Supprimer*. Si une erreur de droits apparaît, retirer `cap_drop` du compose (voir `deploy/README.md`, section Sécurité).
+- [ ] **Lancer « Sagas (TMDB) »** (*Gestion* > bibliothèque `Films`) avec la clé TMDB, et vérifier avec de vraies collections (MCU, Fast & Furious…) : seul un faux TMDB a été testé.
+- [ ] **Essayer à la télécommande**, sur la télé : sagas, éditeur, sélecteur de films, cartes grisées. Les tests tournent dans un Chromium de bureau, pas sur Android TV, Fire TV ni webOS.
+- [ ] Si `test_admin_runs_an_update` échoue de nouveau (il a échoué une fois sur votre machine, jamais sur l'autre) : le relancer seul avec `python -W ignore -m unittest tests.test_ui.TestDetailPages.test_admin_runs_an_update` et garder les lignes de l'échec. Ce test attend au plus 30 s qu'un scan se termine.
+
+## À décider
+
+- [ ] **Cookie de connexion sans `Secure`.** Le marquer `Secure` casserait l'accès en `http://` sur le réseau local (la télé), il faudrait donc distinguer HTTPS de HTTP derrière Tailscale.
+- [ ] **Jeton de session sans expiration**, non révoqué à la déconnexion (c'est documenté dans `docs/api.md`). Le changer déconnecte tous les appareils.
+- [ ] **Épingler les images Docker** (`python:3.13-slim`, `tailscale/tailscale:stable`) et la version de Pillow. Avis : inutile pour un NAS à la maison, sauf si chaque redéploiement doit donner exactement la même chose.
+- [ ] **« Compter »** : afficher les 20 premiers fichiers qu'il supprimerait, pour voir ce qui partira avant de confirmer.
+- [ ] **Sagas de `sagas.json`** : cacher aussi un film listé qui n'est pas encore sorti (aujourd'hui, il s'affiche toujours, puisqu'on l'a écrit exprès).
+
+## Limites connues, non traitées
+
+- [ ] Avec **deux bibliothèques de films**, les collections TMDB sont repérées par le seul nom de saga : la seconde peut être sautée.
+- [ ] Un **film en double** (deux versions) dans une saga désactive sans bruit ses numéros et ses manquants.
+- [ ] `deploy/fetch-ffmpeg.sh` ne vérifie aucune somme de contrôle.
+- [ ] `pip install pillow` est lancé à chaque démarrage du conteneur, en root, sa sortie jetée.
+- [ ] Les photos d'artistes, la liseuse et le lecteur n'ont pas été essayés sur la télé.
+
+## Pas relu
+
+- Le dépôt `media_library` (modifications non commitées côté développement).
+- `.claude/skills/`, volontairement laissé de côté.
