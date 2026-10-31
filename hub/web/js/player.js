@@ -284,7 +284,7 @@
     // --- Clavier et souris ----------------------------------------------------------------
     function eat(e) { e.preventDefault(); e.stopPropagation(); }
     function onKey(e) {
-      if (!el.isConnected || el.style.display === 'none' || H.overlay.isOpen() || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen() || e.ctrlKey || e.metaKey || e.altKey) return;
       var k = e.key;
       if (!err.hidden) return;
       if (k === 'MediaPlayPause') { toggle(); eat(e); return; }

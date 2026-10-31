@@ -154,11 +154,15 @@
 
   // --- La fiche d'un artiste ou d'un groupe ---------------------------------------------
   // Les albums possédés et ceux qui manquent, rangés ensemble par année puis par titre (les possédés arrivent déjà dans cet ordre ; ceux sans année restent à la fin)
+  function firstIndex(list, test) {            // Array.prototype.findIndex est de l'ES2015 : absent des navigateurs de télé les plus anciens
+    for (var i = 0; i < list.length; i++) if (test(list[i])) return i;
+    return -1;
+  }
   function shelf(d) {
     var out = d.albums.slice();
     (d.wanted || []).forEach(function (w) {
-      var after = out.findIndex(function (a) { return a.year && (a.year > w.year || (a.year === w.year && a.title.toLowerCase() > w.title.toLowerCase())); });
-      var undated = out.findIndex(function (a) { return !a.year; });
+      var after = firstIndex(out, function (a) { return a.year && (a.year > w.year || (a.year === w.year && a.title.toLowerCase() > w.title.toLowerCase())); });
+      var undated = firstIndex(out, function (a) { return !a.year; });
       var at = after >= 0 ? after : (undated >= 0 ? undated : out.length);
       out.splice(at, 0, { wanted: true, title: w.title, year: w.year, cover: w.cover });
     });

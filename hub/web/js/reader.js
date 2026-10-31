@@ -172,7 +172,7 @@
       if (info.format === 'cbz') page(Math.min(info.pages - 1, Math.floor(x * info.pages))); else chapter(Math.min(info.chapters.length - 1, Math.floor(x * info.chapters.length)), 0);
     });
     function onKey(e) {
-      if (!el.isConnected || el.style.display === 'none' || H.overlay.isOpen() || e.ctrlKey || e.metaKey || e.altKey || !info || !msg.hidden) return;
+      if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen() || e.ctrlKey || e.metaKey || e.altKey || !info || !msg.hidden) return;
       var k = e.key;
       if (!bar.hidden && bar.contains(document.activeElement)) { showBar(true); return; }
       var eat = function () { e.preventDefault(); e.stopPropagation(); };

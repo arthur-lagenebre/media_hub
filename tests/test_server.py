@@ -331,6 +331,8 @@ class TestBooks(ServerCase):
         status, headers, body = self.api.get(info["chapters"][0])
         self.assertEqual(status, 200)
         self.assertIn("script-src 'none'", headers["Content-Security-Policy"])
+        self.assertIn("form-action 'none'", headers["Content-Security-Policy"])               # une page d'epub ne poste rien
+        self.assertIn("base-uri 'none'", headers["Content-Security-Policy"])
         self.assertIn("xml", headers["Content-Type"])
 
 
@@ -1306,6 +1308,124 @@ class TestSagasEditor(ServerCase):
     def test_the_picker_gives_a_saga_of_the_tag_in_release_order(self):
         films = self.api.json("/api/sagas/films?group=" + quote("Saga DCEU"))[1]["films"]
         self.assertEqual([(f["item"]["title"], f["tmdb"]) for f in films], [("Man of Steel", 49521), ("Batman v Superman", 209112)])
+
+
+class TestHardening(ServerCase):
+    """Ce que la relecture a trouvé de fragile : corps de requête malformés, chemins qui sortent d'une bibliothèque, chemins du serveur dans les erreurs, caches qui ne suivent pas ou s'écrivent à moitié."""
+
+    def raw(self, method, path, headers):
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        conn.putrequest(method, path)
+        for key, value in headers.items():
+            conn.putheader(key, value)
+        conn.endheaders()
+        response = conn.getresponse()
+        return response.status, json.loads(response.read() or "null")
+
+    def test_an_unreadable_content_length_is_a_400_not_a_hung_thread(self):
+        for value in ("-5", "abc", "1.5"):
+            self.assertEqual(self.raw("POST", "/api/progress", {"Content-Length": value})[0], 400, value)
+        self.assertEqual(self.raw("POST", "/api/login", {"Content-Length": "-1"})[0], 400)
+        self.assertEqual(self.raw("POST", "/api/token", {"Content-Length": "x"})[0], 400)
+        self.assertEqual(self.api.json("/api/state")[0], 200)                       # le serveur répond toujours
+
+    def test_a_json_body_that_is_not_an_object_is_an_error_not_a_crash(self):
+        for path in ("/api/progress", "/api/playlists", "/api/scan", "/api/cleanup", "/api/sagas/add"):
+            for body in ([], [1, 2], 5, "texte"):
+                status, _, _ = self.api.request("POST", path, body=json.dumps(body).encode())
+                self.assertNotEqual(status, 500, (path, body))
+
+    def test_a_path_may_not_leave_its_library_by_a_sibling_with_the_same_prefix(self):
+        from hub.server.app import HttpError
+        lib = self.hub.cfg.library("films")
+        for rel in (f"../{lib.path.name}2/x.mkv", "../Series/x.mkv", "../../x"):
+            with self.assertRaises(HttpError, msg=rel) as caught:
+                self.hub.path_of({"lib": "films", "rel": rel})
+            self.assertEqual(caught.exception.status, 400)
+        self.assertEqual(self.hub.path_of({"lib": "films", "rel": "Inception (2010)/Inception (2010).mkv"})[1].name, "Inception (2010).mkv")
+
+    def test_an_unknown_path_under_a_served_prefix_is_a_404_not_the_home_page(self):
+        for path in ("/img/nope/zzz", "/book/abc/page/-1", "/media/zzz"):
+            self.assertEqual(self.api.get(path)[0], 404, path)
+        self.assertEqual(self.api.get("/")[0], 200)
+        self.assertEqual(self.api.get("/js/core.js")[0], 200)
+        self.assertEqual(self.api.get("/une-page-de-l-application")[0], 200)
+
+    def test_the_paths_of_the_server_stay_out_of_the_answers(self):
+        import re
+        from hub.server import app as server
+        lib = self.hub.cfg.library("films")
+        message = self.hub.scrub(f"{lib.path}/Film/x.mkv: Invalid data ; {self.hub.cfg.data}/subs/x")
+        self.assertEqual(message, "…/Film/x.mkv: Invalid data ; …/subs/x")
+        self.assertNotIn(str(lib.path), self.hub.scrub(str(lib.path / "x")))
+
+        def boom(h, m, q):
+            raise RuntimeError(f"échec sur {h.hub.cfg.data}/subs/x et {lib.path}")
+        route = ("GET", re.compile(r"/api/boom"), boom)
+        server.ROUTES.append(route)
+        self.addCleanup(server.ROUTES.remove, route)
+        status, data = self.api.json("/api/boom")
+        self.assertEqual(status, 500)
+        self.assertNotIn(str(self.hub.cfg.data), data["error"])
+        self.assertNotIn(str(lib.path), data["error"])
+
+    def test_progress_must_be_finite(self):
+        entry = self.detail(self.item_by_title("films", "Inception")["id"])["entries"][0]["id"]
+        for fields in ('"position": Infinity, "duration": 100', '"position": 5, "duration": Infinity'):         # `Infinity` passe json.loads : stocké, il rendrait la fiche du compte illisible
+            status, _, _ = self.api.request("POST", "/api/progress", body=('{"entry": "%s", %s}' % (entry, fields)).encode())
+            self.assertEqual(status, 400, fields)
+        for fields in ('"position": -Infinity, "duration": 100', '"position": NaN, "duration": 100'):             # ramenés à 0 : sans danger
+            status, _, _ = self.api.request("POST", "/api/progress", body=('{"entry": "%s", %s}' % (entry, fields)).encode())
+            self.assertEqual(status, 200, fields)
+        self.assertEqual(self.api.json("/api/progress", {"entry": entry, "position": 5, "duration": 100})[0], 200)
+        self.addCleanup(self.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (entry,))
+
+    def test_a_corrected_subtitle_file_is_served_again(self):
+        films = self.run_.libs["films"]
+        folder = films / "Sous-titré (2020)"
+        fixtures.write_mkv(folder / "film.mkv", fixtures.movie_blocks("Sous-titré", "Un film.", "2020-01-01", "movie/4242", "Drame"), minutes=5)
+        srt = folder / "film.fr.srt"
+        srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nPremière version\n", encoding="utf-8")
+        self.hub.jobs.scan(self.hub.cfg.library("films"))
+        self.run_.wait_jobs()
+        entry = self.detail(self.item_by_title("films", "Sous-titré")["id"])["entries"][0]["id"]
+        status, headers, data = self.api.request("GET", f"/api/subs/{entry}/s0.vtt")
+        self.assertEqual(status, 200)
+        self.assertIn("Première version", data.decode())
+        first = headers["ETag"]
+        self.assertEqual(self.api.request("GET", f"/api/subs/{entry}/s0.vtt", headers={"If-None-Match": first})[0], 304)          # inchangé : on revalide
+        srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nVersion corrigée\n", encoding="utf-8")
+        stat = srt.stat()
+        os.utime(srt, (stat.st_atime, stat.st_mtime + 10))
+        status, headers, data = self.api.request("GET", f"/api/subs/{entry}/s0.vtt", headers={"If-None-Match": first})
+        self.assertEqual(status, 200)                                                                                           # le fichier a changé : plus de 304
+        self.assertIn("Version corrigée", data.decode())
+        self.assertNotEqual(headers["ETag"], first)
+        self.assertEqual(headers["Cache-Control"], "private, no-cache")                                                        # plus de jour entier de cache aveugle
+        self.assertEqual(self.api.get(f"/api/subs/{entry}/s9.vtt")[0], 404)
+
+    def test_the_caches_are_written_in_one_piece(self):
+        from hub.media.images import write_atomic
+        target = Path(tempfile.mkdtemp()) / "x.jpg"
+        self.addCleanup(shutil.rmtree, target.parent, True)
+        write_atomic(target, b"abc")
+        write_atomic(target, b"def")
+        self.assertEqual((target.read_bytes(), [p.name for p in target.parent.iterdir()]), (b"def", ["x.jpg"]))
+        with self.assertRaises(OSError):
+            write_atomic(target.parent / "absent" / "x.jpg", b"x")
+        self.assertEqual([p.name for p in target.parent.iterdir()], ["x.jpg"])               # rien de laissé derrière une écriture ratée
+
+    def test_a_playlist_is_not_created_when_none_of_its_tracks_is_valid(self):
+        before = len(self.api.json("/api/playlists")[1]["playlists"])
+        self.assertEqual(self.api.json("/api/playlists", {"name": "Vide", "entries": ["nope"]})[0], 400)
+        self.assertEqual(len(self.api.json("/api/playlists")[1]["playlists"]), before)
+
+    def test_only_known_columns_can_be_updated(self):
+        item = self.item_by_title("films", "Inception")["id"]
+        with self.assertRaises(ValueError):
+            self.hub.db.update_item_meta(item, **{"title=?, lib": "x"})
+        self.hub.db.update_item_meta(item, year="2010")                                      # une colonne connue passe toujours
 
 
 class TestScanResilience(ServerCase):

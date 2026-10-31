@@ -14,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "meta", "added", "count"}      # ce que update_item_meta peut changer
 ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
 
 SCHEMA_VERSION = 2          # 2 : table `users` (comptes) ; une base en version 1 la gagne au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
@@ -173,7 +174,10 @@ class Database:
         self.execute("UPDATE entries SET probe=? WHERE id=?", (json.dumps(probe), entry_id))
 
     def update_item_meta(self, item_id, **fields):
-        """Complète un item (enrichissement TMDB) : `meta` est fusionné, le reste remplace."""
+        """Complète un item (enrichissement TMDB) : `meta` est fusionné, le reste remplace. Seules les colonnes de ITEM_COLUMNS : leur nom entre dans la requête, il ne vient jamais d'ailleurs."""
+        unknown = set(fields) - ITEM_COLUMNS
+        if unknown:
+            raise ValueError(f"colonne inconnue : {', '.join(sorted(unknown))}")
         row = self.one("SELECT meta FROM items WHERE id=?", (item_id,))
         if row is None:
             return
