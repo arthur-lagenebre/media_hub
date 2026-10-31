@@ -10,6 +10,8 @@ Une saga du fichier `sagas.json` n'a pas besoin de collection : sa liste dit dé
 
 from __future__ import annotations
 
+from datetime import date
+
 from . import sagas as sagafile
 from . import urls
 
@@ -30,6 +32,16 @@ def poster_name(ident):
     return f"film-{ident}.jpg"
 
 
+def today():
+    return date.today().isoformat()
+
+
+def released(film, now=None):
+    """Le film de la fiche `film` est-il sorti ? Une date passée (ou du jour) : oui ; une date à venir, ou pas de date (un film encore à l'état de projet) : non. TMDB range les deux dans la collection, mais ce qui n'existe pas encore ne manque à personne."""
+    when = (film.get("date") or "")[:10]
+    return bool(when) and when <= (now or today())
+
+
 def entry(ident, rank, info):
     """Un film manquant tel que l'API le donne : son identifiant TMDB, son titre, son année, son rang dans la saga et son affiche (URL vide s'il n'en a pas)."""
     film = info["films"][str(ident)]
@@ -39,7 +51,7 @@ def entry(ident, rank, info):
 def tagged(name, members, info, ignored):
     """(rangs, manquants) d'une saga de l'étiquette : `members` sont ses films présents (lignes de la table items).
 
-    Les rangs ({id de l'élément: place dans la collection TMDB}) numérotent et ordonnent les films qu'on a ; les manquants sont les autres films de la collection, sauf ceux qu'on a demandé de ne pas voir (`ignored`). Rien de tout cela quand TMDB n'a pas été interrogé pour cette saga, ou quand elle ne concorde pas avec nos films (un film sans identifiant ou hors de la collection : le nom de la saga est alors peut-être celui de deux sagas) : (None, []), et la saga garde son ordre par date de sortie.
+    Les rangs ({id de l'élément: place dans la collection TMDB}) numérotent et ordonnent les films qu'on a ; les manquants sont les autres films de la collection **déjà sortis**, sauf ceux qu'on a demandé de ne pas voir (`ignored`). Un film annoncé garde sa place dans la collection (il est décrit : il apparaît le jour de sa sortie, sans rien relancer) mais ne s'affiche pas. Rien de tout cela quand TMDB n'a pas été interrogé pour cette saga, ou quand elle ne concorde pas avec nos films (un film sans identifiant ou hors de la collection : le nom de la saga est alors peut-être celui de deux sagas) : (None, []), et la saga garde son ordre par date de sortie.
     """
     collection = info["collections"].get(name)
     if not collection:
@@ -50,7 +62,7 @@ def tagged(name, members, info, ignored):
         row = owned.get(ident)
         if row is not None:
             ranks[row["id"]] = rank
-        elif ident not in ignored and str(ident) in info["films"]:
+        elif ident not in ignored and str(ident) in info["films"] and released(info["films"][str(ident)]):
             absent.append({**entry(ident, rank, info), "ignorable": True})         # la collection TMDB le compte, pas nous : on peut le cacher
     if len(ranks) != len(members):
         return None, []
