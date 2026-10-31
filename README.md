@@ -52,7 +52,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_ADMIN` | nom du compte créé par `HUB_PASSWORD` | `admin` |
 | `HUB_FFMPEG` | dossier (ou fichier) de `ffmpeg` / `ffprobe` | `PATH`, puis `HUB_DATA/bin` |
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
-| `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) | `0` |
+| `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne fait perdre aucune progression de lecture, et un `.mkv` illisible n'arrête pas le scan | `0` |
 | `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting) et décrit les films qui manquent aux sagas ; lue aussi dans le `.env` de `media_library` | aucune |
 
 ## Sagas
@@ -118,7 +118,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 175 tests : 149 serveur + 26 interface
+python -m unittest discover -s tests          # 224 tests : 191 serveur + 33 interface
 ```
 
-`tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 26 tests) ; il est ignoré si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 33 tests) ; il est ignoré si Playwright ou ffmpeg manquent.

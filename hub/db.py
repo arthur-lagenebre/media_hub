@@ -14,6 +14,8 @@ import threading
 import time
 from pathlib import Path
 
+ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
+
 SCHEMA_VERSION = 2          # 2 : table `users` (comptes) ; une base en version 1 la gagne au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 SCHEMA = """
@@ -142,7 +144,10 @@ class Database:
         return {row["id"]: row for row in self.query("SELECT * FROM items WHERE lib=?", (lib,))}
 
     def replace_library(self, lib, items, entries):
-        """Remplace le contenu d'une bibliothèque en une transaction. Les sondes ffprobe déjà faites sont gardées si le fichier n'a pas bougé."""
+        """Remplace le contenu d'une bibliothèque en une transaction. Les sondes ffprobe déjà faites sont gardées si le fichier n'a pas bougé.
+
+        La progression n'est pas touchée (elle suit l'identifiant de l'entrée, qui vient du chemin : le fichier qui revient la retrouve) ; seules celles de fichiers disparus depuis plus de ORPHAN_PROGRESS_DAYS jours sont retirées. Toutes les lectures passent par une jointure sur `entries` : une ligne sans fichier ne se voit pas.
+        """
         with self.write_lock:
             conn = self.connection()
             try:
@@ -158,7 +163,7 @@ class Database:
                 conn.executemany(
                     "INSERT INTO entries(id, item_id, lib, rel, kind, season, disc, number, title, summary, duration, size, mtime, meta, probe) "
                     "VALUES(:id, :item_id, :lib, :rel, :kind, :season, :disc, :number, :title, :summary, :duration, :size, :mtime, :meta, :probe)", entries)
-                conn.execute("DELETE FROM progress WHERE entry_id NOT IN (SELECT id FROM entries)")
+                conn.execute("DELETE FROM progress WHERE updated < ? AND entry_id NOT IN (SELECT id FROM entries)", (int(time.time()) - ORPHAN_PROGRESS_DAYS * 86400,))
                 conn.commit()
             except Exception:
                 conn.rollback()
