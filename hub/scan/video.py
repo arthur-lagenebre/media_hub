@@ -131,7 +131,7 @@ def scan_movies(lib, known, enriched=None):
         image = folder_image(folder) if folder else ""
         meta = {
             "tmdb": info.get("tmdb", ""), "directors": info.get("directors", []), "writers": info.get("writers", []),
-            "actors": info.get("actors", []), "part": info.get("collection_part") if info.get("collection_part") is not None else order,
+            "actors": info.get("actors", []), "date": info.get("date", ""), "part": info.get("collection_part") if info.get("collection_part") is not None else order,
             "image": (movie.folder.relative_to(lib.path) / image).as_posix() if image else "", "tagged": bool(info.get("has_tags")),
             "folder": movie.folder.relative_to(lib.path).as_posix() if movie.folder != lib.path else "",
         }

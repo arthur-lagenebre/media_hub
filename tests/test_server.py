@@ -1046,6 +1046,31 @@ class TestSagas(ServerCase):
         self.assertEqual([m["title"] for m in detail["saga"]], [f"Course {i}" for i in range(1, 11)])
 
 
+class TestSagaOrder(ServerCase):
+    """Les films d'une saga se rangent par date de sortie, pas par le numéro du dossier : « 12 - Ant-Man » est le 12e du MCU, pas de la saga Ant-Man."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        films = cls.run_.libs["films"]
+        for part, title, date in ((31, "Ant-Man et la Guêpe - Quantumania", "2023-02-15"), (12, "Ant-Man", "2015-07-14"), (20, "Ant-Man et la Guêpe", "2018-07-04")):
+            fixtures.write_mkv(films / "_Marvel" / f"{part} - {title}.mkv", fixtures.movie_blocks(title, "Petit.", date, f"movie/{800 + part}", "Action", collection="Saga Ant-Man", part=part), minutes=110)
+        cls.hub.jobs.scan(cls.hub.cfg.library("films"))
+        cls.run_.wait_jobs()
+
+    def test_a_saga_page_follows_the_release_order_and_numbers_from_one(self):
+        data = self.items("films", group="Saga Ant-Man", sort="part")
+        self.assertEqual([(i["title"], i["part"]) for i in data["items"]], [("Ant-Man", 1), ("Ant-Man et la Guêpe", 2), ("Ant-Man et la Guêpe - Quantumania", 3)])
+
+    def test_the_film_page_lists_the_saga_the_same_way(self):
+        saga = self.detail(self.item_by_title("films", "Ant-Man et la Guêpe")["id"])["saga"]
+        self.assertEqual([(m["title"], m["part"]) for m in saga], [("Ant-Man", 1), ("Ant-Man et la Guêpe", 2), ("Ant-Man et la Guêpe - Quantumania", 3)])
+
+    def test_the_covers_of_the_saga_card_follow_the_release_order(self):
+        card = next(i for i in self.items("films", sagas=1)["items"] if i["title"] == "Saga Ant-Man")
+        self.assertEqual([self.detail(c)["title"] for c in card["covers"]], ["Ant-Man", "Ant-Man et la Guêpe", "Ant-Man et la Guêpe - Quantumania"])
+
+
 class TestApiUrls(ServerCase):
     """L'API donne elle-même les URLs des images et des fichiers : relatives, sans ?w= ni jeton, et elles mènent bien quelque part."""
 
