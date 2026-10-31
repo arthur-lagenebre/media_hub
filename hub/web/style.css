@@ -288,6 +288,7 @@ body.has-audio #toast { bottom: 6rem; }
 .card.saga:focus .stack, .card.saga:hover .stack { transform: scale(1.045); }
 body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .card.saga .stack { transition: transform 0.12s; }
+.card.saga .t { color: var(--accent); }
 .stack-big { width: 100%; }
 .card.wanted { cursor: default; }
 .card.wanted .poster { opacity: 0.4; filter: grayscale(1); }
