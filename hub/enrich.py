@@ -1,6 +1,8 @@
-"""Enrichissement depuis le web : les séries (TMDB) et les artistes (MusicBrainz, Wikipédia).
+"""Enrichissement depuis le web : les séries et les sagas de films (TMDB), les artistes (MusicBrainz, Wikipédia).
 
 Séries : synopsis (de la série et de chaque saison), genres, année, casting, affiche.
+
+Sagas de films : les films qui manquent à une saga (voir missing.py) : titre, année et affiche de ceux qu'on n'a pas.
 
 Les épisodes portent leur propre fiche, mais pas celle de la série : rien dans un .mkv ne dit de quoi parle « Dark ». Ce passage interroge TMDB (par l'identifiant épinglé dans le nom du dossier, sinon par une recherche sur ce nom) et garde le résultat dans la base ET sur le disque (l'affiche), pour qu'un rescan ne l'efface pas.
 
@@ -13,6 +15,7 @@ import contextlib
 import io
 import json
 import re
+import time
 from datetime import date
 from urllib.error import URLError
 from urllib.parse import quote, urlparse
@@ -23,6 +26,9 @@ from libraries.video import lookup
 from libraries.music import artistinfo
 from libraries.music.musicbrainz import MusicBrainz, MusicBrainzError
 from libraries.video.tmdb import Tmdb, TmdbAuthError, TmdbError
+
+from . import missing
+from . import sagas as sagafile
 
 MB_USER_AGENT = "media_hub/1.0 ( https://github.com/arthur-lagenebre/media_hub )"
 PHOTO_WIDTH = 960               # la photo de l'article, en 960 px quand l'originale est plus grande : de quoi remplir l'en-tête sans garder 5 000 px
@@ -112,6 +118,91 @@ def enrich_shows(cfg, db, lib, log=print, force=False):
             log(f"  {item['title']} : {e}")
             failed += 1
     return {"enriched": done, "failed": failed}
+
+
+def enrich_sagas(cfg, db, lib, log=print, force=False):
+    """Les films qui manquent aux sagas d'une bibliothèque de films : ceux des collections TMDB que dit l'étiquette, et ceux que les sagas de `sagas.json` listent sans qu'on les ait.
+
+    Une collection déjà connue n'est redemandée qu'après un mois (ou avec `force`) ; un film décrit ne l'est pas deux fois. Le résultat se garde au fur et à mesure (voir missing.py) : une clé refusée à mi-chemin n'efface pas ce qui est fait.
+    """
+    if not cfg.tmdb_key:
+        raise RuntimeError("Pas de clé TMDB : renseigne TMDB_KEY (variable d'environnement, ou .env dans media_library).")
+    tmdb = Tmdb(cfg.tmdb_key, "fr-FR", user_agent="media_hub/1.0", cache=tmdb_cache.Cache(folder=cfg.data / "tmdb-cache", read=not force))
+    posters = cfg.data / "tmdb"
+    posters.mkdir(parents=True, exist_ok=True)
+    info = missing.load(db)
+    rows = db.query("SELECT * FROM items WHERE lib=? AND type='movie' ORDER BY sort", (lib.id,))
+    owned = sagafile.by_tmdb(rows)
+    now = int(time.time())
+    counts = {"sagas": 0, "films": 0, "failed": 0}
+
+    def keep(film):
+        """Retient un film que TMDB décrit (titre, date, affiche)."""
+        ident = film["id"]
+        date_ = film.get("release_date") or ""
+        data = {"title": film.get("title") or "", "date": date_, "year": date_[:4], "poster": ""}
+        name = missing.poster_name(ident)
+        if film.get("poster_path"):
+            try:
+                if force or not (posters / name).is_file():
+                    tmdb.save_image(film["poster_path"], "w342", posters / name)
+                data["poster"] = name
+            except TmdbAuthError:
+                raise
+            except (TmdbError, OSError) as e:
+                log(f"  {data['title']} : pas d'affiche ({e})")
+        info["films"][str(ident)] = data
+        counts["films"] += 1
+
+    groups = {}
+    for row in rows:
+        if row["grp"]:
+            groups.setdefault(row["grp"], []).append(row)
+    try:
+        for name, members in sorted(groups.items()):
+            known = info["collections"].get(name)
+            if known and not force and now - known.get("at", 0) < missing.STALE:
+                continue
+            ident = next((i for i in map(sagafile.tmdb_of, members) if i is not None), None)
+            if ident is None:
+                log(f"  {name} : aucun film n'a d'identifiant TMDB")
+                continue
+            try:
+                collection = (tmdb.get(f"movie/{ident}").get("belongs_to_collection") or {}).get("id")
+                if not collection:
+                    log(f"  {name} : TMDB ne rattache ce film à aucune collection")
+                    counts["failed"] += 1
+                    continue
+                parts = tmdb.collection(collection).get("parts") or []
+            except TmdbAuthError:
+                raise
+            except TmdbError as e:
+                log(f"  {name} : {e}")
+                counts["failed"] += 1
+                continue
+            parts = sorted((p for p in parts if p.get("id")), key=lambda p: (p.get("release_date") or "9999", p["id"]))
+            absent = [p for p in parts if p["id"] not in owned]
+            for part in absent:
+                keep(part)
+            info["collections"][name] = {"id": collection, "films": [p["id"] for p in parts], "at": now}
+            counts["sagas"] += 1
+            log(f"  {name} : {len(parts)} film(s), {len(absent)} absent(s)")
+        wanted = []
+        for _, ids in sagafile.Sagas(cfg.data / "sagas.json").all():
+            wanted += [i for i in ids if i not in owned and i not in wanted and (force or str(i) not in info["films"])]
+        for ident in wanted:
+            try:
+                keep(tmdb.get(f"movie/{ident}"))
+            except TmdbAuthError:
+                raise
+            except TmdbError as e:
+                log(f"  film {ident} : {e}")
+                counts["failed"] += 1
+    except TmdbAuthError as e:
+        raise RuntimeError(f"TMDB : {e}")
+    finally:
+        missing.save(db, info)
+    return counts
 
 
 def artist_key(mbid):

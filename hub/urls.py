@@ -21,6 +21,11 @@ def entry_file(entry_id):
     return f"/media/{entry_id}/file"
 
 
+def missing_film(tmdb_id):
+    """L'affiche d'un film qui manque à une saga (voir missing.py) ; 404 s'il n'en a pas."""
+    return f"/img/film/{tmdb_id}"
+
+
 def artist_image(lib_id, artist_id):
     """La photo d'un artiste ; 404 s'il n'en a pas."""
     return f"/img/artist/{lib_id}/{artist_id}"

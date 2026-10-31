@@ -601,6 +601,7 @@
         libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
           h('div', { class: 'what' }, h('b', null, l.label), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · mis à jour ' + ago(l.scanned) : 'dossier introuvable')),
           l.kind === 'shows' ? H.button('Enrichir (TMDB)', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Enrichissement lancé : ' + l.label); } }) : null,
+          l.kind === 'movies' ? H.button('Sagas (TMDB)', null, { 'data-key': 'enrich-' + l.id, title: 'Cherche chez TMDB les films qui manquent à tes sagas.', onclick: function () { start('/api/enrich', { lib: l.id }, 'Recherche des films manquants lancée : ' + l.label); } }) : null,
           l.kind === 'music' ? H.button('Fiches artistes', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Fiches artistes demandées : ' + l.label); } }) : null,
           H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } })));
       });
