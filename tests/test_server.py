@@ -1519,7 +1519,9 @@ class FakeTmdb:
              {"id": 49521, "title": "Man of Steel", "release_date": "2013-06-12", "poster_path": "/mos.jpg"},
              {"id": 297762, "title": "Wonder Woman", "release_date": "2017-05-31", "poster_path": "/ww.jpg"},
              {"id": 209112, "title": "Batman v Superman", "release_date": "2016-03-23", "poster_path": "/bvs.jpg"},
-             {"id": 1000, "title": "Film intermédiaire", "release_date": "2014-01-01", "poster_path": "/mid.jpg"}]
+             {"id": 1000, "title": "Film intermédiaire", "release_date": "2014-01-01", "poster_path": "/mid.jpg"},
+             {"id": 2000, "title": "Film annoncé", "release_date": "2099-01-01", "poster_path": "/soon.jpg"},          # pas encore sorti
+             {"id": 2001, "title": "Film en projet", "release_date": "", "poster_path": None}]                            # pas même de date
     movies = {49521: {"id": 49521, "belongs_to_collection": {"id": 9000}}, 209112: {"id": 209112, "belongs_to_collection": {"id": 9000}},
               777: {"id": 777, "title": "Film du fichier", "release_date": "2020-02-02", "poster_path": "/f.jpg"}}
 
@@ -1571,8 +1573,8 @@ class TestMissingFilms(ServerCase):
     def test_the_enrichment_describes_the_films_we_do_not_have(self):
         self.enrich()
         info = self.hub.db.kv_get("sagainfo")
-        self.assertEqual(info["collections"]["Saga DCEU"]["films"], [49521, 1000, 209112, 297762, 141052])         # dans l'ordre de sortie
-        self.assertEqual(sorted(info["films"]), ["1000", "141052", "209112", "297762", "49521"])                    # toute la collection : un film retiré plus tard doit pouvoir apparaître grisé
+        self.assertEqual(info["collections"]["Saga DCEU"]["films"], [49521, 1000, 209112, 297762, 141052, 2000, 2001])         # dans l'ordre de sortie, ce qui est annoncé à la fin
+        self.assertEqual(sorted(info["films"]), ["1000", "141052", "2000", "2001", "209112", "297762", "49521"])                # toute la collection : un film retiré plus tard doit pouvoir apparaître grisé
         self.assertEqual(info["films"]["1000"], {"title": "Film intermédiaire", "date": "2014-01-01", "year": "2014", "poster": "film-1000.jpg"})
         self.assertEqual(info["films"]["141052"]["poster"], "")                                                     # sans affiche
         self.assertTrue((self.hub.cfg.data / "tmdb" / "film-1000.jpg").is_file())
@@ -1585,6 +1587,38 @@ class TestMissingFilms(ServerCase):
         self.assertEqual([(f["tmdb"], f["title"], f["year"], f["rank"], f["cover"]) for f in data["missing"]],
                          [(1000, "Film intermédiaire", "2014", 2, "/img/film/1000"), (297762, "Wonder Woman", "2017", 4, "/img/film/297762"), (141052, "Justice League", "2017", 5, "")])
         self.assertEqual(data["total"], 2)                                                                          # un manquant n'est pas un élément : il ne compte pas
+
+    def test_a_film_not_out_yet_is_described_but_not_shown_as_missing(self):
+        self.enrich()
+        data = self.group()
+        self.assertEqual([f["tmdb"] for f in data["missing"]], [1000, 297762, 141052])                              # ni « Film annoncé » (2099) ni « Film en projet » (sans date)
+        self.assertEqual([i["part"] for i in data["items"]], [1, 3])                                                # les numéros des films qu'on a ne changent pas
+        film = self.detail(self.item_by_title("films", "Batman v Superman")["id"])
+        self.assertEqual([f["tmdb"] for f in film["sagas"][0]["missing"]], [1000, 297762, 141052])
+        self.assertIn("2000", self.hub.db.kv_get("sagainfo")["films"])                                              # décrit : prêt pour le jour de sa sortie
+
+    def test_a_film_shows_up_on_its_release_day_without_running_anything_again(self):
+        self.enrich()
+        with mock.patch("hub.missing.today", return_value="2098-12-31"):
+            self.assertNotIn(2000, [f["tmdb"] for f in self.group()["missing"]])                                    # la veille
+        with mock.patch("hub.missing.today", return_value="2099-01-01"):
+            shown = self.group()["missing"]
+            self.assertEqual([(f["tmdb"], f["rank"]) for f in shown][-1], (2000, 6))                                # le jour même, à sa place
+            self.assertNotIn(2001, [f["tmdb"] for f in shown])                                                      # sans date, il ne sort jamais de lui-même
+
+    def test_released_means_a_date_that_is_today_or_earlier(self):
+        from hub import missing
+        for date, now, expected in (("2017-11-15", "2017-11-15", True), ("2017-11-14", "2017-11-15", True), ("2017-11-16", "2017-11-15", False),
+                                    ("2017-11-15T00:00:00", "2017-11-15", True), ("", "2017-11-15", False), (None, "2017-11-15", False)):
+            self.assertEqual(missing.released({"date": date}, now), expected, (date, now))
+        self.assertFalse(missing.released({}))
+
+    def test_a_film_listed_by_a_file_saga_is_shown_even_if_it_is_not_out_yet(self):
+        FakeTmdb.movies = {**FakeTmdb.movies, 3000: {"id": 3000, "title": "À venir", "release_date": "2099-06-01", "poster_path": None}}
+        self.addCleanup(FakeTmdb.movies.pop, 3000, None)
+        self.api.json("/api/sagas", {"sagas": [{"name": "Ma saga", "films": [209112, 3000]}]})                       # on l'a écrit soi-même : on veut le voir
+        self.enrich()
+        self.assertEqual([(f["tmdb"], f["rank"]) for f in self.group("Ma saga")["missing"]], [(3000, 2)])
 
     def test_the_film_page_lists_what_is_missing_from_each_saga(self):
         self.enrich()

@@ -201,7 +201,9 @@ def enrich_sagas(cfg, db, lib, log=print, force=False):
                 keep(part)
             info["collections"][name] = {"id": collection, "films": [p["id"] for p in parts], "at": now}
             counts["sagas"] += 1
-            log(f"  {name} : {len(parts)} film(s), {sum(1 for p in parts if p['id'] not in owned)} absent(s)")
+            absent = [p for p in parts if p["id"] not in owned]
+            coming = [p for p in absent if not missing.released({"date": p.get("release_date")})]
+            log(f"  {name} : {len(parts)} film(s), {len(absent) - len(coming)} absent(s)" + (f", {len(coming)} pas encore sorti(s)" if coming else ""))
         wanted = []
         for _, ids in sagafile.Sagas(cfg.data / "sagas.json").all():
             wanted += [i for i in ids if i not in owned and i not in wanted and (force or str(i) not in info["films"])]
