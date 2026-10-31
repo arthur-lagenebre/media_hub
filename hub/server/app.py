@@ -34,6 +34,7 @@ from .. import accounts
 from .. import enrich
 from .. import playlists
 from .. import urls
+from ..sagas import Sagas
 from ..db import Database, make_id
 from ..media import books as bookmedia
 from ..media import probe as prober
@@ -82,6 +83,7 @@ class Hub:
         self.db = Database(cfg.data / "hub.db")
         self.images = Images(cfg, self.db)
         self.jobs = Jobs(cfg, self.db)
+        self.sagas = Sagas(cfg.data / "sagas.json")
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
         self.active = 0
         self.secret = self._secret()
@@ -717,10 +719,10 @@ def release_key(row):
     return (meta.get("date") or row["year"] or "9999", part is None, part or 0, row["sort"])
 
 
-def number_films(films, start=1):
-    """Le numéro affiché sur l'affiche d'un film de saga : sa place dans la saga, de 1 à N."""
+def number_films(films, ranks=None, start=1):
+    """Le numéro affiché sur l'affiche d'un film de saga : son rang dans la saga du fichier (`ranks`, {id du film: rang}), sinon sa place dans la saga, de 1 à N."""
     for n, film in enumerate(films, start):
-        film["part"] = n
+        film["part"] = ranks[film["id"]] if ranks else n
     return films
 
 
@@ -744,20 +746,39 @@ def film_seen(row, seen):
     return seen.get(row["id"], (0, 0))[0] >= max(1, row["count"])
 
 
-def collapse_sagas(rows, seen):
+def saga_groups(rows, custom):
+    """(sagas, home) : {nom: [(film, rang)]} pour chaque saga d'au moins deux films de la bibliothèque, dans l'ordre de la saga ; {id d'un film: nom de la saga qui le range dans la grille}.
+
+    `custom` : les sagas du fichier (voir sagas.py). Elles passent avant la collection de l'étiquette, et la première écrite avant les suivantes : un film n'a qu'une vignette.
+    """
+    sagas = {name: films for name, films in custom.items() if len(films) > 1}
+    tagged = {}
+    for row in rows:
+        if row["type"] == "movie" and row["grp"] and row["grp"] not in sagas:
+            tagged.setdefault(row["grp"], []).append(row)
+    tagged = {name: sorted(films, key=release_key) for name, films in tagged.items() if len(films) > 1}
+    home = {}
+    for name in sagas:
+        for film, _ in sagas[name]:
+            home.setdefault(film["id"], name)
+    for row in rows:
+        if row["type"] == "movie" and row["grp"] in tagged:
+            home.setdefault(row["id"], row["grp"])
+    sagas.update({name: list(zip(films, range(1, len(films) + 1))) for name, films in tagged.items()})
+    return sagas, home
+
+
+def collapse_sagas(rows, seen, custom):
     """Les films d'une même saga (au moins deux dans la bibliothèque) deviennent une seule vignette ; les autres films restent seuls.
 
-    Une vignette de saga est un dictionnaire qui a les mêmes clés qu'une ligne de la base, plus `members` : les films, dans l'ordre de la saga.
+    Une vignette de saga est un dictionnaire qui a les mêmes clés qu'une ligne de la base, plus `members` : les films, dans l'ordre de la saga. Elle existe tant qu'un film au moins y est rangé : un film de deux sagas n'a qu'une vignette (voir saga_groups), mais figure dans la page de chacune.
     """
-    groups = {}
-    for row in rows:
-        if row["type"] == "movie" and row["grp"]:
-            groups.setdefault(row["grp"], []).append(row)
-    out = [row for row in rows if not (row["type"] == "movie" and row["grp"] and len(groups[row["grp"]]) > 1)]
-    for name, members in groups.items():
-        if len(members) < 2:
+    sagas, home = saga_groups(rows, custom)
+    out = [row for row in rows if row["id"] not in home]
+    for name, films in sagas.items():
+        members = [film for film, _ in films]
+        if not any(home.get(m["id"]) == name for m in members):
             continue
-        members.sort(key=SORTS["part"][0])
         years = sorted(m["year"] for m in members if m["year"])
         genres = []
         for m in members:
@@ -788,9 +809,15 @@ def api_library(h, m, q):
     lib = library_or_404(hub, m.group(1))
     rows = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
     seen = seen_counts(hub, h.user["id"], lib.id)
-    sagas = lib.kind == "movies" and q.get("sagas") == "1" and not q.get("group")
+    movies = lib.kind == "movies"
+    custom = hub.sagas.of_movies(rows) if movies else {}          # les sagas du fichier, voir sagas.py
+    in_custom = {}
+    for name, films in custom.items():
+        for film, _ in films:
+            in_custom.setdefault(film["id"], []).append(name)
+    sagas = movies and q.get("sagas") == "1" and not q.get("group")
     if sagas:
-        rows = collapse_sagas(rows, seen)
+        rows = collapse_sagas(rows, seen, custom)
     letters, genres, sections, of = {}, {}, {}, {}
     books = lib.kind == "books"
     music = lib.kind == "music"
@@ -805,19 +832,21 @@ def api_library(h, m, q):
     section = q.get("section", "") if books else ""
     needle = fold(q.get("q", "")).strip()
     letter, genre, group = q.get("letter", ""), q.get("genre", ""), q.get("group", "")
+    ranks = {film["id"]: rank for film, rank in custom[group]} if group in custom else None        # le rang des films d'une saga du fichier
     unseen = q.get("filter") == "unseen"
     chosen = []
     for row in rows:
         is_saga = row["type"] == "saga"
         if letter and letter_of(row) != letter:
             continue
-        if group and row["grp"] != group:
+        if group and (row["id"] not in ranks if ranks is not None else row["grp"] != group):
             continue
         if section and of.get(row["id"]) != section:
             continue
         if genre and genre not in safe_json(row["genres"], []):
             continue
-        if needle and needle not in fold(row["title"]) and needle not in fold(row["grp"]) and not (is_saga and any(needle in fold(f["title"]) for f in row["members"])):
+        if needle and not (needle in fold(row["title"]) or needle in fold(row["grp"]) or any(needle in fold(n) for n in in_custom.get(row["id"], ()))
+                           or (is_saga and any(needle in fold(f["title"]) for f in row["members"]))):
             continue
         if unseen and (row["all_seen"] if is_saga else seen.get(row["id"], (0, 0))[0] >= max(1, row["count"])):
             continue
@@ -826,6 +855,8 @@ def api_library(h, m, q):
     key, reverse = SORTS.get(sort, SORTS["title"])
     if sort == "title" and lib.kind in TITLE_SORTS:
         key = TITLE_SORTS[lib.kind]
+    if sort == "part" and ranks is not None:
+        key = lambda r: ranks[r["id"]]
     chosen.sort(key=key, reverse=reverse)
     try:
         offset, limit = max(0, int(q.get("offset", 0))), min(600, max(1, int(q.get("limit", 240))))
@@ -838,10 +869,10 @@ def api_library(h, m, q):
     if books:
         out["sections"] = sections_json(sections)
     if group and sort == "part":
-        number_films(out["items"], offset + 1)
+        number_films(out["items"], ranks, offset + 1)
     if sagas:
         out["sagas"] = sum(1 for r in chosen if r["type"] == "saga")
-        out["films"] = sum(r["count"] if r["type"] == "saga" else 1 for r in chosen)
+        out["films"] = len({m["id"] for r in chosen for m in (r["members"] if r["type"] == "saga" else [r])})      # un film de deux sagas ne compte qu'une fois
     h.send_json(out)
 
 
@@ -894,10 +925,21 @@ def api_item(h, m, q):
     out["resume"] = resume_target(rows, progress)
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
-    if item["type"] == "movie" and item["grp"]:                 # la saga : les autres films qui la composent
-        saga = sorted(hub.db.query("SELECT * FROM items WHERE lib=? AND grp=?", (item["lib"], item["grp"])), key=release_key)
+    if item["type"] == "movie":
+        movies = hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (item["lib"],))
         seen = seen_counts(hub, h.user["id"], lib.id)
-        out["saga"] = number_films([with_seen(r, seen) for r in saga])
+        sagas = []                  # ses sagas : celle de l'étiquette d'abord, puis celles du fichier (sagas.py), chacune avec les films qui la composent
+        if item["grp"]:
+            tagged = sorted((r for r in movies if r["grp"] == item["grp"]), key=release_key)
+            out["saga"] = number_films([with_seen(r, seen) for r in tagged])           # la saga de l'étiquette seule : gardée pour les clients d'avant `sagas`
+            sagas.append({"name": item["grp"], "films": out["saga"]})
+        for name, films in hub.sagas.of_movies(movies).items():
+            if any(f["id"] == item["id"] for f, _ in films):
+                numbered = number_films([with_seen(f, seen) for f, _ in films], {f["id"]: rank for f, rank in films})
+                sagas = [s for s in sagas if s["name"] != name] + [{"name": name, "films": numbered}]       # un nom que l'étiquette porte aussi : celle du fichier l'emporte
+        sagas = [s for s in sagas if len(s["films"]) > 1]
+        if sagas:
+            out["sagas"] = sagas
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
     h.send_json(out)

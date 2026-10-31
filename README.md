@@ -45,7 +45,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | --- | --- | --- |
 | `HUB_SRV` | racine des bibliothèques (`Films`, `Series`, `Animations`, `Musique`, `Livres`) | `/srv` |
 | `HUB_LIBRARIES` | fichier JSON `[{"id","label","kind","path"}]` pour d'autres dossiers ; `kind` : `movies`, `shows`, `music`, `books` | dossiers connus sous `HUB_SRV` |
-| `HUB_DATA` | base SQLite et cache d'images | `./data` |
+| `HUB_DATA` | base SQLite, cache d'images et `sagas.json` (les sagas que l'on compose soi-même, voir ci-dessous) | `./data` |
 | `HUB_REPO` | dossier `media_library` | `../media_library`, `/app/media_library` |
 | `HUB_BIND` / `HUB_PORT` | adresse et port d'écoute | `127.0.0.1` / `8080` |
 | `HUB_PASSWORD` | amorçage : tant qu'aucun compte n'existe, crée le compte administrateur avec ce mot de passe (ensuite il est ignoré : les comptes se gèrent par `python -m hub user …` ou dans l'interface) ; **à mettre dès que `HUB_BIND` n'est pas local** | aucun (serveur ouvert, sans compte) |
@@ -54,6 +54,16 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) | `0` |
 | `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting) ; lue aussi dans le `.env` de `media_library` | aucune |
+
+## Sagas
+
+Un film porte la saga que dit son étiquette (la collection TMDB posée par `Metadata.py`). On peut en composer d'autres (une trilogie que TMDB ne connaît pas, l'ordre du MCU) dans `sagas.json`, sous `HUB_DATA` : des listes ordonnées de films, désignés par leur identifiant TMDB (celui de l'étiquette `TMDB` du fichier, qui survit aux renommages et à une base refaite).
+
+```json
+{"sagas": [{"name": "Trilogie Cornetto", "films": [747, 4638, 49051]}]}
+```
+
+L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste est son numéro, même quand on n'a pas ceux qui le précèdent. Un film peut être dans plusieurs sagas : la grille ne lui donne qu'une vignette (celle de la première saga du fichier, avant celle de l'étiquette), et sa fiche les liste toutes. Le fichier est relu dès qu'il change ; absent ou illisible, il ne donne aucune saga.
 
 ## Comptes
 
@@ -77,7 +87,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche |
 | `GET /api/library/<id>?q&letter&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec lettres et genres ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
 | `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
-| `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, saga, casting, progression |
+| `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, sagas, casting, progression |
 | `POST /api/play/<entry>` | plan de lecture (url, pistes audio, sous-titres, reprise, suivant) |
 | `GET /media/<entry>/file`, `/media/<entry>/stream` | fichier (Range, `?download=1`) ; flux MP4 fragmenté (remux / transcodage, `?start=`) |
 | `GET /api/subs/<entry>/<e\|s><n>.vtt` | sous-titres en WebVTT |

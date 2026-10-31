@@ -118,7 +118,7 @@ Un film, une série, un album, une série de livres.
 | `added` | entier | date d'ajout |
 | `genres` | liste de chaînes | |
 | `cover` | chaîne | URL de l'affiche / pochette / couverture. **Peut répondre 404** (aucune image) : prévoir une case de remplacement. |
-| `part` | nombre, optionnel | rang dans la saga (films) |
+| `part` | nombre, optionnel | films, seulement dans une liste de saga (`group=…&sort=part`, `saga`, `sagas`) : le rang du film dans la saga. Dans une saga du fichier `sagas.json`, sa place dans la liste (les films absents de la médiathèque comptent : 1 et 3) ; sinon sa place de 1 à N dans l'ordre de sortie |
 | `duration` | nombre, optionnel | durée de l'album (albums) |
 | `artist_id` | chaîne, optionnel | identifiant d'artiste (albums), pour `/api/artist/<lib>/<id>` |
 | `missing` | entier, optionnel | **séries de livres seulement** (`type: "series"`) : nombre de tomes manquants ; absent s'il n'en manque aucun. **Attention : dans la fiche (`GET /api/item/<id>`), le même nom porte une liste** (voir « Même nom, deux types »). Les albums n'ont pas de `missing` : leurs albums manquants sont dans `wanted` (`/api/artist`). |
@@ -163,7 +163,7 @@ Paramètres (tous optionnels) :
 | `filter=unseen` | seulement ce qui n'est pas entièrement vu |
 | `offset`, `limit` | pagination (`limit` : 240 par défaut, 600 au plus) |
 | `sagas=1` | films : regroupe les sagas (au moins deux films) en une vignette `type: "saga"` |
-| `group` | films : les films d'une saga, par son nom (`grp`) ; désactive `sagas` |
+| `group` | films : les films d'une saga, par son nom (`grp`, ou le nom d'une saga du fichier `sagas.json`) ; désactive `sagas` |
 | `section` | livres : une section (Manga, BD…) |
 
 Réponse :
@@ -191,7 +191,8 @@ Un `<élément>` (champs ci-dessus) plus :
 | `resume` | chaîne ou `null` | `id` du fichier à proposer : l'entamé le plus récent, sinon le premier non vu, sinon le premier |
 | `links` | liste, optionnel | `[{"label": "TMDB", "url": "https://…"}]` (films et séries) |
 | `seasons` | liste, optionnel | séries ; **Ambigu** : forme tirée de l'étiquetage, non figée par le serveur |
-| `saga` | liste d'`<élément>`, optionnel | films d'une saga : **tous** les films de la saga, **y compris le film consulté** (le client le reconnaît à son `id`), triés par `part` (les films sans rang à la fin) puis par titre |
+| `saga` | liste d'`<élément>`, optionnel | films d'une saga : **tous** les films de la saga, **y compris le film consulté** (le client le reconnaît à son `id`), dans l'ordre de la saga (date de sortie), avec leur `part`. Seulement la saga que dit l'étiquette du fichier : voir `sagas` pour les autres |
+| `sagas` | liste, optionnel | films : chaque saga d'au moins deux films à laquelle le film appartient, celle de l'étiquette d'abord, puis celles de `sagas.json` : `[{"name": "Trilogie Cornetto", "films": [<élément>]}]`. Les films sont dans l'ordre de la saga, y compris le film consulté ; `name` s'utilise dans `group`. Absent si le film n'est dans aucune saga |
 | `missing` | liste, optionnel | séries de livres : `[{"label": "Naruto", "numbers": [3], "total": 3}]` : par série (ou arc), les numéros de tomes manquants et le total attendu. Absent s'il ne manque rien. **Remplace le compte** que portent les listes. |
 | `tracks_total` | entier, optionnel | albums : nombre de pistes |
 | autres | | selon ce que l'étiquetage ou l'enrichissement a fourni, quand ils sont non vides : `directors`, `writers`, `actors`, `artist`, `artist_id`, `label`, `catalog`, `formats`, `authors`, `publisher`, `section`, `collection`, `status`, `episodes_total`, `seasons_total`, `tmdb`, `unit`, `units`, `years`, `discs`, `season_summaries`. **Ambigu** : leurs types ne sont pas contrôlés par le serveur (listes de chaînes pour les personnes, structures libres pour `discs`, `season_summaries`). |
