@@ -97,6 +97,8 @@ def detail(db: Database, profile, pid):
 def create(db: Database, profile, name, entry_ids=()):
     """Crée une playlist ; si une playlist de ce nom existe déjà, on la reprend (taper deux fois le même nom ne fait pas de doublon)."""
     name = clean_name(name)
+    if entry_ids and not audio_entries(db, [e for e in entry_ids if isinstance(e, str)]):
+        raise PlaylistError(400, "aucune piste valide à ajouter")           # avant de créer quoi que ce soit : pas de playlist vide laissée derrière une erreur
     same = next((r for r in db.query("SELECT * FROM playlists WHERE profile=?", (profile,)) if r["name"].casefold() == name.casefold()), None)
     if same is None:
         pid = secrets.token_hex(8)

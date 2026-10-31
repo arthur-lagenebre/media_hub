@@ -162,7 +162,7 @@
             h('p', null, !H.isAdmin() ? 'Rien n’est encore indexé : l’administrateur doit lancer une mise à jour de la médiathèque.' : H.libs.length ? 'Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.' : 'Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Animations, Musique, Livres), ou décris-les avec HUB_LIBRARIES.'),
             H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/admin', 'data-autofocus': '1' }, 'Ouvrir la gestion') : null));
           clearTimeout(timer);
-          timer = setTimeout(function () { if (el.isConnected && !document.hidden) load(); }, 4000);
+          timer = setTimeout(function () { if (document.body.contains(el) && !document.hidden) load(); }, 4000);
           return;
         }
         if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
@@ -284,7 +284,7 @@
         paint();
         empty.hidden = items.length > 0;
         if (!items.length) showEmpty();
-        if (first && !H.overlay.isOpen() && el.isConnected && el.style.display !== 'none' && document.activeElement !== search && (document.activeElement === document.body || el.contains(document.activeElement))) H.focus.set(grid.querySelector('.card') || search, true);
+        if (first && !H.overlay.isOpen() && document.body.contains(el) && el.style.display !== 'none' && document.activeElement !== search && (document.activeElement === document.body || el.contains(document.activeElement))) H.focus.set(grid.querySelector('.card') || search, true);
         if (items.length < total && sentinel.getBoundingClientRect().top < window.innerHeight + 600) fetchMore(false);
       }).catch(function (e) { loading = false; empty.hidden = false; H.clear(empty).appendChild(h('p', null, e.message)); });
     }
@@ -302,7 +302,7 @@
     }
     if ('IntersectionObserver' in window) new IntersectionObserver(function (e) { if (e[0].isIntersecting) fetchMore(false); }, { rootMargin: '800px' }).observe(sentinel);
     window.addEventListener('scroll', onScroll, { passive: true });
-    function onScroll() { if (el.isConnected && el.style.display !== 'none' && sentinel.getBoundingClientRect().top < window.innerHeight + 800) fetchMore(false); }
+    function onScroll() { if (document.body.contains(el) && el.style.display !== 'none' && sentinel.getBoundingClientRect().top < window.innerHeight + 800) fetchMore(false); }
     grid.addEventListener('focusin', function (e) {
       var cards = grid.querySelectorAll('.card'), idx = Array.prototype.indexOf.call(cards, e.target);
       if (idx >= 0 && idx > cards.length - 40) fetchMore(false);
@@ -663,7 +663,7 @@
       var tools = h('section', { class: 'panel' }, h('h2', null, 'Entretien'));
       tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Fichiers parasites'), h('span', null, 'Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.')),
         H.button('Compter', null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, 'Simulation lancée'); } }),
-        H.button('Supprimer', null, { 'data-key': 'junk-del', onclick: function () { start('/api/cleanup', { apply: true }, 'Nettoyage lancé'); } })));
+        H.button('Supprimer', null, { 'data-key': 'junk-del', onclick: confirmCleanup })));
       el.appendChild(accountPanel());
       if (H.session.auth && H.isAdmin()) el.appendChild(usersPanel());
       if (H.isAdmin()) el.appendChild(tools);
@@ -678,6 +678,14 @@
       if (logPanel) el.appendChild(logPanel);
       if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
       if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
+    }
+    // Supprimer les fichiers parasites ne s'annule pas : on demande, en rappelant ce que la dernière simulation en a compté.
+    function confirmCleanup() {
+      var sim = jobs.filter(function (j) { return j.status === 'done' && j.result && j.label.indexOf('simulation') >= 0; })[0];
+      var detail = sim ? 'La dernière simulation en a compté ' + sim.result.found : 'Lance « Compter » d’abord pour savoir combien';
+      H.menu('Supprimer les fichiers parasites ?', [{ label: 'Supprimer définitivement', detail: detail, value: 'yes' }, { label: 'Annuler', value: 'no' }], 'no', function (v) {
+        if (v === 'yes') start('/api/cleanup', { apply: true }, 'Nettoyage lancé');
+      });
     }
     // Le compte connecté : nom, rôle, changement de mot de passe, déconnexion. Serveur ouvert : comment créer le premier compte.
     function accountPanel() {

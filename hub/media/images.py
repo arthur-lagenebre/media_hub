@@ -14,7 +14,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import subprocess
+import threading
 import warnings
 from pathlib import Path
 
@@ -45,6 +47,21 @@ def sniff(data):
 def snap_width(width):
     width = int(width or 0)
     return next((w for w in WIDTHS if width <= w), WIDTHS[-1]) if width else 0
+
+
+def write_atomic(path, data):
+    """Écrit `data` d'un bloc (fichier temporaire, puis remplacement) : une requête qui arrive en même temps ne lit jamais un fichier à moitié écrit, que le navigateur garderait avec une étiquette stable."""
+    path = Path(path)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 class Images:
@@ -164,7 +181,7 @@ class Images:
             return None
         data, mime = self.resize(source, width)
         try:
-            hit.write_bytes(data)
+            write_atomic(hit, data)
         except OSError:
             pass
         return data, mime, key
@@ -202,7 +219,7 @@ class Images:
             return None
         data, mime = self.resize(source, width)
         try:
-            hit.write_bytes(data)
+            write_atomic(hit, data)
         except OSError:
             pass
         return data, mime, key

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import mimetypes
 import os
 import re
@@ -41,7 +42,7 @@ from ..db import Database, make_id
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
-from ..media.images import Images, sniff
+from ..media.images import Images, sniff, write_atomic
 from .jobs import Jobs
 
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
@@ -120,10 +121,20 @@ class Hub:
         lib = self.cfg.library(entry["lib"])
         if lib is None:
             raise HttpError(404, "bibliothèque inconnue")
-        path = Path(os.path.normpath(Path(lib.path) / entry["rel"]))
-        if not str(path).startswith(os.path.normpath(str(lib.path))):
+        root = Path(os.path.normpath(lib.path))
+        path = Path(os.path.normpath(root / entry["rel"]))
+        if path != root and root not in path.parents:               # `/srv/Musique2` n'est pas dans `/srv/Musique`
             raise HttpError(400, "chemin refusé")
         return lib, path
+
+    def scrub(self, text):
+        """Le message sans les chemins du serveur (dossiers des bibliothèques, HUB_DATA, media_library) : ffprobe, ffmpeg et les OSError les écrivent tels quels, et la réponse part à n'importe quel compte connecté."""
+        text = str(text)
+        roots = [Path(lib.path) for lib in self.cfg.libraries] + [Path(self.cfg.data)] + ([Path(self.cfg.repo)] if self.cfg.repo else [])
+        forms = {form for root in roots for form in (str(root), root.as_posix(), str(root.resolve()), root.resolve().as_posix()) if len(form) > 3}
+        for form in sorted(forms, key=len, reverse=True):          # le plus long d'abord : un dossier peut en contenir un autre
+            text = text.replace(form, "…")
+        return text
 
     def entry(self, ident):
         row = self.db.one("SELECT * FROM entries WHERE id=?", (ident,))
@@ -268,14 +279,17 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == "HEAD":
                 return
             self.connection.settimeout(3600)       # un film mis en pause ne doit pas couper la connexion
-            handle.seek(start)
-            remaining = length
-            while remaining > 0:
-                chunk = handle.read(min(CHUNK, remaining))
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                remaining -= len(chunk)
+            try:
+                handle.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = handle.read(min(CHUNK, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            finally:
+                self.connection.settimeout(self.timeout)       # la connexion persiste : un client inactif ne garde pas un fil une heure de plus
 
     # --- Aiguillage -------------------------------------------------------
     def authorized(self, path, query):
@@ -319,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
                     if found:
                         func(self, found, query)
                         return
-            if self.command in ("GET", "HEAD") and not path.startswith("/api/"):
+            if self.command in ("GET", "HEAD") and not path.startswith(("/api/", "/media/", "/img/", "/book/")):         # un chemin inconnu d'un fichier servi est un 404, pas la page d'accueil
                 self.static(path)
                 return
             raise HttpError(404, "introuvable")
@@ -335,7 +349,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _fail(self, status, message):
         try:
-            self.send_json({"error": message}, status)
+            self.send_json({"error": self.hub.scrub(message)}, status)
         except OSError:
             self.close_connection = True
         if self.command == "POST" and not self.body_taken:      # refus avant toute lecture (401, 404, route qui lève trop tôt) : le corps ne doit pas coller à la requête suivante
@@ -349,13 +363,26 @@ class Handler(BaseHTTPRequestHandler):
             shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
             print(f"{status} {self.command} {shown} : {message}", file=sys.stderr)
 
+    def content_length(self):
+        """La taille annoncée du corps. Illisible ou négative : 400, et la connexion est coupée (on ne sait pas où le corps finit : lire jusqu'à la fin de la connexion bloquerait un fil)."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self.close_connection = True
+            raise HttpError(400, "Content-Length illisible")
+        return length
+
     def body_json(self):
+        """Le corps JSON de la requête, toujours un objet : un texte qui n'en est pas un (une liste, un nombre, du bruit) vaut {}."""
         self.body_taken = True
-        length = int(self.headers.get("Content-Length") or 0)
+        length = self.content_length()
         if length > 1 << 20:
             self.close_connection = True            # corps non lu : la connexion ne peut plus servir
             raise HttpError(413, "corps trop gros")
-        return safe_json(self.rfile.read(length).decode("utf-8", "replace") if length else "", {})
+        data = safe_json(self.rfile.read(length).decode("utf-8", "replace") if length else "", {})
+        return data if isinstance(data, dict) else {}
 
     def discard_body(self):
         """Lit et jette le corps d'une requête qu'on refuse sans l'avoir lue : sinon il reste sur la connexion persistante et colle à la requête suivante. Trop gros pour cela : on coupe la connexion."""
@@ -372,7 +399,7 @@ class Handler(BaseHTTPRequestHandler):
     def body_bytes(self, limit):
         """Le corps de la requête tel quel (un fichier envoyé) ; 413 au-delà de `limit` octets (la connexion est alors coupée : le corps n'est pas lu)."""
         self.body_taken = True
-        length = int(self.headers.get("Content-Length") or 0)
+        length = self.content_length()
         if length > limit:
             self.close_connection = True
             raise HttpError(413, f"fichier trop gros (au plus {limit >> 20} Mo)")
@@ -433,7 +460,7 @@ def session_cookie(hub, row):
 @route("POST", r"/api/login")
 def login(h, m, q):
     h.body_taken = True
-    length = int(h.headers.get("Content-Length") or 0)
+    length = h.content_length()
     if length > 4096:
         h.close_connection = True                   # le reste du corps ne sera pas lu : la connexion ne peut plus servir
     raw = h.rfile.read(min(length, 4096)).decode("utf-8", "replace")
@@ -459,7 +486,7 @@ def login(h, m, q):
 def api_token(h, m, q):
     """Pour un client natif : le nom (facultatif s'il n'y a qu'un compte) et le mot de passe en JSON contre le jeton (à renvoyer en `Authorization: Bearer`) et le jeton de média (`?token=`)."""
     h.body_taken = True
-    length = int(h.headers.get("Content-Length") or 0)
+    length = h.content_length()
     if length > 4096:
         h.close_connection = True                   # le corps ne sera pas lu : la connexion ne peut plus servir à une autre requête
         raise HttpError(413, "corps trop gros")
@@ -1197,6 +1224,8 @@ def api_progress(h, m, q):
         position, duration = max(0.0, float(body.get("position", 0))), max(0.0, float(body.get("duration", 0)))
     except (TypeError, ValueError):
         raise HttpError(400, "position invalide")
+    if not (math.isfinite(position) and math.isfinite(duration)):          # `Infinity` passe json.loads : stocké, il rendrait la fiche du compte illisible pour JSON.parse
+        raise HttpError(400, "position invalide")
     duration = duration or entry["duration"]
     done = bool(body.get("done")) or is_finished(entry["kind"], position, duration)
     if entry["kind"] == "audio":                 # la musique n'a pas de reprise : seulement « écouté »
@@ -1401,23 +1430,29 @@ def api_subs(h, m, q):
     kind, index = m.group(2), int(m.group(3))
     cache = hub.cfg.data / "subs"
     cache.mkdir(parents=True, exist_ok=True)
-    stamp = f"{entry['id']}-{entry['mtime']}-{kind}{index}.vtt"
-    target = cache / stamp
+    side = None
+    if kind == "s":                                  # le fichier posé à côté : sa taille et sa date entrent dans la clé, sinon corriger un .srt resterait sans effet
+        sides = subtitles.side_files(path)
+        if index >= len(sides):
+            raise HttpError(404, "sous-titres introuvables")
+        side = sides[index]["path"]
+        try:
+            st = side.stat()
+        except OSError:
+            raise HttpError(404, "sous-titres introuvables")
+    stamp = f"{entry['id']}-{entry['mtime']}-{kind}{index}" + (f"-{st.st_size}-{st.st_mtime_ns}" if side else "")
+    target = cache / f"{stamp}.vtt"
     if not target.is_file():
         try:
-            if kind == "e":
-                text = subtitles.ffmpeg_vtt(hub.cfg.ffmpeg, path, index)
-            else:
-                sides = subtitles.side_files(path)
-                if index >= len(sides):
-                    raise HttpError(404, "sous-titres introuvables")
-                text = subtitles.side_vtt(hub.cfg.ffmpeg, sides[index]["path"])
-        except HttpError:
-            raise
+            text = subtitles.ffmpeg_vtt(hub.cfg.ffmpeg, path, index) if kind == "e" else subtitles.side_vtt(hub.cfg.ffmpeg, side)
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
             raise HttpError(500, str(e))
-        target.write_text(text, encoding="utf-8")
-    h.send_body(target.read_bytes(), "text/vtt; charset=utf-8", 200, {"Cache-Control": "private, max-age=86400"}, h.command == "HEAD")
+        write_atomic(target, text.encode("utf-8"))
+    tag = f'"{stamp}"'
+    if h.headers.get("If-None-Match") == tag:
+        h.send_body(b"", "text/vtt; charset=utf-8", 304, {"ETag": tag, "Cache-Control": "private, no-cache"})
+        return
+    h.send_body(target.read_bytes(), "text/vtt; charset=utf-8", 200, {"ETag": tag, "Cache-Control": "private, no-cache"}, h.command == "HEAD")
 
 
 # ---------------------------------------------------------------------------
@@ -1497,7 +1532,7 @@ def book_epub(h, m, q):
     if mime.startswith("text/") or mime.endswith("xml") or mime.endswith("css"):
         mime += "; charset=utf-8"
     # Le contenu d'un livre est celui d'un tiers : pas de script, pas de requête vers l'extérieur.
-    csp = "default-src 'self' data: blob:; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; connect-src 'none'"
+    csp = "default-src 'self' data: blob:; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'"
     h.send_body(data, mime, 200, {"Cache-Control": "private, max-age=86400", "Content-Security-Policy": csp}, h.command == "HEAD")
 
 

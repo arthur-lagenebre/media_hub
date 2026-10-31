@@ -478,6 +478,15 @@ class TestMissingFilmsInTheUi(UiCase):
         self.assertEqual(self.view(".sagabox .mhide").count(), 0)
 
 
+class TestCleanupConfirmation(UiCase):
+    def test_deleting_junk_asks_first(self):
+        self.open("#/admin")
+        self.view("[data-key=junk-del]").click()
+        self.page.locator(".menu .opt", has_text="Supprimer définitivement").wait_for()
+        self.page.locator(".menu .opt", has_text="Annuler").click()
+        self.page.wait_for_timeout(300)
+        self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if "Nettoyage" in j["label"]])          # annuler ne lance rien
+
 class TestMusicQueueAndPlaylists(UiCase):
     def open_music(self):
         self.open("#/l/musique")

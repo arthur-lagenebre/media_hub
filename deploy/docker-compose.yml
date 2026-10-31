@@ -56,7 +56,7 @@ services:
       - ${APPS}/media_library:/app/media_library:ro
       - ${APPS}/media_hub-data:/data
       - ${APPS}/ffmpeg:/opt/ffmpeg:ro
-      # Bibliothèques. « :ro » = lecture seule. Retire-le si tu veux que le bouton « Nettoyer » supprime les Thumbs.db,
+      # Bibliothèques. « :ro » = lecture seule. Retire-le si tu veux que le bouton « Supprimer » (Gestion > Entretien) supprime les Thumbs.db,
       # ou que les scripts de media_library (étiquetage, renommage) tournent depuis ce conteneur.
       - ${MEDIA}/Films:/srv/Films:ro
       - ${MEDIA}/Series:/srv/Series:ro
