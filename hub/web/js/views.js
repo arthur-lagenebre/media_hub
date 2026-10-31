@@ -371,12 +371,12 @@
       else if (d.type === 'series') body.appendChild(volumes(d));
       else if (entries.length > 1) body.appendChild(parts(d));
       if (d.actors && d.actors.length) body.appendChild(h('section', { class: 'cast' }, h('h2', null, 'Distribution'), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); }))));
-      if (d.saga && d.saga.length > 1) {
-        var cards = d.saga.map(function (s) { var c = H.card(s, false, true); if (s.id === d.id) c.classList.add('now'); return c; });
+      (d.sagas || []).forEach(function (saga) {
+        var cards = saga.films.map(function (s) { var c = H.card(s, false, true); if (s.id === d.id) c.classList.add('now'); return c; });
         body.appendChild(h('section', { class: 'sagabox' },
-          h('h2', null, h('a', { class: 'f head', href: sagaHref(d.library.id, d.grp) }, d.grp), h('span', { class: 'n' }, H.plural(d.saga.length, 'film'))),
+          h('h2', null, h('a', { class: 'f head', href: sagaHref(d.library.id, saga.name) }, saga.name), h('span', { class: 'n' }, H.plural(saga.films.length, 'film'))),
           h('div', { class: 'grid small' }, cards)));
-      }
+      });
       el.appendChild(body);
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }

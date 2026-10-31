@@ -1071,6 +1071,96 @@ class TestSagaOrder(ServerCase):
         self.assertEqual([self.detail(c)["title"] for c in card["covers"]], ["Ant-Man", "Ant-Man et la Guêpe", "Ant-Man et la Guêpe - Quantumania"])
 
 
+class TestSagasFile(ServerCase):
+    """`sagas.json`, sous HUB_DATA : des listes de films (identifiants TMDB) qui s'ajoutent à la saga de l'étiquette. Inception (27205) n'en a pas ; Man of Steel (49521) et Batman v Superman (209112) sont de « Saga DCEU »."""
+
+    @property
+    def file(self):
+        return self.hub.cfg.data / "sagas.json"
+
+    def write(self, *sagas):
+        self.file.write_text(json.dumps({"sagas": [{"name": name, "films": films} for name, films in sagas]}), encoding="utf-8")
+
+    def tearDown(self):
+        self.file.unlink(missing_ok=True)
+
+    def tiles(self):
+        return {i["title"]: i for i in self.items("films", sagas=1)["items"] if i["type"] == "saga"}
+
+    def names(self, title):
+        return [s["name"] for s in self.detail(self.item_by_title("films", title)["id"]).get("sagas", [])]
+
+    def test_without_the_file_the_saga_of_the_tag_is_the_only_one(self):
+        self.assertEqual(sorted(self.tiles()), ["Saga DCEU"])
+        self.assertEqual(self.names("Inception"), [])
+        self.assertEqual(self.names("Man of Steel"), ["Saga DCEU"])
+
+    def test_a_film_of_the_file_is_listed_with_its_rank_in_the_list(self):
+        self.write(("Ma saga", [209112, 999999, 27205]))        # le film du milieu n'est pas dans la médiathèque : il garde sa place
+        data = self.items("films", group="Ma saga", sort="part")
+        self.assertEqual([(i["title"], i["part"]) for i in data["items"]], [("Batman v Superman", 1), ("Inception", 3)])
+        self.assertEqual(data["total"], 2)
+
+    def test_the_grid_gives_a_film_one_tile(self):
+        self.write(("Ma saga", [209112, 999999, 27205]))
+        data = self.items("films", sagas=1)
+        tiles = {i["title"]: i for i in data["items"] if i["type"] == "saga"}
+        self.assertEqual(sorted(tiles), ["Ma saga", "Saga DCEU"])
+        self.assertEqual((tiles["Ma saga"]["n"], tiles["Saga DCEU"]["n"]), (2, 2))
+        titles = [i["title"] for i in data["items"]]
+        self.assertNotIn("Inception", titles)                    # rangé dans « Ma saga »
+        self.assertNotIn("Batman v Superman", titles)
+        self.assertEqual(data["films"], len(set(i["id"] for i in self.items("films")["items"])))      # chaque film compte une fois
+
+    def test_the_film_page_lists_every_saga_of_the_film(self):
+        self.write(("Ma saga", [209112, 999999, 27205]))
+        steel = self.detail(self.item_by_title("films", "Batman v Superman")["id"])
+        self.assertEqual([s["name"] for s in steel["sagas"]], ["Saga DCEU", "Ma saga"])      # celle de l'étiquette d'abord
+        self.assertEqual([(f["title"], f["part"]) for f in steel["sagas"][1]["films"]], [("Batman v Superman", 1), ("Inception", 3)])
+        self.assertEqual([m["title"] for m in steel["saga"]], ["Man of Steel", "Batman v Superman"])      # `saga` reste la saga de l'étiquette
+        inception = self.detail(self.item_by_title("films", "Inception")["id"])
+        self.assertEqual([s["name"] for s in inception["sagas"]], ["Ma saga"])
+        self.assertNotIn("saga", inception)
+
+    def test_a_saga_of_the_file_with_one_film_here_stays_out_of_the_grid(self):
+        self.write(("Seul", [27205, 1, 2]))
+        self.assertEqual(sorted(self.tiles()), ["Saga DCEU"])
+        self.assertEqual(self.names("Inception"), [])
+
+    def test_the_first_saga_of_the_file_keeps_the_tile(self):
+        self.write(("A", [209112, 27205]), ("B", [27205, 209112]))
+        self.assertEqual(sorted(self.tiles()), ["A", "Saga DCEU"])       # B n'a plus de film à ranger : pas de vignette, mais sa page existe
+        self.assertEqual([i["title"] for i in self.items("films", group="B", sort="part")["items"]], ["Inception", "Batman v Superman"])
+        self.assertEqual(self.names("Inception"), ["A", "B"])
+
+    def test_the_search_finds_the_films_of_a_saga_by_its_name(self):
+        self.write(("Ma saga", [209112, 27205]))
+        self.assertEqual(sorted(i["title"] for i in self.items("films", q="ma saga")["items"]), ["Batman v Superman", "Inception"])
+
+    def test_the_file_is_read_again_when_it_changes(self):
+        self.write(("Ma saga", [209112, 27205]))
+        self.assertIn("Ma saga", self.tiles())
+        self.write(("Autre", [209112, 27205]))
+        self.assertEqual(sorted(self.tiles()), ["Autre", "Saga DCEU"])
+
+    def test_a_broken_file_gives_no_saga(self):
+        self.file.write_text("{pas du json", encoding="utf-8")
+        self.assertEqual(sorted(self.tiles()), ["Saga DCEU"])
+        self.file.write_text('["pas", "un", "objet"]', encoding="utf-8")
+        self.assertEqual(sorted(self.tiles()), ["Saga DCEU"])
+
+    def test_parse_keeps_what_is_readable(self):
+        from hub import sagas
+        text = json.dumps({"sagas": [
+            {"name": "  Une   saga ", "films": [3, "movie/4", "5", 3, True, None, "abc", 1.5]},
+            {"name": "Une saga", "films": [9]},              # nom déjà pris
+            {"name": "", "films": [1]},                      # sans nom
+            {"films": [1]}, "texte", {"name": "Vide", "films": "pas une liste"}]})
+        self.assertEqual(sagas.parse(text), [("Une saga", [3, 4, 5]), ("Vide", [])])
+        self.assertEqual(sagas.parse(""), [])
+        self.assertEqual(sagas.parse('{"sagas": 3}'), [])
+
+
 class TestApiUrls(ServerCase):
     """L'API donne elle-même les URLs des images et des fichiers : relatives, sans ?w= ni jeton, et elles mènent bien quelque part."""
 
