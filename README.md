@@ -63,7 +63,7 @@ Un film porte la saga que dit son étiquette (la collection TMDB posée par `Met
 {"sagas": [{"name": "Trilogie Cornetto", "films": [747, 4638, 49051]}]}
 ```
 
-L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste est son numéro, même quand on n'a pas ceux qui le précèdent. Un film peut être dans plusieurs sagas : la grille ne lui donne qu'une vignette (celle de la première saga du fichier, avant celle de l'étiquette), et sa fiche les liste toutes. Le fichier est relu dès qu'il change ; absent ou illisible, il ne donne aucune saga.
+L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste est son numéro, même quand on n'a pas ceux qui le précèdent. Un film peut être dans plusieurs sagas : la grille ne lui donne qu'une vignette (celle de la première saga du fichier, avant celle de l'étiquette), et sa fiche les liste toutes. Le fichier est relu dès qu'il change ; absent ou illisible, il ne donne aucune saga. L'administrateur le modifie par l'API (`/api/sagas`, voir `docs/api.md`) : le serveur l'écrit d'un bloc et refuse ce qu'il ne comprend pas.
 
 ## Comptes
 
@@ -95,6 +95,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/book/<id>`, `/book/<id>/page/<n>`, `/book/<id>/epub/<chemin>` | pages d'un `.cbz`, fichiers d'un `.epub` (CSP sans script) |
 | `GET /img/item/<id>?w=`, `/img/entry/<id>?w=` | affiches, pochettes, couvertures (réduites et gardées en cache) |
 | `POST /api/token` | pour un client natif (Android TV, iOS, Chromecast) : corps `{"user": "…", "password": "…"}` (`user` facultatif s'il n'y a qu'un compte), réponse `{"token": "…", "media_token": "…", "user": {…}}` (401 `{"error": "mot de passe incorrect"}` sinon ; jetons vides si le serveur est ouvert, sans compte). Le jeton est celui du compte ; le jeton de média est commun à tout le serveur |
+| `GET /api/sagas`, `POST /api/sagas`, `POST /api/sagas/add`, `GET /api/sagas/films` | sagas composées à la main (`sagas.json`, administrateur seulement) : lire, tout remplacer (avec la `version` lue, pour ne pas écraser un autre), ajouter des films, chercher des films à y mettre |
 | `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete` | comptes (administrateur seulement) : lister, créer, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
 | `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
 | Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte ; le jeton de média, lui, ne change pas |

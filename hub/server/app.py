@@ -34,6 +34,7 @@ from .. import accounts
 from .. import enrich
 from .. import playlists
 from .. import urls
+from .. import sagas as sagafile
 from ..sagas import Sagas
 from ..db import Database, make_id
 from ..media import books as bookmedia
@@ -1480,6 +1481,95 @@ def book_epub(h, m, q):
     # Le contenu d'un livre est celui d'un tiers : pas de script, pas de requête vers l'extérieur.
     csp = "default-src 'self' data: blob:; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; connect-src 'none'"
     h.send_body(data, mime, 200, {"Cache-Control": "private, max-age=86400", "Content-Security-Policy": csp}, h.command == "HEAD")
+
+
+# ---------------------------------------------------------------------------
+# Sagas composées à la main (sagas.json, voir sagas.py) : réservées à l'administrateur
+# ---------------------------------------------------------------------------
+def saga_call(func, *args):
+    try:
+        return func(*args)
+    except sagafile.SagaError as e:
+        raise HttpError(e.status, e.message)
+
+
+def movie_rows(hub):
+    """Les films de toutes les bibliothèques de films."""
+    rows = []
+    for lib in hub.cfg.libraries:
+        if lib.kind == "movies":
+            rows += hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (lib.id,))
+    return rows
+
+
+def saga_film(ident, row):
+    """Un film d'une saga du fichier pour l'éditeur : son identifiant TMDB, sa date de sortie (pour trier) et l'élément s'il est dans la médiathèque (`item` vaut null sinon)."""
+    if row is None:
+        return {"tmdb": ident, "date": "", "item": None}
+    return {"tmdb": ident, "date": safe_json(row["meta"], {}).get("date") or row["year"], "item": summary(row)}
+
+
+def sagas_json(hub):
+    owned = sagafile.by_tmdb(movie_rows(hub))
+    return {"version": hub.sagas.version(), "sagas": [{"name": name, "films": [saga_film(i, owned.get(i)) for i in films]} for name, films in hub.sagas.all()]}
+
+
+@route("GET", r"/api/sagas")
+def api_sagas(h, m, q):
+    require_admin(h)
+    h.send_json(sagas_json(h.hub))
+
+
+@route("POST", r"/api/sagas")
+def api_sagas_save(h, m, q):
+    """Remplace toutes les sagas. `version` (celle du dernier GET) évite d'écraser ce qu'un autre a modifié entre-temps."""
+    require_admin(h)
+    body = body_dict(h)
+    version = body.get("version")
+    if version is not None and not isinstance(version, str):
+        raise HttpError(400, "version illisible")
+    saga_call(h.hub.sagas.save, saga_call(sagafile.clean, body.get("sagas")), version)
+    h.send_json(sagas_json(h.hub))
+
+
+@route("POST", r"/api/sagas/add")
+def api_sagas_add(h, m, q):
+    """Ajoute des films à la fin d'une saga, créée au besoin : `films` (identifiants TMDB), puis `items` (éléments de la médiathèque : c'est ce que la fiche d'un film envoie)."""
+    require_admin(h)
+    body = body_dict(h)
+    ids = []
+    for value in body.get("films") if isinstance(body.get("films"), list) else []:
+        ident = sagafile.film_id(value)
+        if ident is None:
+            raise HttpError(400, f"identifiant TMDB illisible ({value!r})")
+        ids.append(ident)
+    for value in body.get("items") if isinstance(body.get("items"), list) else []:
+        row = h.hub.db.one("SELECT * FROM items WHERE id=?", (str(value),))
+        if row is None or row["type"] != "movie":
+            raise HttpError(404, "film inconnu")
+        found = sagafile.by_tmdb([row])
+        if not found:
+            raise HttpError(400, f"« {row['title']} » n'a pas d'identifiant TMDB : étiquette-le avec Metadata.py")
+        ids += list(found)
+    if not ids:
+        raise HttpError(400, "aucun film à ajouter")
+    name = saga_call(h.hub.sagas.add, body.get("name"), ids)
+    h.send_json({**sagas_json(h.hub), "name": name})
+
+
+@route("GET", r"/api/sagas/films")
+def api_sagas_films(h, m, q):
+    """Les films qu'on peut mettre dans une saga (ceux qui portent un identifiant TMDB) : ceux dont le titre ou la saga contient `q`, ou ceux de la saga de l'étiquette `group` dans l'ordre de sortie. Au plus `limit` (40 par défaut, 600)."""
+    require_admin(h)
+    needle, group = fold(q.get("q", "")).strip(), q.get("group", "")
+    try:
+        limit = min(600, max(1, int(q.get("limit", 40))))
+    except ValueError:
+        limit = 40
+    found = [(ident, row) for ident, row in sagafile.by_tmdb(movie_rows(h.hub)).items()
+             if (not group or row["grp"] == group) and (not needle or needle in fold(row["title"]) or needle in fold(row["grp"]))]
+    found.sort(key=lambda f: release_key(f[1]) if group else (f[1]["sort"], f[1]["year"]))
+    h.send_json({"films": [saga_film(ident, row) for ident, row in found[:limit]], "total": len(found)})
 
 
 # ---------------------------------------------------------------------------
