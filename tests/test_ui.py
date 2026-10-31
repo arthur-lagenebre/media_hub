@@ -378,6 +378,61 @@ class TestSagasInLibrary(UiCase):
         self.assertEqual(self.view(".grid .card.saga").count(), 0)
 
 
+class TestSagaEditor(UiCase):
+    """L'éditeur de sagas (Gestion > Sagas) et « Ajouter à une saga » de la fiche d'un film. Inception : 27205 ; Man of Steel : 49521 ; Batman v Superman : 209112."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(lambda: (self.run_.hub.cfg.data / "sagas.json").unlink(missing_ok=True))
+        self.api("/api/sagas", {"sagas": [{"name": "Ma saga", "films": [209112, 999999, 27205]}]})        # le film du milieu n'est pas dans la médiathèque
+
+    def stored(self):
+        return {s["name"]: [f["tmdb"] for f in s["films"]] for s in self.api("/api/sagas")["sagas"]}
+
+    def until(self, condition, tries=40):
+        for _ in range(tries):
+            if condition():
+                return
+            self.page.wait_for_timeout(100)
+        self.fail("la condition n'est jamais devenue vraie")
+
+    def test_gestion_leads_to_the_editor(self):
+        self.open("#/admin")
+        self.view("a.btn", has_text="Composer").click()
+        self.view(".sagaedit .line").first.wait_for()
+        self.assertEqual(self.view(".sagaedit .line b").all_inner_texts(), ["Ma saga"])
+
+    def test_a_saga_lists_its_films_and_moves_them(self):
+        self.open("#/sagas?g=Ma%20saga")
+        self.view(".sfilm").first.wait_for()
+        self.assertEqual(self.view(".sfilm b").all_inner_texts(), ["Batman v Superman", "Film absent de la médiathèque", "Inception"])
+        self.view(".sfilm [data-key=d0]").click()
+        self.until(lambda: self.stored()["Ma saga"] == [999999, 209112, 27205])
+        self.view(".sfilm [data-key=r0]").click()
+        self.until(lambda: self.stored()["Ma saga"] == [209112, 27205])
+
+    def test_the_picker_adds_a_film(self):
+        self.open("#/sagas?g=Ma%20saga")
+        self.view("[data-key=add]").click()
+        self.page.locator(".picker .opt", has_text="Man of Steel").click()
+        self.until(lambda: 49521 in self.stored()["Ma saga"])
+        self.assertEqual(self.page.locator(".picker .opt.on").count(), 3)                 # Batman v Superman, Inception et maintenant Man of Steel
+        self.page.locator(".picker [data-key=pick-close]").click()
+        self.assertEqual(self.view(".sfilm").count(), 4)
+
+    def test_a_film_page_adds_the_film_to_a_saga(self):
+        self.open("#/i/" + self.item("films", "Man of Steel")["id"])
+        self.view("[data-key=saga-add]").click()
+        self.page.locator(".menu .opt", has_text="Ma saga").click()
+        self.until(lambda: 49521 in self.stored()["Ma saga"])
+        self.view(".sagabox h2", has_text="Ma saga").wait_for()
+
+    def test_a_film_without_tmdb_id_cannot_join_a_saga(self):
+        self.open("#/i/" + self.item("films", "Sans Etiquette")["id"])
+        self.view(".hero").wait_for()
+        self.assertEqual(self.view("[data-key=saga-add]").count(), 0)
+
+
 class TestMusicQueueAndPlaylists(UiCase):
     def open_music(self):
         self.open("#/l/musique")
