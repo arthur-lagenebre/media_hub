@@ -401,7 +401,7 @@ class TestSagaEditor(UiCase):
     def test_gestion_leads_to_the_editor(self):
         self.open("#/admin")
         self.view("a.btn", has_text="Composer").click()
-        self.view(".line").first.wait_for()                                   # `.sagaedit` est la racine de la vue : on cherche dedans, pas au-dessus
+        self.page.wait_for_selector("#views > .sagaedit .line")               # l'éditeur est chargé : jusque-là, les `.line` visibles sont ceux de Gestion. `.sagaedit` est la racine de la vue : on cherche dedans
         self.assertEqual(self.view(".line b").all_inner_texts(), ["Ma saga"])
 
     def test_a_saga_lists_its_films_and_moves_them(self):
