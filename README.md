@@ -53,7 +53,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_FFMPEG` | dossier (ou fichier) de `ffmpeg` / `ffprobe` | `PATH`, puis `HUB_DATA/bin` |
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) | `0` |
-| `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting) ; lue aussi dans le `.env` de `media_library` | aucune |
+| `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting) et décrit les films qui manquent aux sagas ; lue aussi dans le `.env` de `media_library` | aucune |
 
 ## Sagas
 
@@ -62,6 +62,8 @@ Un film porte la saga que dit son étiquette (la collection TMDB posée par `Met
 ```json
 {"sagas": [{"name": "Trilogie Cornetto", "films": [747, 4638, 49051]}]}
 ```
+
+Les films qui **manquent** à une saga (le 2 d'une trilogie dont on n'a que le 1 et le 3) apparaissent grisés à leur place, avec leur affiche, dans la page de la saga et sur la fiche d'un film ; le film 3 garde son numéro. Ils viennent de TMDB : *Gestion* > bibliothèque *Films* > *Sagas (TMDB)* (avec `TMDB_KEY`) interroge la collection de chaque saga de l'étiquette et décrit les films que ta saga du fichier réclame sans que tu les aies. Ce ne sont pas des éléments : aucun compteur ne les compte. Une collection TMDB trop large (un spin-off, un court-métrage) se règle en cachant le film (`"ignore": [identifiant TMDB]` dans `sagas.json`, ou `POST /api/sagas/ignore`).
 
 L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste est son numéro, même quand on n'a pas ceux qui le précèdent. Un film peut être dans plusieurs sagas : la grille ne lui donne qu'une vignette (celle de la première saga du fichier, avant celle de l'étiquette), et sa fiche les liste toutes. Le fichier est relu dès qu'il change ; absent ou illisible, il ne donne aucune saga. Pas besoin de l'écrire à la main : l'administrateur compose ses sagas dans l'interface, *Gestion* > *Sagas* (créer, renommer, monter ou descendre une saga ou un film, ajouter des films en les cherchant ou toute une saga d'un coup, trier par date de sortie), ou depuis la fiche d'un film avec « Ajouter à une saga ». Le serveur écrit le fichier d'un bloc et refuse ce qu'il ne comprend pas (`/api/sagas`, voir `docs/api.md`). Seuls les films étiquetés avec un identifiant TMDB peuvent y entrer.
 
@@ -95,7 +97,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/book/<id>`, `/book/<id>/page/<n>`, `/book/<id>/epub/<chemin>` | pages d'un `.cbz`, fichiers d'un `.epub` (CSP sans script) |
 | `GET /img/item/<id>?w=`, `/img/entry/<id>?w=` | affiches, pochettes, couvertures (réduites et gardées en cache) |
 | `POST /api/token` | pour un client natif (Android TV, iOS, Chromecast) : corps `{"user": "…", "password": "…"}` (`user` facultatif s'il n'y a qu'un compte), réponse `{"token": "…", "media_token": "…", "user": {…}}` (401 `{"error": "mot de passe incorrect"}` sinon ; jetons vides si le serveur est ouvert, sans compte). Le jeton est celui du compte ; le jeton de média est commun à tout le serveur |
-| `GET /api/sagas`, `POST /api/sagas`, `POST /api/sagas/add`, `GET /api/sagas/films` | sagas composées à la main (`sagas.json`, administrateur seulement) : lire, tout remplacer (avec la `version` lue, pour ne pas écraser un autre), ajouter des films, chercher des films à y mettre |
+| `GET /api/sagas`, `POST /api/sagas`, `POST /api/sagas/add`, `GET /api/sagas/films` | sagas composées à la main (`sagas.json`, administrateur seulement) : lire, tout remplacer (avec la `version` lue, pour ne pas écraser un autre), ajouter des films, cacher un film des manquants (`POST /api/sagas/ignore`), chercher des films à y mettre ; `GET /img/film/<tmdb>` : l'affiche d'un film manquant |
 | `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete` | comptes (administrateur seulement) : lister, créer, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
 | `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
 | Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte ; le jeton de média, lui, ne change pas |

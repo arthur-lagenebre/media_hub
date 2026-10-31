@@ -118,7 +118,7 @@ Un film, une série, un album, une série de livres.
 | `added` | entier | date d'ajout |
 | `genres` | liste de chaînes | |
 | `cover` | chaîne | URL de l'affiche / pochette / couverture. **Peut répondre 404** (aucune image) : prévoir une case de remplacement. |
-| `part` | nombre, optionnel | films, seulement dans une liste de saga (`group=…&sort=part`, `saga`, `sagas`) : le rang du film dans la saga. Dans une saga du fichier `sagas.json`, sa place dans la liste (les films absents de la médiathèque comptent : 1 et 3) ; sinon sa place de 1 à N dans l'ordre de sortie |
+| `part` | nombre, optionnel | films, seulement dans une liste de saga (`group=…&sort=part`, `saga`, `sagas`) : le rang du film dans la saga. Dans une saga du fichier `sagas.json`, sa place dans la liste (les films absents de la médiathèque comptent : 1 et 3) ; sinon, dans une saga de l'étiquette que l'enrichissement TMDB a décrite (voir `missing`), son rang dans la collection TMDB (1 et 3 quand le 2 manque), et à défaut sa place de 1 à N dans l'ordre de sortie |
 | `duration` | nombre, optionnel | durée de l'album (albums) |
 | `artist_id` | chaîne, optionnel | identifiant d'artiste (albums), pour `/api/artist/<lib>/<id>` |
 | `missing` | entier, optionnel | **séries de livres seulement** (`type: "series"`) : nombre de tomes manquants ; absent s'il n'en manque aucun. **Attention : dans la fiche (`GET /api/item/<id>`), le même nom porte une liste** (voir « Même nom, deux types »). Les albums n'ont pas de `missing` : leurs albums manquants sont dans `wanted` (`/api/artist`). |
@@ -175,7 +175,7 @@ Réponse :
 
 - `total` : éléments après filtres (avant pagination). `letters` et `genres` sont comptés sur **toute** la bibliothèque (hors filtres de lettre / genre / texte) ; `genres` : 60 au plus, du plus fréquent au moins fréquent.
 - Livres : `sections` : `[["Manga", 40], …]`. Avec `sagas=1` : `sagas` (nombre de vignettes de saga) et `films` (nombre de films en tout).
-- Une vignette de **saga** : `id`, `lib`, `type: "saga"`, `title`, `year`, `years` (`[première, dernière]` ou `[]`), `grp: ""`, `n`, `letter`, `added`, `genres`, `covers` (ids des trois premiers films), **`cover_urls`** (leurs URLs), `seen` / `started` optionnels. **Elle n'a pas de `cover`** : l'identifiant d'une saga n'est pas celui d'un élément, `/img/item/<saga>` répondrait 404. Pour ses films : `GET /api/library/<id>?group=<title>&sort=part`. **Ambigu** : `lib` n'est présent que sur les sagas.
+- Une vignette de **saga** : `id`, `lib`, `type: "saga"`, `title`, `year`, `years` (`[première, dernière]` ou `[]`), `grp: ""`, `n`, `letter`, `added`, `genres`, `covers` (ids des trois premiers films), **`cover_urls`** (leurs URLs), `seen` / `started` optionnels. **Elle n'a pas de `cover`** : l'identifiant d'une saga n'est pas celui d'un élément, `/img/item/<saga>` répondrait 404. Pour ses films : `GET /api/library/<id>?group=<title>&sort=part` ; la réponse porte alors `missing` (absent s'il est vide) : les films qui manquent à la saga, comme dans `sagas` de la fiche d'un film (`total` ne les compte pas). **Ambigu** : `lib` n'est présent que sur les sagas.
 - 404 : bibliothèque inconnue.
 
 ### `GET /api/item/<id>`
@@ -192,7 +192,7 @@ Un `<élément>` (champs ci-dessus) plus :
 | `links` | liste, optionnel | `[{"label": "TMDB", "url": "https://…"}]` (films et séries) |
 | `seasons` | liste, optionnel | séries ; **Ambigu** : forme tirée de l'étiquetage, non figée par le serveur |
 | `saga` | liste d'`<élément>`, optionnel | films d'une saga : **tous** les films de la saga, **y compris le film consulté** (le client le reconnaît à son `id`), dans l'ordre de la saga (date de sortie), avec leur `part`. Seulement la saga que dit l'étiquette du fichier : voir `sagas` pour les autres |
-| `sagas` | liste, optionnel | films : chaque saga d'au moins deux films à laquelle le film appartient, celle de l'étiquette d'abord, puis celles de `sagas.json` : `[{"name": "Trilogie Cornetto", "films": [<élément>]}]`. Les films sont dans l'ordre de la saga, y compris le film consulté ; `name` s'utilise dans `group`. Absent si le film n'est dans aucune saga |
+| `sagas` | liste, optionnel | films : chaque saga d'au moins deux films à laquelle le film appartient, celle de l'étiquette d'abord, puis celles de `sagas.json` : `[{"name": "Trilogie Cornetto", "films": [<élément>]}]`. Les films sont dans l'ordre de la saga, y compris le film consulté ; `name` s'utilise dans `group`. Chaque saga porte en plus `missing` (absent s'il est vide) : les films qui lui manquent, `[{"tmdb", "title", "year", "rank", "cover"}]` (`rank` : leur place, au milieu des `part` des films qu'on a ; `cover` : `/img/film/<tmdb>`, ou `""` sans affiche). Ce ne sont pas des éléments : à afficher grisés, pas à ouvrir. Absent si le film n'est dans aucune saga |
 | `missing` | liste, optionnel | séries de livres : `[{"label": "Naruto", "numbers": [3], "total": 3}]` : par série (ou arc), les numéros de tomes manquants et le total attendu. Absent s'il ne manque rien. **Remplace le compte** que portent les listes. |
 | `tracks_total` | entier, optionnel | albums : nombre de pistes |
 | autres | | selon ce que l'étiquetage ou l'enrichissement a fourni, quand ils sont non vides : `directors`, `writers`, `actors`, `artist`, `artist_id`, `label`, `catalog`, `formats`, `authors`, `publisher`, `section`, `collection`, `status`, `episodes_total`, `seasons_total`, `tmdb`, `unit`, `units`, `years`, `discs`, `season_summaries`. **Ambigu** : leurs types ne sont pas contrôlés par le serveur (listes de chaînes pour les personnes, structures libres pour `discs`, `season_summaries`). |
@@ -223,7 +223,7 @@ Musique seulement (404 sinon, ou si l'artiste n'a pas d'album).
 - `info` (optionnel, après « Fiches artistes » côté serveur) : `{"facts": "Groupe · France · 1993 – 2021", "disambiguation": "", "wiki": {"lang", "title", "url", "extract"} ou null, "members": [{"name", "roles", "period", "former"}], "links": [{"label", "url"}]}`.
 - `wanted` : albums de l'artiste qui manquent dans la médiathèque ; `cover` est une URL relative, ou `""` s'il n'y a pas d'image. Ce ne sont ni des éléments ni des fichiers : rien à lire.
 - Administration (usage interne de l'interface, **administrateur seulement**, 403 sinon) : `POST /api/artist/<lib>/<id>/photo` (corps = image JPEG / PNG / WebP, 10 Mo au plus → `{"ok": true}`, 415 sinon) et `POST …/photo/wikipedia` (404 sans article connu, 502 si Wikipédia ne répond pas).
-- `GET /img/artist/<lib>/<id>?w=` : la photo (404 s'il n'y en a pas). `GET /img/wanted/<lib>/<artist_id>/<clé>?w=` : pochette d'un album manquant.
+- `GET /img/artist/<lib>/<id>?w=` : la photo (404 s'il n'y en a pas). `GET /img/wanted/<lib>/<artist_id>/<clé>?w=` : pochette d'un album manquant. `GET /img/film/<tmdb>?w=` : l'affiche d'un film qui manque à une saga (404 s'il n'en a pas).
 
 ## Comptes
 
@@ -245,13 +245,14 @@ Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la cass
 
 Des listes ordonnées de films, gardées dans `sagas.json` sous `HUB_DATA` (voir le README) ; elles s'ajoutent à la saga de l'étiquette (`saga` et `sagas` d'un film, `group=` d'une bibliothèque). Un film y est désigné par son identifiant TMDB. **Toutes ces routes sont réservées à l'administrateur** (403 `réservé à l'administrateur` sinon).
 
-Un **film de saga** est `{"tmdb": 209112, "date": "2016-03-23", "item": <élément>}` ; `item` vaut `null` (et `date` `""`) quand le film n'est pas dans la médiathèque : il garde sa place dans la liste et son numéro.
+Un **film de saga** est `{"tmdb": 209112, "date": "2016-03-23", "item": <élément>}` ; `item` vaut `null` quand le film n'est pas dans la médiathèque : il garde sa place dans la liste et son numéro ; `date`, `title`, `year` et `cover` y sont alors ceux que l'enrichissement TMDB a trouvés (`date` vaut `""` et les trois autres sont absents tant qu'il n'a pas tourné).
 
 | Appel | Corps | Réponse |
 | --- | --- | --- |
-| `GET /api/sagas` | | `{"version": "…", "sagas": [{"name": "Trilogie Cornetto", "films": [<film de saga>]}]}` ; `version` est vide tant qu'il n'y a pas de fichier |
+| `GET /api/sagas` | | `{"version": "…", "sagas": [{"name": "Trilogie Cornetto", "films": [<film de saga>]}], "ignored": [{"tmdb": 1771, "title": "…", "year": "…"}]}` ; `version` est vide tant qu'il n'y a pas de fichier ; `ignored` : les films qu'on a demandé de ne pas voir comme manquants (`title` et `year` quand l'enrichissement les connaît) |
 | `POST /api/sagas` | `{"sagas": [{"name": "…", "films": [747, 4638]}], "version": "…"}` : remplace **toutes** les sagas (l'ordre des listes est l'ordre des sagas). `version` (celle du dernier `GET`) est facultative | comme `GET`. 400 (nom vide, trop long ou en double sans tenir compte de la casse, identifiant illisible : rien n'est écarté en silence ; 200 sagas et 2000 films au plus), 409 `les sagas ont changé…` si le fichier a changé depuis cette `version` |
 | `POST /api/sagas/add` | `{"name": "…", "films": [747], "items": ["<id d'élément>"]}` : ajoute à la fin de la saga (créée au besoin ; la casse du nom ne compte pas), sans doublon, `films` d'abord puis `items` | comme `GET`, plus `name` (le nom de la saga, tel qu'elle s'écrit). 400 (aucun film, nom vide, film sans identifiant TMDB), 404 (élément inconnu ou qui n'est pas un film) |
+| `POST /api/sagas/ignore` | `{"tmdb": 1771, "ignore": true}` : cache un film des manquants des sagas de l'étiquette (`ignore` faux : le rend visible). Sans effet s'il l'est déjà. Les films qu'une saga du fichier liste elle-même ne se cachent pas | comme `GET`. 400 (identifiant illisible) |
 | `GET /api/sagas/films?q=&group=&limit=` | | `{"films": [<film de saga>], "total": 3}` : les films de la médiathèque qui portent un identifiant TMDB (les seuls qu'une saga puisse recevoir), ceux dont le titre ou la saga contient `q`, ou ceux de la saga de l'étiquette `group`, dans l'ordre de sortie. `limit` : 40 par défaut, 600 au plus |
 
 ## Playlists (musique)
@@ -390,7 +391,7 @@ Une seule tâche tourne à la fois, les autres attendent. `POST /api/scan`, `/ap
 | `GET /api/jobs` | | `{"jobs": [<tâche>], "busy": bool}` (30 dernières, sans journal). Tout compte. |
 | `GET /api/jobs?log=1` | | Idem, avec le journal de chaque tâche (`log`). Administrateur seulement : 403 sinon. |
 | `POST /api/scan` | `{"lib": "<id>"}` (sans `lib` : tout) | **202** `{"job": <tâche>}` |
-| `POST /api/enrich` | `{"lib": "<id>", "force": false}` | **202** `{"job": <tâche>}`. Séries / animations : TMDB (400 `pas de clé TMDB…` sans clé) ; musique : fiches artistes ; autre genre : 400 |
+| `POST /api/enrich` | `{"lib": "<id>", "force": false}` | **202** `{"job": <tâche>}`. Séries / animations : TMDB (400 `pas de clé TMDB…` sans clé) ; films : les films qui manquent aux sagas, décrits par TMDB (400 sans clé ; une collection déjà connue n'est redemandée qu'après un mois, ou avec `force`) ; musique : fiches artistes ; autre genre : 400 |
 | `POST /api/cleanup` | `{"apply": false}` | **202** `{"job": <tâche>}` ; sans `apply`, simule |
 
 `<tâche>` : `{"id", "label", "status": "waiting" \| "running" \| "done" \| "failed", "queued", "started", "ended", "result", "log"?}`. `started` / `ended` : `null` tant qu'ils n'ont pas eu lieu. **Ambigu** : la forme de `result` dépend de la tâche (compte rendu du scan, liste des fichiers du nettoyage…) et n'est pas figée ; ne pas en dépendre. Ces routes **modifient l'index et, pour `cleanup` avec `apply`, suppriment des fichiers parasites** de la médiathèque : un client de lecture n'a pas à les appeler.

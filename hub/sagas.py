@@ -2,7 +2,9 @@
 
 Une saga y est une liste ordonnée de films, désignés par leur identifiant TMDB (celui que l'étiquette du fichier porte : il survit aux renommages et à une base refaite) :
 
-    {"sagas": [{"name": "Trilogie Cornetto", "films": [747, 4638, 49051]}]}
+    {"sagas": [{"name": "Trilogie Cornetto", "films": [747, 4638, 49051]}], "ignore": [1771]}
+
+`ignore` (facultatif) : les films que l'enrichissement TMDB ne doit pas montrer comme manquants dans la saga de leur étiquette (un spin-off, un court-métrage que la collection TMDB compte et pas toi). Il ne touche pas aux films qu'une saga ci-dessus liste elle-même : les avoir écrits dit assez qu'on les veut.
 
 Elles s'ajoutent à la saga que dit l'étiquette du fichier (la collection TMDB) : un film peut être dans plusieurs sagas. L'ordre de la liste est l'ordre de la saga, et la place d'un film dans la liste est son numéro, qu'on possède ou non les films qui le précèdent.
 
@@ -65,6 +67,21 @@ def parse(text):
     return sagas
 
 
+def parse_ignore(text):
+    """[identifiants TMDB] de `ignore`, sans doublon ; illisible, il est vide."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    listed = data.get("ignore") if isinstance(data, dict) else None
+    out = []
+    for value in listed if isinstance(listed, list) else []:
+        ident = film_id(value)
+        if ident is not None and ident not in out:
+            out.append(ident)
+    return out
+
+
 def clean(listed):
     """[(nom, [identifiants TMDB])] d'après ce que l'éditeur envoie, ou SagaError : ici rien n'est écarté en silence, on ne perd pas une saga sans le dire."""
     if not isinstance(listed, list):
@@ -99,14 +116,19 @@ def clean(listed):
     return sagas
 
 
+def tmdb_of(row):
+    """L'identifiant TMDB d'une ligne de la table items (l'étiquette du fichier), ou None."""
+    try:
+        return film_id(json.loads(row["meta"] or "{}").get("tmdb"))
+    except (ValueError, AttributeError):
+        return None
+
+
 def by_tmdb(movies):
     """{identifiant TMDB: ligne de la table items} pour les films qui portent cet identifiant (le premier gagne)."""
     found = {}
     for row in movies:
-        try:
-            ident = film_id(json.loads(row["meta"] or "{}").get("tmdb"))
-        except (ValueError, AttributeError):
-            continue
+        ident = tmdb_of(row)
         if ident is not None:
             found.setdefault(ident, row)
     return found
@@ -115,7 +137,7 @@ def by_tmdb(movies):
 class Sagas:
     def __init__(self, path):
         self.path = Path(path)
-        self._read = (None, [], "")          # (taille et date du fichier, sagas lues, empreinte du contenu)
+        self._read = (None, [], "", [])      # (taille et date du fichier, sagas lues, empreinte du contenu, films ignorés)
         self._lock = threading.Lock()        # une écriture à la fois : lire, changer, écrire
 
     def _load(self):
@@ -127,13 +149,18 @@ class Sagas:
         if stamp != self._read[0]:
             try:
                 raw = self.path.read_bytes() if stamp else b""
-                self._read = (stamp, parse(raw.decode("utf-8")), hashlib.sha1(raw).hexdigest()[:12] if stamp else "")
+                text = raw.decode("utf-8")
+                self._read = (stamp, parse(text), hashlib.sha1(raw).hexdigest()[:12] if stamp else "", parse_ignore(text))
             except (OSError, UnicodeDecodeError):
-                self._read = (stamp, [], "")
+                self._read = (stamp, [], "", [])
         return self._read
 
     def all(self):
         return self._load()[1]
+
+    def ignored(self):
+        """[identifiants TMDB] des films qu'on ne veut pas voir comme manquants."""
+        return self._load()[3]
 
     def version(self):
         """Ce qui change quand le fichier change : l'éditeur la rend à l'enregistrement, et le serveur refuse d'écraser une saga qu'un autre a modifiée entre-temps. Vide quand il n'y a pas de fichier."""
@@ -153,7 +180,7 @@ class Sagas:
         """Remplace toutes les sagas par `sagas` (déjà vérifiées par `clean`). `version` : celle que l'éditeur avait lue ; si le fichier a changé depuis, 409."""
         with self._lock:
             self._check(version)
-            self._write(sagas)
+            self._write(sagas, self.ignored())
 
     def add(self, name, ids):
         """Ajoute des films à la fin de la saga `name` (créée si elle n'existe pas ; un nom qui ne diffère que par la casse est la même saga), sans doublon. Rend le nom de la saga."""
@@ -175,15 +202,30 @@ class Sagas:
                     found[1].append(ident)
             if len(found[1]) > MAX_FILMS:
                 raise SagaError(400, f"« {found[0]} » : {MAX_FILMS} films au plus")
-            self._write(sagas)
+            self._write(sagas, self.ignored())
             return found[0]
+
+    def ignore(self, ident, on=True):
+        """Cache (ou rend à nouveau visible) un film manquant ; sans effet s'il l'est déjà ou ne l'est pas."""
+        with self._lock:
+            ignored = list(self.ignored())
+            if on == (ident in ignored):
+                return
+            if on:
+                ignored.append(ident)
+            else:
+                ignored.remove(ident)
+            self._write([(name, list(films)) for name, films in self.all()], ignored)
 
     def _check(self, version):
         if version is not None and version != self.version():
             raise SagaError(409, "les sagas ont changé depuis que tu les as ouvertes : recharge la page")
 
-    def _write(self, sagas):
-        text = json.dumps({"sagas": [{"name": name, "films": films} for name, films in sagas]}, ensure_ascii=False, indent=2) + "\n"
+    def _write(self, sagas, ignored):
+        data = {"sagas": [{"name": name, "films": films} for name, films in sagas]}
+        if ignored:
+            data["ignore"] = ignored
+        text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
         tmp = self.path.with_name(self.path.name + ".tmp")
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,4 +234,4 @@ class Sagas:
         except OSError as e:
             tmp.unlink(missing_ok=True)
             raise SagaError(500, f"impossible d'écrire {self.path.name} : {e.strerror or e}")
-        self._read = (None, [], "")
+        self._read = (None, [], "", [])

@@ -1181,7 +1181,7 @@ class TestSagasEditor(ServerCase):
         return json.loads(self.file.read_text(encoding="utf-8"))["sagas"]
 
     def test_without_the_file_there_is_no_saga(self):
-        self.assertEqual(self.api.json("/api/sagas"), (200, {"version": "", "sagas": []}))
+        self.assertEqual(self.api.json("/api/sagas"), (200, {"version": "", "ignored": [], "sagas": []}))
 
     def test_saving_writes_the_file_and_the_hub_uses_it_at_once(self):
         status, data = self.save([("Ma saga", [209112, 999999, 27205])])
@@ -1260,6 +1260,174 @@ class TestSagasEditor(ServerCase):
     def test_the_picker_gives_a_saga_of_the_tag_in_release_order(self):
         films = self.api.json("/api/sagas/films?group=" + quote("Saga DCEU"))[1]["films"]
         self.assertEqual([(f["item"]["title"], f["tmdb"]) for f in films], [("Man of Steel", 49521), ("Batman v Superman", 209112)])
+
+
+class FakeTmdb:
+    """TMDB pour les sagas : « Saga DCEU » (collection 9000) compte cinq films dont trois qu'on n'a pas ; 777 est un film que seul `sagas.json` réclame."""
+    calls = []
+    parts = [{"id": 141052, "title": "Justice League", "release_date": "2017-11-15", "poster_path": None},
+             {"id": 49521, "title": "Man of Steel", "release_date": "2013-06-12", "poster_path": "/mos.jpg"},
+             {"id": 297762, "title": "Wonder Woman", "release_date": "2017-05-31", "poster_path": "/ww.jpg"},
+             {"id": 209112, "title": "Batman v Superman", "release_date": "2016-03-23", "poster_path": "/bvs.jpg"},
+             {"id": 1000, "title": "Film intermédiaire", "release_date": "2014-01-01", "poster_path": "/mid.jpg"}]
+    movies = {49521: {"id": 49521, "belongs_to_collection": {"id": 9000}}, 209112: {"id": 209112, "belongs_to_collection": {"id": 9000}},
+              777: {"id": 777, "title": "Film du fichier", "release_date": "2020-02-02", "poster_path": "/f.jpg"}}
+
+    def __init__(self, key, language="fr-FR", **kwargs):
+        self.cache = kwargs.get("cache")
+
+    def get(self, endpoint):
+        from libraries.video.tmdb import TmdbError
+        FakeTmdb.calls.append(endpoint)
+        found = re.fullmatch(r"movie/(\d+)", endpoint)
+        if not found or int(found.group(1)) not in self.movies:
+            raise TmdbError("introuvable sur TMDB (HTTP 404)")
+        return self.movies[int(found.group(1))]
+
+    def collection(self, collection_id):
+        FakeTmdb.calls.append(f"collection/{collection_id}")
+        return {"parts": list(self.parts)}
+
+    def save_image(self, image_path, size, dest):
+        FakeTmdb.calls.append(f"image{image_path}")
+        Path(dest).write_bytes(fixtures.PNG)
+
+
+class TestMissingFilms(ServerCase):
+    """Les films qui manquent à une saga : ceux de la collection TMDB (saga de l'étiquette) et ceux que `sagas.json` réclame. Man of Steel (49521) et Batman v Superman (209112) sont de « Saga DCEU »."""
+
+    def setUp(self):
+        FakeTmdb.calls = []
+        self.hub.cfg.tmdb_key = "fake"
+        self.addCleanup(setattr, self.hub.cfg, "tmdb_key", "")
+        self.addCleanup(self.hub.db.execute, "DELETE FROM kv WHERE key='sagainfo'")
+        self.addCleanup((self.hub.cfg.data / "sagas.json").unlink, True)
+
+    def enrich(self, **body):
+        with mock.patch("hub.enrich.Tmdb", FakeTmdb):
+            status, data = self.api.json("/api/enrich", {"lib": "films", **body})
+            self.assertEqual(status, 202, data)
+            self.run_.wait_jobs()
+
+    def group(self, name="Saga DCEU"):
+        return self.items("films", group=name, sort="part")
+
+    def test_nothing_is_missing_before_the_enrichment(self):
+        data = self.group()
+        self.assertEqual([(i["title"], i["part"]) for i in data["items"]], [("Man of Steel", 1), ("Batman v Superman", 2)])        # numérotés de 1 à N
+        self.assertNotIn("missing", data)
+        self.assertNotIn("missing", self.detail(self.item_by_title("films", "Man of Steel")["id"])["sagas"][0])
+
+    def test_the_enrichment_describes_the_films_we_do_not_have(self):
+        self.enrich()
+        info = self.hub.db.kv_get("sagainfo")
+        self.assertEqual(info["collections"]["Saga DCEU"]["films"], [49521, 1000, 209112, 297762, 141052])         # dans l'ordre de sortie
+        self.assertEqual(sorted(info["films"]), ["1000", "141052", "297762"])                                       # seulement ceux qu'on n'a pas
+        self.assertEqual(info["films"]["1000"], {"title": "Film intermédiaire", "date": "2014-01-01", "year": "2014", "poster": "film-1000.jpg"})
+        self.assertEqual(info["films"]["141052"]["poster"], "")                                                     # sans affiche
+        self.assertTrue((self.hub.cfg.data / "tmdb" / "film-1000.jpg").is_file())
+
+    def test_the_saga_page_numbers_by_the_collection_and_lists_what_is_missing(self):
+        self.enrich()
+        data = self.group()
+        self.assertEqual([(i["title"], i["part"]) for i in data["items"]], [("Man of Steel", 1), ("Batman v Superman", 3)])        # le 2 manque : on garde le 3
+        self.assertEqual([(f["tmdb"], f["title"], f["year"], f["rank"], f["cover"]) for f in data["missing"]],
+                         [(1000, "Film intermédiaire", "2014", 2, "/img/film/1000"), (297762, "Wonder Woman", "2017", 4, "/img/film/297762"), (141052, "Justice League", "2017", 5, "")])
+        self.assertEqual(data["total"], 2)                                                                          # un manquant n'est pas un élément : il ne compte pas
+
+    def test_the_film_page_lists_what_is_missing_from_each_saga(self):
+        self.enrich()
+        steel = self.detail(self.item_by_title("films", "Batman v Superman")["id"])
+        saga = steel["sagas"][0]
+        self.assertEqual([(f["title"], f["part"]) for f in saga["films"]], [("Man of Steel", 1), ("Batman v Superman", 3)])
+        self.assertEqual([f["rank"] for f in saga["missing"]], [2, 4, 5])
+        self.assertEqual([(f["title"], f["part"]) for f in steel["saga"]], [("Man of Steel", 1), ("Batman v Superman", 3)])      # `saga` : mêmes rangs
+
+    def test_the_grid_does_not_count_missing_films(self):
+        self.enrich()
+        tiles = {i["title"]: i for i in self.items("films", sagas=1)["items"] if i["type"] == "saga"}
+        self.assertEqual(tiles["Saga DCEU"]["n"], 2)
+
+    def test_the_poster_of_a_missing_film_is_served(self):
+        self.enrich()
+        self.assertEqual(self.api.get("/img/film/1000")[0], 200)
+        self.assertEqual(self.api.get("/img/film/1000?w=160")[0], 200)
+        self.assertEqual(self.api.get("/img/film/141052")[0], 404)                  # TMDB n'a pas d'affiche pour lui
+        self.assertEqual(self.api.get("/img/film/5")[0], 404)                       # inconnu
+
+    def test_a_film_can_be_hidden_from_the_missing_ones_and_shown_again(self):
+        self.enrich()
+        status, data = self.api.json("/api/sagas/ignore", {"tmdb": 1000})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["ignored"], [{"tmdb": 1000, "title": "Film intermédiaire", "year": "2014"}])
+        self.assertEqual([f["rank"] for f in self.group()["missing"]], [4, 5])
+        self.assertEqual([i["part"] for i in self.group()["items"]], [1, 3])        # le rang compte toujours le film caché
+        self.assertEqual(json.loads((self.hub.cfg.data / "sagas.json").read_text(encoding="utf-8"))["ignore"], [1000])
+        self.api.json("/api/sagas", {"sagas": [{"name": "Autre", "films": [27205]}], "version": data["version"]})       # tout remplacer garde la liste
+        self.assertEqual(self.api.json("/api/sagas")[1]["ignored"][0]["tmdb"], 1000)
+        self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": 1000, "ignore": False})[1]["ignored"], [])
+        self.assertEqual([f["rank"] for f in self.group()["missing"]], [2, 4, 5])
+        self.assertEqual(self.api.json("/api/sagas/ignore", {"tmdb": "abc"})[0], 400)
+
+    def test_a_saga_of_the_file_shows_the_films_it_lists_and_we_do_not_have(self):
+        self.api.json("/api/sagas", {"sagas": [{"name": "Ma saga", "films": [209112, 777, 27205]}]})
+        self.assertNotIn("missing", self.group("Ma saga"))                          # pas encore décrit
+        self.enrich()
+        data = self.group("Ma saga")
+        self.assertEqual([(i["title"], i["part"]) for i in data["items"]], [("Batman v Superman", 1), ("Inception", 3)])
+        self.assertEqual([(f["tmdb"], f["title"], f["rank"]) for f in data["missing"]], [(777, "Film du fichier", 2)])
+        self.api.json("/api/sagas/ignore", {"tmdb": 777})                           # ce qu'on a écrit soi-même ne se cache pas
+        self.assertEqual([f["rank"] for f in self.group("Ma saga")["missing"]], [2])
+        absent = self.api.json("/api/sagas")[1]["sagas"][0]["films"][1]            # et l'éditeur le décrit
+        self.assertEqual((absent["tmdb"], absent["item"], absent["title"], absent["year"], absent["date"]), (777, None, "Film du fichier", "2020", "2020-02-02"))
+        film = self.detail(self.item_by_title("films", "Inception")["id"])
+        self.assertEqual([(s["name"], [f["rank"] for f in s["missing"]]) for s in film["sagas"]], [("Ma saga", [2])])
+
+    def test_a_second_run_asks_nothing_new_unless_forced(self):
+        self.enrich()
+        asked = list(FakeTmdb.calls)
+        self.assertIn("collection/9000", asked)
+        FakeTmdb.calls = []
+        self.enrich()
+        self.assertEqual(FakeTmdb.calls, [])                                         # collection connue, affiches là
+        self.enrich(force=True)
+        self.assertIn("collection/9000", FakeTmdb.calls)
+
+    def test_a_scan_keeps_what_the_enrichment_found(self):
+        self.enrich()
+        self.hub.jobs.scan(self.hub.cfg.library("films"))
+        self.run_.wait_jobs()
+        self.assertEqual(len(self.group()["missing"]), 3)
+
+    def test_a_collection_that_does_not_match_our_films_is_not_trusted(self):
+        self.enrich()
+        info = self.hub.db.kv_get("sagainfo")
+        info["collections"]["Saga DCEU"]["films"].remove(209112)                    # un de nos films n'y figure pas : le nom est peut-être celui de deux sagas
+        self.hub.db.kv_set("sagainfo", info)
+        data = self.group()
+        self.assertNotIn("missing", data)
+        self.assertEqual([i["part"] for i in data["items"]], [1, 2])
+
+    def test_the_enrichment_logs_what_it_cannot_find(self):
+        self.api.json("/api/sagas", {"sagas": [{"name": "Ma saga", "films": [209112, 4242]}]})          # 4242 n'existe pas chez TMDB
+        self.enrich()
+        job = next(j for j in self.api.json("/api/jobs?log=1")[1]["jobs"] if j["label"].startswith("Sagas TMDB"))
+        self.assertEqual(job["status"], "done")
+        self.assertTrue(any("4242" in line for line in job["log"]), job["log"])
+        self.assertEqual(job["result"]["failed"], 1)
+
+    def test_a_refused_key_stops_the_job_and_keeps_what_is_done(self):
+        from libraries.video.tmdb import TmdbAuthError
+
+        class Refused(FakeTmdb):
+            def collection(self, collection_id):
+                raise TmdbAuthError("clé refusée")
+        with mock.patch("hub.enrich.Tmdb", Refused):
+            self.api.json("/api/enrich", {"lib": "films"})
+            self.run_.wait_jobs()
+        job = next(j for j in self.api.json("/api/jobs?log=1")[1]["jobs"] if j["label"].startswith("Sagas TMDB"))
+        self.assertEqual(job["status"], "failed")
+        self.assertTrue(any("clé refusée" in line for line in job["log"]))
 
 
 class TestApiUrls(ServerCase):
@@ -1690,7 +1858,7 @@ class TestAccountPermissions(AccountsCase):
         admin = self.admin.session["user"]["id"]
         return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/cleanup", {"apply": True}),
                 ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG), ("POST", f"/api/artist/musique/{self.artist}/photo/wikipedia", {}),
-                ("GET", "/api/sagas", None), ("POST", "/api/sagas", {"sagas": []}), ("POST", "/api/sagas/add", {"name": "intrus", "films": [1]}), ("GET", "/api/sagas/films", None),
+                ("GET", "/api/sagas", None), ("POST", "/api/sagas", {"sagas": []}), ("POST", "/api/sagas/add", {"name": "intrus", "films": [1]}), ("GET", "/api/sagas/films", None), ("POST", "/api/sagas/ignore", {"tmdb": 1}),
                 ("GET", "/api/users", None), ("POST", "/api/users", {"name": "intrus", "password": self.PASSWORD}),
                 ("POST", f"/api/user/{admin}/password", {"password": "piratage-1"}), ("POST", f"/api/user/{admin}/delete", {})]
 

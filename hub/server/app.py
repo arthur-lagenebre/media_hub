@@ -32,6 +32,7 @@ from libraries.video import tmdb
 from .. import __version__
 from .. import accounts
 from .. import enrich
+from .. import missing
 from .. import playlists
 from .. import urls
 from .. import sagas as sagafile
@@ -834,6 +835,14 @@ def api_library(h, m, q):
     needle = fold(q.get("q", "")).strip()
     letter, genre, group = q.get("letter", ""), q.get("genre", ""), q.get("group", "")
     ranks = {film["id"]: rank for film, rank in custom[group]} if group in custom else None        # le rang des films d'une saga du fichier
+    absent = []                                         # les films qui manquent à la saga (voir missing.py)
+    if movies and group:
+        info, owned = missing.load(hub.db), sagafile.by_tmdb(rows)
+        if group in custom:
+            absent = missing.listed(dict(hub.sagas.all())[group], owned, info)
+        else:
+            tagged_ranks, absent = missing.tagged(group, [r for r in rows if r["grp"] == group], info, set(hub.sagas.ignored()))
+            ranks = tagged_ranks if tagged_ranks is not None else ranks                             # numérotés d'après la collection TMDB
     unseen = q.get("filter") == "unseen"
     chosen = []
     for row in rows:
@@ -871,6 +880,8 @@ def api_library(h, m, q):
         out["sections"] = sections_json(sections)
     if group and sort == "part":
         number_films(out["items"], ranks, offset + 1)
+    if absent:
+        out["missing"] = absent
     if sagas:
         out["sagas"] = sum(1 for r in chosen if r["type"] == "saga")
         out["films"] = len({m["id"] for r in chosen for m in (r["members"] if r["type"] == "saga" else [r])})      # un film de deux sagas ne compte qu'une fois
@@ -929,16 +940,21 @@ def api_item(h, m, q):
     if item["type"] == "movie":
         movies = hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (item["lib"],))
         seen = seen_counts(hub, h.user["id"], lib.id)
-        sagas = []                  # ses sagas : celle de l'étiquette d'abord, puis celles du fichier (sagas.py), chacune avec les films qui la composent
+        sagas = []                  # ses sagas : celle de l'étiquette d'abord, puis celles du fichier (sagas.py), chacune avec les films qui la composent et ceux qui lui manquent
+        info, owned = missing.load(hub.db), sagafile.by_tmdb(movies)
         if item["grp"]:
             tagged = sorted((r for r in movies if r["grp"] == item["grp"]), key=release_key)
-            out["saga"] = number_films([with_seen(r, seen) for r in tagged])           # la saga de l'étiquette seule : gardée pour les clients d'avant `sagas`
-            sagas.append({"name": item["grp"], "films": out["saga"]})
+            ranks, absent = missing.tagged(item["grp"], tagged, info, set(hub.sagas.ignored()))
+            if ranks is not None:
+                tagged.sort(key=lambda r: ranks[r["id"]])
+            out["saga"] = number_films([with_seen(r, seen) for r in tagged], ranks)       # la saga de l'étiquette seule : gardée pour les clients d'avant `sagas`
+            sagas.append({"name": item["grp"], "films": out["saga"], "missing": absent})
+        ids = dict(hub.sagas.all())
         for name, films in hub.sagas.of_movies(movies).items():
             if any(f["id"] == item["id"] for f, _ in films):
                 numbered = number_films([with_seen(f, seen) for f, _ in films], {f["id"]: rank for f, rank in films})
-                sagas = [s for s in sagas if s["name"] != name] + [{"name": name, "films": numbered}]       # un nom que l'étiquette porte aussi : celle du fichier l'emporte
-        sagas = [s for s in sagas if len(s["films"]) > 1]
+                sagas = [s for s in sagas if s["name"] != name] + [{"name": name, "films": numbered, "missing": missing.listed(ids[name], owned, info)}]       # un nom que l'étiquette porte aussi : celle du fichier l'emporte
+        sagas = [{k: v for k, v in s.items() if v or k != "missing"} for s in sagas if len(s["films"]) + len(s["missing"]) > 1]
         if sagas:
             out["sagas"] = sagas
     if item["type"] == "album":
@@ -1502,16 +1518,22 @@ def movie_rows(hub):
     return rows
 
 
-def saga_film(ident, row):
-    """Un film d'une saga du fichier pour l'éditeur : son identifiant TMDB, sa date de sortie (pour trier) et l'élément s'il est dans la médiathèque (`item` vaut null sinon)."""
+def saga_film(ident, row, info=None):
+    """Un film d'une saga du fichier pour l'éditeur : son identifiant TMDB, sa date de sortie (pour trier) et l'élément s'il est dans la médiathèque (`item` vaut null sinon, avec `title`, `year` et `cover` quand l'enrichissement TMDB l'a décrit)."""
     if row is None:
-        return {"tmdb": ident, "date": "", "item": None}
+        film = (info or {"films": {}})["films"].get(str(ident))
+        out = {"tmdb": ident, "date": (film or {}).get("date") or "", "item": None}
+        if film:
+            out.update({k: v for k, v in missing.entry(ident, 0, info).items() if k in ("title", "year", "cover")})
+        return out
     return {"tmdb": ident, "date": safe_json(row["meta"], {}).get("date") or row["year"], "item": summary(row)}
 
 
 def sagas_json(hub):
-    owned = sagafile.by_tmdb(movie_rows(hub))
-    return {"version": hub.sagas.version(), "sagas": [{"name": name, "films": [saga_film(i, owned.get(i)) for i in films]} for name, films in hub.sagas.all()]}
+    owned, info = sagafile.by_tmdb(movie_rows(hub)), missing.load(hub.db)
+    ignored = [{k: v for k, v in missing.entry(i, 0, info).items() if k in ("tmdb", "title", "year")} if str(i) in info["films"] else {"tmdb": i} for i in hub.sagas.ignored()]
+    return {"version": hub.sagas.version(), "ignored": ignored,
+            "sagas": [{"name": name, "films": [saga_film(i, owned.get(i), info) for i in films]} for name, films in hub.sagas.all()]}
 
 
 @route("GET", r"/api/sagas")
@@ -1557,6 +1579,39 @@ def api_sagas_add(h, m, q):
     h.send_json({**sagas_json(h.hub), "name": name})
 
 
+@route("POST", r"/api/sagas/ignore")
+def api_sagas_ignore(h, m, q):
+    """Cache un film des manquants des sagas de l'étiquette (`ignore` vrai, par défaut) ou le rend visible (`ignore` faux). Rend comme `GET /api/sagas`."""
+    require_admin(h)
+    body = body_dict(h)
+    ident = sagafile.film_id(body.get("tmdb"))
+    if ident is None:
+        raise HttpError(400, "identifiant TMDB illisible")
+    h.hub.sagas.ignore(ident, body.get("ignore", True) is not False)
+    h.send_json(sagas_json(h.hub))
+
+
+@route("GET", r"/img/film/(\d+)")
+def film_image(h, m, q):
+    """L'affiche d'un film qui manque à une saga (HUB_DATA/tmdb, voir missing.py) ; 404 s'il n'en a pas (la page montre alors une case grisée)."""
+    hub = h.hub
+    film = missing.load(hub.db)["films"].get(m.group(1))
+    path = hub.cfg.data / "tmdb" / missing.poster_name(m.group(1)) if film and film.get("poster") else None
+    try:
+        width = int(q.get("w", 0))
+    except ValueError:
+        width = 0
+    served = hub.images.file(f"film:{m.group(1)}", path, width) if path else None
+    if served is None:
+        raise HttpError(404, "pas d'affiche")
+    data, mime, key = served
+    tag = f'"{key}"'
+    if h.headers.get("If-None-Match") == tag:
+        h.send_body(b"", mime, 304, {"ETag": tag, "Cache-Control": "private, no-cache"})
+        return
+    h.send_body(data, mime, 200, {"ETag": tag, "Cache-Control": "private, no-cache"}, h.command == "HEAD")
+
+
 @route("GET", r"/api/sagas/films")
 def api_sagas_films(h, m, q):
     """Les films qu'on peut mettre dans une saga (ceux qui portent un identifiant TMDB) : ceux dont le titre ou la saga contient `q`, ou ceux de la saga de l'étiquette `group` dans l'ordre de sortie. Au plus `limit` (40 par défaut, 600)."""
@@ -1599,11 +1654,12 @@ def api_enrich(h, m, q):
     if lib.kind == "music":                     # MusicBrainz et Wikipédia : pas de clé
         h.send_json({"job": h.hub.jobs.enrich_artists(lib, bool(body.get("force"))).public()}, 202)
         return
-    if lib.kind != "shows":
-        raise HttpError(400, "l'enrichissement ne concerne que les séries, les animations et la musique")
+    if lib.kind not in ("shows", "movies"):
+        raise HttpError(400, "l'enrichissement ne concerne que les films (sagas), les séries, les animations et la musique")
     if not h.hub.cfg.tmdb_key:
         raise HttpError(400, "pas de clé TMDB : renseigne TMDB_KEY sur le serveur")
-    h.send_json({"job": h.hub.jobs.enrich(lib, bool(body.get("force"))).public()}, 202)
+    jobs = h.hub.jobs
+    h.send_json({"job": (jobs.enrich_sagas if lib.kind == "movies" else jobs.enrich)(lib, bool(body.get("force"))).public()}, 202)
 
 
 @route("POST", r"/api/cleanup")
