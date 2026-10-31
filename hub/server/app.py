@@ -87,6 +87,7 @@ class Hub:
         self.images = Images(cfg, self.db)
         self.jobs = Jobs(cfg, self.db)
         self.sagas = Sagas(cfg.data / "sagas.json")
+        self.throttle = accounts.Throttle()                    # les essais de connexion ratés, par adresse
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
         self.active = 0
         self.secret = self._secret()
@@ -450,7 +451,8 @@ LOGIN_USER_FIELD = '<input type="text" name="user" placeholder="Nom" autocomplet
 @route("GET", r"/login")
 def login_page(h, m, q):
     field = LOGIN_USER_FIELD if len(accounts.rows(h.hub.db)) > 1 else ""
-    h.send_body((LOGIN_PAGE % (field, "Nom ou mot de passe incorrect." if q.get("error") else "")).encode("utf-8"), "text/html; charset=utf-8", 200, {"Cache-Control": "no-store"}, h.command == "HEAD")
+    shown = {"1": "Nom ou mot de passe incorrect.", "2": "Trop d'essais : réessaie dans quelques minutes."}.get(q.get("error", ""), "")
+    h.send_body((LOGIN_PAGE % (field, shown)).encode("utf-8"), "text/html; charset=utf-8", 200, {"Cache-Control": "no-store"}, h.command == "HEAD")
 
 
 def session_cookie(hub, row):
@@ -471,14 +473,22 @@ def login(h, m, q):
         body = safe_json(raw, {})
         body = body if isinstance(body, dict) else {}
         password, name = body.get("password", ""), body.get("user")
-    time.sleep(0.4)       # un essai coûte du temps : pas de force brute à pleine vitesse
+    who = h.client_address[0]
+    try:
+        wait = h.hub.throttle.delay(who) if h.hub.auth() else 0
+    except accounts.AccountError:                # trop d'essais ratés : rien n'est vérifié
+        h.send_body(b"", "text/plain", 303, {"Location": "/login?error=2"})
+        return
+    time.sleep(wait)      # un essai coûte du temps, de plus en plus après chaque échec : pas de force brute à pleine vitesse
     try:
         row = accounts.authenticate(h.hub.db, name, password) if h.hub.auth() else None
     except accounts.AccountError:
         row = None
     if row is not None:
+        h.hub.throttle.passed(who)
         h.send_body(b"", "text/plain", 303, {"Location": "/", "Set-Cookie": session_cookie(h.hub, row)})
     else:
+        h.hub.throttle.failed(who)
         h.send_body(b"", "text/plain", 303, {"Location": "/login?error=1"})
 
 
@@ -497,13 +507,21 @@ def api_token(h, m, q):
     body = safe_json(raw.decode("utf-8", "replace"), {})
     body = body if isinstance(body, dict) else {}
     password, name = body.get("password"), body.get("user")
-    time.sleep(0.4)       # même ralentissement que /api/login
+    who = h.client_address[0]
+    try:
+        wait = h.hub.throttle.delay(who)
+    except accounts.AccountError as e:                # trop d'essais ratés : rien n'est vérifié
+        raise HttpError(e.status, e.message)
+    time.sleep(wait)      # même ralentissement que /api/login
     if not isinstance(password, str) or not (name is None or isinstance(name, str)):
+        h.hub.throttle.failed(who)
         raise HttpError(401, "mot de passe incorrect")
     try:
         row = accounts.authenticate(h.hub.db, name, password)
     except accounts.AccountError as e:
+        h.hub.throttle.failed(who)
         raise HttpError(e.status, e.message)
+    h.hub.throttle.passed(who)
     h.send_json({"token": h.hub.session_token(row), "media_token": h.hub.media_token(), "user": accounts.public(row)})
 
 

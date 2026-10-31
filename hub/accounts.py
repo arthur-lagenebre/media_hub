@@ -53,6 +53,43 @@ def hash_password(password):
 _verifying = threading.Semaphore(2)     # au plus deux vérifications à la fois : chacune coûte ~16 Mo et du processeur, et /api/login et /api/token sont ouverts à qui n'est pas connecté
 
 
+class Throttle:
+    """Les essais de connexion ratés d'une même adresse : chaque échec rallonge l'attente du suivant, et au-delà de LIMIT échecs en WINDOW secondes plus rien n'est vérifié (429) : ni scrypt, ni fil retenu. Un essai réussi remet l'adresse à zéro.
+
+    Derrière un proxy (Tailscale serve) tout vient de la même adresse : un essai de force brute bloque alors aussi les autres, pour au plus WINDOW secondes. C'est le prix d'une défense sans dépendance.
+    """
+    WINDOW, FREE, LIMIT, BASE, CAP = 300, 3, 10, 0.4, 5.0
+
+    def __init__(self, clock=time.time):
+        self._clock, self._fails, self._lock = clock, {}, threading.Lock()
+
+    def _recent(self, key):
+        now = self._clock()
+        kept = [t for t in self._fails.get(key, []) if now - t < self.WINDOW]
+        if kept:
+            self._fails[key] = kept
+        else:
+            self._fails.pop(key, None)
+        return now, kept
+
+    def delay(self, key):
+        """Les secondes à attendre avant de vérifier cet essai ; AccountError 429 quand il y a eu trop d'échecs."""
+        with self._lock:
+            now, kept = self._recent(key)
+            if len(kept) >= self.LIMIT:
+                raise AccountError(429, f"trop d'essais : réessaie dans {int(self.WINDOW - (now - kept[0])) + 1} s")
+            return min(self.CAP, self.BASE * 2 ** max(0, len(kept) - self.FREE))
+
+    def failed(self, key):
+        with self._lock:
+            self._recent(key)
+            self._fails.setdefault(key, []).append(self._clock())
+
+    def passed(self, key):
+        with self._lock:
+            self._fails.pop(key, None)
+
+
 def verify_password(password, stored):
     raw = password.encode("utf-8", "replace") if isinstance(password, str) else b""
     with _verifying:

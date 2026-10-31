@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "meta", "added", "count"}      # ce que update_item_meta peut changer
 ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
 
+MIGRATIONS = {}      # {version: fonction(connexion)} : ce qui fait passer la base à `version` depuis la précédente. CREATE TABLE IF NOT EXISTS (SCHEMA) ajoute des tables, pas une colonne : toute autre évolution s'écrit ici, ex. `3: lambda conn: conn.execute("ALTER TABLE items ADD COLUMN x TEXT")`
 SCHEMA_VERSION = 2          # 2 : table `users` (comptes) ; une base en version 1 la gagne au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 SCHEMA = """
@@ -101,9 +103,37 @@ class Database:
         self._local = threading.local()
         self.write_lock = threading.Lock()
         with self.write_lock:
-            self.connection().executescript(SCHEMA)
-            self.connection().execute("INSERT INTO kv(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA_VERSION),))
-            self.connection().commit()
+            conn = self.connection()
+            conn.executescript(SCHEMA)
+            self._upgrade(conn)
+
+    def _upgrade(self, conn):
+        """Amène la base à SCHEMA_VERSION, une version à la fois, chacune en une transaction : une migration qui échoue laisse la base telle qu'elle était, et le hub ne démarre pas.
+
+        Une base plus récente que ce hub (on est revenu à une ancienne version) n'est pas touchée : le numéro gardé reste le sien, et on le dit.
+        """
+        row = conn.execute("SELECT value FROM kv WHERE key='schema'").fetchone()
+        try:
+            stored = int(json.loads(row["value"])) if row else SCHEMA_VERSION         # sans numéro : base neuve, SCHEMA vient de la créer
+        except (ValueError, TypeError):
+            stored = 0
+        if stored > SCHEMA_VERSION:
+            print(f"ATTENTION : la base est en version {stored}, ce hub n'en connaît que {SCHEMA_VERSION} : mets le hub à jour (la base n'est pas modifiée).", file=sys.stderr)
+            return
+        for version in range(stored + 1, SCHEMA_VERSION + 1):
+            migrate = MIGRATIONS.get(version)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                if migrate:
+                    migrate(conn)
+                conn.execute("INSERT INTO kv(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(version),))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                raise RuntimeError(f"la migration de la base vers la version {version} a échoué ({e}) : la base est restée en version {version - 1}") from e
+        if not row and stored == SCHEMA_VERSION:
+            conn.execute("INSERT INTO kv(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA_VERSION),))
+            conn.commit()
 
     def connection(self):
         conn = getattr(self._local, "conn", None)

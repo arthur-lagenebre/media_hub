@@ -2497,6 +2497,162 @@ class TestOpenServer(unittest.TestCase):
         self.assertEqual(self.api.request("POST", "/api/token", body={"user": "alice", "password": "autre-mot-de-passe"})[0], 200)
 
 
+class TestLoginThrottle(AccountsCase):
+    """Les essais de connexion ratés d'une même adresse s'allongent, puis ne sont plus vérifiés du tout."""
+
+    def test_the_wait_grows_after_each_failure_then_the_address_is_locked(self):
+        clock = [1000.0]
+        throttle = accounts.Throttle(clock=lambda: clock[0])
+        waits = []
+        for _ in range(throttle.LIMIT):
+            waits.append(throttle.delay("a"))
+            throttle.failed("a")
+        self.assertEqual(waits[:throttle.FREE + 1], [throttle.BASE] * (throttle.FREE + 1))          # les premiers essais ne coûtent que le délai de base
+        self.assertEqual(waits[throttle.FREE + 1:throttle.FREE + 3], [throttle.BASE * 2, throttle.BASE * 4])
+        self.assertEqual(max(waits), throttle.CAP)
+        with self.assertRaises(accounts.AccountError) as caught:
+            throttle.delay("a")
+        self.assertEqual(caught.exception.status, 429)
+        self.assertIn("réessaie dans", caught.exception.message)
+        self.assertEqual(throttle.delay("b"), throttle.BASE)                                        # une autre adresse n'est pas touchée
+        clock[0] += throttle.WINDOW + 1
+        self.assertEqual(throttle.delay("a"), throttle.BASE)                                        # les échecs s'oublient avec le temps
+
+    def test_a_success_wipes_the_failures(self):
+        throttle = accounts.Throttle()
+        for _ in range(throttle.LIMIT - 1):
+            throttle.failed("a")
+        throttle.passed("a")
+        self.assertEqual(throttle.delay("a"), throttle.BASE)
+
+    def test_too_many_failures_stop_the_checks_even_for_the_good_password(self):
+        with mock.patch.object(accounts.Throttle, "LIMIT", 3), mock.patch.object(accounts.Throttle, "BASE", 0.0), mock.patch.object(accounts.Throttle, "CAP", 0.0):
+            for _ in range(3):
+                self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "admin", "password": "faux"})[0], 401)
+            status, _, body = self.anon.request("POST", "/api/token", body={"user": "admin", "password": "secret"})
+            self.assertEqual(status, 429)                                                            # le bon mot de passe n'est même pas regardé
+            self.assertIn("trop d'essais", json.loads(body)["error"])
+            status, headers, _ = self.anon.request("POST", "/api/login", body=b"user=admin&password=secret", headers={"Content-Type": "application/x-www-form-urlencoded"})
+            self.assertEqual((status, headers["Location"]), (303, "/login?error=2"))
+            self.assertIn("Trop d'essais", self.anon.get("/login?error=2")[2].decode())
+            self.assertNotIn("Set-Cookie", headers)
+            self.hub.throttle.passed("127.0.0.1")                                                    # l'attente passée : l'accès revient
+            self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "admin", "password": "secret"})[0], 200)
+
+    def test_a_success_in_between_keeps_the_count_from_building_up(self):
+        with mock.patch.object(accounts.Throttle, "LIMIT", 3), mock.patch.object(accounts.Throttle, "BASE", 0.0), mock.patch.object(accounts.Throttle, "CAP", 0.0):
+            for _ in range(5):
+                for _ in range(2):
+                    self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "admin", "password": "faux"})[0], 401)
+                self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "admin", "password": "secret"})[0], 200)
+
+    def test_an_open_server_is_never_throttled(self):
+        tmp = tempfile.mkdtemp()                        # un dossier neuf : ici le compte `admin` existe déjà
+        self.addCleanup(shutil.rmtree, tmp, True)
+        run = Running(tmp, password="")
+        self.addCleanup(run.stop)
+        for _ in range(15):
+            self.assertEqual(Client(run.port).request("POST", "/api/token", body={"user": "x", "password": "y"})[0], 200)
+
+
+class TestSchemaMigrations(unittest.TestCase):
+    """Le schéma monte d'une version à la fois, en une transaction ; une base plus récente que le hub n'est pas touchée."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = self.tmp / "hub.db"
+
+    def columns(self, db):
+        return [r["name"] for r in db.query("PRAGMA table_info(items)")]
+
+    def test_a_new_base_gets_the_current_version(self):
+        from hub import db as database
+        self.assertEqual(database.Database(self.path).kv_get("schema"), database.SCHEMA_VERSION)
+
+    def test_a_migration_runs_once_and_the_version_follows(self):
+        from hub import db as database
+        database.Database(self.path)
+        add = lambda conn: conn.execute("ALTER TABLE items ADD COLUMN extra TEXT")           # noqa: E731
+        with mock.patch.object(database, "SCHEMA_VERSION", 3), mock.patch.dict(database.MIGRATIONS, {3: add}):
+            db = database.Database(self.path)
+            self.assertIn("extra", self.columns(db))
+            self.assertEqual(db.kv_get("schema"), 3)
+            self.assertEqual(database.Database(self.path).kv_get("schema"), 3)               # rouverte : rien n'est rejoué (l'ALTER lèverait « duplicate column »)
+
+    def test_a_failed_migration_leaves_the_base_as_it_was(self):
+        from hub import db as database
+        database.Database(self.path)
+
+        def bad(conn):
+            conn.execute("ALTER TABLE items ADD COLUMN extra TEXT")
+            raise ValueError("boum")
+        with mock.patch.object(database, "SCHEMA_VERSION", 3), mock.patch.dict(database.MIGRATIONS, {3: bad}):
+            with self.assertRaises(RuntimeError) as caught:
+                database.Database(self.path)
+        self.assertIn("version 3", str(caught.exception))
+        db = database.Database(self.path)
+        self.assertEqual((db.kv_get("schema"), "extra" in self.columns(db)), (database.SCHEMA_VERSION, False))      # la colonne ajoutée avant l'échec a été défaite
+
+    def test_a_base_from_before_the_current_version_is_brought_up(self):
+        from hub import db as database
+        db = database.Database(self.path)
+        db.kv_set("schema", 1)
+        self.assertEqual(database.Database(self.path).kv_get("schema"), database.SCHEMA_VERSION)
+
+    def test_a_newer_base_is_left_alone_and_the_hub_says_so(self):
+        import contextlib
+        import io
+        from hub import db as database
+        database.Database(self.path).kv_set("schema", 99)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            db = database.Database(self.path)
+        self.assertIn("99", err.getvalue())
+        self.assertEqual(db.kv_get("schema"), 99)                                              # le numéro de la base plus récente n'est pas rabaissé
+
+
+class TestImageConversions(unittest.TestCase):
+    def test_without_pillow_at_most_max_streams_ffmpeg_run_at_once(self):
+        import types
+        from hub.media import images
+        cfg = types.SimpleNamespace(data=Path(tempfile.mkdtemp()), ffmpeg="ffmpeg-bidon", max_streams=2)
+        self.addCleanup(shutil.rmtree, cfg.data, True)
+        engine = images.Images(cfg, None)
+        running, peak, lock = [0], [0], threading.Lock()
+
+        def fake_run(*args, **kwargs):
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(0.05)
+            with lock:
+                running[0] -= 1
+            return types.SimpleNamespace(returncode=0, stdout=b"\xff\xd8\xff reduit")
+        with mock.patch.object(images, "Image", None), mock.patch.object(images.subprocess, "run", fake_run):
+            threads = [threading.Thread(target=engine.resize, args=(fixtures.PNG, 160)) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(running[0], 0)
+        self.assertEqual(peak[0], 2)                                                           # jamais plus que HUB_MAX_STREAMS, mais bien deux en parallèle
+
+
+class TestPhotoRedirects(unittest.TestCase):
+    def test_a_redirect_stays_on_wikimedia_over_https(self):
+        from urllib.error import URLError
+        from urllib.request import Request
+        from hub import enrich
+        handler = enrich._SameHosts()
+        request = Request("https://upload.wikimedia.org/a.jpg")
+        self.assertIsNotNone(handler.redirect_request(request, None, 302, "Found", {}, "https://upload.wikimedia.org/b.jpg"))
+        self.assertIsNotNone(handler.redirect_request(request, None, 302, "Found", {}, "https://thumb.wikimedia.org/b.jpg"))
+        for target in ("http://upload.wikimedia.org/b.jpg", "https://exemple.org/b.jpg", "http://169.254.169.254/latest", "https://192.168.1.1/x", "file:///etc/passwd"):
+            with self.assertRaises(URLError, msg=target):
+                handler.redirect_request(request, None, 302, "Found", {}, target)
+
+
 class TestAccountCommandLine(unittest.TestCase):
     PASSWORD = "motdepasse1"
 
