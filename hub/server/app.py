@@ -1403,16 +1403,22 @@ def is_finished(kind, position, duration):
     return position / duration >= WATCHED_AT or duration - position <= min(WATCHED_TAIL, duration * 0.08)
 
 
-@route("POST", r"/api/progress")
-def api_progress(h, m, q):
-    body = h.body_json()
-    entry = h.hub.entry(str(body.get("entry", "")))
+def progress_numbers(body):
+    """(position, durée) envoyées par le lecteur, positives ; 400 si ce ne sont pas des nombres finis."""
     try:
         position, duration = max(0.0, float(body.get("position", 0))), max(0.0, float(body.get("duration", 0)))
     except (TypeError, ValueError):
         raise HttpError(400, "position invalide")
     if not (math.isfinite(position) and math.isfinite(duration)):          # `Infinity` passe json.loads : stocké, il rendrait la fiche du compte illisible pour JSON.parse
         raise HttpError(400, "position invalide")
+    return position, duration
+
+
+@route("POST", r"/api/progress")
+def api_progress(h, m, q):
+    body = h.body_json()
+    entry = h.hub.entry(str(body.get("entry", "")))
+    position, duration = progress_numbers(body)
     duration = duration or entry["duration"]
     done = bool(body.get("done")) or is_finished(entry["kind"], position, duration)
     if entry["kind"] == "audio":                 # la musique n'a pas de reprise : seulement « écouté »
