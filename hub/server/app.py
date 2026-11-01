@@ -1298,11 +1298,15 @@ def api_item_seen(h, m, q):
 # ---------------------------------------------------------------------------
 # Playlists
 # ---------------------------------------------------------------------------
-def playlist_call(func, *args):
+def module_call(failure, func, *args):
+    """Appelle `func` ; l'erreur `failure` d'un module (elle porte un `status` et un `message`) devient la réponse HTTP."""
     try:
         return func(*args)
-    except playlists.PlaylistError as e:
+    except failure as e:
         raise HttpError(e.status, e.message)
+
+
+playlist_call = partial(module_call, playlists.PlaylistError)
 
 
 @route("GET", r"/api/playlists")
@@ -1675,11 +1679,7 @@ def book_epub(h, m, q):
 # ---------------------------------------------------------------------------
 # Sagas composées à la main (sagas.json, voir sagas.py) : réservées à l'administrateur
 # ---------------------------------------------------------------------------
-def saga_call(func, *args):
-    try:
-        return func(*args)
-    except sagafile.SagaError as e:
-        raise HttpError(e.status, e.message)
+saga_call = partial(module_call, sagafile.SagaError)
 
 
 def movie_rows(hub):
