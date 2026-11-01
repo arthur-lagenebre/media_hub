@@ -96,6 +96,37 @@ def damaged(text):
     return not isinstance(data, dict) or any(key in data and not isinstance(data[key], list) for key in ("sagas", "ignore"))
 
 
+def _checked_name(saga, names):
+    """Le nom d'une saga envoyée par l'éditeur, retenu dans `names` ; SagaError s'il manque, est trop long ou déjà pris (à la casse près)."""
+    if not isinstance(saga, dict):
+        raise SagaError(400, "une saga est un objet {name, films}")
+    name = clean_name(saga.get("name"))
+    if not name:
+        raise SagaError(400, "donne un nom à la saga")
+    if len(name) > MAX_NAME:
+        raise SagaError(400, f"nom trop long (au plus {MAX_NAME} caractères) : {name[:20]}…")
+    if name.casefold() in names:
+        raise SagaError(400, f"deux sagas s'appellent « {name} »")
+    names.add(name.casefold())
+    return name
+
+
+def _checked_ids(name, values):
+    """Les identifiants TMDB des films d'une saga envoyée par l'éditeur, sans doublon ; SagaError au premier qui ne se lit pas."""
+    if not isinstance(values, list):
+        raise SagaError(400, f"« {name} » : la liste des films est attendue")
+    if len(values) > MAX_FILMS:
+        raise SagaError(400, f"« {name} » : {MAX_FILMS} films au plus")
+    films = []
+    for value in values:
+        ident = film_id(value)
+        if ident is None:
+            raise SagaError(400, f"« {name} » : identifiant TMDB illisible ({value!r})")
+        if ident not in films:
+            films.append(ident)
+    return films
+
+
 def clean(listed):
     """[(nom, [identifiants TMDB])] d'après ce que l'éditeur envoie, ou SagaError : ici rien n'est écarté en silence, on ne perd pas une saga sans le dire."""
     if not isinstance(listed, list):
@@ -104,29 +135,8 @@ def clean(listed):
         raise SagaError(400, f"{MAX_SAGAS} sagas au plus")
     sagas, names = [], set()
     for saga in listed:
-        if not isinstance(saga, dict):
-            raise SagaError(400, "une saga est un objet {name, films}")
-        name = clean_name(saga.get("name"))
-        if not name:
-            raise SagaError(400, "donne un nom à la saga")
-        if len(name) > MAX_NAME:
-            raise SagaError(400, f"nom trop long (au plus {MAX_NAME} caractères) : {name[:20]}…")
-        if name.casefold() in names:
-            raise SagaError(400, f"deux sagas s'appellent « {name} »")
-        names.add(name.casefold())
-        values = saga.get("films", [])
-        if not isinstance(values, list):
-            raise SagaError(400, f"« {name} » : la liste des films est attendue")
-        if len(values) > MAX_FILMS:
-            raise SagaError(400, f"« {name} » : {MAX_FILMS} films au plus")
-        films = []
-        for value in values:
-            ident = film_id(value)
-            if ident is None:
-                raise SagaError(400, f"« {name} » : identifiant TMDB illisible ({value!r})")
-            if ident not in films:
-                films.append(ident)
-        sagas.append((name, films))
+        name = _checked_name(saga, names)
+        sagas.append((name, _checked_ids(name, saga.get("films", []))))
     return sagas
 
 
