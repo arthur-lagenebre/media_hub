@@ -85,13 +85,21 @@ def _sub(index, s):
     }
 
 
+def _format(fmt):
+    return {"container": _container((fmt.get("format_name") or "").split(",")), "duration": float(fmt.get("duration") or 0), "bitrate": int(fmt.get("bit_rate") or 0),
+            "size": int(fmt.get("size") or 0)}
+
+
+def _main_video(streams):
+    """Le flux d'image du film ; une jaquette embarquée (attached_pic) n'en est pas un."""
+    return next((s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
+
+
 def summarize(data):
     """La sortie de ffprobe réduite à ce qui décide de la lecture. Ce résumé est ce qu'on garde dans la base."""
-    fmt = data.get("format") or {}
     streams = data.get("streams") or []
-    video = next((s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
-    return {"container": _container((fmt.get("format_name") or "").split(",")), "duration": float(fmt.get("duration") or 0), "bitrate": int(fmt.get("bit_rate") or 0),
-            "size": int(fmt.get("size") or 0), "video": _video(video) if video else None,
+    video = _main_video(streams)
+    return {**_format(data.get("format") or {}), "video": _video(video) if video else None,
             "audio": [_audio(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "audio")],
             "subs": [_sub(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "subtitle")]}
 
@@ -108,10 +116,14 @@ def _chosen_track(probe, audio):
     return track or default_audio(probe)
 
 
+def _video_readable(video, caps, vcaps):
+    return bool(video) and video["codec"] in vcaps and (video["depth"] <= 8 or f"{video['codec']}10" in vcaps) and not (video["hdr"] and not caps.get("hdr"))
+
+
 def _check_video(video, caps):
     """(lisible tel quel ?, raisons contraires) : le codec, puis les 10 bits et le HDR, que le lecteur doit annoncer."""
     vcaps = set(caps.get("video") or [])
-    ok = bool(video) and video["codec"] in vcaps and (video["depth"] <= 8 or f"{video['codec']}10" in vcaps) and not (video["hdr"] and not caps.get("hdr"))
+    ok = _video_readable(video, caps, vcaps)
     if video and video["codec"] not in vcaps:
         return ok, [f"image {video['codec']} non lisible par ce lecteur"]
     if video and not ok:
@@ -135,8 +147,9 @@ def _check_limits(probe, video, caps, max_kbps, max_height):
 def _check_audio(track, caps):
     """(lisible tel quel ?, raisons contraires) : le codec, puis le nombre de voies."""
     channels = caps.get("channels") or 2
-    ok = track is None or (track["codec"] in set(caps.get("audio") or []) and track["channels"] <= channels)
-    if track and track["codec"] not in set(caps.get("audio") or []):
+    acaps = set(caps.get("audio") or [])
+    ok = track is None or (track["codec"] in acaps and track["channels"] <= channels)
+    if track and track["codec"] not in acaps:
         return ok, [f"son {track['codec']} non lisible par ce lecteur"]
     if track and not ok:
         return ok, [f"son {track['channels']} voies, le lecteur en prend {channels}"]
@@ -179,6 +192,10 @@ def _video_args(probe, decision, max_kbps, max_height, preset):
     video = probe.get("video") or {}
     if decision["copy_video"]:
         return ["-c:v", "copy"] + (["-tag:v", "hvc1"] if video.get("codec") == "hevc" else [])
+    return _x264_args(video, max_kbps, max_height, preset)
+
+
+def _x264_args(video, max_kbps, max_height, preset):
     height = min(x for x in (max_height, video.get("height", 0)) if x) if (max_height or video.get("height")) else 0
     filters = [f"scale=-2:{height}"] if height and video.get("height", 0) > height else []
     args = ["-c:v", "libx264", "-preset", preset, "-crf", "21", "-profile:v", "high", "-level", "4.1", "-g", "48", "-sc_threshold", "0", "-vf", ",".join(filters + ["format=yuv420p"])]
