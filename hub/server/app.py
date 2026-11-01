@@ -475,8 +475,8 @@ def session_cookie(hub, row):
     return f"hub={hub.session_token(row)}; Path=/; Max-Age={SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax"
 
 
-@route("POST", r"/api/login")
-def login(h, m, q):
+def login_credentials(h):
+    """(nom, mot de passe) du formulaire de connexion (application/x-www-form-urlencoded) ou d'un corps JSON ; 4 Ko au plus sont lus."""
     h.body_taken = True
     length = h.content_length()
     if length > 4096:
@@ -484,11 +484,15 @@ def login(h, m, q):
     raw = h.rfile.read(min(length, 4096)).decode("utf-8", "replace")
     if "=" in raw and not raw.lstrip().startswith("{"):
         form = parse_qs(raw)
-        password, name = form.get("password", [""])[0], form.get("user", [""])[0]
-    else:
-        body = safe_json(raw, {})
-        body = body if isinstance(body, dict) else {}
-        password, name = body.get("password", ""), body.get("user")
+        return form.get("user", [""])[0], form.get("password", [""])[0]
+    body = safe_json(raw, {})
+    body = body if isinstance(body, dict) else {}
+    return body.get("user"), body.get("password", "")
+
+
+@route("POST", r"/api/login")
+def login(h, m, q):
+    name, password = login_credentials(h)
     who = h.client_address[0]
     try:
         wait = h.hub.throttle.delay(who) if h.hub.auth() else 0
