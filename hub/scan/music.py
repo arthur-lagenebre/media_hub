@@ -6,6 +6,7 @@ Un album est un dossier qui contient de l'audio (lui ou ses CD1, CD2...) ; les d
 from __future__ import annotations
 
 import json
+from collections import Counter
 
 from libraries.music import library, wanted
 
@@ -17,6 +18,7 @@ def scan_music(lib, known, enriched=None):
     releases = library.scan(lib.path)
     reused = read = 0
     items, entries = [], []
+    homes = artist_dirs(releases)
     for release in releases:
         for track in release.tracks:
             row = known.get(track.rel)
@@ -32,6 +34,7 @@ def scan_music(lib, known, enriched=None):
         meta = {
             "artist": release.artist, "artist_id": release.artist_id, "artist_mbid": release.artist_mbid, "mbid": release.mbid, "label": release.label,
             "catalog": release.catalog, "formats": release.formats, "tagged": release.tagged, "folder": release.rel,
+            "artist_dir": homes.get(release.artist_id, ""),
             "cover_file": cover.name if cover else "", "has_cover": bool(cover),
             "progress": list(progress) if progress else None, "discs": len(release.discs), "duration": release.duration,
         }
@@ -44,6 +47,21 @@ def scan_music(lib, known, enriched=None):
     counts = _Counts(reused, read)
     counts.kv = {f"wanted:{lib.id}": wanted_sheet(lib.path, wanted.find(lib.path, releases))}       # les albums manquants se rangent à part : ce ne sont pas des items, aucune liste ne doit les compter
     return items, entries, counts
+
+
+def artist_dirs(releases):
+    """{id d'artiste: le nom de son dossier, à la racine de la médiathèque} : celui où il a la majorité des albums qui s'y rangent. Un dossier de genre ou de compilations, qui range plusieurs artistes sans majorité, n'est celui de personne. C'est là que va sa photo (artist.webp)."""
+    inside = {}
+    for release in releases:
+        parts = release.rel.split("/")
+        if len(parts) >= 2:             # un album posé à la racine n'a pas de dossier d'artiste
+            inside.setdefault(parts[0], Counter())[release.artist_id] += 1
+    best = {}
+    for name, counts in sorted(inside.items()):
+        artist, n = counts.most_common(1)[0]
+        if n * 2 > sum(counts.values()) and n > best.get(artist, ("", 0))[1]:
+            best[artist] = (name, n)
+    return {artist: name for artist, (name, _) in best.items()}
 
 
 def wanted_sheet(root, found):

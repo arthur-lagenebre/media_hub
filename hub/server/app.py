@@ -44,7 +44,7 @@ from ..db import Database, make_id
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
-from ..media.images import Images, sniff, write_atomic
+from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, write_atomic
 from .jobs import Jobs
 
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
@@ -1112,9 +1112,41 @@ def wanted_albums(hub, lib_id, artist_id):
 PHOTO_UPLOAD_MAX = 10 << 20
 
 
-def artist_photo(hub, artist_id, kept):
+def artist_home(lib, rows):
+    """Le dossier de l'artiste à la racine de la médiathèque (voir scan.music.artist_dirs), où va sa photo ; None si le dernier scan ne lui en a pas trouvé ou s'il n'est plus là."""
+    for row in rows:
+        name = safe_json(row["meta"], {}).get("artist_dir")
+        if name and (lib.path / name).is_dir():
+            return lib.path / name
+    return None
+
+
+def artist_photo(hub, artist_id, kept, home=None):
     """Le fichier de la photo d'un artiste, la seule qu'il ait (elle vient de Wikipédia, via « Fiches artistes », ou de l'utilisateur) ; None s'il n'en a pas."""
-    return enrich.photo_file(hub.cfg.data / "artists", artist_id, (kept or {}).get("mbid", ""))
+    return enrich.photo_file(hub.cfg.data / "artists", artist_id, (kept or {}).get("mbid", ""), home)
+
+
+def save_artist_photo(hub, lib, rows, artist_id, data, box=None):
+    """enrich.save_photo, ses échecs rendus en réponses HTTP : 415 (image illisible), 501 (rien pour convertir), 500 (écriture impossible : le dossier de la médiathèque est peut-être en lecture seule)."""
+    try:
+        enrich.save_photo(hub.cfg, artist_id, data, artist_home(lib, rows), box, (artist_kept(hub, rows) or {}).get("mbid", ""))
+    except NoConverter as e:
+        raise HttpError(501, str(e))
+    except ConvertError as e:
+        raise HttpError(415, str(e))
+    except OSError as e:
+        raise HttpError(500, f"photo non enregistrée : {e}")
+
+
+def photo_box(q):
+    """Le cadre `crop=x,y,largeur,hauteur` (fractions de l'image) de la requête, ou None."""
+    text = q.get("crop")
+    if not text:
+        return None
+    try:
+        return crop_box(text)
+    except ValueError as e:
+        raise HttpError(400, str(e))
 
 
 @route("GET", r"/api/artist/([\w-]+)/(\w+)")
@@ -1138,7 +1170,7 @@ def api_artist(h, m, q):
     if kept:
         out["info"] = artist_sheet(kept["info"], kept["mbid"])
     out["wanted"] = [{"year": w["year"], "title": w["title"], "cover": f"/img/wanted/{lib.id}/{m.group(2)}/{w['key']}" if w["cover"] else ""} for w in wanted_albums(hub, lib.id, m.group(2))]
-    out["photo"] = artist_photo(hub, m.group(2), kept) is not None
+    out["photo"] = artist_photo(hub, m.group(2), kept, artist_home(lib, rows)) is not None
     if out["photo"]:
         out["image"] = urls.artist_image(lib.id, m.group(2))
     h.send_json(out)
@@ -1146,15 +1178,37 @@ def api_artist(h, m, q):
 
 @route("POST", r"/api/artist/([\w-]+)/(\w+)/photo")
 def api_artist_photo_set(h, m, q):
-    """Remplace la photo d'un artiste, quelle qu'elle soit, par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). Administrateur seulement."""
+    """Remplace la photo d'un artiste, quelle qu'elle soit, par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). `crop=x,y,largeur,hauteur` (fractions de l'image) ne garde que ce cadre. Elle est convertie en WebP et posée dans le dossier de l'artiste. Administrateur seulement."""
     require_admin(h)
     hub = h.hub
-    artist_albums(hub, m.group(1), m.group(2))
+    lib, rows = artist_albums(hub, m.group(1), m.group(2))
+    box = photo_box(q)
     data = h.body_bytes(PHOTO_UPLOAD_MAX)
-    ext = enrich.image_ext(data)
-    if not ext:
+    if not enrich.image_ext(data):
         raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
-    enrich.store_photo(hub.cfg.data / "artists", m.group(2), data, ext)
+    save_artist_photo(hub, lib, rows, m.group(2), data, box)
+    h.send_json({"ok": True})
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/photo/crop")
+def api_artist_photo_crop(h, m, q):
+    """Ne garde de la photo de l'artiste que le cadre `{"x", "y", "w", "h"}` (fractions de l'image) : ce qui est hors du cadre disparaît du fichier. Administrateur seulement."""
+    require_admin(h)
+    hub = h.hub
+    lib, rows = artist_albums(hub, m.group(1), m.group(2))
+    body = h.body_json()
+    try:
+        box = crop_box(",".join(str(body.get(k, "")) for k in ("x", "y", "w", "h")))
+    except ValueError as e:
+        raise HttpError(400, str(e))
+    path = artist_photo(hub, m.group(2), artist_kept(hub, rows), artist_home(lib, rows))
+    if path is None:
+        raise HttpError(404, "pas de photo à recadrer")
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise HttpError(500, f"photo illisible : {e}")
+    save_artist_photo(hub, lib, rows, m.group(2), data, box)
     h.send_json({"ok": True})
 
 
@@ -1163,13 +1217,14 @@ def api_artist_photo_wikipedia(h, m, q):
     """Remplace la photo d'un artiste par celle de son article Wikipédia (celui que sa fiche garde : il faut donc que « Fiches artistes » soit passé). Administrateur seulement."""
     require_admin(h)
     hub = h.hub
-    _, rows = artist_albums(hub, m.group(1), m.group(2))
+    lib, rows = artist_albums(hub, m.group(1), m.group(2))
     h.body_json()
-    wiki = ((artist_kept(hub, rows) or {}).get("info") or {}).get("wiki")
+    kept = artist_kept(hub, rows)
+    wiki = ((kept or {}).get("info") or {}).get("wiki")
     if not wiki:
         raise HttpError(404, "pas d'article Wikipédia connu pour cet artiste")
     try:
-        enrich.wikipedia_photo(hub.cfg, m.group(2), wiki)
+        enrich.wikipedia_photo(hub.cfg, m.group(2), wiki, artist_home(lib, rows), kept["mbid"])
     except OSError as e:
         raise HttpError(502, f"photo non récupérée : {e}")
     h.send_json({"ok": True})
@@ -1180,7 +1235,7 @@ def artist_image(h, m, q):
     """La photo d'un artiste, réduite comme les pochettes ; 404 s'il n'en a pas (la page garde alors la pochette de son premier album)."""
     hub = h.hub
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
-    path = artist_photo(hub, m.group(2), artist_kept(hub, rows))
+    path = artist_photo(hub, m.group(2), artist_kept(hub, rows), artist_home(lib, rows))
     try:
         width = int(q.get("w", 0))
     except ValueError:

@@ -13,7 +13,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 | --- | --- | --- |
 | Films | `.mkv` (titre, synopsis, casting, jaquette embarqués par `Metadata.py`), sagas regroupées en une vignette (bouton « Sagas ») | vidéo, sous-titres, reprise |
 | Séries, Animations | dossiers série / saison / épisode, affiche TMDB (avec `TMDB_KEY`) | vidéo, épisode suivant |
-| Musique | `.flac`, `.mp3`, … regroupés en albums, pochette = `cover.{ext}` du dossier ; une image `1997 - OK Computer.jpg` dans le dossier de l'artiste déclare un album manquant (grisé, sur sa fiche seulement) | barre audio qui continue pendant la navigation |
+| Musique | `.flac`, `.mp3`, … regroupés en albums, pochette = `cover.{ext}` du dossier ; une image `1997 - OK Computer.jpg` dans le dossier de l'artiste déclare un album manquant (grisé, sur sa fiche seulement) ; la photo de l'artiste est `artist.webp` dans son dossier (voir [Photos d'artistes](#photos-dartistes)) | barre audio qui continue pendant la navigation |
 | Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens manga, thèmes |
 
 - **Accueil** : « Reprendre » (films, épisodes, livres, albums en cours) et les ajouts récents de chaque bibliothèque.
@@ -54,6 +54,12 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne fait perdre aucune progression de lecture, et un `.mkv` illisible n'arrête pas le scan | `0` |
 | `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting) et décrit les films qui manquent aux sagas ; lue aussi dans le `.env` de `media_library` | aucune |
+
+## Photos d'artistes
+
+La photo d'un artiste est le fichier `artist.webp` de **son dossier, à la racine de la bibliothèque** (`Musique/Daft Punk/artist.webp`) : elle suit la musique si on la déplace ou la sauvegarde, et le nettoyage la laisse. Le dossier de l'artiste est celui, à la racine, où il a la majorité des albums ; un album posé directement à la racine, ou un dossier de genre qui range plusieurs artistes, n'en donne pas : la photo reste alors sous `HUB_DATA/artists/`. Le dossier est connu après un scan.
+
+Sur la fiche de l'artiste, l'administrateur choisit une image (*Changer la photo*) : une fenêtre la montre sous un cadre carré, la vignette. On la déplace (glisser, flèches) et on l'agrandit (molette, curseur, `+` / `-`), puis *Valider* **retire tout ce qui est hors du cadre** et enregistre le résultat en WebP (1280 px au plus). *Recadrer* reprend la photo gardée, *Photo de Wikipédia* la remplace par celle de l'article, que l'on peut aussitôt recadrer. La conversion demande Pillow (avec libwebp) ou ffmpeg ; sans eux, une photo est gardée telle quelle sous `HUB_DATA/artists/` et ne se recadre pas. Le volume de la musique doit être monté en écriture (voir [deploy/README.md](deploy/README.md)).
 
 ## Sagas
 
@@ -101,7 +107,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete` | comptes (administrateur seulement) : lister, créer, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
 | `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
 | Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte ; le jeton de média, lui, ne change pas |
-| `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | (les trois `POST`, comme les photos d'artistes et `GET /api/jobs?log=1` (le journal des tâches), sont réservés à l'administrateur : 403 sinon ; `GET /api/jobs` sans `log` reste ouvert à tout compte) mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}` et que les pochettes d'albums manquants) |
+| `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | (les trois `POST`, comme les photos d'artistes et `GET /api/jobs?log=1` (le journal des tâches), sont réservés à l'administrateur : 403 sinon ; `GET /api/jobs` sans `log` reste ouvert à tout compte) mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}`, que les pochettes d'albums manquants et que `artist.webp`) |
 
 ## Limites connues
 
@@ -118,7 +124,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 263 tests : 226 serveur + 37 interface
+python -m unittest discover -s tests          # 270 tests : 232 serveur + 38 interface
 ```
 
-`tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 37 tests) ; il est ignoré si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 38 tests) ; il est ignoré si Playwright ou ffmpeg manquent.
