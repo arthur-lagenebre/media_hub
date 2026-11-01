@@ -40,21 +40,8 @@ def _split_actor(text):
     return (found.group(1), found.group(2)) if found else (text, "")
 
 
-def read_file(path):
-    """(infos tirées des tags, durée en secondes) d'un fichier vidéo. Un fichier qui n'est pas un .mkv, ou qui n'a pas de tags, rend {}.
-
-    Un .mkv qu'on n'arrive pas à lire (erreur d'E/S sur le NAS, fichier tronqué ou abîmé) rend `{"unreadable": True}` : il apparaît quand même, sous le nom de son dossier, et sera relu au scan suivant (voir Reader) au lieu de rester « non étiqueté » pour toujours. Il ne fait jamais échouer le scan.
-    """
-    if path.suffix.lower() != ".mkv":
-        return {}, 0
-    try:
-        tags, minutes = ebml.read_metadata(path, ordered=True)
-    except Exception:           # le lecteur ne rattrape que les erreurs d'E/S : un fichier abîmé peut lever bien autre chose
-        tags = minutes = None
-    if tags is None:
-        return {"unreadable": True}, 0
-    if not tags:
-        return {}, (minutes or 0) * 60
+def _tag_info(tags):
+    """Ce que disent les tags Matroska d'un fichier (film ou épisode) ; ce qui est vide est omis."""
     info = {
         "title": _first(tags, 50, "TITLE"),
         "synopsis": _first(tags, 50, "SYNOPSIS") or _first(tags, 50, "SUMMARY"),
@@ -71,9 +58,23 @@ def read_file(path):
         "season_title": _first(tags, 60, "TITLE"),
         "has_tags": True,
     }
-    return {k: v for k, v in info.items() if v not in ("", None, [])}, (minutes or 0) * 60
+    return {k: v for k, v in info.items() if v not in ("", None, [])}
 
 
+def read_file(path):
+    """(infos tirées des tags, durée en secondes) d'un fichier vidéo. Un fichier qui n'est pas un .mkv, ou qui n'a pas de tags, rend {}.
+
+    Un .mkv qu'on n'arrive pas à lire (erreur d'E/S sur le NAS, fichier tronqué ou abîmé) rend `{"unreadable": True}` : il apparaît quand même, sous le nom de son dossier, et sera relu au scan suivant (voir Reader) au lieu de rester « non étiqueté » pour toujours. Il ne fait jamais échouer le scan.
+    """
+    if path.suffix.lower() != ".mkv":
+        return {}, 0
+    try:
+        tags, minutes = ebml.read_metadata(path, ordered=True)
+    except Exception:           # le lecteur ne rattrape que les erreurs d'E/S : un fichier abîmé peut lever bien autre chose
+        tags = minutes = None
+    if tags is None:
+        return {"unreadable": True}, 0
+    return (_tag_info(tags) if tags else {}), (minutes or 0) * 60
 def _stat(path):
     try:
         st = path.stat()
