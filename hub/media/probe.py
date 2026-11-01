@@ -44,40 +44,56 @@ def _fps(text):
         return 0
 
 
+def _tags(stream):
+    return {k.lower(): v for k, v in (stream.get("tags") or {}).items()}
+
+
+def _container(names):
+    return next((family for key, family in CONTAINER_FAMILY if key in names), names[0] if names and names[0] else "")
+
+
+def _depth(video):
+    """Les bits par composante : ceux que le fichier annonce, sinon 10 si le format de pixel le dit, sinon 8."""
+    bits = video.get("bits_per_raw_sample") or ""
+    return int(bits) if str(bits).isdigit() else (10 if "10" in (video.get("pix_fmt") or "") else 8)
+
+
+def _video(video):
+    return {
+        "codec": VIDEO_NAMES.get(video.get("codec_name"), video.get("codec_name") or ""), "profile": video.get("profile") or "",
+        "width": int(video.get("width") or 0), "height": int(video.get("height") or 0), "fps": _fps(video.get("avg_frame_rate")),
+        "depth": _depth(video), "pix_fmt": video.get("pix_fmt") or "", "hdr": video.get("color_transfer") in ("smpte2084", "arib-std-b67"),
+        "bitrate": int(video.get("bit_rate") or 0),
+    }
+
+
+def _audio(index, s):
+    tags, disp = _tags(s), s.get("disposition") or {}
+    return {
+        "index": index, "codec": AUDIO_NAMES.get(s.get("codec_name"), s.get("codec_name") or ""), "channels": int(s.get("channels") or 2),
+        "lang": tags.get("language", ""), "title": tags.get("title", ""), "default": bool(disp.get("default")),
+        "commentary": bool(disp.get("comment")) or bool(disp.get("visual_impaired")),
+    }
+
+
+def _sub(index, s):
+    tags, disp = _tags(s), s.get("disposition") or {}
+    codec = s.get("codec_name") or ""
+    return {
+        "index": index, "codec": codec, "lang": tags.get("language", ""), "title": tags.get("title", ""),
+        "forced": bool(disp.get("forced")), "default": bool(disp.get("default")), "text": codec in TEXT_SUBS,
+    }
+
+
 def summarize(data):
     """La sortie de ffprobe réduite à ce qui décide de la lecture. Ce résumé est ce qu'on garde dans la base."""
     fmt = data.get("format") or {}
     streams = data.get("streams") or []
-    names = (fmt.get("format_name") or "").split(",")
-    container = next((family for key, family in CONTAINER_FAMILY if key in names), names[0] if names and names[0] else "")
     video = next((s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
-    out = {"container": container, "duration": float(fmt.get("duration") or 0), "bitrate": int(fmt.get("bit_rate") or 0), "size": int(fmt.get("size") or 0), "video": None, "audio": [], "subs": []}
-    if video:
-        bits = video.get("bits_per_raw_sample") or ""
-        depth = int(bits) if str(bits).isdigit() else (10 if "10" in (video.get("pix_fmt") or "") else 8)
-        out["video"] = {
-            "codec": VIDEO_NAMES.get(video.get("codec_name"), video.get("codec_name") or ""), "profile": video.get("profile") or "",
-            "width": int(video.get("width") or 0), "height": int(video.get("height") or 0), "fps": _fps(video.get("avg_frame_rate")),
-            "depth": depth, "pix_fmt": video.get("pix_fmt") or "", "hdr": video.get("color_transfer") in ("smpte2084", "arib-std-b67"),
-            "bitrate": int(video.get("bit_rate") or 0),
-        }
-    for s in (x for x in streams if x.get("codec_type") == "audio"):
-        tags = {k.lower(): v for k, v in (s.get("tags") or {}).items()}
-        disp = s.get("disposition") or {}
-        out["audio"].append({
-            "index": len(out["audio"]), "codec": AUDIO_NAMES.get(s.get("codec_name"), s.get("codec_name") or ""), "channels": int(s.get("channels") or 2),
-            "lang": tags.get("language", ""), "title": tags.get("title", ""), "default": bool(disp.get("default")),
-            "commentary": bool(disp.get("comment")) or bool(disp.get("visual_impaired")),
-        })
-    for s in (x for x in streams if x.get("codec_type") == "subtitle"):
-        tags = {k.lower(): v for k, v in (s.get("tags") or {}).items()}
-        disp = s.get("disposition") or {}
-        codec = s.get("codec_name") or ""
-        out["subs"].append({
-            "index": len(out["subs"]), "codec": codec, "lang": tags.get("language", ""), "title": tags.get("title", ""),
-            "forced": bool(disp.get("forced")), "default": bool(disp.get("default")), "text": codec in TEXT_SUBS,
-        })
-    return out
+    return {"container": _container((fmt.get("format_name") or "").split(",")), "duration": float(fmt.get("duration") or 0), "bitrate": int(fmt.get("bit_rate") or 0),
+            "size": int(fmt.get("size") or 0), "video": _video(video) if video else None,
+            "audio": [_audio(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "audio")],
+            "subs": [_sub(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "subtitle")]}
 
 
 def default_audio(probe):
