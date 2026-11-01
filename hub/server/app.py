@@ -34,6 +34,7 @@ from libraries.video import tmdb
 
 from .. import __version__
 from .. import accounts
+from .. import countries
 from .. import enrich
 from .. import missing
 from .. import playlists
@@ -1080,7 +1081,7 @@ def artist_sheet(info, mbid=""):
         links.append({"label": "Wikipédia", "url": info["wiki"]["url"]})
     if mbid:
         links.append({"label": "MusicBrainz", "url": musicbrainz.artist_url(mbid)})
-    return {"facts": artistinfo.facts(info), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": links}
+    return {"facts": artistinfo.facts({**info, "area": countries.french(info.get("area"))}), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": links}
 
 
 def artist_albums(hub, lib_id, artist_id):
