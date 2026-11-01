@@ -214,6 +214,25 @@ def order_key(row):
 # ---------------------------------------------------------------------------
 # Le gestionnaire HTTP
 # ---------------------------------------------------------------------------
+RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
+
+
+def range_bounds(header, size):
+    """(début, fin, statut) de ce que demande l'en-tête Range pour un fichier de `size` octets : 206 pour une partie, 200 pour le tout (pas d'en-tête, ou un qu'on ne comprend pas) ; None quand la partie demandée sort du fichier (416)."""
+    found = RANGE_RE.match(header.strip()) if header else None
+    first, last = found.groups() if found else ("", "")
+    if not (first or last):
+        return 0, size - 1, 200
+    if first:
+        start, end = int(first), int(last) if last else size - 1
+    else:
+        start, end = max(0, size - int(last)), size - 1
+    end = min(end, size - 1)
+    if start >= size or start > end:
+        return None
+    return start, end, 206
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"media_hub/{__version__}"
@@ -254,45 +273,40 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(404, "fichier introuvable")
         with handle:
             mime = mime or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-            start, end, status = 0, size - 1, 200
-            header = self.headers.get("Range")
-            if header:
-                found = re.match(r"bytes=(\d*)-(\d*)$", header.strip())
-                if found and (found.group(1) or found.group(2)):
-                    if found.group(1):
-                        start = int(found.group(1))
-                        end = int(found.group(2)) if found.group(2) else size - 1
-                    else:
-                        start = max(0, size - int(found.group(2)))
-                    end = min(end, size - 1)
-                    if start >= size or start > end:
-                        self.send_body(b"", mime, 416, {"Content-Range": f"bytes */{size}"})
-                        return
-                    status = 206
-            length = end - start + 1
-            self.send_response(status)
-            self.send_header("Content-Type", mime)
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Length", str(length))
-            if status == 206:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            for key, value in (headers or {}).items():
-                self.send_header(key, value)
-            self.end_headers()
-            if self.command == "HEAD":
+            bounds = range_bounds(self.headers.get("Range"), size)
+            if bounds is None:
+                self.send_body(b"", mime, 416, {"Content-Range": f"bytes */{size}"})
                 return
-            self.connection.settimeout(3600)       # un film mis en pause ne doit pas couper la connexion
-            try:
-                handle.seek(start)
-                remaining = length
-                while remaining > 0:
-                    chunk = handle.read(min(CHUNK, remaining))
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    remaining -= len(chunk)
-            finally:
-                self.connection.settimeout(self.timeout)       # la connexion persiste : un client inactif ne garde pas un fil une heure de plus
+            start, end, status = bounds
+            self.send_file_headers(mime, status, start, end, size, headers)
+            if self.command != "HEAD":
+                self.copy_range(handle, start, end - start + 1)
+
+    def send_file_headers(self, mime, status, start, end, size, headers):
+        self.send_response(status)
+        self.send_header("Content-Type", mime)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+
+    def copy_range(self, handle, start, length):
+        """Envoie `length` octets du fichier à partir de `start`, par morceaux."""
+        self.connection.settimeout(3600)       # un film mis en pause ne doit pas couper la connexion
+        try:
+            handle.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = handle.read(min(CHUNK, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+        finally:
+            self.connection.settimeout(self.timeout)       # la connexion persiste : un client inactif ne garde pas un fil une heure de plus
 
     # --- Aiguillage -------------------------------------------------------
     def authorized(self, path, query):
