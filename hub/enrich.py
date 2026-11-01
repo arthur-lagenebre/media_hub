@@ -372,19 +372,24 @@ def download_photo(cfg, urls, artist_id, home=None, mbid=""):
     error = OSError("photo introuvable")
     for url in urls:
         try:
-            with urlopen(Request(url, headers={"User-Agent": MB_USER_AGENT}), timeout=30) as response:
-                data = response.read(PHOTO_MAX + 1)
-        except (URLError, OSError) as e:
-            error = e if isinstance(e, OSError) else OSError(str(e))
-            continue
-        if not image_ext(data) or len(data) > PHOTO_MAX:
-            error = OSError("ce n'est pas une image, ou trop grosse")
+            data = fetch_photo(url)
+        except OSError as e:
+            error = e
             continue
         try:
             return save_photo(cfg, artist_id, data, home, mbid=mbid).name
         except images.ConvertError as e:
             error = OSError(str(e))
     raise error
+
+
+def fetch_photo(url):
+    """Les octets de l'image à cette adresse ; OSError si elle ne vient pas, si ce n'est pas une image ou si elle est trop grosse (URLError en est une)."""
+    with urlopen(Request(url, headers={"User-Agent": MB_USER_AGENT}), timeout=30) as response:
+        data = response.read(PHOTO_MAX + 1)
+    if not image_ext(data) or len(data) > PHOTO_MAX:
+        raise OSError("ce n'est pas une image, ou trop grosse")
+    return data
 
 
 def musicbrainz(cfg):
