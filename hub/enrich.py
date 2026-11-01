@@ -300,16 +300,19 @@ def photo_file(folder, artist_id, mbid="", home=None):
 
     Avant, il y en avait deux dans artists/ : custom-<id>.<ext> (envoyée) et <mbid>.<ext> (Wikipédia). Elles sont ramenées au nom d'aujourd'hui au passage, l'envoyée d'abord.
     """
-    def find(stem):
-        return next((p for p in (folder / f"{stem}{ext}" for ext in PHOTO_EXTS) if p.is_file()), None)
-
     if home and (home / f"{PHOTO_STEM}.webp").is_file():
         return home / f"{PHOTO_STEM}.webp"
-    found = find(artist_id)
-    if found:
-        return found
+    return find_photo(folder, artist_id) or rename_old_photo(folder, artist_id, mbid)
+
+
+def find_photo(folder, stem):
+    return next((p for p in (folder / f"{stem}{ext}" for ext in PHOTO_EXTS) if p.is_file()), None)
+
+
+def rename_old_photo(folder, artist_id, mbid):
+    """L'ancienne photo de l'artiste (custom-<id>, sinon <mbid>), ramenée au nom d'aujourd'hui ; elle garde son nom si le renommage échoue. None s'il n'y en a pas."""
     for stem in (f"custom-{artist_id}", mbid):
-        old = find(stem) if stem and SAFE_STEM.fullmatch(stem) else None
+        old = find_photo(folder, stem) if stem and SAFE_STEM.fullmatch(stem) else None
         if old:
             try:
                 return old.replace(folder / f"{artist_id}{old.suffix}")
