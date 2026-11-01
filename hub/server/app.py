@@ -1460,6 +1460,59 @@ def subtitle_list(hub, entry, probe, path):
     return out
 
 
+def play_settings(body):
+    """(capacités du lecteur, piste audio demandée, débit et hauteur demandés) d'après le corps de la requête ; 400 si un réglage n'est pas un nombre."""
+    caps = body.get("caps") or {}
+    try:
+        audio = int(body["audio"]) if body.get("audio") is not None else None
+        return caps, audio, int(body.get("max_kbps") or 0), int(body.get("max_height") or 0)
+    except (TypeError, ValueError):
+        raise HttpError(400, "réglages invalides")
+
+
+def play_url(entry, decision, caps, kbps, height):
+    """Où le lecteur va chercher le fichier : tel quel (avec des Range) ou converti à la volée par /stream."""
+    base = f"/media/{entry['id']}"
+    if decision["mode"] == "direct":
+        return f"{base}/file"
+    args = {"m": decision["mode"], "ca": int(decision["copy_audio"]), "k": kbps, "h": height, "c": min(int(caps.get("channels") or 2), 6)}
+    if decision["audio"] is not None:
+        args["a"] = decision["audio"]
+    return f"{base}/stream?" + "&".join(f"{k}={v}" for k, v in args.items())
+
+
+def default_height(decision, video, height):
+    """La hauteur demandée ; à défaut, 1080 p pour un 4K à convertir (en pleine taille, il ferait ramer le processeur pour rien)."""
+    if decision["mode"] == "transcode" and not height and video.get("height", 0) > 1080:
+        return 1080
+    return height
+
+
+def show_title(hub, entry):
+    """Le titre de la série d'un épisode ; vide pour un film."""
+    item = hub.db.one("SELECT title, type FROM items WHERE id=?", (entry["item_id"],))
+    return item["title"] if item and item["type"] == "show" else ""
+
+
+def play_warning(decision, video):
+    if decision["mode"] == "transcode" and video.get("height", 0) >= 2000 and video.get("codec") in ("hevc", "av1"):
+        return "Image 4K à convertir : le serveur n'a pas de carte vidéo pour cela, la lecture risque de saccader. Le débit demandé peut être baissé."
+    return ""
+
+
+def resume_position(hub, user, entry):
+    """Où reprendre : la position enregistrée, tant que le fichier n'est pas fini et qu'on n'en est pas au tout début."""
+    progress = hub.db.progress_for(user, [entry["id"]]).get(entry["id"])
+    return progress["position"] if progress and not progress["done"] and progress["position"] >= RESUME_MIN else 0
+
+
+def next_summary(following):
+    """Le fichier vidéo qui suit celui-ci (épisode suivant, partie suivante), ou None."""
+    if following and following["kind"] == "video":
+        return {"id": following["id"], "title": following["title"], "season": following["season"], "number": following["number"]}
+    return None
+
+
 @route("POST", r"/api/play/(\w+)")
 def api_play(h, m, q):
     """Le plan de lecture d'un fichier vidéo pour CE lecteur. Le client l'appelle à l'ouverture, puis à chaque changement de piste audio."""
@@ -1470,40 +1523,19 @@ def api_play(h, m, q):
     body = h.body_json()
     lib, path = hub.path_of(entry)
     probe = probe_of(hub, entry)
-    caps = body.get("caps") or {}
-    try:
-        audio = int(body["audio"]) if body.get("audio") is not None else None
-        kbps, height = int(body.get("max_kbps") or 0), int(body.get("max_height") or 0)
-    except (TypeError, ValueError):
-        raise HttpError(400, "réglages invalides")
+    caps, audio, kbps, height = play_settings(body)
     decision = prober.plan(probe, caps, audio, kbps, height)
     chosen = decision["audio"]
     video = probe.get("video") or {}
-    if decision["mode"] == "transcode" and not height and video.get("height", 0) > 1080:
-        height = 1080                  # convertir un 4K en pleine taille ferait ramer le processeur pour rien : 1080p par défaut
-    base = f"/media/{entry['id']}"
-    if decision["mode"] == "direct":
-        url = f"{base}/file"
-    else:
-        args = {"m": decision["mode"], "ca": int(decision["copy_audio"]), "k": kbps, "h": height, "c": min(int(caps.get("channels") or 2), 6)}
-        if chosen is not None:
-            args["a"] = chosen
-        url = f"{base}/stream?" + "&".join(f"{k}={v}" for k, v in args.items())
-    warning = ""
-    if decision["mode"] == "transcode" and video.get("height", 0) >= 2000 and video.get("codec") in ("hevc", "av1"):
-        warning = "Image 4K à convertir : le serveur n'a pas de carte vidéo pour cela, la lecture risque de saccader. Le débit demandé peut être baissé."
-    progress = hub.db.progress_for(h.user["id"], [entry["id"]]).get(entry["id"])
-    resume = progress["position"] if progress and not progress["done"] and progress["position"] >= RESUME_MIN else 0
-    following = next_entry(hub, entry)
-    duration = probe["duration"] or entry["duration"]
-    item = hub.db.one("SELECT title, type FROM items WHERE id=?", (entry["item_id"],))
+    height = default_height(decision, video, height)
     h.send_json({
-        "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": item["title"] if item and item["type"] == "show" else "", "season": entry["season"], "number": entry["number"],
-        "mode": decision["mode"], "why": decision["why"], "url": url, "seekable": decision["mode"] == "direct", "duration": duration, "resume": resume, "warning": warning,
+        "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": show_title(hub, entry), "season": entry["season"], "number": entry["number"],
+        "mode": decision["mode"], "why": decision["why"], "url": play_url(entry, decision, caps, kbps, height), "seekable": decision["mode"] == "direct",
+        "duration": probe["duration"] or entry["duration"], "resume": resume_position(hub, h.user["id"], entry), "warning": play_warning(decision, video),
         "audio": [{"index": t["index"], "label": track_label(t), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
         "subs": subtitle_list(hub, entry, probe, path),
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
-        "next": {"id": following["id"], "title": following["title"], "season": following["season"], "number": following["number"]} if following and following["kind"] == "video" else None,
+        "next": next_summary(next_entry(hub, entry)),
     })
 
 
