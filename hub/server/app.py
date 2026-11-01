@@ -140,15 +140,15 @@ class Hub:
         return text
 
     def entry(self, ident):
-        row = self.db.one("SELECT * FROM entries WHERE id=?", (ident,))
-        if row is None:
-            raise HttpError(404, "fichier inconnu")
-        return row
+        return self.known("entries", ident, "fichier inconnu")
 
     def item(self, ident):
-        row = self.db.one("SELECT * FROM items WHERE id=?", (ident,))
+        return self.known("items", ident, "élément inconnu")
+
+    def known(self, table, ident, unknown):
+        row = self.db.one(f"SELECT * FROM {table} WHERE id=?", (ident,))
         if row is None:
-            raise HttpError(404, "élément inconnu")
+            raise HttpError(404, unknown)
         return row
 
     def first_scan(self):
