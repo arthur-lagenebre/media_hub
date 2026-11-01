@@ -340,24 +340,31 @@ def save_photo(cfg, artist_id, data, home=None, box=None, mbid=""):
     Convertie en WebP, rognée à `box` (voir images.crop_box : ce qui est hors du cadre disparaît) et réduite à 1280 px, puis posée dans son dossier (`home`). Sans de quoi convertir (ni Pillow ni ffmpeg) et sans `box`, elle est gardée telle quelle sous HUB_DATA/artists. ConvertError si elle ne se lit pas, ou si `box` est demandé sans de quoi le faire ; OSError si l'écriture échoue.
     """
     legacy = cfg.data / "artists"
-    if images.can_webp(cfg.ffmpeg):
-        data, ext = images.to_webp(data, cfg.ffmpeg, box), ".webp"
-    elif box:
-        raise images.NoConverter("ni Pillow ni ffmpeg : pas de recadrage possible")
-    else:
-        ext = image_ext(data)
+    data, ext = converted_photo(cfg, data, box)
     folder, stem = (home, PHOTO_STEM) if home and ext == ".webp" else (legacy, artist_id)
     target = folder / store_photo(folder, stem, data, ext)
-    stale = [legacy / f"{s}{e}" for s in (artist_id, f"custom-{artist_id}", mbid) if s and SAFE_STEM.fullmatch(s) for e in PHOTO_EXTS]
-    if home:
-        stale.append(home / f"{PHOTO_STEM}.webp")           # ni l'ancienne d'artists/, ni l'autre dossier : une seule photo par artiste
-    for path in stale:
+    for path in other_photos(legacy, artist_id, mbid, home):
         if path != target:
             try:
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
     return target
+
+
+def converted_photo(cfg, data, box):
+    """(octets, extension) de la photo à garder : en WebP rognée à `box` quand on sait convertir ; telle quelle sinon, ce qui exclut de la rogner."""
+    if images.can_webp(cfg.ffmpeg):
+        return images.to_webp(data, cfg.ffmpeg, box), ".webp"
+    if box:
+        raise images.NoConverter("ni Pillow ni ffmpeg : pas de recadrage possible")
+    return data, image_ext(data)
+
+
+def other_photos(legacy, artist_id, mbid, home):
+    """Tous les fichiers où l'artiste a pu avoir une photo, ancien nom compris : ni dans artists/, ni dans l'autre dossier, il n'en reste qu'une."""
+    stale = [legacy / f"{s}{e}" for s in (artist_id, f"custom-{artist_id}", mbid) if s and SAFE_STEM.fullmatch(s) for e in PHOTO_EXTS]
+    return stale + [home / f"{PHOTO_STEM}.webp"] if home else stale
 
 
 def download_photo(cfg, urls, artist_id, home=None, mbid=""):
