@@ -153,95 +153,131 @@ def enrich_shows(cfg, db, lib, log=print, force=False):
     return {"enriched": done, "failed": failed}
 
 
+class SagaPass:
+    """Une passe sur les sagas d'une bibliothèque de films : ce qu'elle décrit se range dans `info` (voir missing.py), qui se garde à la fin de la passe."""
+
+    def __init__(self, tmdb, posters, info, owned, log, force):
+        self.tmdb, self.posters, self.info, self.owned, self.log, self.force = tmdb, posters, info, owned, log, force
+        self.now = int(time.time())
+        self.counts = {"sagas": 0, "films": 0, "failed": 0}
+
+    def poster(self, film, title):
+        """Le nom du fichier de l'affiche d'un film, téléchargée au besoin ; vide quand elle ne vient pas."""
+        name = missing.poster_name(film["id"])
+        try:
+            if self.force or not (self.posters / name).is_file():
+                partial = self.posters / (name + ".tmp")
+                self.tmdb.save_image(film["poster_path"], "w342", partial)
+                os.replace(partial, self.posters / name)         # d'un bloc : une écriture coupée ne laisse pas une affiche tronquée qu'on ne retélécharge plus
+            return name
+        except TmdbAuthError:
+            raise
+        except (TmdbError, OSError) as e:
+            self.log(f"  {title} : pas d'affiche ({e})")
+            return ""
+
+    def keep(self, film):
+        """Retient un film que TMDB décrit (titre, date, affiche)."""
+        ident = film["id"]
+        date_ = film.get("release_date") or ""
+        data = {"title": film.get("title") or "", "date": date_, "year": date_[:4], "poster": ""}
+        if film.get("poster_path"):
+            data["poster"] = self.poster(film, data["title"])
+        self.info["films"][str(ident)] = data
+        self.counts["films"] += 1
+
+    def describe(self, ident):
+        """Décrit un film d'après sa fiche TMDB (un film dont la collection ne le donne pas, ou que seule une saga du fichier réclame)."""
+        try:
+            self.keep(self.tmdb.get(f"movie/{ident}"))
+        except TmdbAuthError:
+            raise
+        except TmdbError as e:
+            self.log(f"  film {ident} : {e}")
+            self.counts["failed"] += 1
+
+    def collection_of(self, name, members):
+        """(identifiant de la collection TMDB, ses films) de la saga `name`, d'après un de ses films ; None, et une ligne au journal, quand TMDB ne la donne pas."""
+        ident = next((i for i in map(sagafile.tmdb_of, members) if i is not None), None)
+        if ident is None:
+            self.log(f"  {name} : aucun film n'a d'identifiant TMDB")
+            return None
+        try:
+            collection = (self.tmdb.get(f"movie/{ident}").get("belongs_to_collection") or {}).get("id")
+            if not collection:
+                self.log(f"  {name} : TMDB ne rattache ce film à aucune collection")
+                self.counts["failed"] += 1
+                return None
+            return collection, self.tmdb.collection(collection).get("parts") or []
+        except TmdbAuthError:
+            raise
+        except TmdbError as e:
+            self.log(f"  {name} : {e}")
+            self.counts["failed"] += 1
+            return None
+
+    def describe_missing(self, known):
+        """Une collection connue avant qu'on décrive aussi les films qu'on a : ceux qui ont quitté la médiathèque depuis le sont maintenant."""
+        for ident in known["films"]:
+            if ident not in self.owned and str(ident) not in self.info["films"]:
+                self.describe(ident)
+
+    def refresh(self, name, members):
+        """Décrit la collection de la saga `name`, sauf si on la connaît d'assez près (alors ne sont décrits que les films qu'on ne connaît pas encore)."""
+        known = self.info["collections"].get(name)
+        if known and not self.force and self.now - known.get("at", 0) < missing.STALE:
+            return self.describe_missing(known)
+        found = self.collection_of(name, members)
+        if found is None:
+            return
+        collection, parts = found
+        parts = sorted((p for p in parts if p.get("id")), key=lambda p: (p.get("release_date") or "9999", p["id"]))
+        for part in parts:
+            self.keep(part)
+        self.info["collections"][name] = {"id": collection, "films": [p["id"] for p in parts], "at": self.now}
+        self.counts["sagas"] += 1
+        self.report(name, parts)
+
+    def report(self, name, parts):
+        absent = [p for p in parts if p["id"] not in self.owned]
+        coming = [p for p in absent if not missing.released({"date": p.get("release_date")})]
+        self.log(f"  {name} : {len(parts)} film(s), {len(absent) - len(coming)} absent(s)" + (f", {len(coming)} pas encore sorti(s)" if coming else ""))
+
+    def wanted(self, path):
+        """Les films que les sagas de `sagas.json` listent sans qu'on les ait, et qu'on n'a pas encore décrits (tous, avec `force`)."""
+        wanted = []
+        for _, ids in sagafile.Sagas(path).all():
+            wanted += [i for i in ids if i not in self.owned and i not in wanted and (self.force or str(i) not in self.info["films"])]
+        return wanted
+
+
+def film_groups(rows):
+    """{nom de la saga de l'étiquette: ses films}."""
+    groups = {}
+    for row in rows:
+        if row["grp"]:
+            groups.setdefault(row["grp"], []).append(row)
+    return groups
+
+
 def enrich_sagas(cfg, db, lib, log=print, force=False):
     """Les films qui manquent aux sagas d'une bibliothèque de films : ceux des collections TMDB que dit l'étiquette, et ceux que les sagas de `sagas.json` listent sans qu'on les ait.
 
     Tous les films d'une collection sont décrits, ceux qu'on a comme les autres : un film retiré de la médiathèque doit pouvoir apparaître grisé sans attendre qu'on redemande la collection. Une collection déjà connue n'est redemandée qu'après un mois (ou avec `force`) ; un film décrit ne l'est pas deux fois. Le résultat se garde au fur et à mesure (voir missing.py) : une clé refusée à mi-chemin n'efface pas ce qui est fait.
     """
     tmdb, posters = tmdb_client(cfg, read=not force)
-    info = missing.load(db)
     rows = db.query("SELECT * FROM items WHERE lib=? AND type='movie' ORDER BY sort", (lib.id,))
-    owned = sagafile.by_tmdb(rows)
-    now = int(time.time())
-    counts = {"sagas": 0, "films": 0, "failed": 0}
-
-    def keep(film):
-        """Retient un film que TMDB décrit (titre, date, affiche)."""
-        ident = film["id"]
-        date_ = film.get("release_date") or ""
-        data = {"title": film.get("title") or "", "date": date_, "year": date_[:4], "poster": ""}
-        name = missing.poster_name(ident)
-        if film.get("poster_path"):
-            try:
-                if force or not (posters / name).is_file():
-                    partial = posters / (name + ".tmp")
-                    tmdb.save_image(film["poster_path"], "w342", partial)
-                    os.replace(partial, posters / name)         # d'un bloc : une écriture coupée ne laisse pas une affiche tronquée qu'on ne retélécharge plus
-                data["poster"] = name
-            except TmdbAuthError:
-                raise
-            except (TmdbError, OSError) as e:
-                log(f"  {data['title']} : pas d'affiche ({e})")
-        info["films"][str(ident)] = data
-        counts["films"] += 1
-
-    def describe(ident):
-        """Décrit un film d'après sa fiche TMDB (un film dont la collection ne le donne pas, ou que seule une saga du fichier réclame)."""
-        try:
-            keep(tmdb.get(f"movie/{ident}"))
-        except TmdbAuthError:
-            raise
-        except TmdbError as e:
-            log(f"  film {ident} : {e}")
-            counts["failed"] += 1
-
-    groups = {}
-    for row in rows:
-        if row["grp"]:
-            groups.setdefault(row["grp"], []).append(row)
+    run = SagaPass(tmdb, posters, missing.load(db), sagafile.by_tmdb(rows), log, force)
     try:
-        for name, members in sorted(groups.items()):
-            known = info["collections"].get(name)
-            if known and not force and now - known.get("at", 0) < missing.STALE:
-                for ident in known["films"]:                    # connue avant qu'on décrive aussi les films qu'on a : ceux qui ont quitté la médiathèque depuis le sont maintenant
-                    if ident not in owned and str(ident) not in info["films"]:
-                        describe(ident)
-                continue
-            ident = next((i for i in map(sagafile.tmdb_of, members) if i is not None), None)
-            if ident is None:
-                log(f"  {name} : aucun film n'a d'identifiant TMDB")
-                continue
-            try:
-                collection = (tmdb.get(f"movie/{ident}").get("belongs_to_collection") or {}).get("id")
-                if not collection:
-                    log(f"  {name} : TMDB ne rattache ce film à aucune collection")
-                    counts["failed"] += 1
-                    continue
-                parts = tmdb.collection(collection).get("parts") or []
-            except TmdbAuthError:
-                raise
-            except TmdbError as e:
-                log(f"  {name} : {e}")
-                counts["failed"] += 1
-                continue
-            parts = sorted((p for p in parts if p.get("id")), key=lambda p: (p.get("release_date") or "9999", p["id"]))
-            for part in parts:
-                keep(part)
-            info["collections"][name] = {"id": collection, "films": [p["id"] for p in parts], "at": now}
-            counts["sagas"] += 1
-            absent = [p for p in parts if p["id"] not in owned]
-            coming = [p for p in absent if not missing.released({"date": p.get("release_date")})]
-            log(f"  {name} : {len(parts)} film(s), {len(absent) - len(coming)} absent(s)" + (f", {len(coming)} pas encore sorti(s)" if coming else ""))
-        wanted = []
-        for _, ids in sagafile.Sagas(cfg.data / "sagas.json").all():
-            wanted += [i for i in ids if i not in owned and i not in wanted and (force or str(i) not in info["films"])]
-        for ident in wanted:
-            describe(ident)
+        for name, members in sorted(film_groups(rows).items()):
+            run.refresh(name, members)
+        for ident in run.wanted(cfg.data / "sagas.json"):
+            run.describe(ident)
     except TmdbAuthError as e:
         raise RuntimeError(f"TMDB : {e}")
     finally:
-        missing.save(db, info)
-    return counts
+        missing.save(db, run.info)
+    return run.counts
 
 
 def artist_key(mbid):
