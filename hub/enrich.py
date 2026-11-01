@@ -69,11 +69,13 @@ def cast(tmdb, show_id):
     except TmdbError:
         return []
     people = sorted((p for p in people if p.get("name")), key=lambda p: (-(p.get("total_episode_count") or 0), p.get("order", 9999)))
-    out = []
-    for person in people[:CAST_SIZE]:
-        roles = sorted(person.get("roles") or [], key=lambda r: -(r.get("episode_count") or 0))
-        out.append({"name": person["name"], "role": (roles[0].get("character") or "") if roles else ""})
-    return out
+    return [{"name": person["name"], "role": main_role(person)} for person in people[:CAST_SIZE]]
+
+
+def main_role(person):
+    """Le rôle où la personne joue le plus d'épisodes ; vide si TMDB n'en donne aucun."""
+    roles = sorted(person.get("roles") or [], key=lambda r: -(r.get("episode_count") or 0))
+    return (roles[0].get("character") or "") if roles else ""
 
 
 def enrich_shows(cfg, db, lib, log=print, force=False):
