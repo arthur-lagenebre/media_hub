@@ -463,12 +463,8 @@ def wikipedia_photo(cfg, artist_id, wiki, home=None, mbid=""):
     return download_photo(cfg, urls, artist_id, home, mbid)
 
 
-def enrich_artists(cfg, db, lib, log=print, force=False):
-    """La fiche de chaque artiste de la bibliothèque de musique qui porte un identifiant MusicBrainz : type, pays, dates, membres, liens, résumé Wikipédia.
-
-    Sans clé (MusicBrainz n'en demande pas), mais à raison d'une requête par seconde : la première passe est longue. Une fiche de moins de 30 jours n'est pas redemandée, sauf `force`. Elle est gardée dans la base : un rescan ne l'efface pas.
-    """
-    mb = musicbrainz(cfg)
+def album_artists(db, lib):
+    """({identifiant MusicBrainz: nom}, {identifiant MusicBrainz: {identifiants d'artiste}}, {identifiant d'artiste: son dossier}) d'après les albums de la bibliothèque ; seuls comptent les artistes qui portent un identifiant MusicBrainz."""
     artists, ids, homes = {}, {}, {}
     for row in db.query("SELECT grp, meta FROM items WHERE lib=? AND type='album'", (lib.id,)):
         meta = json.loads(row["meta"])
@@ -479,11 +475,48 @@ def enrich_artists(cfg, db, lib, log=print, force=False):
                 ids.setdefault(mbid, set()).add(meta["artist_id"])
                 if meta.get("artist_dir") and (lib.path / meta["artist_dir"]).is_dir():
                     homes[meta["artist_id"]] = lib.path / meta["artist_dir"]
-    folder = cfg.data / "artists"
+    return artists, ids, homes
+
+
+def sheet_is_fresh(kept):
+    """La fiche gardée se passe d'être refaite : récente, avec sa photo (même vide) et de la version d'aujourd'hui."""
+    return bool(kept) and not artistinfo.stale(kept) and "photo" in kept["info"] and kept["info"].get("sheet") == SHEET_VERSION
+
+
+class ArtistPass:
+    """Une passe sur les artistes d'une bibliothèque de musique : leurs fiches, et la photo de chacun de leurs dossiers."""
+
+    def __init__(self, cfg, mb, ids, homes, log):
+        self.cfg, self.mb, self.ids, self.homes, self.log = cfg, mb, ids, homes, log
+        self.folder = cfg.data / "artists"
+
+    def settle_photos(self, info, mbid, name):
+        """Met dans `info["photo"]` la photo de l'artiste : celle qu'il a déjà, d'où qu'elle vienne, sinon celle de son article Wikipédia ; "" s'il n'en a pas (inutile de la redemander). Sans la clé « photo », le prochain passage réessaie."""
+        urls = photo_urls(self.mb, info["wiki"]) if info.get("wiki") else []
+        info["photo"] = ""
+        for artist_id in sorted(self.ids.get(mbid, ())):
+            have = photo_file(self.folder, artist_id, mbid, self.homes.get(artist_id))
+            if have:
+                info["photo"] = have.name
+                continue
+            try:
+                info["photo"] = download_photo(self.cfg, urls, artist_id, self.homes.get(artist_id), mbid) if urls else ""
+            except OSError as e:
+                self.log(f"  {name} : photo non récupérée ({e})")
+                info.pop("photo", None)
+
+
+def enrich_artists(cfg, db, lib, log=print, force=False):
+    """La fiche de chaque artiste de la bibliothèque de musique qui porte un identifiant MusicBrainz : type, pays, dates, membres, liens, résumé Wikipédia.
+
+    Sans clé (MusicBrainz n'en demande pas), mais à raison d'une requête par seconde : la première passe est longue. Une fiche de moins de 30 jours n'est pas redemandée, sauf `force`. Elle est gardée dans la base : un rescan ne l'efface pas.
+    """
+    mb = musicbrainz(cfg)
+    artists, ids, homes = album_artists(db, lib)
+    run = ArtistPass(cfg, mb, ids, homes, log)
     done = failed = 0
     for mbid, name in sorted(artists.items(), key=lambda kv: kv[1].casefold()):
-        kept = db.kv_get(artist_key(mbid))
-        if not force and kept and not artistinfo.stale(kept) and "photo" in kept["info"] and kept["info"].get("sheet") == SHEET_VERSION:        # sans "photo" ou d'une version plus ancienne : on la refait
+        if not force and sheet_is_fresh(db.kv_get(artist_key(mbid))):
             continue
         try:
             info = fetch_artist(mb, mbid)
@@ -491,18 +524,7 @@ def enrich_artists(cfg, db, lib, log=print, force=False):
             log(f"  {name} : {e}")
             failed += 1
             continue
-        urls = photo_urls(mb, info["wiki"]) if info.get("wiki") else []
-        info["photo"] = ""                                                                          # "" : pas de photo de Wikipédia, et inutile de la redemander
-        for artist_id in sorted(ids.get(mbid, ())):
-            have = photo_file(folder, artist_id, mbid, homes.get(artist_id))
-            if have:                                                                                # elle a déjà sa photo, d'où qu'elle vienne : on n'y touche pas
-                info["photo"] = have.name
-                continue
-            try:
-                info["photo"] = download_photo(cfg, urls, artist_id, homes.get(artist_id), mbid) if urls else ""
-            except OSError as e:
-                log(f"  {name} : photo non récupérée ({e})")
-                info.pop("photo", None)                                                             # pas de clé "photo" : le prochain passage réessaie
+        run.settle_photos(info, mbid, name)
         db.kv_set(artist_key(mbid), {"fetched": date.today().isoformat(), "info": info})
         done += 1
         log(f"  {name} : {artistinfo.facts(info) or 'fiche vide'}{' · photo' if info.get('photo') else ''}")
