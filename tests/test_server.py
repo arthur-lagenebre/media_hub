@@ -155,6 +155,14 @@ class TestBrowse(ServerCase):
         self.assertEqual((len(page["items"]), page["offset"]), (1, 1))
         self.assertGreater(page["total"], 1)
 
+    def test_library_page_bounds_fall_back_to_sane_values(self):
+        total = self.items("films")["total"]
+        self.assertEqual(len(self.items("films", limit=0)["items"]), 1)                              # au moins un élément par page
+        self.assertEqual(self.items("films", offset=-5)["offset"], 0)                                  # un départ négatif ramène au début
+        broken = self.items("films", offset="x", limit=1)                                              # une valeur qui n'est pas un nombre : les deux reviennent aux valeurs par défaut
+        self.assertEqual((broken["offset"], len(broken["items"])), (0, total))
+        self.assertEqual(self.items("films", offset=total)["items"], [])                              # au-delà de la fin : une page vide, pas une erreur
+
     def test_music_letter_is_the_artist_and_sort_is_fixed(self):
         album = self.item_by_title("musique", "Discovery")
         self.hub.db.execute("UPDATE items SET grp='Zebra' WHERE id=?", (album["id"],))
