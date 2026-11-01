@@ -176,20 +176,30 @@
   }
   // Recadrer une photo : un cadre carré (la vignette) sur l'image qu'on déplace et qu'on agrandit. `src` est l'image à montrer ; `onOk(cadre)` envoie le cadre (x, y, largeur, hauteur en fractions de l'image) et rend une promesse : la fenêtre se ferme si elle réussit, reste ouverte avec le message si elle échoue. Ce qui est hors du cadre ne sera pas gardé.
   function cropPhoto(src, onOk, onClosed) {
-    var S = Math.round(Math.max(220, Math.min(560, window.innerWidth * 0.92 - 40, window.innerHeight * 0.84 - 340))), pad = Math.round(S * 0.08), F = S - 2 * pad;
+    var S = 0, pad = 0, F = 0;       // côté de la fenêtre de l'image, marge autour du cadre, côté du cadre (voir size)
     var nw = 0, nh = 0, base = 1, zoom = 1, ox = 0, oy = 0, busy = false, drag = null;
     var err = h('p', { class: 'formerr', role: 'alert' });
-    var ok = H.button('Valider', 'check', { class: 'primary', disabled: true, onclick: validate });
+    var ok = H.button('Valider', null, { class: 'primary', disabled: true, onclick: validate });
     var img = h('img', { alt: '', draggable: 'false', onload: function () {
       nw = this.naturalWidth; nh = this.naturalHeight;
       if (!nw || !nh) { err.textContent = 'Image illisible.'; return; }
-      base = F / Math.min(nw, nh);
-      ox = pad + (F - nw * base) / 2; oy = pad + (F - nh * base) / 2;
-      ok.disabled = false; place();
+      ok.disabled = false; layout();
     }, onerror: function () { err.textContent = 'Image illisible.'; } });
     var slider = h('input', { type: 'range', class: 'f', min: '0', max: '100', step: '1', value: '0', 'aria-label': 'Zoom', oninput: function () { zoomTo(1 + this.value / 25); } });
-    var stage = h('div', { class: 'crop-stage f', tabindex: '0', role: 'application', 'aria-label': 'Photo à recadrer : flèches pour déplacer, + et - pour agrandir, Entrée pour valider', 'data-autofocus': '1',
-      style: 'width:' + S + 'px;height:' + S + 'px' }, img, h('div', { class: 'crop-frame', style: 'left:' + pad + 'px;top:' + pad + 'px;width:' + F + 'px;height:' + F + 'px' }));
+    var frameEl = h('div', { class: 'crop-frame' });
+    var stage = h('div', { class: 'crop-stage f', tabindex: '0', role: 'application', 'aria-label': 'Photo à recadrer : flèches pour déplacer, + et - pour agrandir, Entrée pour valider', 'data-autofocus': '1' }, img, frameEl);
+    function size(side) {
+      S = Math.round(side); pad = Math.round(S * 0.08); F = S - 2 * pad;
+      stage.style.width = stage.style.height = S + 'px';
+      frameEl.style.left = frameEl.style.top = pad + 'px'; frameEl.style.width = frameEl.style.height = F + 'px';
+    }
+    function layout() {       // l'image remplit le cadre, centrée, sans zoom
+      if (nw) {
+        base = F / Math.min(nw, nh); zoom = 1; slider.value = '0';
+        ox = pad + (F - nw * base) / 2; oy = pad + (F - nh * base) / 2;
+        place();
+      }
+    }
     function place() {       // l'image garde toujours le cadre plein : jamais de bord vide dans la vignette
       var w = nw * base * zoom, ht = nh * base * zoom;
       ox = Math.min(pad, Math.max(pad + F - w, ox)); oy = Math.min(pad, Math.max(pad + F - ht, oy));
@@ -235,11 +245,16 @@
       e.preventDefault(); place();
     });
     img.src = src;       // après les gestionnaires : une image déjà en cache déclenche onload tout de suite
-    H.overlay.open(h('div', { class: 'menu crop', role: 'dialog', 'aria-label': 'Recadrer la photo' },
+    var box = h('div', { class: 'menu crop', role: 'dialog', 'aria-label': 'Recadrer la photo' },
       h('h3', null, 'Recadrer la photo'),
       h('p', { class: 'lead' }, 'Déplace l’image et agrandis-la : seule la partie dans le cadre est gardée, le reste est retiré de la photo.'),
       stage, h('label', { class: 'zoom' }, h('span', null, 'Zoom'), slider), err,
-      h('div', { class: 'btns' }, ok, H.button('Annuler', null, { onclick: function () { H.overlay.close(); } }))), onClosed);
+      h('div', { class: 'btns' }, ok, H.button('Annuler', null, { onclick: function () { H.overlay.close(); } })));
+    size(Math.max(160, Math.min(560, window.innerWidth * 0.92 - 80)));
+    H.overlay.open(box, onClosed);
+    // La fenêtre ne dépasse jamais l'écran, quelle que soit la taille du texte (rem) : l'image prend ce qui reste une fois le reste mesuré
+    var rest = box.scrollHeight - S, room = box.clientHeight || window.innerHeight * 0.84;
+    if (box.scrollHeight > room || S > room - rest - 24) { size(Math.max(120, Math.min(S, room - rest - 24))); layout(); }
   }
 
   H.route(/^\/artist\/([\w-]+)\/(\w+)$/, function (m) {
