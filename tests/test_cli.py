@@ -6,7 +6,9 @@ import contextlib
 import io
 import os
 import shutil
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -108,6 +110,68 @@ class TestReadSecret(unittest.TestCase):
             self.assertEqual(cli.read_secret("Mot de passe : "), "secret")
         asked.assert_called_once_with("Mot de passe : ")
 
+
+def fake_config(tmp, **over):
+    lib = types.SimpleNamespace(label="Films", kind="movies", path=Path(tmp) / "Films")
+    return types.SimpleNamespace(**{"bind": "127.0.0.1", "port": 8080, "libraries": [lib], "ffmpeg": "/usr/bin/ffmpeg", "repo": tmp, **over})
+
+
+class TestAnnounce(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def said(self, cfg, auth=True):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cli.announce(cfg, types.SimpleNamespace(auth=lambda: auth))
+        return out.getvalue(), err.getvalue()
+
+    def test_a_healthy_start_says_where_it_listens_and_warns_of_nothing(self):
+        (Path(self.tmp) / "Films").mkdir()
+        out, err = self.said(fake_config(self.tmp))
+        self.assertIn("http://127.0.0.1:8080", out)
+        self.assertIn("Films", out)
+        self.assertNotIn("introuvable", out)
+        self.assertEqual(err, "")
+
+    def test_a_missing_folder_is_flagged_on_its_line(self):
+        self.assertIn("(dossier introuvable)", self.said(fake_config(self.tmp))[0])
+
+    def test_no_library_and_no_ffmpeg_are_warned_on_stderr(self):
+        err = self.said(fake_config(self.tmp, libraries=[], ffmpeg=""))[1]
+        self.assertIn("aucune bibliothèque", err)
+        self.assertIn("ffmpeg introuvable", err)
+
+    def test_listening_on_the_network_without_an_account_is_warned(self):
+        self.assertIn("ATTENTION", self.said(fake_config(self.tmp, bind="0.0.0.0"), auth=False)[1])
+        self.assertEqual(self.said(fake_config(self.tmp, bind="0.0.0.0"), auth=True)[1], "")           # avec un compte : rien à signaler
+        self.assertEqual(self.said(fake_config(self.tmp, bind="localhost"), auth=False)[1], "")        # en local : rien à signaler
+
+
+class TestMain(unittest.TestCase):
+    def serve(self, argv, serve_forever):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        hub = mock.Mock()
+        hub.auth.return_value = True
+        server = mock.Mock(hub=hub, serve_forever=serve_forever)
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["hub", *argv]), mock.patch.object(cli.config, "load", return_value=fake_config(tmp)),                 mock.patch.object(cli.config, "use_media_library"), mock.patch.dict(sys.modules, {"hub.server.app": types.SimpleNamespace(make_server=lambda cfg: server)}), contextlib.redirect_stdout(out):
+            cli.main()
+        return server, hub, out.getvalue()
+
+    def test_it_scans_then_serves_and_closes_the_socket_on_ctrl_c(self):
+        server, hub, out = self.serve([], mock.Mock(side_effect=KeyboardInterrupt))
+        hub.first_scan.assert_called_once_with()
+        hub.autoscan.assert_called_once_with()
+        server.server_close.assert_called_once_with()
+        self.assertIn("arrêt.", out)
+
+    def test_user_hands_over_to_the_account_commands(self):
+        with mock.patch.object(cli, "user_command") as users:
+            self.serve(["user", "list"], mock.Mock())
+        users.assert_called_once_with(["list"])
 
 if __name__ == "__main__":
     unittest.main()
