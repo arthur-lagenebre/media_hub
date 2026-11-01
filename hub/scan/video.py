@@ -119,38 +119,55 @@ def clean_name(name):
 # ---------------------------------------------------------------------------
 # Films
 # ---------------------------------------------------------------------------
+def _movie_parts(reader, lib, movie):
+    """[(chemin, rel, taille, date, infos, durée)] des fichiers lisibles d'un film."""
+    parts = []
+    for path in movie.files:
+        rel = path.relative_to(lib.path).as_posix()
+        result = reader(path, rel)
+        if result:
+            parts.append((path, rel, *result))
+    return parts
+
+
+def _movie_meta(lib, movie, info, order, parts):
+    image = folder_image(movie.folder) if movie.owns_folder else ""
+    return {
+        "tmdb": info.get("tmdb", ""), "directors": info.get("directors", []), "writers": info.get("writers", []),
+        "actors": info.get("actors", []), "date": info.get("date", ""), "part": info.get("collection_part") if info.get("collection_part") is not None else order,
+        "image": (movie.folder.relative_to(lib.path) / image).as_posix() if image else "", "tagged": bool(info.get("has_tags")),
+        "folder": movie.folder.relative_to(lib.path).as_posix() if movie.folder != lib.path else "",
+        "duration": sum(p[5] for p in parts),
+    }
+
+
+def _movie_item(lib, movie, parts):
+    info = parts[0][4]
+    guessed, guessed_year, order = naming.parse_title_year(naming.extract_tmdb_id(movie.rawname)[1])
+    title = info.get("title") or guessed or movie.rawname
+    year = (info.get("date") or "")[:4] or guessed_year or ""
+    key = parts[0][1] if len(parts) == 1 else movie.folder.relative_to(lib.path).as_posix() + "/" + parts[0][1]
+    return item_row(lib.id, key, "movie", title, year=year, summary=info.get("synopsis", ""), genres=info.get("genres", []),
+                    grp=info.get("collection", ""), meta=_movie_meta(lib, movie, info, order, parts), added=max(p[3] for p in parts), count=len(parts))
+
+
+def _movie_entries(lib, item, parts):
+    title = item["title"]
+    return [entry_row(lib.id, item["id"], rel, "video", title=title if len(parts) == 1 else f"{title} - partie {n}", number=n,
+                      duration=duration, size=size, mtime=mtime, meta={"info": pinfo})
+            for n, (path, rel, size, mtime, pinfo, duration) in enumerate(parts, 1)]
+
+
 def scan_movies(lib, known, enriched=None):
     reader = Reader(lib.id, known)
     items, entries = [], []
     for movie in naming.find_movies(lib.path):
-        parts = []
-        for path in movie.files:
-            rel = path.relative_to(lib.path).as_posix()
-            result = reader(path, rel)
-            if result:
-                parts.append((path, rel, *result))
+        parts = _movie_parts(reader, lib, movie)
         if not parts:
             continue
-        info = parts[0][4]
-        guessed, guessed_year, order = naming.parse_title_year(naming.extract_tmdb_id(movie.rawname)[1])
-        title = info.get("title") or guessed or movie.rawname
-        year = (info.get("date") or "")[:4] or guessed_year or ""
-        key = parts[0][1] if len(parts) == 1 else movie.folder.relative_to(lib.path).as_posix() + "/" + parts[0][1]
-        folder = movie.folder if movie.owns_folder else None
-        image = folder_image(folder) if folder else ""
-        meta = {
-            "tmdb": info.get("tmdb", ""), "directors": info.get("directors", []), "writers": info.get("writers", []),
-            "actors": info.get("actors", []), "date": info.get("date", ""), "part": info.get("collection_part") if info.get("collection_part") is not None else order,
-            "image": (movie.folder.relative_to(lib.path) / image).as_posix() if image else "", "tagged": bool(info.get("has_tags")),
-            "folder": movie.folder.relative_to(lib.path).as_posix() if movie.folder != lib.path else "",
-        }
-        meta["duration"] = sum(p[5] for p in parts)
-        item = item_row(lib.id, key, "movie", title, year=year, summary=info.get("synopsis", ""), genres=info.get("genres", []),
-                        grp=info.get("collection", ""), meta=meta, added=max(p[3] for p in parts), count=len(parts))
+        item = _movie_item(lib, movie, parts)
         items.append(item)
-        for n, (path, rel, size, mtime, pinfo, duration) in enumerate(parts, 1):
-            entries.append(entry_row(lib.id, item["id"], rel, "video", title=title if len(parts) == 1 else f"{title} - partie {n}", number=n,
-                                     duration=duration, size=size, mtime=mtime, meta={"info": pinfo}))
+        entries += _movie_entries(lib, item, parts)
     return items, entries, _Counts(reader.reused, reader.read)
 
 
