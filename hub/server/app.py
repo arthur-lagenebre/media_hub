@@ -827,11 +827,7 @@ def saga_groups(rows, custom):
     `custom` : les sagas du fichier (voir sagas.py). Elles passent avant la collection de l'étiquette, et la première écrite avant les suivantes : un film n'a qu'une vignette. Une saga du fichier qui porte le nom d'une saga de l'étiquette la remplace (page, fiche et grille s'accordent sur ce que ce nom désigne), même si elle n'a qu'un film ici.
     """
     sagas = {name: films for name, films in custom.items() if len(films) > 1}
-    tagged = {}
-    for row in rows:
-        if row["type"] == "movie" and row["grp"] and row["grp"] not in custom:
-            tagged.setdefault(row["grp"], []).append(row)
-    tagged = {name: sorted(films, key=release_key) for name, films in tagged.items() if len(films) > 1}
+    tagged = tagged_groups(rows, custom)
     home = {}
     for name in sagas:
         for film, _ in sagas[name]:
@@ -841,6 +837,15 @@ def saga_groups(rows, custom):
             home.setdefault(row["id"], row["grp"])
     sagas.update({name: list(zip(films, range(1, len(films) + 1))) for name, films in tagged.items()})
     return sagas, home
+
+
+def tagged_groups(rows, custom):
+    """{nom: films par date de sortie} des sagas de l'étiquette qui ont au moins deux films et que `custom` (les sagas du fichier) ne remplace pas."""
+    tagged = {}
+    for row in rows:
+        if row["type"] == "movie" and row["grp"] and row["grp"] not in custom:
+            tagged.setdefault(row["grp"], []).append(row)
+    return {name: sorted(films, key=release_key) for name, films in tagged.items() if len(films) > 1}
 
 
 def collapse_sagas(rows, seen, custom):
