@@ -69,6 +69,7 @@ services:
       - ${APPS}/ffmpeg:/opt/ffmpeg:ro
       # Bibliothèques. « :ro » = lecture seule. Retire-le si tu veux que le bouton « Supprimer » (Gestion > Entretien) supprime les Thumbs.db,
       # ou que les scripts de media_library (étiquetage, renommage) tournent depuis ce conteneur.
+      # Musique sans « :ro » aussi pour les photos d'artistes : « Valider » écrit artist.webp dans le dossier de l'artiste (sinon : erreur 500, la photo n'est pas enregistrée).
       - ${MEDIA}/Films:/srv/Films:ro
       - ${MEDIA}/Series:/srv/Series:ro
       - ${MEDIA}/Animations:/srv/Animations:ro

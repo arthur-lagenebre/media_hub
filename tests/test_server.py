@@ -27,7 +27,8 @@ fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
 
 from hub.scan.common import is_album_cover  # noqa: E402
-from hub.scan.music import scan_music  # noqa: E402
+from hub.media import images  # noqa: E402
+from hub.scan.music import artist_dirs, scan_music  # noqa: E402
 from hub.server import jobs  # noqa: E402
 from hub.server.app import TITLE_SORTS, Handler, make_server  # noqa: E402
 
@@ -442,6 +443,7 @@ class TestJobs(ServerCase):
         self.addCleanup(shutil.rmtree, candidates, True)
         keep = [album / "cover.jpg", album / "cover.png", album / "notes.txt", candidates / "candidate.jpg", *album.glob("*.flac"),
                 artist / "1999 - Un album qui manque.jpg", artist / "2001 - Un autre.PNG",       # pochettes d'albums manquants, posées dans le dossier de l'artiste
+                artist / "artist.webp",       # la photo de l'artiste
                 self.run_.libs["films"] / "Inception (2010)" / "folder.jpg"]       # hors musique, folder.jpg est une vraie affiche
         for path in junk + keep:
             if not path.exists():
@@ -520,7 +522,8 @@ class TestJobs(ServerCase):
         lib = next(l for l in self.hub.cfg.libraries if l.id == "musique")
         photo = f"/img/artist/musique/{detail['artist_id']}?w=320"
         self.assertEqual(self.api.get(photo)[0], 404)                  # pas de photo avant les fiches
-        self.addCleanup((self.hub.cfg.data / "artists" / f"{detail['artist_id']}.png").unlink, True)
+        home = self.run_.libs["musique"] / "Daft Punk"
+        self.addCleanup((home / "artist.webp").unlink, True)
 
         class Download:                                                 # ce que Wikimedia répondrait : une image
             def __enter__(self):
@@ -538,7 +541,9 @@ class TestJobs(ServerCase):
             self.run_.wait_jobs()
         sheet = self.api.json(url)[1]
         self.assertTrue(sheet["photo"])
-        self.assertEqual([p.name for p in (self.hub.cfg.data / "artists").glob("*.png")], [f"{detail['artist_id']}.png"])       # un fichier par artiste, à son nom
+        self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # un fichier par artiste, dans son dossier
+        self.assertEqual(list((self.hub.cfg.data / "artists").glob("*.*")), [])         # et plus sous HUB_DATA
+        self.assertEqual((home / "artist.webp").read_bytes()[8:12], b"WEBP")
         status, headers, body = self.api.get(photo)
         self.assertEqual((status, headers["Content-Type"]), (200, "image/jpeg"))
         self.assertIn("genres", sheet)
@@ -580,18 +585,21 @@ class TestJobs(ServerCase):
         base = f"/api/artist/musique/{artist_id}"
         photo = f"/img/artist/musique/{artist_id}?w=320"
         folder = self.hub.cfg.data / "artists"
-        self.addCleanup(lambda: [p.unlink() for p in folder.glob(f"{artist_id}.*")])
+        home = self.run_.libs["musique"] / "Daft Punk"
+        self.addCleanup(lambda: [p.unlink() for p in [*folder.glob(f"{artist_id}.*"), *home.glob("artist.*")]])
         self.assertNotIn("own_photo", self.api.json(base)[1])
         self.assertEqual(self.api.request("POST", base + "/photo", body=b"ceci n'est pas une image", headers={"Content-Type": "image/png"})[0], 415)
         self.assertEqual(self.api.request("POST", base + "/photo", body=b"RIFFxxxxWAVE", headers={"Content-Type": "image/webp"})[0], 415)
+        self.assertEqual(self.api.request("POST", base + "/photo", body=b"\x89PNG\r\n\x1a\n tronquee", headers={"Content-Type": "image/png"})[0], 415)       # l'en-tête d'une image, rien derrière
         self.assertEqual(self.api.request("POST", "/api/artist/musique/deadbeef/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})[0], 404)
         status, _, body = self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})
         self.assertEqual(status, 200, body)
         self.assertTrue(self.api.json(base)[1]["photo"])
         self.assertEqual(self.api.get(photo)[0], 200)
-        self.assertEqual([p.name for p in folder.glob(f"{artist_id}.*")], [f"{artist_id}.png"])
+        self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # dans le dossier de l'artiste, à la racine de la médiathèque
+        self.assertEqual(list(folder.glob(f"{artist_id}.*")), [])
         self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})
-        self.assertEqual([p.name for p in folder.glob(f"{artist_id}.*")], [f"{artist_id}.png"])       # la nouvelle prend la place de l'ancienne
+        self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # la nouvelle prend la place de l'ancienne
 
         self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 404)                        # sans article connu, rien à chercher
         self.assertEqual(self.api.json(base + "/photo/delete", {})[0], 404)                           # et une photo ne se supprime pas
@@ -610,14 +618,116 @@ class TestJobs(ServerCase):
                 return False
 
             def read(self, n=-1):
-                return b"\xff\xd8\xff\xe0 photo de Wikipedia"
+                return fixtures.PNG
 
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{artist_id}.jpg").write_bytes(b"d'avant")                                        # une photo d'avant, sous HUB_DATA : elle ne doit pas rester à côté
         with mock.patch("hub.enrich.photo_urls", return_value=["https://upload.wikimedia.org/x.jpg"]), mock.patch("hub.enrich.urlopen", return_value=Download()):
             self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 200)
-        self.assertEqual([p.name for p in folder.glob(f"{artist_id}.*")], [f"{artist_id}.jpg"])       # celle de Wikipédia remplace la mienne, sans la laisser à côté
+        self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # celle de Wikipédia remplace la mienne, sans la laisser à côté
+        self.assertEqual((home / "artist.webp").read_bytes()[8:12], b"WEBP")
+        self.assertEqual(list(folder.glob(f"{artist_id}.*")), [])
         with mock.patch("hub.enrich.photo_urls", return_value=[]):
             self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 502)
-        self.assertEqual([p.name for p in folder.glob(f"{artist_id}.*")], [f"{artist_id}.jpg"])       # un échec ne retire rien
+        self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # un échec ne retire rien
+
+    @unittest.skipUnless(images.Image is not None and images.can_webp(""), "Pillow absent")
+    def test_artist_photo_keeps_only_the_frame_and_becomes_webp(self):
+        import io
+        from PIL import Image
+
+        album = self.item_by_title("musique", "Discovery")
+        artist_id = self.detail(album["id"])["artist_id"]
+        base = f"/api/artist/musique/{artist_id}"
+        home = self.run_.libs["musique"] / "Daft Punk"
+        self.addCleanup(lambda: [p.unlink() for p in home.glob("artist.*")])
+
+        def two_halves(size=(40, 20)):       # gauche rouge, droite bleue
+            image = Image.new("RGB", size, (220, 0, 0))
+            image.paste((0, 0, 220), (size[0] // 2, 0, size[0], size[1]))
+            out = io.BytesIO()
+            image.save(out, "PNG")
+            return out.getvalue()
+
+        def stored():
+            with Image.open(home / "artist.webp") as image:
+                return image.format, image.size, image.convert("RGB").getpixel((image.width // 2, image.height // 2))
+
+        def send(query, body=None):
+            return self.api.request("POST", base + "/photo" + query, body=body or two_halves(), headers={"Content-Type": "image/png"})
+
+        self.assertEqual(self.api.json(base + "/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1})[0], 404)       # rien à recadrer sans photo
+        for bad in ("?crop=abc", "?crop=0,0,1", "?crop=0.5,0,0.8,1", "?crop=0,0,0,1", "?crop=-0.1,0,0.5,1"):
+            self.assertEqual(send(bad)[0], 400, bad)
+        self.assertFalse((home / "artist.webp").exists())
+        status, _, body = send("?crop=0.5,0,0.5,1")                       # la moitié droite : la bleue
+        self.assertEqual(status, 200, body)
+        format_, size, centre = stored()
+        self.assertEqual((format_, size), ("WEBP", (20, 20)))             # ce qui est hors du cadre n'est plus dans le fichier
+        self.assertTrue(centre[2] > 150 and centre[0] < 80, centre)
+        for bad in ({"x": "a", "y": 0, "w": 1, "h": 1}, {"x": 0, "y": 0, "w": 2, "h": 1}, {}):
+            self.assertEqual(self.api.json(base + "/photo/crop", bad)[0], 400, bad)
+        self.assertEqual(self.api.json(base + "/photo/crop", {"x": 0, "y": 0, "w": 0.5, "h": 0.5})[0], 200)       # on recadre le fichier gardé, encore
+        self.assertEqual(stored()[1], (10, 10))
+        self.assertEqual(send("", two_halves((3000, 1000)))[0], 200)       # sans cadre, l'image entière, réduite à 1280 px au plus
+        self.assertEqual(stored()[1], (1280, 427))
+        self.assertEqual(self.api.get(f"/img/artist/musique/{artist_id}?w=320")[0], 200)
+
+    @unittest.skipUnless(FFMPEG and images.Image is not None, "ffmpeg ou Pillow absent")
+    def test_artist_photo_is_cropped_by_ffmpeg_when_pillow_is_missing(self):
+        import io
+        from PIL import Image
+
+        album = self.item_by_title("musique", "Discovery")
+        artist_id = self.detail(album["id"])["artist_id"]
+        base = f"/api/artist/musique/{artist_id}"
+        home = self.run_.libs["musique"] / "Daft Punk"
+        self.addCleanup(lambda: [p.unlink() for p in home.glob("artist.*")])
+        image = Image.new("RGB", (40, 20), (220, 0, 0))
+        image.paste((0, 0, 220), (20, 0, 40, 20))
+        out = io.BytesIO()
+        image.save(out, "PNG")
+        with mock.patch("hub.media.images.Image", None):
+            status, _, body = self.api.request("POST", base + "/photo?crop=0.5,0,0.5,1", body=out.getvalue(), headers={"Content-Type": "image/png"})
+        self.assertEqual(status, 200, body)
+        with Image.open(home / "artist.webp") as stored:
+            self.assertEqual((stored.format, stored.size), ("WEBP", (20, 20)))
+            self.assertTrue(stored.convert("RGB").getpixel((10, 10))[2] > 150)
+
+    def test_artist_photo_without_a_converter_is_kept_as_it_is_but_cannot_be_cropped(self):
+        album = self.item_by_title("musique", "Discovery")
+        artist_id = self.detail(album["id"])["artist_id"]
+        base = f"/api/artist/musique/{artist_id}"
+        home = self.run_.libs["musique"] / "Daft Punk"
+        folder = self.hub.cfg.data / "artists"
+        self.addCleanup(lambda: [p.unlink() for p in [*folder.glob(f"{artist_id}.*"), *home.glob("artist.*")]])
+        with mock.patch("hub.media.images.can_webp", return_value=False):
+            self.assertEqual(self.api.request("POST", base + "/photo?crop=0,0,0.5,0.5", body=fixtures.PNG, headers={"Content-Type": "image/png"})[0], 501)
+            self.assertEqual(self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})[0], 200)
+        self.assertEqual(([p.name for p in folder.glob(f"{artist_id}.*")], list(home.glob("artist.*"))), ([f"{artist_id}.png"], []))       # sans de quoi convertir : comme avant, sous HUB_DATA
+        self.assertEqual(self.api.get(f"/img/artist/musique/{artist_id}?w=320")[0], 200)
+
+    def test_an_artist_photo_beside_the_albums_is_not_cleaned_up_and_not_a_missing_album(self):
+        home = self.run_.libs["musique"] / "Daft Punk"
+        (home / "artist.webp").write_bytes(b"RIFF\0\0\0\0WEBP")
+        self.addCleanup((home / "artist.webp").unlink, True)
+        self.hub.jobs.scan(self.hub.cfg.library("musique"))
+        self.run_.wait_jobs()
+        artist_id = self.detail(self.item_by_title("musique", "Discovery")["id"])["artist_id"]
+        self.assertEqual(self.api.json(f"/api/artist/musique/{artist_id}")[1]["wanted"], [])
+        self.api.json("/api/cleanup", {"apply": True})
+        self.run_.wait_jobs()
+        self.assertTrue((home / "artist.webp").exists())
+
+    def test_the_artist_folder_is_the_root_folder_where_the_artist_has_most_albums(self):
+        from types import SimpleNamespace as R
+
+        def release(rel, artist):
+            return R(rel=rel, artist_id=artist)
+
+        found = artist_dirs([release("Daft Punk/Discovery", "dp"), release("Daft Punk/Homework", "dp"), release("Daft Punk/Collabs", "tb"), release("Rock/Muse/Absolution", "mu"),
+                             release("Rock/Queen/Jazz", "qu"), release("Single", "so"), release("Tiersmonde/Alpha", "al"), release("Tiersmonde/Beta", "be")])
+        self.assertEqual(found, {"dp": "Daft Punk"})       # majorité d'albums : Rock en range deux autres sans majorité, Single est posé à la racine
 
     def test_artist_photos_from_before_are_brought_to_one_file(self):
         import tempfile
@@ -636,6 +746,13 @@ class TestJobs(ServerCase):
             self.assertEqual(enrich.photo_file(folder, "a2", "m2").name, "a2.jpg")                    # sinon celle de Wikipédia
             self.assertEqual(enrich.store_photo(folder, "a2", fixtures.PNG, ".png"), "a2.png")
             self.assertEqual(sorted(p.name for p in folder.glob("a2.*")), ["a2.png"])
+            home = Path(tmp) / "Artiste"
+            home.mkdir()
+            (home / "artist.webp").write_bytes(b"dans son dossier")
+            self.assertEqual(enrich.photo_file(folder, "a2", "m2", home), home / "artist.webp")           # celle de son dossier passe avant toutes les autres
+            self.assertEqual(enrich.photo_file(folder, "a2", "m2").name, "a2.png")                        # sans dossier, on retrouve les anciennes
+            (folder / "evil.png").write_bytes(b"x")
+            self.assertIsNone(enrich.photo_file(folder / "sous", "a3", "../evil"))                      # un identifiant qui a l'air d'un chemin ne désigne aucun fichier
 
     def test_artist_links_are_limited_to_the_wanted_ones(self):
         from hub import enrich
@@ -2191,6 +2308,7 @@ class TestAccountPermissions(AccountsCase):
         admin = self.admin.session["user"]["id"]
         return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/cleanup", {"apply": True}),
                 ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG), ("POST", f"/api/artist/musique/{self.artist}/photo/wikipedia", {}),
+                ("POST", f"/api/artist/musique/{self.artist}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1}),
                 ("GET", "/api/sagas", None), ("POST", "/api/sagas", {"sagas": []}), ("POST", "/api/sagas/add", {"name": "intrus", "films": [1]}), ("GET", "/api/sagas/films", None), ("POST", "/api/sagas/ignore", {"tmdb": 1}),
                 ("GET", "/api/users", None), ("POST", "/api/users", {"name": "intrus", "password": self.PASSWORD}),
                 ("POST", f"/api/user/{admin}/password", {"password": "piratage-1"}), ("POST", f"/api/user/{admin}/delete", {})]

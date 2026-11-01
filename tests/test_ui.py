@@ -5,11 +5,13 @@ Sauté si Playwright ou ffmpeg manquent. Ce que ces tests ne peuvent pas garanti
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import tempfile
 import unittest
 import urllib.request
+from pathlib import Path
 from unittest import mock
 
 from tests import fixtures
@@ -549,6 +551,56 @@ class TestMusicQueueAndPlaylists(UiCase):
         self.view(".actions .btn", has_text="Lire").click()
         self.page.wait_for_selector("#abar:not([hidden])")
         self.assertEqual(self.page.inner_text("#abar .ti"), "One More Time")
+
+
+@unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow absent")
+class TestArtistPhotoCrop(UiCase):
+    def two_halves(self):
+        import io
+        from PIL import Image
+
+        image = Image.new("RGB", (400, 200), (220, 0, 0))
+        image.paste((0, 0, 220), (200, 0, 400, 200))
+        out = io.BytesIO()
+        image.save(out, "PNG")
+        return out.getvalue()
+
+    def test_the_chosen_photo_is_cropped_in_the_frame_then_saved_as_webp(self):
+        from PIL import Image
+
+        artist = self.item("musique", "Discovery")["artist_id"]
+        home = Path(self.tmp) / "srv" / "Musique" / "Daft Punk" / "artist.webp"
+        self.addCleanup(home.unlink, True)
+        self.open(f"#/artist/musique/{artist}")
+        self.view(".actions .btn", has_text="Tout lire").wait_for()
+        self.assertEqual(self.view(".actions .btn", has_text="Recadrer").count(), 0)           # pas de photo, rien à recadrer
+        self.page.set_input_files("input[type=file]", files={"name": "daft.png", "mimeType": "image/png", "buffer": self.two_halves()})
+        self.page.wait_for_selector(".menu.crop .crop-stage")
+        valider = self.page.locator(".menu.crop .btn", has_text="Valider")
+        self.page.wait_for_function("!document.querySelector('.menu.crop .btn.primary').disabled")
+        box = self.page.locator(".crop-stage").bounding_box()
+        self.page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        self.page.mouse.down()
+        self.page.mouse.move(box["x"] + box["width"] / 2 - 400, box["y"] + box["height"] / 2, steps=5)       # on pousse l'image à gauche : la moitié bleue est dans le cadre
+        self.page.mouse.up()
+        valider.click()
+        self.page.wait_for_selector(".menu.crop", state="detached")
+        self.until(home.exists)
+        with Image.open(home) as stored:
+            self.assertEqual(stored.format, "WEBP")
+            self.assertEqual(stored.size[0], stored.size[1])                                       # carrée, comme la vignette
+            self.assertLessEqual(stored.size[0], 200)                                              # le cadre ne couvre que la hauteur : 200 px au plus
+            self.assertTrue(stored.convert("RGB").getpixel((stored.width // 2, stored.height // 2))[2] > 150)
+        self.view(".actions .btn", has_text="Recadrer").wait_for()
+        self.view(".actions .btn", has_text="Recadrer").click()                                    # la photo gardée se recadre encore
+        self.page.wait_for_function("!document.querySelector('.menu.crop .btn.primary').disabled")
+        self.page.locator(".menu.crop input[type=range]").fill("100")                              # zoom maximal
+        self.page.locator(".menu.crop .btn", has_text="Valider").click()
+        self.page.wait_for_selector(".menu.crop", state="detached")
+        self.until(lambda: Image.open(home).size[0] < 100)
+        self.view(".actions .btn", has_text="Recadrer").click()
+        self.page.locator(".menu.crop .btn", has_text="Annuler").click()                           # annuler ne touche à rien
+        self.page.wait_for_selector(".menu.crop", state="detached")
 
 
 class TestBooksQuickAccess(UiCase):

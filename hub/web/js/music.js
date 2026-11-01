@@ -174,18 +174,95 @@
       H.picture(w.cover ? w.cover + '?w=300' : '', w.title, 'sq'),
       h('div', { class: 't' }, w.title), h('div', { class: 's' }, [w.year, 'Manquant'].join(' · ')));
   }
+  // Recadrer une photo : un cadre carré (la vignette) sur l'image qu'on déplace et qu'on agrandit. `src` est l'image à montrer ; `onOk(cadre)` envoie le cadre (x, y, largeur, hauteur en fractions de l'image) et rend une promesse : la fenêtre se ferme si elle réussit, reste ouverte avec le message si elle échoue. Ce qui est hors du cadre ne sera pas gardé.
+  function cropPhoto(src, onOk, onClosed) {
+    var S = Math.round(Math.max(220, Math.min(560, window.innerWidth * 0.92 - 40, window.innerHeight * 0.84 - 340))), pad = Math.round(S * 0.08), F = S - 2 * pad;
+    var nw = 0, nh = 0, base = 1, zoom = 1, ox = 0, oy = 0, busy = false, drag = null;
+    var err = h('p', { class: 'formerr', role: 'alert' });
+    var ok = H.button('Valider', 'check', { class: 'primary', disabled: true, onclick: validate });
+    var img = h('img', { alt: '', draggable: 'false', onload: function () {
+      nw = this.naturalWidth; nh = this.naturalHeight;
+      if (!nw || !nh) { err.textContent = 'Image illisible.'; return; }
+      base = F / Math.min(nw, nh);
+      ox = pad + (F - nw * base) / 2; oy = pad + (F - nh * base) / 2;
+      ok.disabled = false; place();
+    }, onerror: function () { err.textContent = 'Image illisible.'; } });
+    var slider = h('input', { type: 'range', class: 'f', min: '0', max: '100', step: '1', value: '0', 'aria-label': 'Zoom', oninput: function () { zoomTo(1 + this.value / 25); } });
+    var stage = h('div', { class: 'crop-stage f', tabindex: '0', role: 'application', 'aria-label': 'Photo à recadrer : flèches pour déplacer, + et - pour agrandir, Entrée pour valider', 'data-autofocus': '1',
+      style: 'width:' + S + 'px;height:' + S + 'px' }, img, h('div', { class: 'crop-frame', style: 'left:' + pad + 'px;top:' + pad + 'px;width:' + F + 'px;height:' + F + 'px' }));
+    function place() {       // l'image garde toujours le cadre plein : jamais de bord vide dans la vignette
+      var w = nw * base * zoom, ht = nh * base * zoom;
+      ox = Math.min(pad, Math.max(pad + F - w, ox)); oy = Math.min(pad, Math.max(pad + F - ht, oy));
+      img.style.width = w + 'px'; img.style.height = ht + 'px'; img.style.left = ox + 'px'; img.style.top = oy + 'px';
+    }
+    function zoomTo(z, ax, ay) {       // autour du point (ax, ay) de la fenêtre, par défaut le centre du cadre
+      if (!nw) return;
+      z = Math.min(5, Math.max(1, z));
+      ax = ax === undefined ? pad + F / 2 : ax; ay = ay === undefined ? pad + F / 2 : ay;
+      var k = z / zoom;
+      ox = ax - (ax - ox) * k; oy = ay - (ay - oy) * k; zoom = z;
+      slider.value = String(Math.round((z - 1) * 25));
+      place();
+    }
+    function frame() {
+      var w = nw * base * zoom, ht = nh * base * zoom, x = (pad - ox) / w, y = (pad - oy) / ht;
+      x = Math.min(1, Math.max(0, x)); y = Math.min(1, Math.max(0, y));
+      return { x: +x.toFixed(5), y: +y.toFixed(5), w: +Math.min(1 - x, F / w).toFixed(5), h: +Math.min(1 - y, F / ht).toFixed(5) };
+    }
+    function validate() {
+      if (busy || !nw) return;
+      busy = true; ok.disabled = true; err.textContent = '';
+      Promise.resolve(onOk(frame())).then(function () { H.overlay.close(); }, function (e) { busy = false; ok.disabled = false; err.textContent = e && e.message ? e.message : 'Impossible pour le moment.'; });
+    }
+    stage.addEventListener('pointerdown', function (e) {
+      if (e.button) return;
+      drag = { x: e.clientX, y: e.clientY, ox: ox, oy: oy };
+      try { stage.setPointerCapture(e.pointerId); } catch (x) { /* tant pis */ }
+      e.preventDefault();
+    });
+    stage.addEventListener('pointermove', function (e) { if (drag) { ox = drag.ox + e.clientX - drag.x; oy = drag.oy + e.clientY - drag.y; place(); } });
+    ['pointerup', 'pointercancel'].forEach(function (name) { stage.addEventListener(name, function () { drag = null; }); });
+    stage.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var r = stage.getBoundingClientRect();
+      zoomTo(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+    stage.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 40 : 10, k = e.key;
+      if (k === 'ArrowLeft') ox += step; else if (k === 'ArrowRight') ox -= step; else if (k === 'ArrowUp') oy += step; else if (k === 'ArrowDown') oy -= step;
+      else if (k === '+' || k === '=') zoomTo(zoom * 1.1); else if (k === '-') zoomTo(zoom / 1.1);
+      else if (k === 'Enter') validate(); else return;
+      e.preventDefault(); place();
+    });
+    img.src = src;       // après les gestionnaires : une image déjà en cache déclenche onload tout de suite
+    H.overlay.open(h('div', { class: 'menu crop', role: 'dialog', 'aria-label': 'Recadrer la photo' },
+      h('h3', null, 'Recadrer la photo'),
+      h('p', { class: 'lead' }, 'Déplace l’image et agrandis-la : seule la partie dans le cadre est gardée, le reste est retiré de la photo.'),
+      stage, h('label', { class: 'zoom' }, h('span', null, 'Zoom'), slider), err,
+      h('div', { class: 'btns' }, ok, H.button('Annuler', null, { onclick: function () { H.overlay.close(); } }))), onClosed);
+  }
+
   H.route(/^\/artist\/([\w-]+)\/(\w+)$/, function (m) {
     var lib = m[1], id = m[2], data = null, stamp = 0;
     var el = h('section', { class: 'detail artist', 'data-lib': lib });
     var picker = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', hidden: true, 'aria-hidden': 'true', tabindex: '-1',
       onchange: function () { var file = this.files && this.files[0]; this.value = ''; if (file) upload(file); } });
-    function upload(file) {
+    function saved(message) { stamp = Date.now(); H.toast(message); return load(); }
+    function upload(file) {       // l'image choisie s'ouvre dans le recadrage ; rien n'est envoyé avant « Valider »
       if (file.size > 10 * 1024 * 1024) { H.toast('Image trop grosse (10 Mo au plus).'); return; }
-      H.api('/api/artist/' + lib + '/' + id + '/photo', file, { raw: true }).then(function () { stamp = Date.now(); H.toast('Photo enregistrée'); return load(); }).catch(fail);
+      var url = URL.createObjectURL(file);
+      cropPhoto(url, function (f) {
+        return H.api('/api/artist/' + lib + '/' + id + '/photo?crop=' + [f.x, f.y, f.w, f.h].join(','), file, { raw: true }).then(function () { return saved('Photo enregistrée'); });
+      }, function () { URL.revokeObjectURL(url); });
     }
-    function fromWikipedia() {
+    function recrop() {       // la photo qu'il a déjà, rognée une seconde fois
+      cropPhoto('/img/artist/' + lib + '/' + id + '?w=1280&v=' + (stamp || 1), function (f) {
+        return H.api('/api/artist/' + lib + '/' + id + '/photo/crop', f).then(function () { return saved('Photo recadrée'); });
+      });
+    }
+    function fromWikipedia() {       // enregistrée telle quelle, puis proposée au recadrage (« Annuler » la garde entière)
       H.toast('Recherche sur Wikipédia…');
-      H.api('/api/artist/' + lib + '/' + id + '/photo/wikipedia', {}).then(function () { stamp = Date.now(); H.toast('Photo de Wikipédia enregistrée'); return load(); }).catch(fail);
+      H.api('/api/artist/' + lib + '/' + id + '/photo/wikipedia', {}).then(function () { return saved('Photo de Wikipédia enregistrée'); }).then(recrop).catch(fail);
     }
     function load() {
       return H.api('/api/artist/' + lib + '/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
@@ -209,6 +286,7 @@
         H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
         H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }),
         H.device === 'tv' || !H.isAdmin() ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
+        H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button('Recadrer', 'full', { 'data-key': 'crop', onclick: recrop }),
         info && info.wiki && H.isAdmin() ? H.button('Photo de Wikipédia', 'refresh', { 'data-key': 'wikiphoto', onclick: fromWikipedia }) : null));
       var first = d.albums[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id, v = stamp ? '&v=' + stamp : '';       // la photo de l'artiste, sinon la pochette de son premier album
       el.appendChild(picker);

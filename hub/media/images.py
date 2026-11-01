@@ -64,6 +64,74 @@ def write_atomic(path, data):
         raise
 
 
+PHOTO_SIDE = 1280      # la photo d'un artiste ne dépasse pas ce côté : c'est la plus grande taille que le serveur sert (WIDTHS)
+
+
+class ConvertError(Exception):
+    """L'image ne se convertit pas : elle est illisible."""
+
+
+class NoConverter(ConvertError):
+    """Ni Pillow (avec libwebp) ni ffmpeg : rien ne sait écrire du WebP."""
+
+
+def crop_box(text):
+    """(x, y, largeur, hauteur) en fractions de l'image, d'après "x,y,l,h" ; ValueError si ce n'est pas un rectangle dans l'image."""
+    try:
+        x, y, w, h = (float(part) for part in text.split(","))
+    except ValueError:
+        raise ValueError("recadrage attendu : x,y,largeur,hauteur") from None
+    if not (0 <= x < 1 and 0 <= y < 1 and 0 < w <= 1 and 0 < h <= 1 and x + w <= 1.0001 and y + h <= 1.0001):
+        raise ValueError("le recadrage sort de l'image")
+    return x, y, w, h
+
+
+def can_webp(ffmpeg=""):
+    """Peut-on écrire du WebP ? Pillow l'écrit s'il a été compilé avec libwebp ; sinon ffmpeg, s'il est là."""
+    if Image is not None:
+        try:
+            from PIL import features
+            if features.check("webp"):
+                return True
+        except Exception:
+            pass
+    return bool(ffmpeg)
+
+
+def to_webp(data, ffmpeg="", box=None, side=PHOTO_SIDE):
+    """Les octets WebP de `data`, rognés à `box` (fractions, voir crop_box) puis réduits à `side` px au plus ; ce qui est hors du cadre disparaît. ConvertError si l'image ne se lit pas ou si rien ne sait écrire du WebP."""
+    if Image is not None:
+        try:
+            from PIL import ImageOps, features
+            if features.check("webp"):
+                with Image.open(io.BytesIO(data)) as image:
+                    image = ImageOps.exif_transpose(image)
+                    image = image.convert("RGBA" if "A" in image.getbands() or "transparency" in image.info else "RGB")
+                    if box:
+                        x, y, w, h = box
+                        left, top = min(image.width - 1, round(x * image.width)), min(image.height - 1, round(y * image.height))
+                        image = image.crop((left, top, max(left + 1, min(image.width, round((x + w) * image.width))), max(top + 1, min(image.height, round((y + h) * image.height)))))
+                    if max(image.size) > side:
+                        scale = side / max(image.size)
+                        image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
+                    out = io.BytesIO()
+                    image.save(out, "WEBP", quality=85, method=4)
+                    return out.getvalue()
+        except Exception as e:
+            raise ConvertError(f"image illisible ({e})") from e
+    if ffmpeg:
+        crop = f"crop=iw*{box[2]}:ih*{box[3]}:iw*{box[0]}:ih*{box[1]}," if box else ""
+        try:
+            done = subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-i", "pipe:0", "-vf", f"{crop}scale='min({side},iw)':'min({side},ih)':force_original_aspect_ratio=decrease",
+                                   "-frames:v", "1", "-c:v", "libwebp", "-q:v", "85", "-f", "webp", "pipe:1"], input=data, capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise ConvertError(f"ffmpeg n'a pas répondu ({e})") from e
+        if done.returncode == 0 and done.stdout:
+            return done.stdout
+        raise ConvertError("image illisible")
+    raise NoConverter("ni Pillow ni ffmpeg : pas de conversion en WebP possible")
+
+
 class Images:
     def __init__(self, cfg, db):
         self.cfg, self.db = cfg, db

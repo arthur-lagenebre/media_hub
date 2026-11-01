@@ -111,11 +111,14 @@ SKIP_DIRS = {".zfs"}        # instantanés ZFS : lecture seule, et copies de tou
 CANDIDATES_DIRS = {coverfile.CANDIDATES_DIR.casefold()}      # les pochettes entre lesquelles Cover.py --candidates laisse choisir : elles n'ont pas encore été choisies
 
 
+ARTIST_PHOTO = f"{enrich.PHOTO_STEM}.webp"        # la photo d'un artiste, dans son dossier
+
+
 def is_junk(name, music=False):
-    """Ce nom de fichier est-il un déchet ? Ceux que Windows ou macOS sèment (Thumbs.db, AlbumArt_{...}_Large.jpg...) ; et, en musique, toute image qui n'est pas cover.{ext}, la seule pochette d'un album, ni la pochette d'un album manquant ("1997 - OK Computer.jpg")."""
+    """Ce nom de fichier est-il un déchet ? Ceux que Windows ou macOS sèment (Thumbs.db, AlbumArt_{...}_Large.jpg...) ; et, en musique, toute image qui n'est pas cover.{ext}, la seule pochette d'un album, ni la pochette d'un album manquant ("1997 - OK Computer.jpg"), ni artist.webp, la photo d'un artiste."""
     if name.casefold() in JUNK or ALBUM_ART.match(name):
         return True
-    return music and os.path.splitext(name.casefold())[1] in coverfile.EXTS and not is_album_cover(name) and wanted.parse(name) is None
+    return music and os.path.splitext(name.casefold())[1] in coverfile.EXTS and not is_album_cover(name) and name.casefold() != ARTIST_PHOTO and wanted.parse(name) is None
 
 
 def walk_junk(root, music=False):

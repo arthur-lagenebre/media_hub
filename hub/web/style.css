@@ -330,6 +330,16 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .menu .btns .btn.primary { background: var(--accent); }
 .menu.prompt { width: min(34rem, 92vw); }
 .menu.prompt .field { width: 100%; margin: 0.2rem 0 0.4rem; }
+.menu.crop { width: auto; max-width: 96vw; align-items: center; overflow-y: auto; }
+.menu.crop .lead { align-self: stretch; padding: 0 0.6rem 0.7rem; color: var(--text); font-size: 0.95rem; max-width: 34rem; }
+.crop-stage { position: relative; flex-shrink: 0; overflow: hidden; background: #000; border-radius: 0.5rem; cursor: grab; touch-action: none; user-select: none; }
+.crop-stage:active { cursor: grabbing; }
+.crop-stage img { position: absolute; max-width: none; pointer-events: none; }
+.crop-frame { position: absolute; box-sizing: border-box; border: 2px solid var(--accent); box-shadow: 0 0 0 999px rgba(5, 7, 9, 0.66); pointer-events: none; }
+.menu.crop .zoom { display: flex; align-items: center; gap: 0.8rem; margin: 0.8rem 0 0.2rem; align-self: stretch; padding: 0 0.6rem; color: var(--mute); }
+.menu.crop .zoom input { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.menu.crop .formerr { min-height: 1.2em; margin: 0.2rem 0.6rem; color: #ffa595; font-weight: 600; }
+.menu.crop .btns { align-self: stretch; }
 .menu.form { overflow-y: auto; }
 .menu.form .lead { padding: 0 0.6rem 0.7rem; color: var(--text); }
 .menu.form .flab { display: block; padding: 0 0.6rem; margin-bottom: 0.4rem; color: var(--mute); font-size: 0.9rem; }
