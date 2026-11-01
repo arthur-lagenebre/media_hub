@@ -46,23 +46,34 @@ def clean_name(name):
     return " ".join(str(name if name is not None else "").split())
 
 
-def parse(text):
-    """[(nom, [identifiants TMDB])] d'après le contenu du fichier. Une saga sans nom, un nom déjà pris ou un identifiant illisible sont écartés sans bruit : le reste du fichier compte."""
+def _listed(text, key):
+    """La liste `key` du fichier ; vide si le fichier est illisible ou n'a pas cette liste."""
     try:
         data = json.loads(text)
     except (ValueError, RecursionError):
         return []
-    listed = data.get("sagas") if isinstance(data, dict) else None
+    listed = data.get(key) if isinstance(data, dict) else None
+    return listed if isinstance(listed, list) else []
+
+
+def _readable_ids(values):
+    """Les identifiants TMDB lisibles de `values`, sans doublon ; le reste est écarté."""
+    ids = []
+    for value in values:
+        ident = film_id(value)
+        if ident is not None and ident not in ids:
+            ids.append(ident)
+    return ids
+
+
+def parse(text):
+    """[(nom, [identifiants TMDB])] d'après le contenu du fichier. Une saga sans nom, un nom déjà pris ou un identifiant illisible sont écartés sans bruit : le reste du fichier compte."""
     sagas, names = [], set()
-    for saga in listed if isinstance(listed, list) else []:
+    for saga in _listed(text, "sagas"):
         if not isinstance(saga, dict):
             continue
         name = clean_name(saga.get("name"))
-        films = []
-        for value in saga.get("films") if isinstance(saga.get("films"), list) else []:
-            ident = film_id(value)
-            if ident is not None and ident not in films:
-                films.append(ident)
+        films = _readable_ids(saga.get("films") if isinstance(saga.get("films"), list) else [])
         if name and name.casefold() not in names:          # comme `clean` : deux noms qui ne diffèrent que par la casse sont le même
             names.add(name.casefold())
             sagas.append((name, films))
@@ -71,17 +82,7 @@ def parse(text):
 
 def parse_ignore(text):
     """[identifiants TMDB] de `ignore`, sans doublon ; illisible, il est vide."""
-    try:
-        data = json.loads(text)
-    except (ValueError, RecursionError):
-        return []
-    listed = data.get("ignore") if isinstance(data, dict) else None
-    out = []
-    for value in listed if isinstance(listed, list) else []:
-        ident = film_id(value)
-        if ident is not None and ident not in out:
-            out.append(ident)
-    return out
+    return _readable_ids(_listed(text, "ignore"))
 
 
 def damaged(text):
