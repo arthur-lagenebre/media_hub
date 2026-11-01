@@ -78,51 +78,78 @@ def main_role(person):
     return (roles[0].get("character") or "") if roles else ""
 
 
-def enrich_shows(cfg, db, lib, log=print, force=False):
+def tmdb_client(cfg, read=True):
+    """(client TMDB, dossier des affiches) ; RuntimeError sans clé. Le dossier des affiches est créé."""
     if not cfg.tmdb_key:
         raise RuntimeError("Pas de clé TMDB : renseigne TMDB_KEY (variable d'environnement, ou .env dans media_library).")
-    tmdb = Tmdb(cfg.tmdb_key, "fr-FR", user_agent="media_hub/1.0", cache=tmdb_cache.Cache(folder=cfg.data / "tmdb-cache", read=True))
+    tmdb = Tmdb(cfg.tmdb_key, "fr-FR", user_agent="media_hub/1.0", cache=tmdb_cache.Cache(folder=cfg.data / "tmdb-cache", read=read))
     posters = cfg.data / "tmdb"
     posters.mkdir(parents=True, exist_ok=True)
+    return tmdb, posters
+
+
+def show_key(lib, item):
+    return f"enrich:{lib.id}:{item['id']}"
+
+
+def show_is_done(db, lib, item, force):
+    """Déjà enrichie, avec les saisons et le casting (une fiche d'avant leur ajout est refaite) ; `force` refait tout."""
+    before = db.kv_get(show_key(lib, item))
+    return not force and bool(before) and "season_summaries" in before
+
+
+def show_facts(show, show_id):
+    return {
+        "summary": show.get("overview") or "", "genres": [g.get("name", "") for g in show.get("genres", []) if g.get("name")],
+        "year": (show.get("first_air_date") or "")[:4], "tmdb": int(show_id), "tmdb_name": show.get("name") or "",
+        "seasons_total": show.get("number_of_seasons"), "episodes_total": show.get("number_of_episodes"), "status": show.get("status") or "",
+    }
+
+
+def enrich_show(tmdb, posters, db, lib, item):
+    """Enrichit une série et garde le résultat (base et affiche sur le disque) ; (fiche TMDB, données gardées), ou None si TMDB ne la trouve pas."""
+    meta = json.loads(item["meta"])
+    folder = lib.path / meta.get("folder", "")
+    with contextlib.redirect_stdout(io.StringIO()):
+        show_id = lookup.resolve_show_id(tmdb, folder, meta.get("tmdb_pinned") or None)
+    if not show_id:
+        return None
+    show = tmdb.series(show_id)
+    data = show_facts(show, show_id)
+    if show.get("poster_path"):
+        name = f"{show_id}.jpg"
+        tmdb.save_image(show["poster_path"], "w500", posters / name)
+        data["poster_file"] = name
+    data["season_summaries"] = season_summaries(tmdb, show_id, meta.get("seasons", []))
+    data["actors"] = cast(tmdb, show_id)
+    db.kv_set(show_key(lib, item), data)
+    fields = {"summary": data["summary"], "genres": data["genres"], "meta": {k: v for k, v in data.items() if k not in ("summary", "genres", "year")}}
+    if data["year"]:
+        fields["year"] = data["year"]
+    db.update_item_meta(item["id"], **fields)
+    return show, data
+
+
+def enrich_shows(cfg, db, lib, log=print, force=False):
+    tmdb, posters = tmdb_client(cfg)
     done = failed = 0
     for item in db.query("SELECT * FROM items WHERE lib=? AND type='show' ORDER BY sort", (lib.id,)):
-        key = f"enrich:{lib.id}:{item['id']}"
-        done_before = db.kv_get(key)
-        if not force and done_before and "season_summaries" in done_before:      # enrichi avant l'ajout des saisons et du casting : on le refait
+        if show_is_done(db, lib, item, force):
             continue
-        meta = json.loads(item["meta"])
-        folder = lib.path / meta.get("folder", "")
         try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                show_id = lookup.resolve_show_id(tmdb, folder, meta.get("tmdb_pinned") or None)
-            if not show_id:
-                log(f"  {item['title']} : série introuvable sur TMDB")
-                failed += 1
-                continue
-            show = tmdb.series(show_id)
-            data = {
-                "summary": show.get("overview") or "", "genres": [g.get("name", "") for g in show.get("genres", []) if g.get("name")],
-                "year": (show.get("first_air_date") or "")[:4], "tmdb": int(show_id), "tmdb_name": show.get("name") or "",
-                "seasons_total": show.get("number_of_seasons"), "episodes_total": show.get("number_of_episodes"), "status": show.get("status") or "",
-            }
-            if show.get("poster_path"):
-                name = f"{show_id}.jpg"
-                tmdb.save_image(show["poster_path"], "w500", posters / name)
-                data["poster_file"] = name
-            data["season_summaries"] = season_summaries(tmdb, show_id, meta.get("seasons", []))
-            data["actors"] = cast(tmdb, show_id)
-            db.kv_set(key, data)
-            fields = {"summary": data["summary"], "genres": data["genres"], "meta": {k: v for k, v in data.items() if k not in ("summary", "genres", "year")}}
-            if data["year"]:
-                fields["year"] = data["year"]
-            db.update_item_meta(item["id"], **fields)
-            done += 1
-            log(f"  {item['title']} -> {show.get('name')} ({data['year']})")
+            found = enrich_show(tmdb, posters, db, lib, item)
         except TmdbAuthError as e:
             raise RuntimeError(f"TMDB : {e}")
         except (TmdbError, OSError) as e:
             log(f"  {item['title']} : {e}")
             failed += 1
+            continue
+        if found is None:
+            log(f"  {item['title']} : série introuvable sur TMDB")
+            failed += 1
+        else:
+            done += 1
+            log(f"  {item['title']} -> {found[0].get('name')} ({found[1]['year']})")
     return {"enriched": done, "failed": failed}
 
 
@@ -131,11 +158,7 @@ def enrich_sagas(cfg, db, lib, log=print, force=False):
 
     Tous les films d'une collection sont décrits, ceux qu'on a comme les autres : un film retiré de la médiathèque doit pouvoir apparaître grisé sans attendre qu'on redemande la collection. Une collection déjà connue n'est redemandée qu'après un mois (ou avec `force`) ; un film décrit ne l'est pas deux fois. Le résultat se garde au fur et à mesure (voir missing.py) : une clé refusée à mi-chemin n'efface pas ce qui est fait.
     """
-    if not cfg.tmdb_key:
-        raise RuntimeError("Pas de clé TMDB : renseigne TMDB_KEY (variable d'environnement, ou .env dans media_library).")
-    tmdb = Tmdb(cfg.tmdb_key, "fr-FR", user_agent="media_hub/1.0", cache=tmdb_cache.Cache(folder=cfg.data / "tmdb-cache", read=not force))
-    posters = cfg.data / "tmdb"
-    posters.mkdir(parents=True, exist_ok=True)
+    tmdb, posters = tmdb_client(cfg, read=not force)
     info = missing.load(db)
     rows = db.query("SELECT * FROM items WHERE lib=? AND type='movie' ORDER BY sort", (lib.id,))
     owned = sagafile.by_tmdb(rows)
