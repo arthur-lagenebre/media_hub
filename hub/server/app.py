@@ -1196,6 +1196,18 @@ def photo_box(q):
         raise HttpError(400, str(e))
 
 
+def artist_tracks(hub, rows, name):
+    """(pistes, {genre: nombre d'albums}) de tous les albums d'un artiste, les pistes dans l'ordre de chaque album."""
+    tracks, genres = [], {}
+    for row in rows:
+        for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
+            tracks.append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"],
+                           "cover": urls.item_cover(row["id"]), "file": urls.entry_file(entry["id"])})
+        for genre in safe_json(row["genres"], []):
+            genres[genre] = genres.get(genre, 0) + 1
+    return tracks, genres
+
+
 @route("GET", r"/api/artist/([\w-]+)/(\w+)")
 def api_artist(h, m, q):
     """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent, photo comprise (une fois les fiches demandées dans Gestion)."""
@@ -1203,14 +1215,8 @@ def api_artist(h, m, q):
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     seen = seen_counts(hub, h.user["id"], lib.id)
     name = rows[0]["grp"] or "Artiste inconnu"
-    out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": []}
-    genres = {}
-    for row in rows:
-        for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
-            out["tracks"].append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"],
-                                "cover": urls.item_cover(row["id"]), "file": urls.entry_file(entry["id"])})
-        for genre in safe_json(row["genres"], []):
-            genres[genre] = genres.get(genre, 0) + 1
+    tracks, genres = artist_tracks(hub, rows, name)
+    out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": tracks}
     out["genres"] = [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
     kept = artist_kept(hub, rows)
