@@ -206,50 +206,76 @@ def episode_title(path):
     return re.sub(r"^\s*(?:s\d{1,2}\s*e\d{1,3}|\d{1,3})\s*[-–.]?\s*", "", stem, flags=re.I).strip() or stem
 
 
+def _season_of(path, number, info):
+    """La saison d'un épisode : celle de son dossier ; posé à plat dans le dossier de la série, celle que dit son nom (S02E03), sinon son tag, sinon la première."""
+    if number is not None:
+        return number
+    guess = naming.P_SE.search(path.name)
+    return int(guess.group(1)) if guess else int(info.get("season") or 1)
+
+
+def _show_episodes(reader, lib, seasons):
+    """[(saison, chemin, rel, taille, date, infos, durée)] des épisodes lisibles d'une série."""
+    found = []
+    for season_dir, number in seasons:
+        for path in _videos(season_dir):
+            rel = path.relative_to(lib.path).as_posix()
+            result = reader(path, rel)
+            if result:
+                size, mtime, info, duration = result
+                found.append((_season_of(path, number, info), path, rel, size, mtime, info, duration))
+    return found
+
+
+def _season_images(lib, folder, seasons):
+    """{numéro de saison: image posée dans le dossier de la saison}."""
+    images = {}
+    for season_dir, number in seasons:
+        img = folder_image(season_dir) if number is not None and season_dir != folder else ""
+        if img:
+            images[str(number)] = (season_dir.relative_to(lib.path) / img).as_posix()
+    return images
+
+
+def _show_meta(lib, folder, seasons, found, pinned, extra):
+    image = folder_image(folder)
+    return {"tmdb_pinned": pinned or "", "image": (folder.relative_to(lib.path) / image).as_posix() if image else "", "seasons": sorted({f[0] for f in found}),
+            "season_images": _season_images(lib, folder, seasons), "folder": folder.relative_to(lib.path).as_posix(), "tagged": any(f[5].get("has_tags") for f in found),
+            **{k: v for k, v in extra.items() if k not in ("summary", "genres", "year", "title")}}
+
+
+def _show_item(lib, folder, container, seasons, found, enriched):
+    rel_dir = folder.relative_to(lib.path).as_posix()
+    pinned, name = naming.extract_tmdb_id(folder.name)
+    first = next((f[5] for f in found if f[5].get("collection")), {})
+    years = sorted((f[5].get("date") or "")[:4] for f in found if f[5].get("date"))
+    extra = enriched.get(make_id(lib.id, rel_dir), {})
+    return item_row(lib.id, rel_dir, "show", extra.get("title") or first.get("collection") or name, year=extra.get("year") or (years[0] if years else ""),
+                    summary=extra.get("summary", ""), genres=extra.get("genres", []), grp=container, meta=_show_meta(lib, folder, seasons, found, pinned, extra),
+                    added=max(f[4] for f in found), count=len(found))
+
+
+def _show_entries(lib, item, found):
+    entries = []
+    for season, path, rel, size, mtime, info, duration in sorted(found, key=lambda f: (f[0], f[5].get("number") or naming.detect_episode_number(f[1].name) or 9999, f[1].name.casefold())):
+        number = info.get("number")
+        if number is None:
+            number = naming.detect_episode_number(path.name)
+        entries.append(entry_row(lib.id, item["id"], rel, "video", title=info.get("title") or episode_title(path), summary=info.get("synopsis", ""), season=season, number=number,
+                                 duration=duration, size=size, mtime=mtime, meta={"info": info}))
+    return entries
+
+
 def scan_shows(lib, known, enriched=None):
     reader = Reader(lib.id, known)
     items, entries = [], []
     enriched = enriched or {}
     for folder, container in find_shows(lib.path):
         seasons = naming.find_seasons(folder) or [(folder, None)]
-        found = []          # (saison, chemin, rel, size, mtime, info, durée)
-        for season_dir, number in seasons:
-            for path in _videos(season_dir):
-                rel = path.relative_to(lib.path).as_posix()
-                result = reader(path, rel)
-                if not result:
-                    continue
-                size, mtime, info, duration = result
-                season = number
-                if season is None:             # épisodes posés à plat dans le dossier de la série
-                    guess = naming.P_SE.search(path.name)
-                    season = int(guess.group(1)) if guess else int(info.get("season") or 1)
-                found.append((season, path, rel, size, mtime, info, duration))
+        found = _show_episodes(reader, lib, seasons)
         if not found:
             continue
-        rel_dir = folder.relative_to(lib.path).as_posix()
-        pinned, name = naming.extract_tmdb_id(folder.name)
-        first = next((f[5] for f in found if f[5].get("collection")), {})
-        title = first.get("collection") or name
-        years = sorted((f[5].get("date") or "")[:4] for f in found if f[5].get("date"))
-        item_id = make_id(lib.id, rel_dir)
-        extra = enriched.get(item_id, {})
-        image = folder_image(folder)
-        season_images = {}
-        for season_dir, number in seasons:
-            if number is not None and season_dir != folder:
-                img = folder_image(season_dir)
-                if img:
-                    season_images[str(number)] = (season_dir.relative_to(lib.path) / img).as_posix()
-        meta = {"tmdb_pinned": pinned or "", "image": (folder.relative_to(lib.path) / image).as_posix() if image else "", "seasons": sorted({f[0] for f in found}),
-                "season_images": season_images, "folder": rel_dir, "tagged": any(f[5].get("has_tags") for f in found), **{k: v for k, v in extra.items() if k not in ("summary", "genres", "year", "title")}}
-        item = item_row(lib.id, rel_dir, "show", extra.get("title") or title, year=extra.get("year") or (years[0] if years else ""), summary=extra.get("summary", ""),
-                        genres=extra.get("genres", []), grp=container, meta=meta, added=max(f[4] for f in found), count=len(found))
+        item = _show_item(lib, folder, container, seasons, found, enriched)
         items.append(item)
-        for season, path, rel, size, mtime, info, duration in sorted(found, key=lambda f: (f[0], f[5].get("number") or naming.detect_episode_number(f[1].name) or 9999, f[1].name.casefold())):
-            number = info.get("number")
-            if number is None:
-                number = naming.detect_episode_number(path.name)
-            entries.append(entry_row(lib.id, item["id"], rel, "video", title=info.get("title") or episode_title(path), summary=info.get("synopsis", ""), season=season, number=number,
-                                     duration=duration, size=size, mtime=mtime, meta={"info": info}))
+        entries += _show_entries(lib, item, found)
     return items, entries, _Counts(reader.reused, reader.read)
