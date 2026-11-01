@@ -1549,6 +1549,66 @@ def media_file(h, m, q):
     h.send_file(path, headers=extra)
 
 
+def query_number(q, name, cast=int, default=0):
+    try:
+        return cast(q.get(name, default))
+    except ValueError:
+        raise HttpError(400, f"paramètre {name} invalide")
+
+
+def stream_command(hub, path, probe, q):
+    """La commande ffmpeg qui répond à la requête : copie de l'image et du son (remux) ou ré-encodage (transcode), départ, plafonds et nombre de voies demandés."""
+    mode = "transcode" if q.get("m") == "transcode" else "remux"
+    audio = query_number(q, "a") if "a" in q else None
+    decision = {"mode": mode, "audio": audio if probe["audio"] else None, "copy_video": mode == "remux", "copy_audio": mode == "remux" and query_number(q, "ca", int, 1) == 1}
+    return prober.ffmpeg_command(hub.cfg.ffmpeg, path, probe, decision, start=max(0.0, query_number(q, "start", float, 0.0)), max_kbps=query_number(q, "k"),
+                                 max_height=query_number(q, "h"), channels=max(1, min(6, query_number(q, "c", int, 2))))
+
+
+def first_chunk(proc, errors):
+    """Les premiers octets que ffmpeg produit ; 500, avec sa dernière ligne d'erreur, s'il n'en produit pas."""
+    first = proc.stdout.read1(CHUNK)
+    if not first:
+        proc.wait(timeout=5)
+        time.sleep(0.05)
+        raise HttpError(500, "ffmpeg n'a rien produit : " + ((errors[0].strip().splitlines() or ["erreur inconnue"])[-1] if errors else "erreur inconnue"))
+    return first
+
+
+def send_stream(h, proc, first):
+    h.send_response(200)
+    h.send_header("Content-Type", "video/mp4")
+    h.send_header("Cache-Control", "no-store")
+    h.send_header("Accept-Ranges", "none")
+    h.send_header("Connection", "close")
+    h.end_headers()
+    h.close_connection = True
+    if h.command == "HEAD":
+        return
+    h.connection.settimeout(3600)
+    h.wfile.write(first)
+    while True:
+        chunk = proc.stdout.read1(CHUNK)
+        if not chunk:
+            break
+        h.wfile.write(chunk)
+
+
+def stop_stream(proc):
+    """Arrête ffmpeg s'il tourne encore et ferme ses tubes."""
+    if proc.poll() is None:
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.SubprocessError:
+        pass
+    for pipe in (proc.stdout, proc.stderr):
+        try:
+            pipe.close()
+        except OSError:
+            pass
+
+
 @route("GET", r"/media/(\w+)/stream")
 def media_stream(h, m, q):
     """Un MP4 fragmenté produit à la volée. Pas de Content-Length, pas de Range : pour avancer, le client redemande avec ?start=."""
@@ -1557,18 +1617,7 @@ def media_stream(h, m, q):
     lib, path = hub.path_of(entry)
     if not hub.cfg.ffmpeg:
         raise HttpError(501, "ffmpeg est introuvable sur le serveur : seule la lecture directe est possible.")
-    probe = probe_of(hub, entry)
-    mode = "transcode" if q.get("m") == "transcode" else "remux"
-
-    def number(name, cast=int, default=0):
-        try:
-            return cast(q.get(name, default))
-        except ValueError:
-            raise HttpError(400, f"paramètre {name} invalide")
-    audio = number("a") if "a" in q else None
-    decision = {"mode": mode, "audio": audio if probe["audio"] else None, "copy_video": mode == "remux", "copy_audio": mode == "remux" and number("ca", int, 1) == 1}
-    cmd = prober.ffmpeg_command(hub.cfg.ffmpeg, path, probe, decision, start=max(0.0, number("start", float, 0.0)), max_kbps=number("k"), max_height=number("h"),
-                                channels=max(1, min(6, number("c", int, 2))))
+    cmd = stream_command(hub, path, probe_of(hub, entry), q)
     if not hub.streams.acquire(blocking=False):
         raise HttpError(503, f"{hub.cfg.max_streams} conversions en cours : attends la fin de l'une d'elles.")
     hub.active += 1
@@ -1577,40 +1626,10 @@ def media_stream(h, m, q):
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
         errors = []
         threading.Thread(target=lambda: errors.append(proc.stderr.read().decode("utf-8", "replace")), daemon=True).start()
-        first = proc.stdout.read1(CHUNK)
-        if not first:
-            proc.wait(timeout=5)
-            time.sleep(0.05)
-            raise HttpError(500, "ffmpeg n'a rien produit : " + ((errors[0].strip().splitlines() or ["erreur inconnue"])[-1] if errors else "erreur inconnue"))
-        h.send_response(200)
-        h.send_header("Content-Type", "video/mp4")
-        h.send_header("Cache-Control", "no-store")
-        h.send_header("Accept-Ranges", "none")
-        h.send_header("Connection", "close")
-        h.end_headers()
-        h.close_connection = True
-        if h.command == "HEAD":
-            return
-        h.connection.settimeout(3600)
-        h.wfile.write(first)
-        while True:
-            chunk = proc.stdout.read1(CHUNK)
-            if not chunk:
-                break
-            h.wfile.write(chunk)
+        send_stream(h, proc, first_chunk(proc, errors))
     finally:
         if proc is not None:
-            if proc.poll() is None:
-                proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.SubprocessError:
-                pass
-            for pipe in (proc.stdout, proc.stderr):
-                try:
-                    pipe.close()
-                except OSError:
-                    pass
+            stop_stream(proc)
         hub.active -= 1
         hub.streams.release()
 
