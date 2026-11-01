@@ -1756,6 +1756,15 @@ def book_page(h, m, q):
     h.send_body(data, sniff(data), 200, {"Cache-Control": "private, max-age=86400"}, h.command == "HEAD")
 
 
+def epub_mime(data, mime):
+    """Le type d'un fichier de l'epub : le XML bien formé se sert en XHTML, le reste en HTML ; l'encodage est dit pour tout ce qui est du texte."""
+    if mime in ("application/xhtml+xml", "text/html", "image/svg+xml") or data[:5] == b"<?xml":
+        mime = "application/xhtml+xml" if mime != "image/svg+xml" and bookmedia.valid_xml(data) else ("text/html" if mime != "image/svg+xml" else mime)
+    if mime.startswith("text/") or mime.endswith("xml") or mime.endswith("css"):
+        mime += "; charset=utf-8"
+    return mime
+
+
 @route("GET", r"/book/(\w+)/epub/(.+)")
 def book_epub(h, m, q):
     hub = h.hub
@@ -1765,10 +1774,7 @@ def book_epub(h, m, q):
         data, mime = bookmedia.epub_member(path, m.group(2))
     except BookError as e:
         raise HttpError(404, str(e))
-    if mime in ("application/xhtml+xml", "text/html", "image/svg+xml") or data[:5] == b"<?xml":
-        mime = "application/xhtml+xml" if mime != "image/svg+xml" and bookmedia.valid_xml(data) else ("text/html" if mime != "image/svg+xml" else mime)
-    if mime.startswith("text/") or mime.endswith("xml") or mime.endswith("css"):
-        mime += "; charset=utf-8"
+    mime = epub_mime(data, mime)
     # Le contenu d'un livre est celui d'un tiers : pas de script, pas de requête vers l'extérieur.
     csp = "default-src 'self' data: blob:; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'"
     h.send_body(data, mime, 200, {"Cache-Control": "private, max-age=86400", "Content-Security-Policy": csp}, h.command == "HEAD")
