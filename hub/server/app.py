@@ -1828,25 +1828,42 @@ def api_sagas_save(h, m, q):
     h.send_json(sagas_json(h.hub))
 
 
-@route("POST", r"/api/sagas/add")
-def api_sagas_add(h, m, q):
-    """Ajoute des films à la fin d'une saga, créée au besoin : `films` (identifiants TMDB), puis `items` (éléments de la médiathèque : c'est ce que la fiche d'un film envoie)."""
-    require_admin(h)
-    body = body_dict(h)
+def listed_in(body, key):
+    """La liste `key` du corps de la requête ; vide si elle n'y est pas ou n'en est pas une."""
+    return body.get(key) if isinstance(body.get(key), list) else []
+
+
+def listed_film_ids(values):
+    """Les identifiants TMDB (nombre ou « movie/27205 ») de `values` ; 400 au premier illisible."""
     ids = []
-    for value in body.get("films") if isinstance(body.get("films"), list) else []:
+    for value in values:
         ident = sagafile.film_id(value)
         if ident is None:
             raise HttpError(400, f"identifiant TMDB illisible ({value!r})")
         ids.append(ident)
-    for value in body.get("items") if isinstance(body.get("items"), list) else []:
-        row = h.hub.db.one("SELECT * FROM items WHERE id=?", (str(value),))
+    return ids
+
+
+def item_film_ids(db, values):
+    """Les identifiants TMDB des films de la médiathèque désignés par leur élément ; 404 pour un élément qui n'est pas un film, 400 pour un film sans identifiant."""
+    ids = []
+    for value in values:
+        row = db.one("SELECT * FROM items WHERE id=?", (str(value),))
         if row is None or row["type"] != "movie":
             raise HttpError(404, "film inconnu")
         found = sagafile.by_tmdb([row])
         if not found:
             raise HttpError(400, f"« {row['title']} » n'a pas d'identifiant TMDB : étiquette-le avec Metadata.py")
         ids += list(found)
+    return ids
+
+
+@route("POST", r"/api/sagas/add")
+def api_sagas_add(h, m, q):
+    """Ajoute des films à la fin d'une saga, créée au besoin : `films` (identifiants TMDB), puis `items` (éléments de la médiathèque : c'est ce que la fiche d'un film envoie)."""
+    require_admin(h)
+    body = body_dict(h)
+    ids = listed_film_ids(listed_in(body, "films")) + item_film_ids(h.hub.db, listed_in(body, "items"))
     if not ids:
         raise HttpError(400, "aucun film à ajouter")
     name = saga_call(h.hub.sagas.add, body.get("name"), ids)
