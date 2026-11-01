@@ -601,7 +601,7 @@ class TestJobs(ServerCase):
         self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})
         self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # la nouvelle prend la place de l'ancienne
 
-        self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 404)                        # sans article connu, rien à chercher
+        self.assertEqual(self.api.get(base + "/photo/wikipedia")[0], 404)                             # sans article connu, rien à chercher
         self.assertEqual(self.api.json(base + "/photo/delete", {})[0], 404)                           # et une photo ne se supprime pas
         info = {"sheet": 2, "photo": "", "wiki": {"lang": "fr", "title": "Daft Punk", "url": "https://fr.wikipedia.org/wiki/Daft_Punk", "extract": "Duo."}}
         self.hub.db.update_item_meta(album["id"], meta={"artist_mbid": "abc"})
@@ -621,15 +621,16 @@ class TestJobs(ServerCase):
                 return fixtures.PNG
 
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / f"{artist_id}.jpg").write_bytes(b"d'avant")                                        # une photo d'avant, sous HUB_DATA : elle ne doit pas rester à côté
+        before = (home / "artist.webp").read_bytes()
         with mock.patch("hub.enrich.photo_urls", return_value=["https://upload.wikimedia.org/x.jpg"]), mock.patch("hub.enrich.urlopen", return_value=Download()):
-            self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 200)
-        self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # celle de Wikipédia remplace la mienne, sans la laisser à côté
-        self.assertEqual((home / "artist.webp").read_bytes()[8:12], b"WEBP")
+            status, headers, body = self.api.get(base + "/photo/wikipedia")
+        self.assertEqual((status, body), (200, fixtures.PNG))                                          # la photo est rendue telle quelle, pour le recadrage
+        self.assertEqual(headers.get("Content-Type"), "image/png")
+        self.assertEqual((home / "artist.webp").read_bytes(), before)                                 # et rien n'est enregistré avant la validation
         self.assertEqual(list(folder.glob(f"{artist_id}.*")), [])
         with mock.patch("hub.enrich.photo_urls", return_value=[]):
-            self.assertEqual(self.api.json(base + "/photo/wikipedia", {})[0], 502)
-        self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # un échec ne retire rien
+            self.assertEqual(self.api.get(base + "/photo/wikipedia")[0], 502)
+        self.assertEqual((home / "artist.webp").read_bytes(), before)
 
     @unittest.skipUnless(images.Image is not None and images.can_webp(""), "Pillow absent")
     def test_artist_photo_keeps_only_the_frame_and_becomes_webp(self):
@@ -2307,7 +2308,7 @@ class TestAccountPermissions(AccountsCase):
         """Ce qu'un compte `user` n'a pas le droit de faire : (méthode, chemin, corps)."""
         admin = self.admin.session["user"]["id"]
         return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/cleanup", {"apply": True}),
-                ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG), ("POST", f"/api/artist/musique/{self.artist}/photo/wikipedia", {}),
+                ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG), ("GET", f"/api/artist/musique/{self.artist}/photo/wikipedia", None),
                 ("POST", f"/api/artist/musique/{self.artist}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1}),
                 ("GET", "/api/sagas", None), ("POST", "/api/sagas", {"sagas": []}), ("POST", "/api/sagas/add", {"name": "intrus", "films": [1]}), ("GET", "/api/sagas/films", None), ("POST", "/api/sagas/ignore", {"tmdb": 1}),
                 ("GET", "/api/users", None), ("POST", "/api/users", {"name": "intrus", "password": self.PASSWORD}),

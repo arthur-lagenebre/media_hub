@@ -455,12 +455,18 @@ def musicbrainz(cfg):
     return MusicBrainz(user_agent=MB_USER_AGENT, cache=tmdb_cache.Cache(folder=cfg.data / "musicbrainz-cache", read=True))
 
 
-def wikipedia_photo(cfg, artist_id, wiki, home=None, mbid=""):
-    """Remplace la photo d'un artiste par celle de son article Wikipédia ; son nom de fichier, ou OSError si l'article n'en a pas ou si elle ne vient pas."""
+def wikipedia_photo(cfg, wiki):
+    """Les octets de la photo de l'article Wikipédia d'un artiste, sans rien enregistrer (on la recadre avant de la garder) ; OSError si l'article n'en a pas ou si elle ne vient pas."""
     urls = photo_urls(musicbrainz(cfg), wiki)
     if not urls:
         raise OSError("l'article n'a pas de photo")
-    return download_photo(cfg, urls, artist_id, home, mbid)
+    error = OSError("photo introuvable")
+    for url in urls:
+        try:
+            return fetch_photo(url)
+        except OSError as e:
+            error = e
+    raise error
 
 
 def album_artists(db, lib):
