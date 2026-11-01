@@ -263,11 +263,13 @@ def photo_urls(mb, wiki):
     except MusicBrainzError:
         return []
     thumb, original = (data.get("thumbnail") or {}).get("source", ""), data.get("originalimage") or {}
-    urls = []
-    if "/thumb/" in thumb and (original.get("width") or 0) > PHOTO_WIDTH:
-        urls.append(re.sub(r"/\d+px-", f"/{PHOTO_WIDTH}px-", thumb, count=1))
-    urls += [u for u in (thumb, original.get("source", "")) if u]
-    return [u for u in urls if urlparse(u).scheme == "https" and urlparse(u).hostname in PHOTO_HOSTS]      # ce qu'on télécharge vient de Wikimedia, rien d'autre
+    bigger = [re.sub(r"/\d+px-", f"/{PHOTO_WIDTH}px-", thumb, count=1)] if "/thumb/" in thumb and (original.get("width") or 0) > PHOTO_WIDTH else []
+    return [u for u in bigger + [u for u in (thumb, original.get("source", "")) if u] if from_wikimedia(u)]      # ce qu'on télécharge vient de Wikimedia, rien d'autre
+
+
+def from_wikimedia(url):
+    parts = urlparse(url)
+    return parts.scheme == "https" and parts.hostname in PHOTO_HOSTS
 
 
 def image_ext(data):
