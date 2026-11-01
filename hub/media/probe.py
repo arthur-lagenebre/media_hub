@@ -49,7 +49,7 @@ def _tags(stream):
 
 
 def _container(names):
-    return next((family for key, family in CONTAINER_FAMILY if key in names), names[0] if names and names[0] else "")
+    return next((family for key, family in CONTAINER_FAMILY if key in names), names[0])
 
 
 def _depth(video):
@@ -196,8 +196,9 @@ def _video_args(probe, decision, max_kbps, max_height, preset):
 
 
 def _x264_args(video, max_kbps, max_height, preset):
-    height = min(x for x in (max_height, video.get("height", 0)) if x) if (max_height or video.get("height")) else 0
-    filters = [f"scale=-2:{height}"] if height and video.get("height", 0) > height else []
+    source = video.get("height") or 0
+    wanted = max_height or source
+    filters = [f"scale=-2:{wanted}"] if source > wanted else []
     args = ["-c:v", "libx264", "-preset", preset, "-crf", "21", "-profile:v", "high", "-level", "4.1", "-g", "48", "-sc_threshold", "0", "-vf", ",".join(filters + ["format=yuv420p"])]
     return args + (["-maxrate", f"{int(max_kbps * 0.92)}k", "-bufsize", f"{int(max_kbps * 2)}k"] if max_kbps else [])
 
@@ -214,7 +215,7 @@ def _audio_args(probe, decision, channels):
 def ffmpeg_command(ffmpeg, path, probe, decision, start=0, max_kbps=0, max_height=0, channels=2, preset="veryfast"):
     """La ligne de commande qui produit un MP4 fragmenté sur la sortie standard. Le MP4 fragmenté se lit en continu, sans que le fichier soit fini."""
     track = decision["audio"]
-    cmd = [ffmpeg, "-v", "error", "-nostdin"] + (["-ss", f"{start:.3f}"] if start and start > 0 else [])
+    cmd = [ffmpeg, "-v", "error", "-nostdin"] + (["-ss", f"{start:.3f}"] if start > 0 else [])
     cmd += ["-i", str(path), "-map", "0:v:0"] + ([] if track is None else ["-map", f"0:a:{track}"])
     cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"] + _video_args(probe, decision, max_kbps, max_height, preset)
     cmd += [] if track is None else _audio_args(probe, decision, channels)
