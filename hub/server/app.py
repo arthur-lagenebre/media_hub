@@ -423,16 +423,21 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     # --- Fichiers du site -------------------------------------------------
-    def static(self, path):
+    def static_target(self, path):
+        """Le fichier du site que demande `path` ; 404 s'il sort du dossier du site ou si c'est un fichier (avec une extension) qui n'existe pas, sinon la page d'accueil."""
         web = self.hub.cfg.web.resolve()
         name = path.lstrip("/") or "index.html"
         target = (web / name).resolve()
         if web not in target.parents and target != web:
             raise HttpError(404, "introuvable")
-        if not target.is_file():
-            if "." in name.rsplit("/", 1)[-1]:
-                raise HttpError(404, "introuvable")
-            target = web / "index.html"          # route de l'application : elle se débrouille côté navigateur
+        if target.is_file():
+            return target
+        if "." in name.rsplit("/", 1)[-1]:
+            raise HttpError(404, "introuvable")
+        return web / "index.html"          # route de l'application : elle se débrouille côté navigateur
+
+    def static(self, path):
+        target = self.static_target(path)
         stamp = f'"{int(target.stat().st_mtime)}-{target.stat().st_size}"'
         if self.headers.get("If-None-Match") == stamp:
             self.send_body(b"", "text/plain", 304, {"ETag": stamp})
