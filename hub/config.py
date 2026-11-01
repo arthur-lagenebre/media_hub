@@ -74,25 +74,20 @@ def _find_repo(env):
     return None
 
 
+def _first_file(*candidates):
+    return next((str(path) for path in candidates if path.is_file()), "")
+
+
+def _explicit_tool(name, given):
+    """HUB_FFMPEG : le fichier lui-même (ou, s'il porte le nom de l'autre outil, son voisin), ou le dossier qui le contient."""
+    if given.is_file():
+        return str(given) if given.name.startswith(name) else _first_file(given.parent / (name + given.suffix))
+    return _first_file(given / name, given / f"{name}.exe")
+
+
 def _find_tool(name, env, data):
     explicit = env.get("HUB_FFMPEG")
-    if explicit:
-        folder = Path(explicit)
-        if folder.is_file() and folder.name.startswith(name):
-            return str(folder)
-        for candidate in (folder / name, folder / f"{name}.exe"):
-            if candidate.is_file():
-                return str(candidate)
-        sibling = folder.parent / (name + folder.suffix) if folder.is_file() else None
-        if sibling and sibling.is_file():
-            return str(sibling)
-    found = shutil.which(name)
-    if found:
-        return found
-    for candidate in (data / "bin" / name, data / "bin" / f"{name}.exe"):
-        if candidate.is_file():
-            return str(candidate)
-    return ""
+    return (explicit and _explicit_tool(name, Path(explicit))) or shutil.which(name) or _first_file(data / "bin" / name, data / "bin" / f"{name}.exe")
 
 
 def _read_dotenv_key(repo):
@@ -109,23 +104,32 @@ def _read_dotenv_key(repo):
     return ""
 
 
+def _declared(item):
+    if item["kind"] not in KINDS:
+        raise ValueError(f"genre de bibliothèque inconnu : {item['kind']!r} (attendu : {', '.join(KINDS)})")
+    return Library(item["id"], item.get("label", item["id"]), item["kind"], Path(item["path"]))
+
+
+def _declared_libraries(path):
+    """Les bibliothèques que décrit le fichier HUB_LIBRARIES : une liste, ou un objet qui la porte sous `libraries`."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [_declared(item) for item in (data["libraries"] if isinstance(data, dict) else data)]
+
+
+def _known_libraries(srv):
+    """Les dossiers connus sous HUB_SRV (la casse ne compte pas) ; pour chaque bibliothèque, le premier de ses noms qui existe."""
+    existing = {p.name.casefold(): p for p in srv.iterdir() if p.is_dir()} if srv.is_dir() else {}
+    found = []
+    for lib_id, label, kind, names in DEFAULTS:
+        name = next((n.casefold() for n in names if n.casefold() in existing), None)
+        if name:
+            found.append(Library(lib_id, label, kind, existing[name]))
+    return found
+
+
 def _libraries(env, srv):
     explicit = env.get("HUB_LIBRARIES")
-    found = []
-    if explicit:
-        data = json.loads(Path(explicit).read_text(encoding="utf-8"))
-        for item in data["libraries"] if isinstance(data, dict) else data:
-            if item["kind"] not in KINDS:
-                raise ValueError(f"genre de bibliothèque inconnu : {item['kind']!r} (attendu : {', '.join(KINDS)})")
-            found.append(Library(item["id"], item.get("label", item["id"]), item["kind"], Path(item["path"])))
-        return found
-    existing = {p.name.casefold(): p for p in srv.iterdir() if p.is_dir()} if srv.is_dir() else {}
-    for lib_id, label, kind, names in DEFAULTS:
-        for name in names:
-            if name.casefold() in existing:
-                found.append(Library(lib_id, label, kind, existing[name.casefold()]))
-                break
-    return found
+    return _declared_libraries(explicit) if explicit else _known_libraries(srv)
 
 
 def load(env=None):

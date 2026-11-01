@@ -14,36 +14,52 @@ from .common import entry_row, is_album_cover, item_row, unchanged
 from .video import _Counts
 
 
+def _read_tracks(release, known):
+    """Lit les tags des pistes d'un album, ou reprend ceux du scan précédent ; (reprises, lues)."""
+    reused = read = 0
+    for track in release.tracks:
+        row = known.get(track.rel)
+        cached = json.loads(row["meta"]).get("info") if unchanged(row, track.size, track.mtime) else None
+        if cached:
+            track.info = cached
+            reused += 1
+        else:
+            library.read_info(track)
+            read += 1
+    return reused, read
+
+
+def _album_item(lib, release, homes):
+    progress = release.progress()
+    cover = release.cover_file if release.cover_file and is_album_cover(release.cover_file.name) else None     # cover.{ext} seul : folder.jpg et les pochettes embarquées ne comptent pas
+    meta = {
+        "artist": release.artist, "artist_id": release.artist_id, "artist_mbid": release.artist_mbid, "mbid": release.mbid, "label": release.label,
+        "catalog": release.catalog, "formats": release.formats, "tagged": release.tagged, "folder": release.rel,
+        "artist_dir": homes.get(release.artist_id, ""),
+        "cover_file": cover.name if cover else "", "has_cover": bool(cover),
+        "progress": list(progress) if progress else None, "discs": len(release.discs), "duration": release.duration,
+    }
+    return item_row(lib.id, release.rel or ".", "album", release.title, year=release.year, genres=release.genres, grp=release.artist, meta=meta,
+                    added=max(t.mtime for t in release.tracks), count=len(release.tracks))
+
+
+def _album_entries(lib, item, release):
+    return [entry_row(lib.id, item["id"], track.rel, "audio", title=track.title, disc=track.disc, number=track.number, duration=track.duration,
+                      size=track.size, mtime=track.mtime, meta={"info": track.info, "error": track.error or "", "format": track.kind})
+            for track in release.tracks]
+
+
 def scan_music(lib, known, enriched=None):
     releases = library.scan(lib.path)
     reused = read = 0
     items, entries = [], []
     homes = artist_dirs(releases)
     for release in releases:
-        for track in release.tracks:
-            row = known.get(track.rel)
-            cached = json.loads(row["meta"]).get("info") if unchanged(row, track.size, track.mtime) else None
-            if cached:
-                track.info = cached
-                reused += 1
-            else:
-                library.read_info(track)
-                read += 1
-        progress = release.progress()
-        cover = release.cover_file if release.cover_file and is_album_cover(release.cover_file.name) else None     # cover.{ext} seul : folder.jpg et les pochettes embarquées ne comptent pas
-        meta = {
-            "artist": release.artist, "artist_id": release.artist_id, "artist_mbid": release.artist_mbid, "mbid": release.mbid, "label": release.label,
-            "catalog": release.catalog, "formats": release.formats, "tagged": release.tagged, "folder": release.rel,
-            "artist_dir": homes.get(release.artist_id, ""),
-            "cover_file": cover.name if cover else "", "has_cover": bool(cover),
-            "progress": list(progress) if progress else None, "discs": len(release.discs), "duration": release.duration,
-        }
-        item = item_row(lib.id, release.rel or ".", "album", release.title, year=release.year, genres=release.genres, grp=release.artist, meta=meta,
-                        added=max(t.mtime for t in release.tracks), count=len(release.tracks))
+        more_reused, more_read = _read_tracks(release, known)
+        reused, read = reused + more_reused, read + more_read
+        item = _album_item(lib, release, homes)
         items.append(item)
-        for track in release.tracks:
-            entries.append(entry_row(lib.id, item["id"], track.rel, "audio", title=track.title, disc=track.disc, number=track.number, duration=track.duration,
-                                     size=track.size, mtime=track.mtime, meta={"info": track.info, "error": track.error or "", "format": track.kind}))
+        entries += _album_entries(lib, item, release)
     counts = _Counts(reused, read)
     counts.kv = {f"wanted:{lib.id}": wanted_sheet(lib.path, wanted.find(lib.path, releases))}       # les albums manquants se rangent à part : ce ne sont pas des items, aucune liste ne doit les compter
     return items, entries, counts

@@ -141,15 +141,15 @@ class Hub:
         return text
 
     def entry(self, ident):
-        row = self.db.one("SELECT * FROM entries WHERE id=?", (ident,))
-        if row is None:
-            raise HttpError(404, "fichier inconnu")
-        return row
+        return self.known("entries", ident, "fichier inconnu")
 
     def item(self, ident):
-        row = self.db.one("SELECT * FROM items WHERE id=?", (ident,))
+        return self.known("items", ident, "élément inconnu")
+
+    def known(self, table, ident, unknown):
+        row = self.db.one(f"SELECT * FROM {table} WHERE id=?", (ident,))
         if row is None:
-            raise HttpError(404, "élément inconnu")
+            raise HttpError(404, unknown)
         return row
 
     def first_scan(self):
@@ -215,6 +215,25 @@ def order_key(row):
 # ---------------------------------------------------------------------------
 # Le gestionnaire HTTP
 # ---------------------------------------------------------------------------
+RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
+
+
+def range_bounds(header, size):
+    """(début, fin, statut) de ce que demande l'en-tête Range pour un fichier de `size` octets : 206 pour une partie, 200 pour le tout (pas d'en-tête, ou un qu'on ne comprend pas) ; None quand la partie demandée sort du fichier (416)."""
+    found = RANGE_RE.match(header.strip()) if header else None
+    first, last = found.groups() if found else ("", "")
+    if not (first or last):
+        return 0, size - 1, 200
+    if first:
+        start, end = int(first), int(last) if last else size - 1
+    else:
+        start, end = max(0, size - int(last)), size - 1
+    end = min(end, size - 1)
+    if start >= size or start > end:
+        return None
+    return start, end, 206
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"media_hub/{__version__}"
@@ -255,47 +274,53 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(404, "fichier introuvable")
         with handle:
             mime = mime or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-            start, end, status = 0, size - 1, 200
-            header = self.headers.get("Range")
-            if header:
-                found = re.match(r"bytes=(\d*)-(\d*)$", header.strip())
-                if found and (found.group(1) or found.group(2)):
-                    if found.group(1):
-                        start = int(found.group(1))
-                        end = int(found.group(2)) if found.group(2) else size - 1
-                    else:
-                        start = max(0, size - int(found.group(2)))
-                    end = min(end, size - 1)
-                    if start >= size or start > end:
-                        self.send_body(b"", mime, 416, {"Content-Range": f"bytes */{size}"})
-                        return
-                    status = 206
-            length = end - start + 1
-            self.send_response(status)
-            self.send_header("Content-Type", mime)
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Length", str(length))
-            if status == 206:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            for key, value in (headers or {}).items():
-                self.send_header(key, value)
-            self.end_headers()
-            if self.command == "HEAD":
+            bounds = range_bounds(self.headers.get("Range"), size)
+            if bounds is None:
+                self.send_body(b"", mime, 416, {"Content-Range": f"bytes */{size}"})
                 return
-            self.connection.settimeout(3600)       # un film mis en pause ne doit pas couper la connexion
-            try:
-                handle.seek(start)
-                remaining = length
-                while remaining > 0:
-                    chunk = handle.read(min(CHUNK, remaining))
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    remaining -= len(chunk)
-            finally:
-                self.connection.settimeout(self.timeout)       # la connexion persiste : un client inactif ne garde pas un fil une heure de plus
+            start, end, status = bounds
+            self.send_file_headers(mime, status, start, end, size, headers)
+            if self.command != "HEAD":
+                self.copy_range(handle, start, end - start + 1)
+
+    def send_file_headers(self, mime, status, start, end, size, headers):
+        self.send_response(status)
+        self.send_header("Content-Type", mime)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+
+    def copy_range(self, handle, start, length):
+        """Envoie `length` octets du fichier à partir de `start`, par morceaux."""
+        self.connection.settimeout(3600)       # un film mis en pause ne doit pas couper la connexion
+        try:
+            handle.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = handle.read(min(CHUNK, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+        finally:
+            self.connection.settimeout(self.timeout)       # la connexion persiste : un client inactif ne garde pas un fil une heure de plus
 
     # --- Aiguillage -------------------------------------------------------
+    def session_user(self):
+        """Le compte du jeton de session, en cookie puis en `Authorization: Bearer` ; None s'il n'y en a pas ou s'il ne vaut rien."""
+        cookie = self.headers.get("Cookie", "")
+        found = re.search(r"(?:^|;\s*)hub=(\w{1,64}\.[0-9a-f]{64})\s*(?:;|$)", cookie, re.ASCII)       # valeur entière, sans rien derrière : `hub=<id>.<mac>.junk` ne passe pas
+        bearer = re.fullmatch(r"Bearer\s+(\S+)", self.headers.get("Authorization", "").strip(), re.IGNORECASE)
+        for token in (found.group(1) if found else None, bearer.group(1) if bearer else None):
+            row = accounts.user_for_token(self.hub.db, self.hub.secret, token) if token else None
+            if row is not None:
+                return accounts.public(row)
+        return None
+
     def authorized(self, path, query):
         """Trois façons de se présenter : le jeton de session (`<identifiant>.<mac>`) en cookie (navigateur) ou en `Authorization: Bearer` (clients natifs),
         le jeton de média en `?token=` (balises <img> / <video>, Cast), celui-ci seulement sur les fichiers et les sous-titres (/api/subs/), nulle part ailleurs sur /api/.
@@ -308,17 +333,21 @@ class Handler(BaseHTTPRequestHandler):
             return True
         if path in ("/login", "/api/login", "/api/token", "/favicon.svg", "/icon.svg"):
             return True
-        cookie = self.headers.get("Cookie", "")
-        found = re.search(r"(?:^|;\s*)hub=(\w{1,64}\.[0-9a-f]{64})\s*(?:;|$)", cookie, re.ASCII)       # valeur entière, sans rien derrière : `hub=<id>.<mac>.junk` ne passe pas
-        bearer = re.fullmatch(r"Bearer\s+(\S+)", self.headers.get("Authorization", "").strip(), re.IGNORECASE)
-        for token in (found.group(1) if found else None, bearer.group(1) if bearer else None):
-            row = accounts.user_for_token(self.hub.db, self.hub.secret, token) if token else None
-            if row is not None:
-                self.user = accounts.public(row)
-                return True
+        self.user = self.session_user()
+        if self.user is not None:
+            return True
         if path.startswith(("/media/", "/img/", "/book/", "/api/subs/")) and "token" in query:
             return hmac.compare_digest(query["token"].encode("utf-8", "replace"), self.hub.media_token().encode())
         return False
+
+    def find_route(self, path):
+        """(fonction, correspondance) de la première route qui répond à la méthode et au chemin ; HEAD répond aux routes GET. None s'il n'y en a pas."""
+        for method, pattern, func in self.routes:
+            if method == self.command or (self.command == "HEAD" and method == "GET"):
+                found = pattern.fullmatch(path)
+                if found:
+                    return func, found
+        return None
 
     def dispatch(self):
         split = urlsplit(self.path)
@@ -331,12 +360,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise HttpError(401, "connexion requise")
                 self.send_body(b"", "text/plain", 302, {"Location": "/login"})
                 return
-            for method, pattern, func in self.routes:
-                if method == self.command or (self.command == "HEAD" and method == "GET"):
-                    found = pattern.fullmatch(path)
-                    if found:
-                        func(self, found, query)
-                        return
+            found = self.find_route(path)
+            if found:
+                found[0](self, found[1], query)
+                return
             if self.command in ("GET", "HEAD") and not path.startswith(("/api/", "/media/", "/img/", "/book/")):         # un chemin inconnu d'un fichier servi est un 404, pas la page d'accueil
                 self.static(path)
                 return
@@ -410,16 +437,21 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     # --- Fichiers du site -------------------------------------------------
-    def static(self, path):
+    def static_target(self, path):
+        """Le fichier du site que demande `path` ; 404 s'il sort du dossier du site ou si c'est un fichier (avec une extension) qui n'existe pas, sinon la page d'accueil."""
         web = self.hub.cfg.web.resolve()
         name = path.lstrip("/") or "index.html"
         target = (web / name).resolve()
         if web not in target.parents and target != web:
             raise HttpError(404, "introuvable")
-        if not target.is_file():
-            if "." in name.rsplit("/", 1)[-1]:
-                raise HttpError(404, "introuvable")
-            target = web / "index.html"          # route de l'application : elle se débrouille côté navigateur
+        if target.is_file():
+            return target
+        if "." in name.rsplit("/", 1)[-1]:
+            raise HttpError(404, "introuvable")
+        return web / "index.html"          # route de l'application : elle se débrouille côté navigateur
+
+    def static(self, path):
+        target = self.static_target(path)
         stamp = f'"{int(target.stat().st_mtime)}-{target.stat().st_size}"'
         if self.headers.get("If-None-Match") == stamp:
             self.send_body(b"", "text/plain", 304, {"ETag": stamp})
@@ -462,8 +494,8 @@ def session_cookie(hub, row):
     return f"hub={hub.session_token(row)}; Path=/; Max-Age={SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax"
 
 
-@route("POST", r"/api/login")
-def login(h, m, q):
+def login_credentials(h):
+    """(nom, mot de passe) du formulaire de connexion (application/x-www-form-urlencoded) ou d'un corps JSON ; 4 Ko au plus sont lus."""
     h.body_taken = True
     length = h.content_length()
     if length > 4096:
@@ -471,11 +503,15 @@ def login(h, m, q):
     raw = h.rfile.read(min(length, 4096)).decode("utf-8", "replace")
     if "=" in raw and not raw.lstrip().startswith("{"):
         form = parse_qs(raw)
-        password, name = form.get("password", [""])[0], form.get("user", [""])[0]
-    else:
-        body = safe_json(raw, {})
-        body = body if isinstance(body, dict) else {}
-        password, name = body.get("password", ""), body.get("user")
+        return form.get("user", [""])[0], form.get("password", [""])[0]
+    body = safe_json(raw, {})
+    body = body if isinstance(body, dict) else {}
+    return body.get("user"), body.get("password", "")
+
+
+@route("POST", r"/api/login")
+def login(h, m, q):
+    name, password = login_credentials(h)
     who = h.client_address[0]
     try:
         wait = h.hub.throttle.delay(who) if h.hub.auth() else 0
@@ -673,6 +709,35 @@ def dismiss_key(profile, item_id):
     return f"dismiss:{profile}:{item_id}"
 
 
+def progress_card(entry, item, position, total, resume, updated):
+    card = entry_json(entry)
+    card.update({"item": summary(item), "position": position, "total": total or entry["duration"], "resume": resume, "updated": updated})
+    return card
+
+
+def finished_card(hub, profile, row, item):
+    """Un fichier fini ne se reprend pas : on propose l'épisode ou le tome qui le suit, s'il y en a un et qu'il n'est pas fini lui aussi. Un film fini n'a rien à proposer."""
+    if item["type"] == "movie":
+        return None
+    following = next_entry(hub, row)
+    if following is None:
+        return None
+    progress = hub.db.progress_for(profile, [following["id"]]).get(following["id"])
+    if progress is not None and progress["done"]:
+        return None
+    position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
+    return progress_card(following, item, position, total, False, row["updated"])
+
+
+def resume_card(hub, profile, row, item):
+    """La carte « Reprendre » d'un fichier de la progression, ou None quand il n'y a rien à proposer (fini sans suite, à peine commencé)."""
+    if row["done"]:
+        return finished_card(hub, profile, row, item)
+    if row["position"] < (1 if row["kind"] == "book" else RESUME_MIN):
+        return None
+    return progress_card(row, item, row["position"], row["pduration"], True, row["updated"])
+
+
 def continue_row(hub, profile):
     """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant."""
     rows = hub.db.query(
@@ -686,26 +751,9 @@ def continue_row(hub, profile):
         if row["updated"] <= hub.db.kv_get(dismiss_key(profile, row["item_id"]), -1):
             continue
         item = hub.db.one("SELECT * FROM items WHERE id=?", (row["item_id"],))
-        if item is None:
+        card = resume_card(hub, profile, row, item) if item is not None else None
+        if card is None:
             continue
-        entry, resume = row, True
-        if row["done"]:
-            if item["type"] == "movie":
-                continue
-            following = next_entry(hub, row)
-            if following is None:
-                continue
-            progress = hub.db.progress_for(profile, [following["id"]]).get(following["id"])
-            if progress is not None and progress["done"]:
-                continue
-            entry, resume = following, False
-            position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
-        else:
-            if row["position"] < (1 if row["kind"] == "book" else RESUME_MIN):
-                continue
-            position, total = row["position"], row["pduration"]
-        card = entry_json(entry)
-        card.update({"item": summary(item), "position": position, "total": total or entry["duration"], "resume": resume, "updated": row["updated"]})
         out.append(card)
         if len(out) >= 24:
             break
@@ -802,11 +850,7 @@ def saga_groups(rows, custom):
     `custom` : les sagas du fichier (voir sagas.py). Elles passent avant la collection de l'étiquette, et la première écrite avant les suivantes : un film n'a qu'une vignette. Une saga du fichier qui porte le nom d'une saga de l'étiquette la remplace (page, fiche et grille s'accordent sur ce que ce nom désigne), même si elle n'a qu'un film ici.
     """
     sagas = {name: films for name, films in custom.items() if len(films) > 1}
-    tagged = {}
-    for row in rows:
-        if row["type"] == "movie" and row["grp"] and row["grp"] not in custom:
-            tagged.setdefault(row["grp"], []).append(row)
-    tagged = {name: sorted(films, key=release_key) for name, films in tagged.items() if len(films) > 1}
+    tagged = tagged_groups(rows, custom)
     home = {}
     for name in sagas:
         for film, _ in sagas[name]:
@@ -816,6 +860,15 @@ def saga_groups(rows, custom):
             home.setdefault(row["id"], row["grp"])
     sagas.update({name: list(zip(films, range(1, len(films) + 1))) for name, films in tagged.items()})
     return sagas, home
+
+
+def tagged_groups(rows, custom):
+    """{nom: films par date de sortie} des sagas de l'étiquette qui ont au moins deux films et que `custom` (les sagas du fichier) ne remplace pas."""
+    tagged = {}
+    for row in rows:
+        if row["type"] == "movie" and row["grp"] and row["grp"] not in custom:
+            tagged.setdefault(row["grp"], []).append(row)
+    return {name: sorted(films, key=release_key) for name, films in tagged.items() if len(films) > 1}
 
 
 def collapse_sagas(rows, seen, custom):
@@ -1025,6 +1078,50 @@ def video_links(item, meta):
     return [{"label": "TMDB", "url": f"{tmdb.WEB_BASE}/{kind}/{found.group(2)}"}]
 
 
+ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
+                  "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries")
+
+
+def tagged_saga(hub, item, movies, seen, info):
+    """(films, manquants) de la saga de l'étiquette d'un film : numérotés d'après la collection TMDB quand on la connaît, sinon par date de sortie."""
+    tagged = sorted((r for r in movies if r["grp"] == item["grp"]), key=release_key)
+    ranks, absent = missing.tagged(item["grp"], tagged, info, set(hub.sagas.ignored()))
+    if ranks is not None:
+        tagged.sort(key=lambda r: ranks[r["id"]])
+    return number_films([with_seen(r, seen) for r in tagged], ranks), absent
+
+
+def file_saga(name, films, listed, seen, owned, info):
+    """Une saga de `sagas.json` : ses films numérotés d'après leur place dans la liste, et ceux de la liste qu'on n'a pas."""
+    numbered = number_films([with_seen(f, seen) for f, _ in films], {f["id"]: rank for f, rank in films})
+    return {"name": name, "films": numbered, "missing": missing.listed(listed.get(name, []), owned, info)}
+
+
+def movie_sagas(hub, item, lib, user):
+    """Ses sagas : celle de l'étiquette d'abord (`saga`, gardée pour les clients d'avant `sagas`), puis celles du fichier (sagas.py), chacune avec les films qui la composent et ceux qui lui manquent."""
+    movies = hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (item["lib"],))
+    seen = seen_counts(hub, user, lib.id)
+    custom = hub.sagas.of_movies(movies)
+    mine = {name: films for name, films in custom.items() if any(f["id"] == item["id"] for f, _ in films)}
+    info, owned = (missing.load(hub.db), sagafile.by_tmdb(movies)) if item["grp"] or mine else (None, None)          # TMDB ne sert que s'il y a une saga
+    out, sagas = {}, []
+    if item["grp"]:
+        out["saga"], absent = tagged_saga(hub, item, movies, seen, info)
+        if item["grp"] not in custom:                   # une saga du fichier de même nom la remplace : c'est elle que ce nom désigne dans la grille
+            sagas.append({"name": item["grp"], "films": out["saga"], "missing": absent})
+    listed = dict(hub.sagas.all())
+    sagas += [file_saga(name, films, listed, seen, owned, info) for name, films in mine.items()]
+    sagas = visible_sagas(sagas)
+    if sagas:
+        out["sagas"] = sagas
+    return out
+
+
+def visible_sagas(sagas):
+    """Les sagas de plus d'un film (présents ou manquants), sans la liste des manquants quand elle est vide."""
+    return [{k: v for k, v in s.items() if v or k != "missing"} for s in sagas if len(s["films"]) + len(s["missing"]) > 1]
+
+
 @route("GET", r"/api/item/(\w+)")
 def api_item(h, m, q):
     hub = h.hub
@@ -1035,10 +1132,7 @@ def api_item(h, m, q):
     meta = safe_json(item["meta"], {})
     out = summary(item)
     out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
-    for key in ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
-                "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries"):
-        if meta.get(key) not in (None, "", []):
-            out[key] = meta[key]
+    out.update({key: meta[key] for key in ITEM_META_KEYS if meta.get(key) not in (None, "", [])})
     links = video_links(item, meta)
     if links:
         out["links"] = links
@@ -1047,27 +1141,7 @@ def api_item(h, m, q):
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
     if item["type"] == "movie":
-        movies = hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (item["lib"],))
-        seen = seen_counts(hub, h.user["id"], lib.id)
-        sagas = []                  # ses sagas : celle de l'étiquette d'abord, puis celles du fichier (sagas.py), chacune avec les films qui la composent et ceux qui lui manquent
-        custom = hub.sagas.of_movies(movies)
-        mine = {name: films for name, films in custom.items() if any(f["id"] == item["id"] for f, _ in films)}
-        info, owned = (missing.load(hub.db), sagafile.by_tmdb(movies)) if item["grp"] or mine else (None, None)          # TMDB ne sert que s'il y a une saga
-        if item["grp"]:
-            tagged = sorted((r for r in movies if r["grp"] == item["grp"]), key=release_key)
-            ranks, absent = missing.tagged(item["grp"], tagged, info, set(hub.sagas.ignored()))
-            if ranks is not None:
-                tagged.sort(key=lambda r: ranks[r["id"]])
-            out["saga"] = number_films([with_seen(r, seen) for r in tagged], ranks)       # la saga de l'étiquette seule : gardée pour les clients d'avant `sagas`
-            if item["grp"] not in custom:                   # une saga du fichier de même nom la remplace : c'est elle que ce nom désigne dans la grille
-                sagas.append({"name": item["grp"], "films": out["saga"], "missing": absent})
-        ids = dict(hub.sagas.all())
-        for name, films in mine.items():
-            numbered = number_films([with_seen(f, seen) for f, _ in films], {f["id"]: rank for f, rank in films})
-            sagas.append({"name": name, "films": numbered, "missing": missing.listed(ids.get(name, []), owned, info)})
-        sagas = [{k: v for k, v in s.items() if v or k != "missing"} for s in sagas if len(s["films"]) + len(s["missing"]) > 1]
-        if sagas:
-            out["sagas"] = sagas
+        out.update(movie_sagas(hub, item, lib, h.user["id"]))
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
     h.send_json(out)
@@ -1150,6 +1224,18 @@ def photo_box(q):
         raise HttpError(400, str(e))
 
 
+def artist_tracks(hub, rows, name):
+    """(pistes, {genre: nombre d'albums}) de tous les albums d'un artiste, les pistes dans l'ordre de chaque album."""
+    tracks, genres = [], {}
+    for row in rows:
+        for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
+            tracks.append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"],
+                           "cover": urls.item_cover(row["id"]), "file": urls.entry_file(entry["id"])})
+        for genre in safe_json(row["genres"], []):
+            genres[genre] = genres.get(genre, 0) + 1
+    return tracks, genres
+
+
 @route("GET", r"/api/artist/([\w-]+)/(\w+)")
 def api_artist(h, m, q):
     """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent, photo comprise (une fois les fiches demandées dans Gestion)."""
@@ -1157,14 +1243,8 @@ def api_artist(h, m, q):
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     seen = seen_counts(hub, h.user["id"], lib.id)
     name = rows[0]["grp"] or "Artiste inconnu"
-    out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": []}
-    genres = {}
-    for row in rows:
-        for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
-            out["tracks"].append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"],
-                                "cover": urls.item_cover(row["id"]), "file": urls.entry_file(entry["id"])})
-        for genre in safe_json(row["genres"], []):
-            genres[genre] = genres.get(genre, 0) + 1
+    tracks, genres = artist_tracks(hub, rows, name)
+    out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": tracks}
     out["genres"] = [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
     kept = artist_kept(hub, rows)
@@ -1298,11 +1378,15 @@ def api_item_seen(h, m, q):
 # ---------------------------------------------------------------------------
 # Playlists
 # ---------------------------------------------------------------------------
-def playlist_call(func, *args):
+def module_call(failure, func, *args):
+    """Appelle `func` ; l'erreur `failure` d'un module (elle porte un `status` et un `message`) devient la réponse HTTP."""
     try:
         return func(*args)
-    except playlists.PlaylistError as e:
+    except failure as e:
         raise HttpError(e.status, e.message)
+
+
+playlist_call = partial(module_call, playlists.PlaylistError)
 
 
 @route("GET", r"/api/playlists")
@@ -1352,16 +1436,22 @@ def is_finished(kind, position, duration):
     return position / duration >= WATCHED_AT or duration - position <= min(WATCHED_TAIL, duration * 0.08)
 
 
-@route("POST", r"/api/progress")
-def api_progress(h, m, q):
-    body = h.body_json()
-    entry = h.hub.entry(str(body.get("entry", "")))
+def progress_numbers(body):
+    """(position, durée) envoyées par le lecteur, positives ; 400 si ce ne sont pas des nombres finis."""
     try:
         position, duration = max(0.0, float(body.get("position", 0))), max(0.0, float(body.get("duration", 0)))
     except (TypeError, ValueError):
         raise HttpError(400, "position invalide")
     if not (math.isfinite(position) and math.isfinite(duration)):          # `Infinity` passe json.loads : stocké, il rendrait la fiche du compte illisible pour JSON.parse
         raise HttpError(400, "position invalide")
+    return position, duration
+
+
+@route("POST", r"/api/progress")
+def api_progress(h, m, q):
+    body = h.body_json()
+    entry = h.hub.entry(str(body.get("entry", "")))
+    position, duration = progress_numbers(body)
     duration = duration or entry["duration"]
     done = bool(body.get("done")) or is_finished(entry["kind"], position, duration)
     if entry["kind"] == "audio":                 # la musique n'a pas de reprise : seulement « écouté »
@@ -1435,6 +1525,59 @@ def subtitle_list(hub, entry, probe, path):
     return out
 
 
+def play_settings(body):
+    """(capacités du lecteur, piste audio demandée, débit et hauteur demandés) d'après le corps de la requête ; 400 si un réglage n'est pas un nombre."""
+    caps = body.get("caps") or {}
+    try:
+        audio = int(body["audio"]) if body.get("audio") is not None else None
+        return caps, audio, int(body.get("max_kbps") or 0), int(body.get("max_height") or 0)
+    except (TypeError, ValueError):
+        raise HttpError(400, "réglages invalides")
+
+
+def play_url(entry, decision, caps, kbps, height):
+    """Où le lecteur va chercher le fichier : tel quel (avec des Range) ou converti à la volée par /stream."""
+    base = f"/media/{entry['id']}"
+    if decision["mode"] == "direct":
+        return f"{base}/file"
+    args = {"m": decision["mode"], "ca": int(decision["copy_audio"]), "k": kbps, "h": height, "c": min(int(caps.get("channels") or 2), 6)}
+    if decision["audio"] is not None:
+        args["a"] = decision["audio"]
+    return f"{base}/stream?" + "&".join(f"{k}={v}" for k, v in args.items())
+
+
+def default_height(decision, video, height):
+    """La hauteur demandée ; à défaut, 1080 p pour un 4K à convertir (en pleine taille, il ferait ramer le processeur pour rien)."""
+    if decision["mode"] == "transcode" and not height and video.get("height", 0) > 1080:
+        return 1080
+    return height
+
+
+def show_title(hub, entry):
+    """Le titre de la série d'un épisode ; vide pour un film."""
+    item = hub.db.one("SELECT title, type FROM items WHERE id=?", (entry["item_id"],))
+    return item["title"] if item and item["type"] == "show" else ""
+
+
+def play_warning(decision, video):
+    if decision["mode"] == "transcode" and video.get("height", 0) >= 2000 and video.get("codec") in ("hevc", "av1"):
+        return "Image 4K à convertir : le serveur n'a pas de carte vidéo pour cela, la lecture risque de saccader. Le débit demandé peut être baissé."
+    return ""
+
+
+def resume_position(hub, user, entry):
+    """Où reprendre : la position enregistrée, tant que le fichier n'est pas fini et qu'on n'en est pas au tout début."""
+    progress = hub.db.progress_for(user, [entry["id"]]).get(entry["id"])
+    return progress["position"] if progress and not progress["done"] and progress["position"] >= RESUME_MIN else 0
+
+
+def next_summary(following):
+    """Le fichier vidéo qui suit celui-ci (épisode suivant, partie suivante), ou None."""
+    if following and following["kind"] == "video":
+        return {"id": following["id"], "title": following["title"], "season": following["season"], "number": following["number"]}
+    return None
+
+
 @route("POST", r"/api/play/(\w+)")
 def api_play(h, m, q):
     """Le plan de lecture d'un fichier vidéo pour CE lecteur. Le client l'appelle à l'ouverture, puis à chaque changement de piste audio."""
@@ -1445,40 +1588,19 @@ def api_play(h, m, q):
     body = h.body_json()
     lib, path = hub.path_of(entry)
     probe = probe_of(hub, entry)
-    caps = body.get("caps") or {}
-    try:
-        audio = int(body["audio"]) if body.get("audio") is not None else None
-        kbps, height = int(body.get("max_kbps") or 0), int(body.get("max_height") or 0)
-    except (TypeError, ValueError):
-        raise HttpError(400, "réglages invalides")
+    caps, audio, kbps, height = play_settings(body)
     decision = prober.plan(probe, caps, audio, kbps, height)
     chosen = decision["audio"]
     video = probe.get("video") or {}
-    if decision["mode"] == "transcode" and not height and video.get("height", 0) > 1080:
-        height = 1080                  # convertir un 4K en pleine taille ferait ramer le processeur pour rien : 1080p par défaut
-    base = f"/media/{entry['id']}"
-    if decision["mode"] == "direct":
-        url = f"{base}/file"
-    else:
-        args = {"m": decision["mode"], "ca": int(decision["copy_audio"]), "k": kbps, "h": height, "c": min(int(caps.get("channels") or 2), 6)}
-        if chosen is not None:
-            args["a"] = chosen
-        url = f"{base}/stream?" + "&".join(f"{k}={v}" for k, v in args.items())
-    warning = ""
-    if decision["mode"] == "transcode" and video.get("height", 0) >= 2000 and video.get("codec") in ("hevc", "av1"):
-        warning = "Image 4K à convertir : le serveur n'a pas de carte vidéo pour cela, la lecture risque de saccader. Le débit demandé peut être baissé."
-    progress = hub.db.progress_for(h.user["id"], [entry["id"]]).get(entry["id"])
-    resume = progress["position"] if progress and not progress["done"] and progress["position"] >= RESUME_MIN else 0
-    following = next_entry(hub, entry)
-    duration = probe["duration"] or entry["duration"]
-    item = hub.db.one("SELECT title, type FROM items WHERE id=?", (entry["item_id"],))
+    height = default_height(decision, video, height)
     h.send_json({
-        "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": item["title"] if item and item["type"] == "show" else "", "season": entry["season"], "number": entry["number"],
-        "mode": decision["mode"], "why": decision["why"], "url": url, "seekable": decision["mode"] == "direct", "duration": duration, "resume": resume, "warning": warning,
+        "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": show_title(hub, entry), "season": entry["season"], "number": entry["number"],
+        "mode": decision["mode"], "why": decision["why"], "url": play_url(entry, decision, caps, kbps, height), "seekable": decision["mode"] == "direct",
+        "duration": probe["duration"] or entry["duration"], "resume": resume_position(hub, h.user["id"], entry), "warning": play_warning(decision, video),
         "audio": [{"index": t["index"], "label": track_label(t), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
         "subs": subtitle_list(hub, entry, probe, path),
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
-        "next": {"id": following["id"], "title": following["title"], "season": following["season"], "number": following["number"]} if following and following["kind"] == "video" else None,
+        "next": next_summary(next_entry(hub, entry)),
     })
 
 
@@ -1492,6 +1614,66 @@ def media_file(h, m, q):
     h.send_file(path, headers=extra)
 
 
+def query_number(q, name, cast=int, default=0):
+    try:
+        return cast(q.get(name, default))
+    except ValueError:
+        raise HttpError(400, f"paramètre {name} invalide")
+
+
+def stream_command(hub, path, probe, q):
+    """La commande ffmpeg qui répond à la requête : copie de l'image et du son (remux) ou ré-encodage (transcode), départ, plafonds et nombre de voies demandés."""
+    mode = "transcode" if q.get("m") == "transcode" else "remux"
+    audio = query_number(q, "a") if "a" in q else None
+    decision = {"mode": mode, "audio": audio if probe["audio"] else None, "copy_video": mode == "remux", "copy_audio": mode == "remux" and query_number(q, "ca", int, 1) == 1}
+    return prober.ffmpeg_command(hub.cfg.ffmpeg, path, probe, decision, start=max(0.0, query_number(q, "start", float, 0.0)), max_kbps=query_number(q, "k"),
+                                 max_height=query_number(q, "h"), channels=max(1, min(6, query_number(q, "c", int, 2))))
+
+
+def first_chunk(proc, errors):
+    """Les premiers octets que ffmpeg produit ; 500, avec sa dernière ligne d'erreur, s'il n'en produit pas."""
+    first = proc.stdout.read1(CHUNK)
+    if not first:
+        proc.wait(timeout=5)
+        time.sleep(0.05)
+        raise HttpError(500, "ffmpeg n'a rien produit : " + ((errors[0].strip().splitlines() or ["erreur inconnue"])[-1] if errors else "erreur inconnue"))
+    return first
+
+
+def send_stream(h, proc, first):
+    h.send_response(200)
+    h.send_header("Content-Type", "video/mp4")
+    h.send_header("Cache-Control", "no-store")
+    h.send_header("Accept-Ranges", "none")
+    h.send_header("Connection", "close")
+    h.end_headers()
+    h.close_connection = True
+    if h.command == "HEAD":
+        return
+    h.connection.settimeout(3600)
+    h.wfile.write(first)
+    while True:
+        chunk = proc.stdout.read1(CHUNK)
+        if not chunk:
+            break
+        h.wfile.write(chunk)
+
+
+def stop_stream(proc):
+    """Arrête ffmpeg s'il tourne encore et ferme ses tubes."""
+    if proc.poll() is None:
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.SubprocessError:
+        pass
+    for pipe in (proc.stdout, proc.stderr):
+        try:
+            pipe.close()
+        except OSError:
+            pass
+
+
 @route("GET", r"/media/(\w+)/stream")
 def media_stream(h, m, q):
     """Un MP4 fragmenté produit à la volée. Pas de Content-Length, pas de Range : pour avancer, le client redemande avec ?start=."""
@@ -1500,18 +1682,7 @@ def media_stream(h, m, q):
     lib, path = hub.path_of(entry)
     if not hub.cfg.ffmpeg:
         raise HttpError(501, "ffmpeg est introuvable sur le serveur : seule la lecture directe est possible.")
-    probe = probe_of(hub, entry)
-    mode = "transcode" if q.get("m") == "transcode" else "remux"
-
-    def number(name, cast=int, default=0):
-        try:
-            return cast(q.get(name, default))
-        except ValueError:
-            raise HttpError(400, f"paramètre {name} invalide")
-    audio = number("a") if "a" in q else None
-    decision = {"mode": mode, "audio": audio if probe["audio"] else None, "copy_video": mode == "remux", "copy_audio": mode == "remux" and number("ca", int, 1) == 1}
-    cmd = prober.ffmpeg_command(hub.cfg.ffmpeg, path, probe, decision, start=max(0.0, number("start", float, 0.0)), max_kbps=number("k"), max_height=number("h"),
-                                channels=max(1, min(6, number("c", int, 2))))
+    cmd = stream_command(hub, path, probe_of(hub, entry), q)
     if not hub.streams.acquire(blocking=False):
         raise HttpError(503, f"{hub.cfg.max_streams} conversions en cours : attends la fin de l'une d'elles.")
     hub.active += 1
@@ -1520,40 +1691,10 @@ def media_stream(h, m, q):
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
         errors = []
         threading.Thread(target=lambda: errors.append(proc.stderr.read().decode("utf-8", "replace")), daemon=True).start()
-        first = proc.stdout.read1(CHUNK)
-        if not first:
-            proc.wait(timeout=5)
-            time.sleep(0.05)
-            raise HttpError(500, "ffmpeg n'a rien produit : " + ((errors[0].strip().splitlines() or ["erreur inconnue"])[-1] if errors else "erreur inconnue"))
-        h.send_response(200)
-        h.send_header("Content-Type", "video/mp4")
-        h.send_header("Cache-Control", "no-store")
-        h.send_header("Accept-Ranges", "none")
-        h.send_header("Connection", "close")
-        h.end_headers()
-        h.close_connection = True
-        if h.command == "HEAD":
-            return
-        h.connection.settimeout(3600)
-        h.wfile.write(first)
-        while True:
-            chunk = proc.stdout.read1(CHUNK)
-            if not chunk:
-                break
-            h.wfile.write(chunk)
+        send_stream(h, proc, first_chunk(proc, errors))
     finally:
         if proc is not None:
-            if proc.poll() is None:
-                proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.SubprocessError:
-                pass
-            for pipe in (proc.stdout, proc.stderr):
-                try:
-                    pipe.close()
-                except OSError:
-                    pass
+            stop_stream(proc)
         hub.active -= 1
         hub.streams.release()
 
@@ -1654,6 +1795,15 @@ def book_page(h, m, q):
     h.send_body(data, sniff(data), 200, {"Cache-Control": "private, max-age=86400"}, h.command == "HEAD")
 
 
+def epub_mime(data, mime):
+    """Le type d'un fichier de l'epub : le XML bien formé se sert en XHTML, le reste en HTML ; l'encodage est dit pour tout ce qui est du texte."""
+    if mime in ("application/xhtml+xml", "text/html", "image/svg+xml") or data[:5] == b"<?xml":
+        mime = "application/xhtml+xml" if mime != "image/svg+xml" and bookmedia.valid_xml(data) else ("text/html" if mime != "image/svg+xml" else mime)
+    if mime.startswith("text/") or mime.endswith("xml") or mime.endswith("css"):
+        mime += "; charset=utf-8"
+    return mime
+
+
 @route("GET", r"/book/(\w+)/epub/(.+)")
 def book_epub(h, m, q):
     hub = h.hub
@@ -1663,10 +1813,7 @@ def book_epub(h, m, q):
         data, mime = bookmedia.epub_member(path, m.group(2))
     except BookError as e:
         raise HttpError(404, str(e))
-    if mime in ("application/xhtml+xml", "text/html", "image/svg+xml") or data[:5] == b"<?xml":
-        mime = "application/xhtml+xml" if mime != "image/svg+xml" and bookmedia.valid_xml(data) else ("text/html" if mime != "image/svg+xml" else mime)
-    if mime.startswith("text/") or mime.endswith("xml") or mime.endswith("css"):
-        mime += "; charset=utf-8"
+    mime = epub_mime(data, mime)
     # Le contenu d'un livre est celui d'un tiers : pas de script, pas de requête vers l'extérieur.
     csp = "default-src 'self' data: blob:; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'"
     h.send_body(data, mime, 200, {"Cache-Control": "private, max-age=86400", "Content-Security-Policy": csp}, h.command == "HEAD")
@@ -1675,11 +1822,7 @@ def book_epub(h, m, q):
 # ---------------------------------------------------------------------------
 # Sagas composées à la main (sagas.json, voir sagas.py) : réservées à l'administrateur
 # ---------------------------------------------------------------------------
-def saga_call(func, *args):
-    try:
-        return func(*args)
-    except sagafile.SagaError as e:
-        raise HttpError(e.status, e.message)
+saga_call = partial(module_call, sagafile.SagaError)
 
 
 def movie_rows(hub):
@@ -1730,25 +1873,42 @@ def api_sagas_save(h, m, q):
     h.send_json(sagas_json(h.hub))
 
 
-@route("POST", r"/api/sagas/add")
-def api_sagas_add(h, m, q):
-    """Ajoute des films à la fin d'une saga, créée au besoin : `films` (identifiants TMDB), puis `items` (éléments de la médiathèque : c'est ce que la fiche d'un film envoie)."""
-    require_admin(h)
-    body = body_dict(h)
+def listed_in(body, key):
+    """La liste `key` du corps de la requête ; vide si elle n'y est pas ou n'en est pas une."""
+    return body.get(key) if isinstance(body.get(key), list) else []
+
+
+def listed_film_ids(values):
+    """Les identifiants TMDB (nombre ou « movie/27205 ») de `values` ; 400 au premier illisible."""
     ids = []
-    for value in body.get("films") if isinstance(body.get("films"), list) else []:
+    for value in values:
         ident = sagafile.film_id(value)
         if ident is None:
             raise HttpError(400, f"identifiant TMDB illisible ({value!r})")
         ids.append(ident)
-    for value in body.get("items") if isinstance(body.get("items"), list) else []:
-        row = h.hub.db.one("SELECT * FROM items WHERE id=?", (str(value),))
+    return ids
+
+
+def item_film_ids(db, values):
+    """Les identifiants TMDB des films de la médiathèque désignés par leur élément ; 404 pour un élément qui n'est pas un film, 400 pour un film sans identifiant."""
+    ids = []
+    for value in values:
+        row = db.one("SELECT * FROM items WHERE id=?", (str(value),))
         if row is None or row["type"] != "movie":
             raise HttpError(404, "film inconnu")
         found = sagafile.by_tmdb([row])
         if not found:
             raise HttpError(400, f"« {row['title']} » n'a pas d'identifiant TMDB : étiquette-le avec Metadata.py")
         ids += list(found)
+    return ids
+
+
+@route("POST", r"/api/sagas/add")
+def api_sagas_add(h, m, q):
+    """Ajoute des films à la fin d'une saga, créée au besoin : `films` (identifiants TMDB), puis `items` (éléments de la médiathèque : c'est ce que la fiche d'un film envoie)."""
+    require_admin(h)
+    body = body_dict(h)
+    ids = listed_film_ids(listed_in(body, "films")) + item_film_ids(h.hub.db, listed_in(body, "items"))
     if not ids:
         raise HttpError(400, "aucun film à ajouter")
     name = saga_call(h.hub.sagas.add, body.get("name"), ids)

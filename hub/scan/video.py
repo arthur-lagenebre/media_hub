@@ -40,21 +40,8 @@ def _split_actor(text):
     return (found.group(1), found.group(2)) if found else (text, "")
 
 
-def read_file(path):
-    """(infos tirées des tags, durée en secondes) d'un fichier vidéo. Un fichier qui n'est pas un .mkv, ou qui n'a pas de tags, rend {}.
-
-    Un .mkv qu'on n'arrive pas à lire (erreur d'E/S sur le NAS, fichier tronqué ou abîmé) rend `{"unreadable": True}` : il apparaît quand même, sous le nom de son dossier, et sera relu au scan suivant (voir Reader) au lieu de rester « non étiqueté » pour toujours. Il ne fait jamais échouer le scan.
-    """
-    if path.suffix.lower() != ".mkv":
-        return {}, 0
-    try:
-        tags, minutes = ebml.read_metadata(path, ordered=True)
-    except Exception:           # le lecteur ne rattrape que les erreurs d'E/S : un fichier abîmé peut lever bien autre chose
-        tags = minutes = None
-    if tags is None:
-        return {"unreadable": True}, 0
-    if not tags:
-        return {}, (minutes or 0) * 60
+def _tag_info(tags):
+    """Ce que disent les tags Matroska d'un fichier (film ou épisode) ; ce qui est vide est omis."""
     info = {
         "title": _first(tags, 50, "TITLE"),
         "synopsis": _first(tags, 50, "SYNOPSIS") or _first(tags, 50, "SUMMARY"),
@@ -71,9 +58,23 @@ def read_file(path):
         "season_title": _first(tags, 60, "TITLE"),
         "has_tags": True,
     }
-    return {k: v for k, v in info.items() if v not in ("", None, [])}, (minutes or 0) * 60
+    return {k: v for k, v in info.items() if v not in ("", None, [])}
 
 
+def read_file(path):
+    """(infos tirées des tags, durée en secondes) d'un fichier vidéo. Un fichier qui n'est pas un .mkv, ou qui n'a pas de tags, rend {}.
+
+    Un .mkv qu'on n'arrive pas à lire (erreur d'E/S sur le NAS, fichier tronqué ou abîmé) rend `{"unreadable": True}` : il apparaît quand même, sous le nom de son dossier, et sera relu au scan suivant (voir Reader) au lieu de rester « non étiqueté » pour toujours. Il ne fait jamais échouer le scan.
+    """
+    if path.suffix.lower() != ".mkv":
+        return {}, 0
+    try:
+        tags, minutes = ebml.read_metadata(path, ordered=True)
+    except Exception:           # le lecteur ne rattrape que les erreurs d'E/S : un fichier abîmé peut lever bien autre chose
+        tags = minutes = None
+    if tags is None:
+        return {"unreadable": True}, 0
+    return (_tag_info(tags) if tags else {}), (minutes or 0) * 60
 def _stat(path):
     try:
         st = path.stat()
@@ -118,38 +119,55 @@ def clean_name(name):
 # ---------------------------------------------------------------------------
 # Films
 # ---------------------------------------------------------------------------
+def _movie_parts(reader, lib, movie):
+    """[(chemin, rel, taille, date, infos, durée)] des fichiers lisibles d'un film."""
+    parts = []
+    for path in movie.files:
+        rel = path.relative_to(lib.path).as_posix()
+        result = reader(path, rel)
+        if result:
+            parts.append((path, rel, *result))
+    return parts
+
+
+def _movie_meta(lib, movie, info, order, parts):
+    image = folder_image(movie.folder) if movie.owns_folder else ""
+    return {
+        "tmdb": info.get("tmdb", ""), "directors": info.get("directors", []), "writers": info.get("writers", []),
+        "actors": info.get("actors", []), "date": info.get("date", ""), "part": info.get("collection_part") if info.get("collection_part") is not None else order,
+        "image": (movie.folder.relative_to(lib.path) / image).as_posix() if image else "", "tagged": bool(info.get("has_tags")),
+        "folder": movie.folder.relative_to(lib.path).as_posix() if movie.folder != lib.path else "",
+        "duration": sum(p[5] for p in parts),
+    }
+
+
+def _movie_item(lib, movie, parts):
+    info = parts[0][4]
+    guessed, guessed_year, order = naming.parse_title_year(naming.extract_tmdb_id(movie.rawname)[1])
+    title = info.get("title") or guessed or movie.rawname
+    year = (info.get("date") or "")[:4] or guessed_year or ""
+    key = parts[0][1] if len(parts) == 1 else movie.folder.relative_to(lib.path).as_posix() + "/" + parts[0][1]
+    return item_row(lib.id, key, "movie", title, year=year, summary=info.get("synopsis", ""), genres=info.get("genres", []),
+                    grp=info.get("collection", ""), meta=_movie_meta(lib, movie, info, order, parts), added=max(p[3] for p in parts), count=len(parts))
+
+
+def _movie_entries(lib, item, parts):
+    title = item["title"]
+    return [entry_row(lib.id, item["id"], rel, "video", title=title if len(parts) == 1 else f"{title} - partie {n}", number=n,
+                      duration=duration, size=size, mtime=mtime, meta={"info": pinfo})
+            for n, (path, rel, size, mtime, pinfo, duration) in enumerate(parts, 1)]
+
+
 def scan_movies(lib, known, enriched=None):
     reader = Reader(lib.id, known)
     items, entries = [], []
     for movie in naming.find_movies(lib.path):
-        parts = []
-        for path in movie.files:
-            rel = path.relative_to(lib.path).as_posix()
-            result = reader(path, rel)
-            if result:
-                parts.append((path, rel, *result))
+        parts = _movie_parts(reader, lib, movie)
         if not parts:
             continue
-        info = parts[0][4]
-        guessed, guessed_year, order = naming.parse_title_year(naming.extract_tmdb_id(movie.rawname)[1])
-        title = info.get("title") or guessed or movie.rawname
-        year = (info.get("date") or "")[:4] or guessed_year or ""
-        key = parts[0][1] if len(parts) == 1 else movie.folder.relative_to(lib.path).as_posix() + "/" + parts[0][1]
-        folder = movie.folder if movie.owns_folder else None
-        image = folder_image(folder) if folder else ""
-        meta = {
-            "tmdb": info.get("tmdb", ""), "directors": info.get("directors", []), "writers": info.get("writers", []),
-            "actors": info.get("actors", []), "date": info.get("date", ""), "part": info.get("collection_part") if info.get("collection_part") is not None else order,
-            "image": (movie.folder.relative_to(lib.path) / image).as_posix() if image else "", "tagged": bool(info.get("has_tags")),
-            "folder": movie.folder.relative_to(lib.path).as_posix() if movie.folder != lib.path else "",
-        }
-        meta["duration"] = sum(p[5] for p in parts)
-        item = item_row(lib.id, key, "movie", title, year=year, summary=info.get("synopsis", ""), genres=info.get("genres", []),
-                        grp=info.get("collection", ""), meta=meta, added=max(p[3] for p in parts), count=len(parts))
+        item = _movie_item(lib, movie, parts)
         items.append(item)
-        for n, (path, rel, size, mtime, pinfo, duration) in enumerate(parts, 1):
-            entries.append(entry_row(lib.id, item["id"], rel, "video", title=title if len(parts) == 1 else f"{title} - partie {n}", number=n,
-                                     duration=duration, size=size, mtime=mtime, meta={"info": pinfo}))
+        entries += _movie_entries(lib, item, parts)
     return items, entries, _Counts(reader.reused, reader.read)
 
 
@@ -188,50 +206,76 @@ def episode_title(path):
     return re.sub(r"^\s*(?:s\d{1,2}\s*e\d{1,3}|\d{1,3})\s*[-–.]?\s*", "", stem, flags=re.I).strip() or stem
 
 
+def _season_of(path, number, info):
+    """La saison d'un épisode : celle de son dossier ; posé à plat dans le dossier de la série, celle que dit son nom (S02E03), sinon son tag, sinon la première."""
+    if number is not None:
+        return number
+    guess = naming.P_SE.search(path.name)
+    return int(guess.group(1)) if guess else int(info.get("season") or 1)
+
+
+def _show_episodes(reader, lib, seasons):
+    """[(saison, chemin, rel, taille, date, infos, durée)] des épisodes lisibles d'une série."""
+    found = []
+    for season_dir, number in seasons:
+        for path in _videos(season_dir):
+            rel = path.relative_to(lib.path).as_posix()
+            result = reader(path, rel)
+            if result:
+                size, mtime, info, duration = result
+                found.append((_season_of(path, number, info), path, rel, size, mtime, info, duration))
+    return found
+
+
+def _season_images(lib, folder, seasons):
+    """{numéro de saison: image posée dans le dossier de la saison}."""
+    images = {}
+    for season_dir, number in seasons:
+        img = folder_image(season_dir) if number is not None and season_dir != folder else ""
+        if img:
+            images[str(number)] = (season_dir.relative_to(lib.path) / img).as_posix()
+    return images
+
+
+def _show_meta(lib, folder, seasons, found, pinned, extra):
+    image = folder_image(folder)
+    return {"tmdb_pinned": pinned or "", "image": (folder.relative_to(lib.path) / image).as_posix() if image else "", "seasons": sorted({f[0] for f in found}),
+            "season_images": _season_images(lib, folder, seasons), "folder": folder.relative_to(lib.path).as_posix(), "tagged": any(f[5].get("has_tags") for f in found),
+            **{k: v for k, v in extra.items() if k not in ("summary", "genres", "year", "title")}}
+
+
+def _show_item(lib, folder, container, seasons, found, enriched):
+    rel_dir = folder.relative_to(lib.path).as_posix()
+    pinned, name = naming.extract_tmdb_id(folder.name)
+    first = next((f[5] for f in found if f[5].get("collection")), {})
+    years = sorted((f[5].get("date") or "")[:4] for f in found if f[5].get("date"))
+    extra = enriched.get(make_id(lib.id, rel_dir), {})
+    return item_row(lib.id, rel_dir, "show", extra.get("title") or first.get("collection") or name, year=extra.get("year") or (years[0] if years else ""),
+                    summary=extra.get("summary", ""), genres=extra.get("genres", []), grp=container, meta=_show_meta(lib, folder, seasons, found, pinned, extra),
+                    added=max(f[4] for f in found), count=len(found))
+
+
+def _show_entries(lib, item, found):
+    entries = []
+    for season, path, rel, size, mtime, info, duration in sorted(found, key=lambda f: (f[0], f[5].get("number") or naming.detect_episode_number(f[1].name) or 9999, f[1].name.casefold())):
+        number = info.get("number")
+        if number is None:
+            number = naming.detect_episode_number(path.name)
+        entries.append(entry_row(lib.id, item["id"], rel, "video", title=info.get("title") or episode_title(path), summary=info.get("synopsis", ""), season=season, number=number,
+                                 duration=duration, size=size, mtime=mtime, meta={"info": info}))
+    return entries
+
+
 def scan_shows(lib, known, enriched=None):
     reader = Reader(lib.id, known)
     items, entries = [], []
     enriched = enriched or {}
     for folder, container in find_shows(lib.path):
         seasons = naming.find_seasons(folder) or [(folder, None)]
-        found = []          # (saison, chemin, rel, size, mtime, info, durée)
-        for season_dir, number in seasons:
-            for path in _videos(season_dir):
-                rel = path.relative_to(lib.path).as_posix()
-                result = reader(path, rel)
-                if not result:
-                    continue
-                size, mtime, info, duration = result
-                season = number
-                if season is None:             # épisodes posés à plat dans le dossier de la série
-                    guess = naming.P_SE.search(path.name)
-                    season = int(guess.group(1)) if guess else int(info.get("season") or 1)
-                found.append((season, path, rel, size, mtime, info, duration))
+        found = _show_episodes(reader, lib, seasons)
         if not found:
             continue
-        rel_dir = folder.relative_to(lib.path).as_posix()
-        pinned, name = naming.extract_tmdb_id(folder.name)
-        first = next((f[5] for f in found if f[5].get("collection")), {})
-        title = first.get("collection") or name
-        years = sorted((f[5].get("date") or "")[:4] for f in found if f[5].get("date"))
-        item_id = make_id(lib.id, rel_dir)
-        extra = enriched.get(item_id, {})
-        image = folder_image(folder)
-        season_images = {}
-        for season_dir, number in seasons:
-            if number is not None and season_dir != folder:
-                img = folder_image(season_dir)
-                if img:
-                    season_images[str(number)] = (season_dir.relative_to(lib.path) / img).as_posix()
-        meta = {"tmdb_pinned": pinned or "", "image": (folder.relative_to(lib.path) / image).as_posix() if image else "", "seasons": sorted({f[0] for f in found}),
-                "season_images": season_images, "folder": rel_dir, "tagged": any(f[5].get("has_tags") for f in found), **{k: v for k, v in extra.items() if k not in ("summary", "genres", "year", "title")}}
-        item = item_row(lib.id, rel_dir, "show", extra.get("title") or title, year=extra.get("year") or (years[0] if years else ""), summary=extra.get("summary", ""),
-                        genres=extra.get("genres", []), grp=container, meta=meta, added=max(f[4] for f in found), count=len(found))
+        item = _show_item(lib, folder, container, seasons, found, enriched)
         items.append(item)
-        for season, path, rel, size, mtime, info, duration in sorted(found, key=lambda f: (f[0], f[5].get("number") or naming.detect_episode_number(f[1].name) or 9999, f[1].name.casefold())):
-            number = info.get("number")
-            if number is None:
-                number = naming.detect_episode_number(path.name)
-            entries.append(entry_row(lib.id, item["id"], rel, "video", title=info.get("title") or episode_title(path), summary=info.get("synopsis", ""), season=season, number=number,
-                                     duration=duration, size=size, mtime=mtime, meta={"info": info}))
+        entries += _show_entries(lib, item, found)
     return items, entries, _Counts(reader.reused, reader.read)

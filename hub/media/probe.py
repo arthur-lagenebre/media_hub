@@ -44,40 +44,64 @@ def _fps(text):
         return 0
 
 
+def _tags(stream):
+    return {k.lower(): v for k, v in (stream.get("tags") or {}).items()}
+
+
+def _container(names):
+    return next((family for key, family in CONTAINER_FAMILY if key in names), names[0] if names and names[0] else "")
+
+
+def _depth(video):
+    """Les bits par composante : ceux que le fichier annonce, sinon 10 si le format de pixel le dit, sinon 8."""
+    bits = video.get("bits_per_raw_sample") or ""
+    return int(bits) if str(bits).isdigit() else (10 if "10" in (video.get("pix_fmt") or "") else 8)
+
+
+def _video(video):
+    return {
+        "codec": VIDEO_NAMES.get(video.get("codec_name"), video.get("codec_name") or ""), "profile": video.get("profile") or "",
+        "width": int(video.get("width") or 0), "height": int(video.get("height") or 0), "fps": _fps(video.get("avg_frame_rate")),
+        "depth": _depth(video), "pix_fmt": video.get("pix_fmt") or "", "hdr": video.get("color_transfer") in ("smpte2084", "arib-std-b67"),
+        "bitrate": int(video.get("bit_rate") or 0),
+    }
+
+
+def _audio(index, s):
+    tags, disp = _tags(s), s.get("disposition") or {}
+    return {
+        "index": index, "codec": AUDIO_NAMES.get(s.get("codec_name"), s.get("codec_name") or ""), "channels": int(s.get("channels") or 2),
+        "lang": tags.get("language", ""), "title": tags.get("title", ""), "default": bool(disp.get("default")),
+        "commentary": bool(disp.get("comment")) or bool(disp.get("visual_impaired")),
+    }
+
+
+def _sub(index, s):
+    tags, disp = _tags(s), s.get("disposition") or {}
+    codec = s.get("codec_name") or ""
+    return {
+        "index": index, "codec": codec, "lang": tags.get("language", ""), "title": tags.get("title", ""),
+        "forced": bool(disp.get("forced")), "default": bool(disp.get("default")), "text": codec in TEXT_SUBS,
+    }
+
+
+def _format(fmt):
+    return {"container": _container((fmt.get("format_name") or "").split(",")), "duration": float(fmt.get("duration") or 0), "bitrate": int(fmt.get("bit_rate") or 0),
+            "size": int(fmt.get("size") or 0)}
+
+
+def _main_video(streams):
+    """Le flux d'image du film ; une jaquette embarquée (attached_pic) n'en est pas un."""
+    return next((s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
+
+
 def summarize(data):
     """La sortie de ffprobe réduite à ce qui décide de la lecture. Ce résumé est ce qu'on garde dans la base."""
-    fmt = data.get("format") or {}
     streams = data.get("streams") or []
-    names = (fmt.get("format_name") or "").split(",")
-    container = next((family for key, family in CONTAINER_FAMILY if key in names), names[0] if names and names[0] else "")
-    video = next((s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
-    out = {"container": container, "duration": float(fmt.get("duration") or 0), "bitrate": int(fmt.get("bit_rate") or 0), "size": int(fmt.get("size") or 0), "video": None, "audio": [], "subs": []}
-    if video:
-        bits = video.get("bits_per_raw_sample") or ""
-        depth = int(bits) if str(bits).isdigit() else (10 if "10" in (video.get("pix_fmt") or "") else 8)
-        out["video"] = {
-            "codec": VIDEO_NAMES.get(video.get("codec_name"), video.get("codec_name") or ""), "profile": video.get("profile") or "",
-            "width": int(video.get("width") or 0), "height": int(video.get("height") or 0), "fps": _fps(video.get("avg_frame_rate")),
-            "depth": depth, "pix_fmt": video.get("pix_fmt") or "", "hdr": video.get("color_transfer") in ("smpte2084", "arib-std-b67"),
-            "bitrate": int(video.get("bit_rate") or 0),
-        }
-    for s in (x for x in streams if x.get("codec_type") == "audio"):
-        tags = {k.lower(): v for k, v in (s.get("tags") or {}).items()}
-        disp = s.get("disposition") or {}
-        out["audio"].append({
-            "index": len(out["audio"]), "codec": AUDIO_NAMES.get(s.get("codec_name"), s.get("codec_name") or ""), "channels": int(s.get("channels") or 2),
-            "lang": tags.get("language", ""), "title": tags.get("title", ""), "default": bool(disp.get("default")),
-            "commentary": bool(disp.get("comment")) or bool(disp.get("visual_impaired")),
-        })
-    for s in (x for x in streams if x.get("codec_type") == "subtitle"):
-        tags = {k.lower(): v for k, v in (s.get("tags") or {}).items()}
-        disp = s.get("disposition") or {}
-        codec = s.get("codec_name") or ""
-        out["subs"].append({
-            "index": len(out["subs"]), "codec": codec, "lang": tags.get("language", ""), "title": tags.get("title", ""),
-            "forced": bool(disp.get("forced")), "default": bool(disp.get("default")), "text": codec in TEXT_SUBS,
-        })
-    return out
+    video = _main_video(streams)
+    return {**_format(data.get("format") or {}), "video": _video(video) if video else None,
+            "audio": [_audio(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "audio")],
+            "subs": [_sub(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "subtitle")]}
 
 
 def default_audio(probe):
@@ -86,44 +110,56 @@ def default_audio(probe):
     return next((t for t in tracks if t["default"] and not t["commentary"]), tracks[0] if tracks else None)
 
 
-def plan(probe, caps, audio=None, max_kbps=0, max_height=0):
-    """Décide comment jouer. `caps` : {"video": [...], "audio": [...], "containers": [...], "channels": n, "height": n}.
+def _chosen_track(probe, audio):
+    """La piste demandée si elle existe, sinon celle que le lecteur choisirait seul."""
+    track = next((t for t in probe["audio"] if t["index"] == audio), None) if audio is not None else None
+    return track or default_audio(probe)
 
-    Rend {"mode": direct|remux|transcode, "audio": index, "why": [raisons], "copy_video": bool, "copy_audio": bool}.
-    """
-    caps = caps or {}
-    vcaps, acaps = set(caps.get("video") or []), set(caps.get("audio") or [])
-    containers = set(caps.get("containers") or ["mp4", "webm"])
-    video = probe.get("video")
-    track = None
-    if audio is not None:
-        track = next((t for t in probe["audio"] if t["index"] == audio), None)
-    track = track or default_audio(probe)
-    chosen = track["index"] if track else None
-    why = []
 
-    video_ok = bool(video) and video["codec"] in vcaps and (video["depth"] <= 8 or f"{video['codec']}10" in vcaps) and not (video["hdr"] and not caps.get("hdr"))
+def _video_readable(video, caps, vcaps):
+    return bool(video) and video["codec"] in vcaps and (video["depth"] <= 8 or f"{video['codec']}10" in vcaps) and not (video["hdr"] and not caps.get("hdr"))
+
+
+def _check_video(video, caps):
+    """(lisible tel quel ?, raisons contraires) : le codec, puis les 10 bits et le HDR, que le lecteur doit annoncer."""
+    vcaps = set(caps.get("video") or [])
+    ok = _video_readable(video, caps, vcaps)
     if video and video["codec"] not in vcaps:
-        why.append(f"image {video['codec']} non lisible par ce lecteur")
-    elif video and not video_ok:
-        why.append("image 10 bits / HDR non lisible par ce lecteur")
+        return ok, [f"image {video['codec']} non lisible par ce lecteur"]
+    if video and not ok:
+        return ok, ["image 10 bits / HDR non lisible par ce lecteur"]
+    return ok, []
+
+
+def _check_limits(probe, video, caps, max_kbps, max_height):
+    """(trop haute ?, trop lourde ?, raisons) : la hauteur demandée, ou à défaut celle du lecteur ; le débit demandé, à 5 % près."""
     limit_h = max_height or caps.get("height") or 0
     too_tall = bool(video and limit_h and video["height"] > limit_h)
     too_heavy = bool(max_kbps and probe["bitrate"] and probe["bitrate"] / 1000 > max_kbps * 1.05)
+    why = []
     if too_tall:
         why.append(f"image {video['height']} p au-delà de {limit_h} p")
     if too_heavy:
         why.append(f"débit {round(probe['bitrate'] / 1e6, 1)} Mb/s au-delà de {round(max_kbps / 1000, 1)} Mb/s demandés")
+    return too_tall, too_heavy, why
 
-    audio_ok = track is None or (track["codec"] in acaps and track["channels"] <= (caps.get("channels") or 2))
+
+def _check_audio(track, caps):
+    """(lisible tel quel ?, raisons contraires) : le codec, puis le nombre de voies."""
+    channels = caps.get("channels") or 2
+    acaps = set(caps.get("audio") or [])
+    ok = track is None or (track["codec"] in acaps and track["channels"] <= channels)
     if track and track["codec"] not in acaps:
-        why.append(f"son {track['codec']} non lisible par ce lecteur")
-    elif track and not audio_ok:
-        why.append(f"son {track['channels']} voies, le lecteur en prend {caps.get('channels') or 2}")
-    container_ok = probe["container"] in containers
+        return ok, [f"son {track['codec']} non lisible par ce lecteur"]
+    if track and not ok:
+        return ok, [f"son {track['channels']} voies, le lecteur en prend {channels}"]
+    return ok, []
 
-    if not video_ok or too_tall or too_heavy:
-        return {"mode": "transcode", "audio": chosen, "why": why, "copy_video": False, "copy_audio": False}
+
+def _direct_or_remux(probe, caps, track, audio_ok, why):
+    """L'image se lit telle quelle : direct si le conteneur et la piste aussi, sinon on recopie l'image dans un conteneur lisible."""
+    chosen = track["index"] if track else None
+    container_ok = probe["container"] in set(caps.get("containers") or ["mp4", "webm"])
     is_default = track is None or track is default_audio(probe)
     if container_ok and audio_ok and is_default:
         return {"mode": "direct", "audio": chosen, "why": [], "copy_video": True, "copy_audio": True}
@@ -134,36 +170,52 @@ def plan(probe, caps, audio=None, max_kbps=0, max_height=0):
     return {"mode": "remux", "audio": chosen, "why": why, "copy_video": True, "copy_audio": audio_ok}
 
 
-def ffmpeg_command(ffmpeg, path, probe, decision, start=0, max_kbps=0, max_height=0, channels=2, preset="veryfast"):
-    """La ligne de commande qui produit un MP4 fragmenté sur la sortie standard. Le MP4 fragmenté se lit en continu, sans que le fichier soit fini."""
-    cmd = [ffmpeg, "-v", "error", "-nostdin"]
-    if start and start > 0:
-        cmd += ["-ss", f"{start:.3f}"]
-    cmd += ["-i", str(path), "-map", "0:v:0"]
-    track = decision["audio"]
-    if track is not None:
-        cmd += ["-map", f"0:a:{track}"]
-    cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"]
+def plan(probe, caps, audio=None, max_kbps=0, max_height=0):
+    """Décide comment jouer. `caps` : {"video": [...], "audio": [...], "containers": [...], "channels": n, "height": n}.
+
+    Rend {"mode": direct|remux|transcode, "audio": index, "why": [raisons], "copy_video": bool, "copy_audio": bool}.
+    """
+    caps = caps or {}
+    video = probe.get("video")
+    track = _chosen_track(probe, audio)
+    video_ok, why = _check_video(video, caps)
+    too_tall, too_heavy, limits = _check_limits(probe, video, caps, max_kbps, max_height)
+    audio_ok, sound = _check_audio(track, caps)
+    why = why + limits + sound
+    if not video_ok or too_tall or too_heavy:
+        return {"mode": "transcode", "audio": track["index"] if track else None, "why": why, "copy_video": False, "copy_audio": False}
+    return _direct_or_remux(probe, caps, track, audio_ok, why)
+
+
+def _video_args(probe, decision, max_kbps, max_height, preset):
+    """L'image : recopiée (étiquetée hvc1 si c'est du HEVC, pour les lecteurs d'Apple), ou ré-encodée en H.264 8 bits, réduite seulement si elle dépasse la hauteur demandée."""
     video = probe.get("video") or {}
     if decision["copy_video"]:
-        cmd += ["-c:v", "copy"]
-        if video.get("codec") == "hevc":
-            cmd += ["-tag:v", "hvc1"]
-    else:
-        height = min(x for x in (max_height, video.get("height", 0)) if x) if (max_height or video.get("height")) else 0
-        filters = []
-        if height and video.get("height", 0) > height:
-            filters.append(f"scale=-2:{height}")
-        filters.append("format=yuv420p")
-        cmd += ["-c:v", "libx264", "-preset", preset, "-crf", "21", "-profile:v", "high", "-level", "4.1", "-g", "48", "-sc_threshold", "0", "-vf", ",".join(filters)]
-        if max_kbps:
-            cmd += ["-maxrate", f"{int(max_kbps * 0.92)}k", "-bufsize", f"{int(max_kbps * 2)}k"]
-    if track is not None:
-        if decision["copy_audio"]:
-            cmd += ["-c:a", "copy"]
-        else:
-            src = next((t for t in probe["audio"] if t["index"] == track), {"channels": 2})
-            out_channels = max(1, min(src["channels"], channels))
-            cmd += ["-c:a", "aac", "-b:a", f"{96 + 64 * out_channels}k", "-ac", str(out_channels)]
-    cmd += ["-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"]
-    return cmd
+        return ["-c:v", "copy"] + (["-tag:v", "hvc1"] if video.get("codec") == "hevc" else [])
+    return _x264_args(video, max_kbps, max_height, preset)
+
+
+def _x264_args(video, max_kbps, max_height, preset):
+    height = min(x for x in (max_height, video.get("height", 0)) if x) if (max_height or video.get("height")) else 0
+    filters = [f"scale=-2:{height}"] if height and video.get("height", 0) > height else []
+    args = ["-c:v", "libx264", "-preset", preset, "-crf", "21", "-profile:v", "high", "-level", "4.1", "-g", "48", "-sc_threshold", "0", "-vf", ",".join(filters + ["format=yuv420p"])]
+    return args + (["-maxrate", f"{int(max_kbps * 0.92)}k", "-bufsize", f"{int(max_kbps * 2)}k"] if max_kbps else [])
+
+
+def _audio_args(probe, decision, channels):
+    """Le son : recopié, ou converti en AAC avec au plus autant de voies que la source et que le lecteur."""
+    if decision["copy_audio"]:
+        return ["-c:a", "copy"]
+    src = next((t for t in probe["audio"] if t["index"] == decision["audio"]), {"channels": 2})
+    out_channels = max(1, min(src["channels"], channels))
+    return ["-c:a", "aac", "-b:a", f"{96 + 64 * out_channels}k", "-ac", str(out_channels)]
+
+
+def ffmpeg_command(ffmpeg, path, probe, decision, start=0, max_kbps=0, max_height=0, channels=2, preset="veryfast"):
+    """La ligne de commande qui produit un MP4 fragmenté sur la sortie standard. Le MP4 fragmenté se lit en continu, sans que le fichier soit fini."""
+    track = decision["audio"]
+    cmd = [ffmpeg, "-v", "error", "-nostdin"] + (["-ss", f"{start:.3f}"] if start and start > 0 else [])
+    cmd += ["-i", str(path), "-map", "0:v:0"] + ([] if track is None else ["-map", f"0:a:{track}"])
+    cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"] + _video_args(probe, decision, max_kbps, max_height, preset)
+    cmd += [] if track is None else _audio_args(probe, decision, channels)
+    return cmd + ["-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"]

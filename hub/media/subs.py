@@ -22,22 +22,26 @@ def language(code):
 def side_files(video):
     """[{'index', 'path', 'label', 'lang', 'forced'}] : les fichiers de sous-titres qui portent le nom de la vidéo (« Film.fr.forced.srt »)."""
     video = Path(video)
-    found = []
     try:
         siblings = sorted(video.parent.iterdir(), key=lambda p: p.name.casefold())
     except OSError:
-        return found
-    for path in siblings:
-        if path.suffix.lower() not in SIDE_EXTS or not path.name.casefold().startswith(video.stem.casefold()):
-            continue
-        tail = path.stem[len(video.stem):].strip(" ._-")
-        words = [w for w in re.split(r"[ ._-]+", tail) if w]
-        forced = any(w.lower() in ("forced", "force", "forcé") for w in words)
-        sdh = any(w.lower() in ("sdh", "cc", "hi") for w in words)
-        lang = next((w.lower() for w in words if w.lower() in LANG_NAMES), "")
-        label = " · ".join(x for x in (language(lang) or (tail if not lang else ""), "Forcé" if forced else "", "SDH" if sdh else "") if x) or "Sous-titres"
+        return []
+    paths = [p for p in siblings if p.suffix.lower() in SIDE_EXTS and p.name.casefold().startswith(video.stem.casefold())]
+    found = []
+    for path in paths:
+        label, lang, forced = describe_side(path.stem[len(video.stem):].strip(" ._-"))
         found.append({"index": len(found), "path": path, "label": label, "lang": lang, "forced": forced})
     return found
+
+
+def describe_side(tail):
+    """(libellé, langue, forcé ?) d'après ce que dit le nom d'un fichier de sous-titres après celui de la vidéo (« fr.forced », « eng SDH »)."""
+    words = [w.lower() for w in re.split(r"[ ._-]+", tail) if w]
+    forced = any(w in ("forced", "force", "forcé") for w in words)
+    sdh = any(w in ("sdh", "cc", "hi") for w in words)
+    lang = next((w for w in words if w in LANG_NAMES), "")
+    label = " · ".join(x for x in (language(lang) or (tail if not lang else ""), "Forcé" if forced else "", "SDH" if sdh else "") if x) or "Sous-titres"
+    return label, lang, forced
 
 
 def decode(data):
