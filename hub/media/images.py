@@ -274,8 +274,10 @@ class Images:
             data = hit.read_bytes()
             return data, sniff(data), key
         source = self._from_image_file(Path(path))
-        if not source:
-            return None
+        return self._store(hit, source, width, key) if source else None
+
+    def _store(self, hit, source, width, key):
+        """(octets, type MIME, étiquette) de `source` réduite à `width`, gardée dans le cache sous `hit` (sans bruit si le disque refuse)."""
         data, mime = self.resize(source, width)
         try:
             write_atomic(hit, data)
@@ -283,22 +285,22 @@ class Images:
             pass
         return data, mime, key
 
+    def _row_and_stamp(self, kind, ident):
+        """(ligne de la table, ce qui change quand l'image doit changer) d'un item ou d'une entrée ; (None, "") s'ils n'existent pas."""
+        if kind == "item":
+            row = self.db.one("SELECT * FROM items WHERE id=?", (ident,))
+            if row is None:
+                return None, ""
+            stamp = f"{row['added']}|{row['count']}|{row['meta']}"
+            return row, stamp + (self._cover_stamp(self.cfg.library(row["lib"]), row) if row["type"] == "album" else "")
+        row = self.db.one("SELECT * FROM entries WHERE id=?", (ident,))
+        return row, f"{row['size']}|{row['mtime']}" if row else ""
+
     def get(self, kind, ident, width=0):
         """(octets, type MIME, étiquette) ou None. `kind` : "item" ou "entry"."""
         width = snap_width(width)
-        if kind == "item":
-            row = self.db.one("SELECT * FROM items WHERE id=?", (ident,))
-            stamp = ""
-            if row:
-                stamp = f"{row['added']}|{row['count']}|{row['meta']}"
-                if row["type"] == "album":
-                    stamp += self._cover_stamp(self.cfg.library(row["lib"]), row)
-        else:
-            row = self.db.one("SELECT * FROM entries WHERE id=?", (ident,))
-            stamp = f"{row['size']}|{row['mtime']}" if row else ""
-        if row is None:
-            return None
-        lib = self.cfg.library(row["lib"])
+        row, stamp = self._row_and_stamp(kind, ident)
+        lib = self.cfg.library(row["lib"]) if row is not None else None
         if lib is None:
             return None
         key = self._key(f"{kind}:{ident}", stamp, width)
@@ -309,14 +311,8 @@ class Images:
         if miss.is_file():
             return None
         source = self.item_source(lib, row) if kind == "item" else self.entry_source(lib, row)
-        if not source and kind == "entry":
-            return None
         if not source:
-            miss.touch()
+            if kind == "item":
+                miss.touch()          # un item sans image : on ne la cherche plus tant que son étiquette ne change pas (pas pour une entrée)
             return None
-        data, mime = self.resize(source, width)
-        try:
-            write_atomic(hit, data)
-        except OSError:
-            pass
-        return data, mime, key
+        return self._store(hit, source, width, key)
