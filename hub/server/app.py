@@ -309,6 +309,17 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(self.timeout)       # la connexion persiste : un client inactif ne garde pas un fil une heure de plus
 
     # --- Aiguillage -------------------------------------------------------
+    def session_user(self):
+        """Le compte du jeton de session, en cookie puis en `Authorization: Bearer` ; None s'il n'y en a pas ou s'il ne vaut rien."""
+        cookie = self.headers.get("Cookie", "")
+        found = re.search(r"(?:^|;\s*)hub=(\w{1,64}\.[0-9a-f]{64})\s*(?:;|$)", cookie, re.ASCII)       # valeur entière, sans rien derrière : `hub=<id>.<mac>.junk` ne passe pas
+        bearer = re.fullmatch(r"Bearer\s+(\S+)", self.headers.get("Authorization", "").strip(), re.IGNORECASE)
+        for token in (found.group(1) if found else None, bearer.group(1) if bearer else None):
+            row = accounts.user_for_token(self.hub.db, self.hub.secret, token) if token else None
+            if row is not None:
+                return accounts.public(row)
+        return None
+
     def authorized(self, path, query):
         """Trois façons de se présenter : le jeton de session (`<identifiant>.<mac>`) en cookie (navigateur) ou en `Authorization: Bearer` (clients natifs),
         le jeton de média en `?token=` (balises <img> / <video>, Cast), celui-ci seulement sur les fichiers et les sous-titres (/api/subs/), nulle part ailleurs sur /api/.
@@ -321,17 +332,21 @@ class Handler(BaseHTTPRequestHandler):
             return True
         if path in ("/login", "/api/login", "/api/token", "/favicon.svg", "/icon.svg"):
             return True
-        cookie = self.headers.get("Cookie", "")
-        found = re.search(r"(?:^|;\s*)hub=(\w{1,64}\.[0-9a-f]{64})\s*(?:;|$)", cookie, re.ASCII)       # valeur entière, sans rien derrière : `hub=<id>.<mac>.junk` ne passe pas
-        bearer = re.fullmatch(r"Bearer\s+(\S+)", self.headers.get("Authorization", "").strip(), re.IGNORECASE)
-        for token in (found.group(1) if found else None, bearer.group(1) if bearer else None):
-            row = accounts.user_for_token(self.hub.db, self.hub.secret, token) if token else None
-            if row is not None:
-                self.user = accounts.public(row)
-                return True
+        self.user = self.session_user()
+        if self.user is not None:
+            return True
         if path.startswith(("/media/", "/img/", "/book/", "/api/subs/")) and "token" in query:
             return hmac.compare_digest(query["token"].encode("utf-8", "replace"), self.hub.media_token().encode())
         return False
+
+    def find_route(self, path):
+        """(fonction, correspondance) de la première route qui répond à la méthode et au chemin ; HEAD répond aux routes GET. None s'il n'y en a pas."""
+        for method, pattern, func in self.routes:
+            if method == self.command or (self.command == "HEAD" and method == "GET"):
+                found = pattern.fullmatch(path)
+                if found:
+                    return func, found
+        return None
 
     def dispatch(self):
         split = urlsplit(self.path)
@@ -344,12 +359,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise HttpError(401, "connexion requise")
                 self.send_body(b"", "text/plain", 302, {"Location": "/login"})
                 return
-            for method, pattern, func in self.routes:
-                if method == self.command or (self.command == "HEAD" and method == "GET"):
-                    found = pattern.fullmatch(path)
-                    if found:
-                        func(self, found, query)
-                        return
+            found = self.find_route(path)
+            if found:
+                found[0](self, found[1], query)
+                return
             if self.command in ("GET", "HEAD") and not path.startswith(("/api/", "/media/", "/img/", "/book/")):         # un chemin inconnu d'un fichier servi est un 404, pas la page d'accueil
                 self.static(path)
                 return
