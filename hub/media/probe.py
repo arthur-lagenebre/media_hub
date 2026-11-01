@@ -102,44 +102,51 @@ def default_audio(probe):
     return next((t for t in tracks if t["default"] and not t["commentary"]), tracks[0] if tracks else None)
 
 
-def plan(probe, caps, audio=None, max_kbps=0, max_height=0):
-    """Décide comment jouer. `caps` : {"video": [...], "audio": [...], "containers": [...], "channels": n, "height": n}.
+def _chosen_track(probe, audio):
+    """La piste demandée si elle existe, sinon celle que le lecteur choisirait seul."""
+    track = next((t for t in probe["audio"] if t["index"] == audio), None) if audio is not None else None
+    return track or default_audio(probe)
 
-    Rend {"mode": direct|remux|transcode, "audio": index, "why": [raisons], "copy_video": bool, "copy_audio": bool}.
-    """
-    caps = caps or {}
-    vcaps, acaps = set(caps.get("video") or []), set(caps.get("audio") or [])
-    containers = set(caps.get("containers") or ["mp4", "webm"])
-    video = probe.get("video")
-    track = None
-    if audio is not None:
-        track = next((t for t in probe["audio"] if t["index"] == audio), None)
-    track = track or default_audio(probe)
-    chosen = track["index"] if track else None
-    why = []
 
-    video_ok = bool(video) and video["codec"] in vcaps and (video["depth"] <= 8 or f"{video['codec']}10" in vcaps) and not (video["hdr"] and not caps.get("hdr"))
+def _check_video(video, caps):
+    """(lisible tel quel ?, raisons contraires) : le codec, puis les 10 bits et le HDR, que le lecteur doit annoncer."""
+    vcaps = set(caps.get("video") or [])
+    ok = bool(video) and video["codec"] in vcaps and (video["depth"] <= 8 or f"{video['codec']}10" in vcaps) and not (video["hdr"] and not caps.get("hdr"))
     if video and video["codec"] not in vcaps:
-        why.append(f"image {video['codec']} non lisible par ce lecteur")
-    elif video and not video_ok:
-        why.append("image 10 bits / HDR non lisible par ce lecteur")
+        return ok, [f"image {video['codec']} non lisible par ce lecteur"]
+    if video and not ok:
+        return ok, ["image 10 bits / HDR non lisible par ce lecteur"]
+    return ok, []
+
+
+def _check_limits(probe, video, caps, max_kbps, max_height):
+    """(trop haute ?, trop lourde ?, raisons) : la hauteur demandée, ou à défaut celle du lecteur ; le débit demandé, à 5 % près."""
     limit_h = max_height or caps.get("height") or 0
     too_tall = bool(video and limit_h and video["height"] > limit_h)
     too_heavy = bool(max_kbps and probe["bitrate"] and probe["bitrate"] / 1000 > max_kbps * 1.05)
+    why = []
     if too_tall:
         why.append(f"image {video['height']} p au-delà de {limit_h} p")
     if too_heavy:
         why.append(f"débit {round(probe['bitrate'] / 1e6, 1)} Mb/s au-delà de {round(max_kbps / 1000, 1)} Mb/s demandés")
+    return too_tall, too_heavy, why
 
-    audio_ok = track is None or (track["codec"] in acaps and track["channels"] <= (caps.get("channels") or 2))
-    if track and track["codec"] not in acaps:
-        why.append(f"son {track['codec']} non lisible par ce lecteur")
-    elif track and not audio_ok:
-        why.append(f"son {track['channels']} voies, le lecteur en prend {caps.get('channels') or 2}")
-    container_ok = probe["container"] in containers
 
-    if not video_ok or too_tall or too_heavy:
-        return {"mode": "transcode", "audio": chosen, "why": why, "copy_video": False, "copy_audio": False}
+def _check_audio(track, caps):
+    """(lisible tel quel ?, raisons contraires) : le codec, puis le nombre de voies."""
+    channels = caps.get("channels") or 2
+    ok = track is None or (track["codec"] in set(caps.get("audio") or []) and track["channels"] <= channels)
+    if track and track["codec"] not in set(caps.get("audio") or []):
+        return ok, [f"son {track['codec']} non lisible par ce lecteur"]
+    if track and not ok:
+        return ok, [f"son {track['channels']} voies, le lecteur en prend {channels}"]
+    return ok, []
+
+
+def _direct_or_remux(probe, caps, track, audio_ok, why):
+    """L'image se lit telle quelle : direct si le conteneur et la piste aussi, sinon on recopie l'image dans un conteneur lisible."""
+    chosen = track["index"] if track else None
+    container_ok = probe["container"] in set(caps.get("containers") or ["mp4", "webm"])
     is_default = track is None or track is default_audio(probe)
     if container_ok and audio_ok and is_default:
         return {"mode": "direct", "audio": chosen, "why": [], "copy_video": True, "copy_audio": True}
@@ -148,6 +155,23 @@ def plan(probe, caps, audio=None, max_kbps=0, max_height=0):
     if not is_default:
         why.append("autre piste audio que celle par défaut")
     return {"mode": "remux", "audio": chosen, "why": why, "copy_video": True, "copy_audio": audio_ok}
+
+
+def plan(probe, caps, audio=None, max_kbps=0, max_height=0):
+    """Décide comment jouer. `caps` : {"video": [...], "audio": [...], "containers": [...], "channels": n, "height": n}.
+
+    Rend {"mode": direct|remux|transcode, "audio": index, "why": [raisons], "copy_video": bool, "copy_audio": bool}.
+    """
+    caps = caps or {}
+    video = probe.get("video")
+    track = _chosen_track(probe, audio)
+    video_ok, why = _check_video(video, caps)
+    too_tall, too_heavy, limits = _check_limits(probe, video, caps, max_kbps, max_height)
+    audio_ok, sound = _check_audio(track, caps)
+    why = why + limits + sound
+    if not video_ok or too_tall or too_heavy:
+        return {"mode": "transcode", "audio": track["index"] if track else None, "why": why, "copy_video": False, "copy_audio": False}
+    return _direct_or_remux(probe, caps, track, audio_ok, why)
 
 
 def ffmpeg_command(ffmpeg, path, probe, decision, start=0, max_kbps=0, max_height=0, channels=2, preset="veryfast"):
