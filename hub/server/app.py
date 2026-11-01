@@ -686,6 +686,35 @@ def dismiss_key(profile, item_id):
     return f"dismiss:{profile}:{item_id}"
 
 
+def progress_card(entry, item, position, total, resume, updated):
+    card = entry_json(entry)
+    card.update({"item": summary(item), "position": position, "total": total or entry["duration"], "resume": resume, "updated": updated})
+    return card
+
+
+def finished_card(hub, profile, row, item):
+    """Un fichier fini ne se reprend pas : on propose l'épisode ou le tome qui le suit, s'il y en a un et qu'il n'est pas fini lui aussi. Un film fini n'a rien à proposer."""
+    if item["type"] == "movie":
+        return None
+    following = next_entry(hub, row)
+    if following is None:
+        return None
+    progress = hub.db.progress_for(profile, [following["id"]]).get(following["id"])
+    if progress is not None and progress["done"]:
+        return None
+    position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
+    return progress_card(following, item, position, total, False, row["updated"])
+
+
+def resume_card(hub, profile, row, item):
+    """La carte « Reprendre » d'un fichier de la progression, ou None quand il n'y a rien à proposer (fini sans suite, à peine commencé)."""
+    if row["done"]:
+        return finished_card(hub, profile, row, item)
+    if row["position"] < (1 if row["kind"] == "book" else RESUME_MIN):
+        return None
+    return progress_card(row, item, row["position"], row["pduration"], True, row["updated"])
+
+
 def continue_row(hub, profile):
     """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant."""
     rows = hub.db.query(
@@ -699,26 +728,9 @@ def continue_row(hub, profile):
         if row["updated"] <= hub.db.kv_get(dismiss_key(profile, row["item_id"]), -1):
             continue
         item = hub.db.one("SELECT * FROM items WHERE id=?", (row["item_id"],))
-        if item is None:
+        card = resume_card(hub, profile, row, item) if item is not None else None
+        if card is None:
             continue
-        entry, resume = row, True
-        if row["done"]:
-            if item["type"] == "movie":
-                continue
-            following = next_entry(hub, row)
-            if following is None:
-                continue
-            progress = hub.db.progress_for(profile, [following["id"]]).get(following["id"])
-            if progress is not None and progress["done"]:
-                continue
-            entry, resume = following, False
-            position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
-        else:
-            if row["position"] < (1 if row["kind"] == "book" else RESUME_MIN):
-                continue
-            position, total = row["position"], row["pduration"]
-        card = entry_json(entry)
-        card.update({"item": summary(item), "position": position, "total": total or entry["duration"], "resume": resume, "updated": row["updated"]})
         out.append(card)
         if len(out) >= 24:
             break
