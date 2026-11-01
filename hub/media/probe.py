@@ -174,36 +174,31 @@ def plan(probe, caps, audio=None, max_kbps=0, max_height=0):
     return _direct_or_remux(probe, caps, track, audio_ok, why)
 
 
-def ffmpeg_command(ffmpeg, path, probe, decision, start=0, max_kbps=0, max_height=0, channels=2, preset="veryfast"):
-    """La ligne de commande qui produit un MP4 fragmenté sur la sortie standard. Le MP4 fragmenté se lit en continu, sans que le fichier soit fini."""
-    cmd = [ffmpeg, "-v", "error", "-nostdin"]
-    if start and start > 0:
-        cmd += ["-ss", f"{start:.3f}"]
-    cmd += ["-i", str(path), "-map", "0:v:0"]
-    track = decision["audio"]
-    if track is not None:
-        cmd += ["-map", f"0:a:{track}"]
-    cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"]
+def _video_args(probe, decision, max_kbps, max_height, preset):
+    """L'image : recopiée (étiquetée hvc1 si c'est du HEVC, pour les lecteurs d'Apple), ou ré-encodée en H.264 8 bits, réduite seulement si elle dépasse la hauteur demandée."""
     video = probe.get("video") or {}
     if decision["copy_video"]:
-        cmd += ["-c:v", "copy"]
-        if video.get("codec") == "hevc":
-            cmd += ["-tag:v", "hvc1"]
-    else:
-        height = min(x for x in (max_height, video.get("height", 0)) if x) if (max_height or video.get("height")) else 0
-        filters = []
-        if height and video.get("height", 0) > height:
-            filters.append(f"scale=-2:{height}")
-        filters.append("format=yuv420p")
-        cmd += ["-c:v", "libx264", "-preset", preset, "-crf", "21", "-profile:v", "high", "-level", "4.1", "-g", "48", "-sc_threshold", "0", "-vf", ",".join(filters)]
-        if max_kbps:
-            cmd += ["-maxrate", f"{int(max_kbps * 0.92)}k", "-bufsize", f"{int(max_kbps * 2)}k"]
-    if track is not None:
-        if decision["copy_audio"]:
-            cmd += ["-c:a", "copy"]
-        else:
-            src = next((t for t in probe["audio"] if t["index"] == track), {"channels": 2})
-            out_channels = max(1, min(src["channels"], channels))
-            cmd += ["-c:a", "aac", "-b:a", f"{96 + 64 * out_channels}k", "-ac", str(out_channels)]
-    cmd += ["-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"]
-    return cmd
+        return ["-c:v", "copy"] + (["-tag:v", "hvc1"] if video.get("codec") == "hevc" else [])
+    height = min(x for x in (max_height, video.get("height", 0)) if x) if (max_height or video.get("height")) else 0
+    filters = [f"scale=-2:{height}"] if height and video.get("height", 0) > height else []
+    args = ["-c:v", "libx264", "-preset", preset, "-crf", "21", "-profile:v", "high", "-level", "4.1", "-g", "48", "-sc_threshold", "0", "-vf", ",".join(filters + ["format=yuv420p"])]
+    return args + (["-maxrate", f"{int(max_kbps * 0.92)}k", "-bufsize", f"{int(max_kbps * 2)}k"] if max_kbps else [])
+
+
+def _audio_args(probe, decision, channels):
+    """Le son : recopié, ou converti en AAC avec au plus autant de voies que la source et que le lecteur."""
+    if decision["copy_audio"]:
+        return ["-c:a", "copy"]
+    src = next((t for t in probe["audio"] if t["index"] == decision["audio"]), {"channels": 2})
+    out_channels = max(1, min(src["channels"], channels))
+    return ["-c:a", "aac", "-b:a", f"{96 + 64 * out_channels}k", "-ac", str(out_channels)]
+
+
+def ffmpeg_command(ffmpeg, path, probe, decision, start=0, max_kbps=0, max_height=0, channels=2, preset="veryfast"):
+    """La ligne de commande qui produit un MP4 fragmenté sur la sortie standard. Le MP4 fragmenté se lit en continu, sans que le fichier soit fini."""
+    track = decision["audio"]
+    cmd = [ffmpeg, "-v", "error", "-nostdin"] + (["-ss", f"{start:.3f}"] if start and start > 0 else [])
+    cmd += ["-i", str(path), "-map", "0:v:0"] + ([] if track is None else ["-map", f"0:a:{track}"])
+    cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"] + _video_args(probe, decision, max_kbps, max_height, preset)
+    cmd += [] if track is None else _audio_args(probe, decision, channels)
+    return cmd + ["-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"]
