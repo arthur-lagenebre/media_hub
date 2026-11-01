@@ -166,27 +166,33 @@ class Images:
             return data, sniff(data)
         if Image is not None:
             try:
-                with Image.open(io.BytesIO(data)) as image:
-                    if image.format == "JPEG":
-                        image.draft("RGB", (width * 2, width * 3))
-                    image = image.convert("RGB")
-                    if image.width > width:
-                        image = image.resize((width, max(1, round(image.height * width / image.width))), Image.LANCZOS)
-                    out = io.BytesIO()
-                    image.save(out, "JPEG", quality=80, optimize=True)
-                    return out.getvalue(), "image/jpeg"
+                return self._pillow_jpeg(data, width), "image/jpeg"
             except Exception:       # image illisible : on la rend telle quelle
                 return data, sniff(data)
-        if self.cfg.ffmpeg:
-            try:
-                with self.convert:
-                    done = subprocess.run([self.cfg.ffmpeg, "-v", "error", "-nostdin", "-i", "pipe:0", "-vf", f"scale='min({width},iw)':-2", "-frames:v", "1", "-q:v", "4", "-f", "mjpeg", "pipe:1"],
-                                          input=data, capture_output=True, timeout=30)
-                if done.returncode == 0 and done.stdout:
-                    return done.stdout, "image/jpeg"
-            except (OSError, subprocess.SubprocessError):
-                pass
-        return data, sniff(data)
+        small = self._ffmpeg_jpeg(data, width) if self.cfg.ffmpeg else None
+        return (small, "image/jpeg") if small else (data, sniff(data))
+
+    @staticmethod
+    def _pillow_jpeg(data, width):
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format == "JPEG":
+                image.draft("RGB", (width * 2, width * 3))
+            image = image.convert("RGB")
+            if image.width > width:
+                image = image.resize((width, max(1, round(image.height * width / image.width))), Image.LANCZOS)
+            out = io.BytesIO()
+            image.save(out, "JPEG", quality=80, optimize=True)
+            return out.getvalue()
+
+    def _ffmpeg_jpeg(self, data, width):
+        """Les octets JPEG que ffmpeg écrit ; None s'il échoue."""
+        try:
+            with self.convert:
+                done = subprocess.run([self.cfg.ffmpeg, "-v", "error", "-nostdin", "-i", "pipe:0", "-vf", f"scale='min({width},iw)':-2", "-frames:v", "1", "-q:v", "4", "-f", "mjpeg", "pipe:1"],
+                                      input=data, capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 and done.stdout else None
 
     # --- Sources -----------------------------------------------------------
     def _file(self, lib, rel):
