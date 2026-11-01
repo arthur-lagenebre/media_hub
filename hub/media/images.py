@@ -98,37 +98,58 @@ def can_webp(ffmpeg=""):
     return bool(ffmpeg)
 
 
+def _cropped(image, box):
+    """`image` rognée à `box` (x, y, largeur, hauteur en fractions), d'au moins un pixel."""
+    x, y, w, h = box
+    left, top = min(image.width - 1, round(x * image.width)), min(image.height - 1, round(y * image.height))
+    return image.crop((left, top, max(left + 1, min(image.width, round((x + w) * image.width))), max(top + 1, min(image.height, round((y + h) * image.height)))))
+
+
+def _reduced(image, side):
+    """`image` réduite pour que son grand côté ne dépasse pas `side` ; telle quelle si elle y tient."""
+    if max(image.size) <= side:
+        return image
+    scale = side / max(image.size)
+    return image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
+
+
+def _pillow_webp(data, box, side):
+    """Les octets WebP écrits par Pillow ; None si Pillow n'a pas libwebp."""
+    from PIL import ImageOps, features
+    if not features.check("webp"):
+        return None
+    with Image.open(io.BytesIO(data)) as image:
+        image = ImageOps.exif_transpose(image)
+        image = image.convert("RGBA" if "A" in image.getbands() or "transparency" in image.info else "RGB")
+        image = _reduced(_cropped(image, box) if box else image, side)
+        out = io.BytesIO()
+        image.save(out, "WEBP", quality=85, method=4)
+        return out.getvalue()
+
+
+def _ffmpeg_webp(data, ffmpeg, box, side):
+    crop = f"crop=iw*{box[2]}:ih*{box[3]}:iw*{box[0]}:ih*{box[1]}," if box else ""
+    try:
+        done = subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-i", "pipe:0", "-vf", f"{crop}scale='min({side},iw)':'min({side},ih)':force_original_aspect_ratio=decrease",
+                               "-frames:v", "1", "-c:v", "libwebp", "-q:v", "85", "-f", "webp", "pipe:1"], input=data, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise ConvertError(f"ffmpeg n'a pas répondu ({e})") from e
+    if done.returncode == 0 and done.stdout:
+        return done.stdout
+    raise ConvertError("image illisible")
+
+
 def to_webp(data, ffmpeg="", box=None, side=PHOTO_SIDE):
     """Les octets WebP de `data`, rognés à `box` (fractions, voir crop_box) puis réduits à `side` px au plus ; ce qui est hors du cadre disparaît. ConvertError si l'image ne se lit pas ou si rien ne sait écrire du WebP."""
     if Image is not None:
         try:
-            from PIL import ImageOps, features
-            if features.check("webp"):
-                with Image.open(io.BytesIO(data)) as image:
-                    image = ImageOps.exif_transpose(image)
-                    image = image.convert("RGBA" if "A" in image.getbands() or "transparency" in image.info else "RGB")
-                    if box:
-                        x, y, w, h = box
-                        left, top = min(image.width - 1, round(x * image.width)), min(image.height - 1, round(y * image.height))
-                        image = image.crop((left, top, max(left + 1, min(image.width, round((x + w) * image.width))), max(top + 1, min(image.height, round((y + h) * image.height)))))
-                    if max(image.size) > side:
-                        scale = side / max(image.size)
-                        image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
-                    out = io.BytesIO()
-                    image.save(out, "WEBP", quality=85, method=4)
-                    return out.getvalue()
+            out = _pillow_webp(data, box, side)
         except Exception as e:
             raise ConvertError(f"image illisible ({e})") from e
+        if out is not None:
+            return out
     if ffmpeg:
-        crop = f"crop=iw*{box[2]}:ih*{box[3]}:iw*{box[0]}:ih*{box[1]}," if box else ""
-        try:
-            done = subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-i", "pipe:0", "-vf", f"{crop}scale='min({side},iw)':'min({side},ih)':force_original_aspect_ratio=decrease",
-                                   "-frames:v", "1", "-c:v", "libwebp", "-q:v", "85", "-f", "webp", "pipe:1"], input=data, capture_output=True, timeout=60)
-        except (OSError, subprocess.SubprocessError) as e:
-            raise ConvertError(f"ffmpeg n'a pas répondu ({e})") from e
-        if done.returncode == 0 and done.stdout:
-            return done.stdout
-        raise ConvertError("image illisible")
+        return _ffmpeg_webp(data, ffmpeg, box, side)
     raise NoConverter("ni Pillow ni ffmpeg : pas de conversion en WebP possible")
 
 
