@@ -358,13 +358,9 @@ def download_photo(cfg, urls, artist_id, home=None, mbid=""):
     error = OSError("photo introuvable")
     for url in urls:
         try:
-            with urlopen(Request(url, headers={"User-Agent": MB_USER_AGENT}), timeout=30) as response:
-                data = response.read(PHOTO_MAX + 1)
-        except (URLError, OSError) as e:
-            error = e if isinstance(e, OSError) else OSError(str(e))
-            continue
-        if not image_ext(data) or len(data) > PHOTO_MAX:
-            error = OSError("ce n'est pas une image, ou trop grosse")
+            data = fetch_photo(url)
+        except OSError as e:
+            error = e
             continue
         try:
             return save_photo(cfg, artist_id, data, home, mbid=mbid).name
@@ -373,16 +369,31 @@ def download_photo(cfg, urls, artist_id, home=None, mbid=""):
     raise error
 
 
+def fetch_photo(url):
+    """Les octets de l'image à cette adresse ; OSError si elle ne vient pas, si ce n'est pas une image ou si elle est trop grosse (URLError en est une)."""
+    with urlopen(Request(url, headers={"User-Agent": MB_USER_AGENT}), timeout=30) as response:
+        data = response.read(PHOTO_MAX + 1)
+    if not image_ext(data) or len(data) > PHOTO_MAX:
+        raise OSError("ce n'est pas une image, ou trop grosse")
+    return data
+
+
 def musicbrainz(cfg):
     return MusicBrainz(user_agent=MB_USER_AGENT, cache=tmdb_cache.Cache(folder=cfg.data / "musicbrainz-cache", read=True))
 
 
-def wikipedia_photo(cfg, artist_id, wiki, home=None, mbid=""):
-    """Remplace la photo d'un artiste par celle de son article Wikipédia ; son nom de fichier, ou OSError si l'article n'en a pas ou si elle ne vient pas."""
+def wikipedia_photo(cfg, wiki):
+    """Les octets de la photo de l'article Wikipédia d'un artiste, sans rien enregistrer (on la recadre avant de la garder) ; OSError si l'article n'en a pas ou si elle ne vient pas."""
     urls = photo_urls(musicbrainz(cfg), wiki)
     if not urls:
         raise OSError("l'article n'a pas de photo")
-    return download_photo(cfg, urls, artist_id, home, mbid)
+    error = OSError("photo introuvable")
+    for url in urls:
+        try:
+            return fetch_photo(url)
+        except OSError as e:
+            error = e
+    raise error
 
 
 def enrich_artists(cfg, db, lib, log=print, force=False):

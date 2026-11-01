@@ -1212,22 +1212,21 @@ def api_artist_photo_crop(h, m, q):
     h.send_json({"ok": True})
 
 
-@route("POST", r"/api/artist/([\w-]+)/(\w+)/photo/wikipedia")
+@route("GET", r"/api/artist/([\w-]+)/(\w+)/photo/wikipedia")
 def api_artist_photo_wikipedia(h, m, q):
-    """Remplace la photo d'un artiste par celle de son article Wikipédia (celui que sa fiche garde : il faut donc que « Fiches artistes » soit passé). Administrateur seulement."""
+    """La photo de l'article Wikipédia d'un artiste (celui que sa fiche garde : il faut donc que « Fiches artistes » soit passé), telle quelle : rien n'est enregistré, l'interface la propose au recadrage et n'envoie que le résultat à `…/photo?crop=`. Administrateur seulement."""
     require_admin(h)
     hub = h.hub
-    lib, rows = artist_albums(hub, m.group(1), m.group(2))
-    h.body_json()
-    kept = artist_kept(hub, rows)
-    wiki = ((kept or {}).get("info") or {}).get("wiki")
+    _, rows = artist_albums(hub, m.group(1), m.group(2))
+    wiki = ((artist_kept(hub, rows) or {}).get("info") or {}).get("wiki")
     if not wiki:
         raise HttpError(404, "pas d'article Wikipédia connu pour cet artiste")
     try:
-        enrich.wikipedia_photo(hub.cfg, m.group(2), wiki, artist_home(lib, rows), kept["mbid"])
+        data = enrich.wikipedia_photo(hub.cfg, wiki)
     except OSError as e:
         raise HttpError(502, f"photo non récupérée : {e}")
-    h.send_json({"ok": True})
+    mime = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}[enrich.image_ext(data)]
+    h.send_body(data, mime, 200, {"Cache-Control": "no-store"})
 
 
 @route("GET", r"/img/artist/([\w-]+)/(\w+)")

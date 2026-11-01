@@ -275,9 +275,19 @@
         return H.api('/api/artist/' + lib + '/' + id + '/photo/crop', f).then(function () { return saved('Photo recadrée'); });
       });
     }
-    function fromWikipedia() {       // enregistrée telle quelle, puis proposée au recadrage (« Annuler » la garde entière)
+    function fromWikipedia() {       // proposée au recadrage ; rien n'est enregistré avant « Valider » (« Annuler » garde la photo d'avant)
       H.toast('Recherche sur Wikipédia…');
-      H.api('/api/artist/' + lib + '/' + id + '/photo/wikipedia', {}).then(function () { return saved('Photo de Wikipédia enregistrée'); }).then(recrop).catch(fail);
+      fetch('/api/artist/' + lib + '/' + id + '/photo/wikipedia', { credentials: 'same-origin' }).then(function (r) {
+        if (r.status === 401) { location.href = '/login'; throw new Error('connexion requise'); }
+        if (r.ok) return r.blob();
+        return r.json().catch(function () { return null; }).then(function (d) { throw new Error((d && d.error) || ('Erreur ' + r.status)); });
+      }).then(function (blob) {
+        if (blob.size > 10 * 1024 * 1024) throw new Error('Image trop grosse (10 Mo au plus).');
+        var url = URL.createObjectURL(blob);
+        cropPhoto(url, function (f) {
+          return H.api('/api/artist/' + lib + '/' + id + '/photo?crop=' + [f.x, f.y, f.w, f.h].join(','), blob, { raw: true }).then(function () { return saved('Photo de Wikipédia enregistrée'); });
+        }, function () { URL.revokeObjectURL(url); });
+      }).catch(fail);
     }
     function load() {
       return H.api('/api/artist/' + lib + '/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
