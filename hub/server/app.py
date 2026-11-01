@@ -1024,6 +1024,50 @@ def video_links(item, meta):
     return [{"label": "TMDB", "url": f"{tmdb.WEB_BASE}/{kind}/{found.group(2)}"}]
 
 
+ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
+                  "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries")
+
+
+def tagged_saga(hub, item, movies, seen, info):
+    """(films, manquants) de la saga de l'étiquette d'un film : numérotés d'après la collection TMDB quand on la connaît, sinon par date de sortie."""
+    tagged = sorted((r for r in movies if r["grp"] == item["grp"]), key=release_key)
+    ranks, absent = missing.tagged(item["grp"], tagged, info, set(hub.sagas.ignored()))
+    if ranks is not None:
+        tagged.sort(key=lambda r: ranks[r["id"]])
+    return number_films([with_seen(r, seen) for r in tagged], ranks), absent
+
+
+def file_saga(name, films, listed, seen, owned, info):
+    """Une saga de `sagas.json` : ses films numérotés d'après leur place dans la liste, et ceux de la liste qu'on n'a pas."""
+    numbered = number_films([with_seen(f, seen) for f, _ in films], {f["id"]: rank for f, rank in films})
+    return {"name": name, "films": numbered, "missing": missing.listed(listed.get(name, []), owned, info)}
+
+
+def movie_sagas(hub, item, lib, user):
+    """Ses sagas : celle de l'étiquette d'abord (`saga`, gardée pour les clients d'avant `sagas`), puis celles du fichier (sagas.py), chacune avec les films qui la composent et ceux qui lui manquent."""
+    movies = hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (item["lib"],))
+    seen = seen_counts(hub, user, lib.id)
+    custom = hub.sagas.of_movies(movies)
+    mine = {name: films for name, films in custom.items() if any(f["id"] == item["id"] for f, _ in films)}
+    info, owned = (missing.load(hub.db), sagafile.by_tmdb(movies)) if item["grp"] or mine else (None, None)          # TMDB ne sert que s'il y a une saga
+    out, sagas = {}, []
+    if item["grp"]:
+        out["saga"], absent = tagged_saga(hub, item, movies, seen, info)
+        if item["grp"] not in custom:                   # une saga du fichier de même nom la remplace : c'est elle que ce nom désigne dans la grille
+            sagas.append({"name": item["grp"], "films": out["saga"], "missing": absent})
+    listed = dict(hub.sagas.all())
+    sagas += [file_saga(name, films, listed, seen, owned, info) for name, films in mine.items()]
+    sagas = visible_sagas(sagas)
+    if sagas:
+        out["sagas"] = sagas
+    return out
+
+
+def visible_sagas(sagas):
+    """Les sagas de plus d'un film (présents ou manquants), sans la liste des manquants quand elle est vide."""
+    return [{k: v for k, v in s.items() if v or k != "missing"} for s in sagas if len(s["films"]) + len(s["missing"]) > 1]
+
+
 @route("GET", r"/api/item/(\w+)")
 def api_item(h, m, q):
     hub = h.hub
@@ -1034,10 +1078,7 @@ def api_item(h, m, q):
     meta = safe_json(item["meta"], {})
     out = summary(item)
     out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
-    for key in ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
-                "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries"):
-        if meta.get(key) not in (None, "", []):
-            out[key] = meta[key]
+    out.update({key: meta[key] for key in ITEM_META_KEYS if meta.get(key) not in (None, "", [])})
     links = video_links(item, meta)
     if links:
         out["links"] = links
@@ -1046,27 +1087,7 @@ def api_item(h, m, q):
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
     if item["type"] == "movie":
-        movies = hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (item["lib"],))
-        seen = seen_counts(hub, h.user["id"], lib.id)
-        sagas = []                  # ses sagas : celle de l'étiquette d'abord, puis celles du fichier (sagas.py), chacune avec les films qui la composent et ceux qui lui manquent
-        custom = hub.sagas.of_movies(movies)
-        mine = {name: films for name, films in custom.items() if any(f["id"] == item["id"] for f, _ in films)}
-        info, owned = (missing.load(hub.db), sagafile.by_tmdb(movies)) if item["grp"] or mine else (None, None)          # TMDB ne sert que s'il y a une saga
-        if item["grp"]:
-            tagged = sorted((r for r in movies if r["grp"] == item["grp"]), key=release_key)
-            ranks, absent = missing.tagged(item["grp"], tagged, info, set(hub.sagas.ignored()))
-            if ranks is not None:
-                tagged.sort(key=lambda r: ranks[r["id"]])
-            out["saga"] = number_films([with_seen(r, seen) for r in tagged], ranks)       # la saga de l'étiquette seule : gardée pour les clients d'avant `sagas`
-            if item["grp"] not in custom:                   # une saga du fichier de même nom la remplace : c'est elle que ce nom désigne dans la grille
-                sagas.append({"name": item["grp"], "films": out["saga"], "missing": absent})
-        ids = dict(hub.sagas.all())
-        for name, films in mine.items():
-            numbered = number_films([with_seen(f, seen) for f, _ in films], {f["id"]: rank for f, rank in films})
-            sagas.append({"name": name, "films": numbered, "missing": missing.listed(ids.get(name, []), owned, info)})
-        sagas = [{k: v for k, v in s.items() if v or k != "missing"} for s in sagas if len(s["films"]) + len(s["missing"]) > 1]
-        if sagas:
-            out["sagas"] = sagas
+        out.update(movie_sagas(hub, item, lib, h.user["id"]))
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
     h.send_json(out)
