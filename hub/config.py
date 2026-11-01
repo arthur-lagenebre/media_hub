@@ -74,25 +74,20 @@ def _find_repo(env):
     return None
 
 
+def _first_file(*candidates):
+    return next((str(path) for path in candidates if path.is_file()), "")
+
+
+def _explicit_tool(name, given):
+    """HUB_FFMPEG : le fichier lui-même (ou, s'il porte le nom de l'autre outil, son voisin), ou le dossier qui le contient."""
+    if given.is_file():
+        return str(given) if given.name.startswith(name) else _first_file(given.parent / (name + given.suffix))
+    return _first_file(given / name, given / f"{name}.exe")
+
+
 def _find_tool(name, env, data):
     explicit = env.get("HUB_FFMPEG")
-    if explicit:
-        folder = Path(explicit)
-        if folder.is_file() and folder.name.startswith(name):
-            return str(folder)
-        for candidate in (folder / name, folder / f"{name}.exe"):
-            if candidate.is_file():
-                return str(candidate)
-        sibling = folder.parent / (name + folder.suffix) if folder.is_file() else None
-        if sibling and sibling.is_file():
-            return str(sibling)
-    found = shutil.which(name)
-    if found:
-        return found
-    for candidate in (data / "bin" / name, data / "bin" / f"{name}.exe"):
-        if candidate.is_file():
-            return str(candidate)
-    return ""
+    return (explicit and _explicit_tool(name, Path(explicit))) or shutil.which(name) or _first_file(data / "bin" / name, data / "bin" / f"{name}.exe")
 
 
 def _read_dotenv_key(repo):
