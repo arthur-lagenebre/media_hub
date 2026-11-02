@@ -25,7 +25,7 @@
 ### Films
 
 - [ ] **Bouton « … » sur les films et les sagas** : *Voir / Revoir*, *Marquer vu / non vu*, *Ajouter à une saga*, *TMDB*.
-- [ ] **Changer les affiches.** À vérifier d'abord : l'affiche actuelle est-elle seulement extraite du `.mkv` ? Si l'on en choisit une autre, la glisser aussi dans le `.mkv`. *À décider* : le hub n'écrit aujourd'hui jamais dans les fichiers de la médiathèque (c'est `media_library` qui écrit les étiquettes), donc cette intégration serait une exception, ou revient à `media_library`.
+- [ ] **Changer les affiches.** Aujourd'hui le hub prend `folder.jpg` à côté du film, sinon la jaquette `cover.jpg` embarquée dans le `.mkv`. Si l'on en choisit une autre, la glisser aussi dans le `.mkv` : le hub appellerait `media_library` (qui sait déjà remplacer cette jaquette avec `mkvpropedit`, mais seulement à partir d'une affiche TMDB : il lui faut une fonction qui prenne n'importe quelle image). À régler avant : `mkvpropedit` n'est pas dans le conteneur, le volume `Films` est monté en `:ro` dans le compose du dépôt, un film en cours de lecture est ouvert pendant l'écriture, et le cache d'images doit être invalidé après le changement. Deux temps possibles : d'abord écrire `folder.jpg` (sans toucher au `.mkv`), puis l'intégration au `.mkv`.
 
 ### Séries et animations
 
