@@ -322,7 +322,7 @@ def photo_urls(mb, wiki):
     except MusicBrainzError:
         return []
     thumb, original = (data.get("thumbnail") or {}).get("source", ""), data.get("originalimage") or {}
-    bigger = [re.sub(r"/\d+px-", f"/{PHOTO_WIDTH}px-", thumb, count=1)] if "/thumb/" in thumb and (original.get("width") or 0) > PHOTO_WIDTH else []
+    bigger = [re.sub(r"/\d+px-(?=[^/]*$)", f"/{PHOTO_WIDTH}px-", thumb)] if "/thumb/" in thumb and (original.get("width") or 0) > PHOTO_WIDTH else []
     return [u for u in bigger + [u for u in (thumb, original.get("source", "")) if u] if from_wikimedia(u)]      # ce qu'on télécharge vient de Wikimedia, rien d'autre
 
 
