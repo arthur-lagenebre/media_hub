@@ -4,11 +4,11 @@
 
 ## À faire de votre côté
 
-- [ ] **Redéployer** le compose. Vérifier d'abord que `HUB_PASSWORD` est dans le `.env` : il est obligatoire, sans lui `docker compose up` refuse de démarrer (il ne sert qu'à créer le premier compte, les comptes existants ne changent pas).
-- [ ] **Retirer le `:ro`** des volumes `Animations` et `Musique` dans le compose pour que le nettoyage des fichiers parasites puisse effacer. Pour `Musique`, il faut aussi que le serveur puisse écrire `artist.webp` dans les dossiers d'artistes (photos recadrées).
-- [ ] **Avant de « Supprimer » en musique** : compter les `folder.*` sur le NAS (`find /mnt/tank/media/Musique -iname 'folder.*' | wc -l`). En musique, le nettoyage efface toute image autre que `cover.{ext}`, `folder.jpg` compris.
-- [ ] **Après le redéploiement** : lancer un scan (le dossier de chaque artiste n'est connu qu'après), puis essayer *Changer la photo* / *Recadrer* sur une fiche d'artiste. Les photos d'avant restent sous `HUB_DATA/artists/` jusqu’à leur remplacement. Ensuite *Gestion* > *Entretien* > *Compter*, puis *Supprimer*. Si une erreur de droits apparaît, retirer `cap_drop` du compose (voir `deploy/README.md`, section Sécurité).
-- [ ] **Lancer « Sagas (TMDB) »** (*Gestion* > bibliothèque `Films`) avec la clé TMDB, et vérifier avec de vraies collections (MCU, Fast & Furious…) : seul un faux TMDB a été testé.
+- [x] **Redéployer** le compose. Vérifier d'abord que `HUB_PASSWORD` est dans le `.env` : il est obligatoire, sans lui `docker compose up` refuse de démarrer (il ne sert qu'à créer le premier compte, les comptes existants ne changent pas).
+- [x] **Retirer le `:ro`** des volumes `Animations` et `Musique` dans le compose pour que le nettoyage des fichiers parasites puisse effacer. Pour `Musique`, il faut aussi que le serveur puisse écrire `artist.webp` dans les dossiers d'artistes (photos recadrées).
+- [x] **Avant de « Supprimer » en musique** : compter les `folder.*` sur le NAS (`find /mnt/tank/media/Musique -iname 'folder.*' | wc -l`). En musique, le nettoyage efface toute image autre que `cover.{ext}`, `folder.jpg` compris.
+- [x] **Après le redéploiement** : lancer un scan (le dossier de chaque artiste n'est connu qu'après), puis essayer *Changer la photo* / *Recadrer* sur une fiche d'artiste. Les photos d'avant restent sous `HUB_DATA/artists/` jusqu’à leur remplacement. Ensuite *Gestion* > *Entretien* > *Compter*, puis *Supprimer*. Si une erreur de droits apparaît, retirer `cap_drop` du compose (voir `deploy/README.md`, section Sécurité).
+- [x] **Lancer « Sagas (TMDB) »** (*Gestion* > bibliothèque `Films`) avec la clé TMDB, et vérifier avec de vraies collections (MCU, Fast & Furious…) : seul un faux TMDB a été testé.
 - [ ] **Essayer à la télécommande**, sur la télé : sagas, éditeur, sélecteur de films, cartes grisées. Les tests tournent dans un Chromium de bureau, pas sur Android TV, Fire TV ni webOS.
 - [ ] Si `test_admin_runs_an_update` échoue de nouveau (il a échoué une fois sur votre machine, jamais sur l'autre) : le relancer seul avec `python -W ignore -m unittest tests.test_ui.TestDetailPages.test_admin_runs_an_update` et garder les lignes de l'échec. Ce test attend au plus 30 s qu'un scan se termine.
 
