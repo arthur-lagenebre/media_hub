@@ -20,6 +20,33 @@
 - [ ] **« Compter »** : afficher les 20 premiers fichiers qu'il supprimerait, pour voir ce qui partira avant de confirmer.
 - [ ] **Sagas de `sagas.json`** : cacher aussi un film listé qui n'est pas encore sorti (aujourd'hui, il s'affiche toujours, puisqu'on l'a écrit exprès).
 
+## Évolutions souhaitées
+
+### Films
+
+- [ ] **Bouton « … » sur les films et les sagas** : *Voir / Revoir*, *Marquer vu / non vu*, *Ajouter à une saga*, *TMDB*.
+- [ ] **Changer les affiches.** À vérifier d'abord : l'affiche actuelle est-elle seulement extraite du `.mkv` ? Si l'on en choisit une autre, la glisser aussi dans le `.mkv`. *À décider* : le hub n'écrit aujourd'hui jamais dans les fichiers de la médiathèque (c'est `media_library` qui écrit les étiquettes), donc cette intégration serait une exception, ou revient à `media_library`.
+
+### Séries et animations
+
+- [ ] **Bouton « … » sur les séries et les animations** : *Voir / Revoir*, *Marquer vu / non vu*, *TMDB*.
+- [ ] **Changer les textes** : « Marquer comme vu » / « Marquer non vu » deviennent « Marquer toutes les saisons comme vu » / « Marquer toutes les saisons non vu ».
+- [ ] **« Marquer comme vu » / « Marquer non vu » sur chaque épisode**, éventuellement derrière un bouton « … ».
+
+### Global
+
+- [ ] **Télécharger** les films, les séries, les animations, la musique et les livres.
+
+### Interface
+
+- [ ] **Renommer « Admin » en « Paramètres ».**
+- [ ] **Séparer les paramètres en onglets**, en haut de la page et qui restent flottants :
+  - *Gestion* (bibliothèques, sagas, entretien) : admin ;
+  - *Comptes* : « Mon compte » pour tout le monde, « Comptes » pour l'admin ;
+  - *Tâches* (avec la possibilité de tout déplier et de tout voir) : admin ;
+  - *Serveur* : admin.
+- [ ] **Une autre page d'accueil.** Pas d'idée encore : à chercher.
+
 ## Limites connues, non traitées
 
 - [ ] Avec **deux bibliothèques de films**, les collections TMDB sont repérées par le seul nom de saga : la seconde peut être sautée.
