@@ -464,5 +464,18 @@ class TestArtistPass(TempCase):
         self.assertEqual(self.run_pass(force=True)[2], ["z-id", "a-id"])
 
 
+class TestRefusedRedirect(unittest.TestCase):
+    def refusal(self, target):
+        from urllib.error import URLError
+        from urllib.request import Request
+        with self.assertRaises(URLError) as caught:
+            enrich._SameHosts().redirect_request(Request("https://upload.wikimedia.org/a.jpg"), None, 302, "Found", {}, target)
+        return caught.exception.reason
+
+    def test_the_refusal_names_the_host_it_would_have_gone_to_or_else_the_address(self):
+        self.assertEqual(self.refusal("https://exemple.org/b.jpg"), "redirection refusée vers exemple.org")
+        self.assertEqual(self.refusal("file:///etc/passwd"), "redirection refusée vers file:///etc/passwd")
+
+
 if __name__ == "__main__":
     unittest.main()

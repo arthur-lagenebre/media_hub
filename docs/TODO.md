@@ -10,7 +10,7 @@
 - [x] **Après le redéploiement** : lancer un scan (le dossier de chaque artiste n'est connu qu'après), puis essayer *Changer la photo* / *Recadrer* sur une fiche d'artiste. Les photos d'avant restent sous `HUB_DATA/artists/` jusqu’à leur remplacement. Ensuite *Gestion* > *Entretien* > *Compter*, puis *Supprimer*. Si une erreur de droits apparaît, retirer `cap_drop` du compose (voir `deploy/README.md`, section Sécurité).
 - [x] **Lancer « Sagas (TMDB) »** (*Gestion* > bibliothèque `Films`) avec la clé TMDB, et vérifier avec de vraies collections (MCU, Fast & Furious…) : seul un faux TMDB a été testé.
 - [ ] **Essayer à la télécommande**, sur la télé : sagas, éditeur, sélecteur de films, cartes grisées. Les tests tournent dans un Chromium de bureau, pas sur Android TV, Fire TV ni webOS.
-- [ ] Si `test_admin_runs_an_update` échoue de nouveau (il a échoué une fois sur votre machine, jamais sur l'autre) : le relancer seul avec `python -W ignore -m unittest tests.test_ui.TestDetailPages.test_admin_runs_an_update` et garder les lignes de l'échec. Ce test attend au plus 30 s qu'un scan se termine.
+- [x] Si `test_admin_runs_an_update` échoue de nouveau (il a échoué une fois sur votre machine, jamais sur l'autre) : le relancer seul avec `python -W ignore -m unittest tests.test_ui.TestDetailPages.test_admin_runs_an_update` et garder les lignes de l'échec. Ce test attend au plus 30 s qu'un scan se termine.
 
 ## À décider
 
