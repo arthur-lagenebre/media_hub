@@ -676,7 +676,7 @@ def seen_counts(hub, profile, lib_id=None):
 
 
 def with_seen(row, seen):
-    done, touched = seen.get(row["id"], (0, 0))
+    done, touched = watched(row, seen)
     out = summary(row)
     if touched:
         out["seen"] = done
