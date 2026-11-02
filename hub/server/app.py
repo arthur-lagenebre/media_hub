@@ -51,8 +51,7 @@ from .jobs import Jobs
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
 CHUNK = 256 * 1024
 SESSION_DAYS = 90
-WATCHED_AT = 0.92          # au-delà de cette part, ou à moins d'une minute et demie de la fin, le film est vu
-WATCHED_TAIL = 90
+WATCHED_AT = 0.92          # au-delà de cette part, le film est vu
 RESUME_MIN = 20            # en deçà (secondes), on ne reprend pas : on recommence
 
 for ext, mime in {".mkv": "video/x-matroska", ".flac": "audio/flac", ".opus": "audio/ogg", ".m4a": "audio/mp4", ".webp": "image/webp", ".cbz": "application/vnd.comicbook+zip",
@@ -225,11 +224,11 @@ def range_bounds(header, size):
     if not (first or last):
         return 0, size - 1, 200
     if first:
-        start, end = int(first), int(last) if last else size - 1
+        start, end = int(first), int(last) if last else size
     else:
-        start, end = max(0, size - int(last)), size - 1
+        start, end = max(0, size - int(last)), size
     end = min(end, size - 1)
-    if start >= size or start > end:
+    if start > end:
         return None
     return start, end, 206
 
@@ -677,7 +676,7 @@ def seen_counts(hub, profile, lib_id=None):
 
 
 def with_seen(row, seen):
-    done, touched = seen.get(row["id"], (0, 0))
+    done, touched = watched(row, seen)
     out = summary(row)
     if touched:
         out["seen"] = done
@@ -833,15 +832,20 @@ def sections_json(counts):
     """Les sections dans l'ordre de l'étagère (Manga, BD, Comics… puis les autres par ordre alphabétique, « Autres » en dernier)."""
     def rank(name):
         if name == shelf.LOOSE_SECTION:
-            return (2, 0, "")
+            return (2, "")
         if name in shelf.SECTION_ORDER:
-            return (0, shelf.SECTION_ORDER.index(name), "")
-        return (1, 0, fold(name))
+            return (0, shelf.SECTION_ORDER.index(name))
+        return (1, fold(name))
     return [[name, counts[name]] for name in sorted(counts, key=rank)]
 
 
+def watched(row, seen):
+    """(fichiers vus, position en cours) de ce que le compte a regardé de cet élément ; (0, 0) quand il n'y a pas touché."""
+    return seen.get(row["id"], (0, 0))
+
+
 def film_seen(row, seen):
-    return seen.get(row["id"], (0, 0))[0] >= max(1, row["count"])
+    return watched(row, seen)[0] >= max(1, row["count"])
 
 
 def saga_groups(rows, custom):
@@ -895,7 +899,7 @@ def collapse_sagas(rows, seen, custom):
 
 def saga_json(saga, seen):
     done = sum(1 for m in saga["members"] if film_seen(m, seen))
-    started = sum(1 for m in saga["members"] if not film_seen(m, seen) and seen.get(m["id"], (0, 0))[1])
+    started = sum(1 for m in saga["members"] if not film_seen(m, seen) and watched(m, seen)[1])
     out = {"id": saga["id"], "lib": saga["lib"], "type": "saga", "title": saga["title"], "year": saga["year"], "years": saga["years"], "grp": "", "n": saga["count"], "letter": saga["letter"],
            "added": saga["added"], "genres": safe_json(saga["genres"], []), "covers": [m["id"] for m in saga["members"][:3]],
            "cover_urls": [urls.item_cover(m["id"]) for m in saga["members"][:3]]}
@@ -963,7 +967,7 @@ def matches_needle(row, needle, in_custom):
 def is_unseen(row, seen):
     if row["type"] == "saga":
         return not row["all_seen"]
-    return seen.get(row["id"], (0, 0))[0] < max(1, row["count"])
+    return not film_seen(row, seen)
 
 
 def library_filters(q, kind, ranks, of, in_custom, seen):
@@ -1433,7 +1437,7 @@ def is_finished(kind, position, duration):
         return False
     if kind == "book":
         return position >= duration - 1
-    return position / duration >= WATCHED_AT or duration - position <= min(WATCHED_TAIL, duration * 0.08)
+    return position / duration >= WATCHED_AT
 
 
 def progress_numbers(body):
@@ -1456,7 +1460,6 @@ def api_progress(h, m, q):
     done = bool(body.get("done")) or is_finished(entry["kind"], position, duration)
     if entry["kind"] == "audio":                 # la musique n'a pas de reprise : seulement « écouté »
         done = done or (duration > 0 and position / duration > 0.8)
-        position = 0 if done else position
     h.hub.db.save_progress(h.user["id"], entry["id"], duration if done and entry["kind"] != "book" else position, duration, done)
     h.send_json({"ok": True, "done": done})
 

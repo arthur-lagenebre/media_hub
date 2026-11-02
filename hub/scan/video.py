@@ -231,7 +231,7 @@ def _season_images(lib, folder, seasons):
     """{numéro de saison: image posée dans le dossier de la saison}."""
     images = {}
     for season_dir, number in seasons:
-        img = folder_image(season_dir) if number is not None and season_dir != folder else ""
+        img = folder_image(season_dir) if number is not None else ""
         if img:
             images[str(number)] = (season_dir.relative_to(lib.path) / img).as_posix()
     return images
