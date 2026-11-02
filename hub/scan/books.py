@@ -20,7 +20,7 @@ def _read_volumes(series, known):
         row = known.get(volume.rel)
         meta = json.loads(row["meta"]) if unchanged(row, volume.size, volume.mtime) else None
         if meta is not None and "info" in meta and not meta.get("error"):          # une lecture en erreur se refait
-            volume.info, volume.error = meta["info"], meta.get("error") or None
+            volume.info, volume.error = meta["info"], None
             reused += 1
         else:
             shelf.read_info(volume)
