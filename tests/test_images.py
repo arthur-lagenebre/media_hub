@@ -58,6 +58,15 @@ class TestCropped(unittest.TestCase):
         self.assertEqual(images._cropped(picture, (1, 1, 0.5, 0.5)).getpixel((0, 0)), (255, 0, 0))
 
 
+class TestConversionSlots(unittest.TestCase):
+    def test_there_is_always_at_least_one_slot_whatever_the_setting(self):
+        for streams, slots in ((0, 1), (1, 1), (3, 3)):
+            service = images.Images(types.SimpleNamespace(data=Path(tempfile.mkdtemp()), max_streams=streams, ffmpeg=""), None)
+            self.addCleanup(shutil.rmtree, service.cfg.data, True)
+            taken = [service.convert.acquire(blocking=False) for _ in range(slots + 1)]
+            self.assertEqual(taken, [True] * slots + [False], streams)
+
+
 class TestFfmpegJpeg(unittest.TestCase):
     def convert(self, result):
         cfg = types.SimpleNamespace(data=Path(tempfile.mkdtemp()), max_streams=1, ffmpeg="ffmpeg")
@@ -231,6 +240,13 @@ class TestPillowJpeg(unittest.TestCase):
 
     def test_a_picture_narrower_than_the_width_is_not_enlarged(self):
         self.assertEqual(self.size(encoded("PNG", (50, 80)), 100), (50, 80))
+
+    def test_the_jpeg_is_written_with_optimized_tables(self):
+        noise = images.Image.effect_noise((200, 200), 60).convert("RGB")
+        raw, plain = io.BytesIO(), io.BytesIO()
+        noise.save(raw, "PNG")
+        noise.save(plain, "JPEG", quality=80)
+        self.assertLess(len(images.Images._pillow_jpeg(raw.getvalue(), 400)), len(plain.getvalue()))
 
     def test_a_jpeg_is_decoded_straight_at_a_reduced_size_but_a_png_is_not(self):
         from PIL import JpegImagePlugin
