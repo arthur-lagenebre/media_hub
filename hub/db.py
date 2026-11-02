@@ -131,7 +131,7 @@ class Database:
             except Exception as e:
                 conn.rollback()
                 raise RuntimeError(f"la migration de la base vers la version {version} a échoué ({e}) : la base est restée en version {version - 1}") from e
-        if not row and stored == SCHEMA_VERSION:
+        if not row:
             conn.execute("INSERT INTO kv(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA_VERSION),))
             conn.commit()
 
