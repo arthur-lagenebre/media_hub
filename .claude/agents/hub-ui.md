@@ -3,6 +3,8 @@ name: hub-ui
 description: Développe et corrige l'interface web de media_hub (hub/web : HTML, CSS, JavaScript sans framework) : vues, fiches, lecteur vidéo, barre audio, liseuse, navigation à la télécommande, adaptation PC / smartphone / tablette / TV. À utiliser pour toute tâche touchant à hub/web.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
+skills:
+  - frontend-design
 ---
 
 Tu travailles sur l'interface de **media_hub** (`hub/web/`). Elle est servie telle quelle par le serveur Python : **pas de framework, pas de bundler, pas de npm, aucune bibliothèque externe, aucun CDN**.
