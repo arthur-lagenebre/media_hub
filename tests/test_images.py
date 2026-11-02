@@ -72,6 +72,7 @@ class TestFfmpegJpeg(unittest.TestCase):
         self.assertEqual(data, b"jpeg")
         self.assertIn("scale='min(320,iw)':-2", run.call_args.args[0])
         self.assertEqual(run.call_args.kwargs["input"], b"octets")
+        self.assertTrue(run.call_args.kwargs["capture_output"])
 
     def test_a_failure_or_an_empty_answer_gives_nothing(self):
         for result in (types.SimpleNamespace(returncode=1, stdout=b"jpeg"), types.SimpleNamespace(returncode=0, stdout=b""), OSError("pas de ffmpeg"),
@@ -161,6 +162,149 @@ class TestResize(unittest.TestCase):
         self.assertEqual(service.resize(fixtures.PNG, 0), (fixtures.PNG, "image/png"))
         data, mime = service.resize(fixtures.PNG, 160)
         self.assertEqual((mime, images.sniff(data)), ("image/jpeg", "image/jpeg"))
+
+
+def encoded(fmt, size, mode="RGB", **save):
+    """Les octets d'une image unie de `size`, au format `fmt`."""
+    out = io.BytesIO()
+    images.Image.new(mode, size).save(out, fmt, **save)
+    return out.getvalue()
+
+
+class TestSnapWidth(unittest.TestCase):
+    def test_a_width_snaps_up_to_the_next_size_that_can_be_asked(self):
+        for asked, served in ((0, 0), (None, 0), (1, 160), (160, 160), (161, 320), (320, 320), (481, 720), (1280, 1280), (1281, 1280), (5000, 1280), ("320", 320)):
+            self.assertEqual(images.snap_width(asked), served, asked)
+
+
+class TestCropBox(unittest.TestCase):
+    def test_a_rectangle_inside_the_picture_is_read_as_fractions(self):
+        self.assertEqual(images.crop_box("0.1,0.2,0.3,0.4"), (0.1, 0.2, 0.3, 0.4))
+        self.assertEqual(images.crop_box("0,0,1,1"), (0, 0, 1, 1))
+        self.assertEqual(images.crop_box("0.5,0.5,0.5,0.5"), (0.5, 0.5, 0.5, 0.5))
+
+    def test_what_is_not_four_numbers_is_refused(self):
+        for text in ("", "1,2,3", "a,b,c,d", "0,0,1,1,1"):
+            with self.assertRaisesRegex(ValueError, "recadrage attendu"):
+                images.crop_box(text)
+
+    def test_each_edge_of_the_rectangle_has_its_own_limit(self):
+        for text in ("1,0,0.00001,0.5", "0,1,0.5,0.00001", "0,0,0,0.5", "0,0,0.5,0", "-0.1,0,0.5,0.5", "0,-0.1,0.5,0.5", "0,0,1.1,0.5", "0,0,0.5,1.1",
+                     "0.5,0,0.6,0.5", "0,0.5,0.5,0.6", "0.5,0,0.5002,0.5", "0,0.5,0.5,0.5002"):
+            with self.assertRaisesRegex(ValueError, "sort de l'image", msg=text):
+                images.crop_box(text)
+
+    def test_a_rounding_error_at_the_far_edge_is_forgiven_but_not_more(self):
+        self.assertEqual(images.crop_box("0.0001,0,1,1"), (0.0001, 0, 1, 1))
+        self.assertEqual(images.crop_box("0,0.0001,1,1"), (0, 0.0001, 1, 1))
+        self.assertEqual(images.crop_box("0.5,0.5,0.50005,0.50005"), (0.5, 0.5, 0.50005, 0.50005))
+
+
+@needs_pillow
+class TestReduced(unittest.TestCase):
+    def test_a_picture_that_fits_is_returned_itself(self):
+        picture = images.Image.new("RGB", (100, 50))
+        self.assertIs(images._reduced(picture, 100), picture)
+        self.assertIs(images._reduced(picture, 300), picture)
+
+    def test_a_bigger_one_gets_its_long_side_to_the_limit(self):
+        self.assertEqual(images._reduced(images.Image.new("RGB", (200, 100)), 100).size, (100, 50))
+        self.assertEqual(images._reduced(images.Image.new("RGB", (100, 400)), 100).size, (25, 100))
+
+    def test_a_thin_picture_keeps_one_pixel(self):
+        self.assertEqual(images._reduced(images.Image.new("RGB", (1000, 1)), 10).size, (10, 1))
+        self.assertEqual(images._reduced(images.Image.new("RGB", (1, 1000)), 10).size, (1, 10))
+
+
+@needs_pillow
+class TestPillowJpeg(unittest.TestCase):
+    def size(self, data, width):
+        with images.Image.open(io.BytesIO(images.Images._pillow_jpeg(data, width))) as out:
+            return out.size
+
+    def test_the_height_follows_the_shape_of_the_picture(self):
+        self.assertEqual(self.size(encoded("PNG", (400, 800)), 100), (100, 200))
+        self.assertEqual(self.size(encoded("PNG", (300, 100)), 150), (150, 50))
+
+    def test_a_thin_picture_keeps_one_pixel(self):
+        self.assertEqual(self.size(encoded("PNG", (1000, 1)), 10), (10, 1))
+
+    def test_a_picture_narrower_than_the_width_is_not_enlarged(self):
+        self.assertEqual(self.size(encoded("PNG", (50, 80)), 100), (50, 80))
+
+    def test_a_jpeg_is_decoded_straight_at_a_reduced_size_but_a_png_is_not(self):
+        from PIL import JpegImagePlugin
+        real = JpegImagePlugin.JpegImageFile.draft
+        with mock.patch.object(JpegImagePlugin.JpegImageFile, "draft", autospec=True, side_effect=real) as draft:
+            images.Images._pillow_jpeg(encoded("PNG", (400, 400)), 100)
+            self.assertEqual(draft.call_count, 0)
+            images.Images._pillow_jpeg(encoded("JPEG", (400, 400)), 100)
+        self.assertEqual(draft.call_args.args[1:], ("RGB", (200, 300)))
+
+
+def has_webp():
+    from PIL import features
+    return images.Image is not None and features.check("webp")
+
+
+@unittest.skipUnless(has_webp(), "Pillow sans libwebp")
+class TestPillowWebp(unittest.TestCase):
+    def mode(self, data):
+        with images.Image.open(io.BytesIO(images._pillow_webp(data, None, 100))) as out:
+            return out.mode
+
+    def test_a_picture_with_transparency_keeps_it(self):
+        self.assertEqual(self.mode(encoded("PNG", (20, 20), "RGBA")), "RGBA")
+        self.assertEqual(self.mode(encoded("PNG", (20, 20), "P", transparency=0)), "RGBA")
+
+    def test_an_opaque_one_stays_opaque(self):
+        self.assertEqual(self.mode(encoded("PNG", (20, 20))), "RGB")
+        self.assertEqual(self.mode(encoded("JPEG", (20, 20))), "RGB")
+
+
+class TestFfmpegWebp(unittest.TestCase):
+    def convert(self, returncode=0, stdout=b"webp", box=None):
+        run = mock.Mock(return_value=types.SimpleNamespace(returncode=returncode, stdout=stdout))
+        with mock.patch.object(images.subprocess, "run", run):
+            return images._ffmpeg_webp(b"octets", "ffmpeg", box, 500), run
+
+    def test_the_box_becomes_a_crop_before_the_scale(self):
+        data, run = self.convert(box=(0.1, 0.2, 0.3, 0.4))
+        self.assertEqual(data, b"webp")
+        self.assertIn("crop=iw*0.3:ih*0.4:iw*0.1:ih*0.2,scale='min(500,iw)':'min(500,ih)':force_original_aspect_ratio=decrease", run.call_args.args[0])
+
+    def test_without_a_box_nothing_is_cropped(self):
+        self.assertIn("scale='min(500,iw)':'min(500,ih)':force_original_aspect_ratio=decrease", self.convert()[1].call_args.args[0])
+        self.assertFalse(any("crop=" in part for part in self.convert()[1].call_args.args[0]))
+
+    def test_it_takes_both_a_success_code_and_some_bytes(self):
+        for returncode, stdout in ((1, b"webp"), (0, b"")):
+            with self.assertRaisesRegex(images.ConvertError, "illisible"):
+                self.convert(returncode, stdout)
+
+
+class TestMoreSources(ServiceCase):
+    def test_a_poster_kept_by_the_enrichment_is_read_from_the_data_folder(self):
+        (self.cfg.data / "tmdb").mkdir()
+        (self.cfg.data / "tmdb" / "poster.png").write_bytes(fixtures.PNG)
+        self.fill([item("i1", meta={"poster_file": "poster.png"})])
+        row = self.db.one("SELECT * FROM items WHERE id=?", ("i1",))
+        self.assertEqual(self.service.item_source(self.cfg.library("lib"), row), fixtures.PNG)
+
+    def test_an_album_cover_stamp_needs_a_library_and_a_cover_file(self):
+        row = {"meta": json.dumps({"cover_file": "cover.jpg"})}
+        self.assertEqual(self.service._cover_stamp(None, row), "")
+        self.assertEqual(self.service._cover_stamp(self.cfg.library("lib"), {"meta": "{}"}), "")
+        self.assertEqual(self.service._cover_stamp(self.cfg.library("lib"), row), "")      # le fichier n'y est pas
+        (self.root / "cover.jpg").write_bytes(b"jpeg")
+        self.assertRegex(self.service._cover_stamp(self.cfg.library("lib"), row), r"^\|4\|\d+$")
+
+    @needs_pillow
+    def test_a_photo_without_a_width_is_served_as_it_is(self):
+        photo = self.root / "photo.png"
+        photo.write_bytes(encoded("PNG", (400, 400)))
+        data, mime, _key = self.service.file("a", photo)
+        self.assertEqual((data, mime), (photo.read_bytes(), "image/png"))
 
 
 if __name__ == "__main__":
