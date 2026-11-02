@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from hub.media import probe as prober
 
@@ -64,8 +68,46 @@ class TestSummarize(unittest.TestCase):
         out = prober.summarize({"streams": [{"codec_type": "video", "codec_name": "wmv3"}, {"codec_type": "audio", "codec_name": "wmapro"}, {"codec_type": "audio"}]})
         self.assertEqual((out["video"]["codec"], out["audio"][0]["codec"], out["audio"][1]["codec"]), ("wmv3", "wmapro", ""))
 
+    def test_a_video_without_size_or_bitrate_has_zeros(self):
+        out = prober.summarize({"streams": [{"codec_type": "video", "codec_name": "h264"}]})["video"]
+        self.assertEqual((out["width"], out["height"], out["bitrate"]), (0, 0, 0))
+
     def test_the_frame_rate(self):
         self.assertEqual([prober._fps(t) for t in ("24000/1001", "25", "0/0", "x/y", "", None)], [23.976, 25.0, 0, 0, 0.0, 0.0])
+
+
+class TestRunFfprobe(unittest.TestCase):
+    def run_with(self, returncode=0, stdout=b"", stderr=b"", ffprobe="ffprobe", **failure):
+        done = SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+        with mock.patch.object(prober.subprocess, "run", return_value=done, **failure) as run:
+            return prober.run_ffprobe(ffprobe, "/films/a.mkv"), run
+
+    def test_the_answer_of_ffprobe_is_summarized(self):
+        out, run = self.run_with(stdout=json.dumps({"format": {"format_name": "matroska,webm", "duration": "5"}}).encode("utf-8"))
+        self.assertEqual((out["container"], out["duration"]), ("mkv", 5.0))
+        self.assertEqual(run.call_args.args[0], ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "/films/a.mkv"])
+        self.assertEqual(run.call_args.kwargs, {"capture_output": True, "timeout": 60})
+
+    def test_an_empty_answer_is_an_empty_file(self):
+        self.assertEqual(self.run_with(stdout=b"")[0]["container"], "")
+
+    def test_without_ffprobe_nothing_is_probed(self):
+        with self.assertRaisesRegex(prober.ProbeError, "ffprobe est introuvable"):
+            self.run_with(ffprobe="")
+
+    def test_a_failure_says_what_ffprobe_said(self):
+        with self.assertRaisesRegex(prober.ProbeError, "^fichier cassé é$"):
+            self.run_with(returncode=1, stderr=" fichier cassé é\n".encode("utf-8"))
+        with self.assertRaisesRegex(prober.ProbeError, "^ffprobe a échoué$"):
+            self.run_with(returncode=1)
+        with self.assertRaises(prober.ProbeError) as caught:
+            self.run_with(returncode=2, stderr=b"x" * 500)
+        self.assertEqual(len(str(caught.exception)), 300)
+
+    def test_a_program_that_cannot_run_is_an_error_too(self):
+        for failure in (OSError("pas de programme"), subprocess.TimeoutExpired("ffprobe", 60)):
+            with self.assertRaisesRegex(prober.ProbeError, "ffprobe a échoué : "):
+                self.run_with(side_effect=failure)
 
 
 class TestPlan(unittest.TestCase):
@@ -105,6 +147,11 @@ class TestPlan(unittest.TestCase):
         self.assertEqual(self.plan(max_kbps=3800)["mode"], "transcode")           # 4000 > 3800 × 1,05
         self.assertEqual(self.plan(max_kbps=3850)["mode"], "direct")                  # 4000 ≤ 3850 × 1,05
         self.assertEqual(self.plan(info(bitrate=0), max_kbps=100)["mode"], "direct")        # débit inconnu : on ne peut pas dire qu'il est trop haut
+        self.assertEqual(self.plan(info(bitrate=2_100_000), max_kbps=2000)["mode"], "direct")       # pile à la marge : encore lisible
+
+    def test_the_bitrate_reason_is_rounded_to_a_tenth_of_a_megabit(self):
+        why = self.plan(info(bitrate=4_300_000), max_kbps=3300)["why"]
+        self.assertEqual(why, ["débit 4.3 Mb/s au-delà de 3.3 Mb/s demandés"])
 
     def test_every_reason_is_listed(self):
         out = self.plan(info(codec="hevc", bitrate=9_000_000), max_kbps=2000, max_height=720)
@@ -216,6 +263,19 @@ class TestFfmpegCommand(unittest.TestCase):
         for source, wanted, rate in ((6, 2, "224k"), (6, 6, "480k"), (1, 2, "160k"), (2, 2, "224k")):
             cmd = self.command(info(tracks=[audio(channels=source)]), decision={**self.TRANSCODE, "copy_video": True}, channels=wanted)
             self.assertEqual((self.after(cmd, "-c:a"), self.after(cmd, "-b:a"), self.after(cmd, "-ac")), ("aac", rate, str(min(source, wanted))), (source, wanted))
+
+    def test_the_sound_always_has_one_channel_at_least(self):
+        cmd = self.command(decision={**self.TRANSCODE, "copy_video": True}, channels=0)
+        self.assertEqual((self.after(cmd, "-ac"), self.after(cmd, "-b:a")), ("1", "160k"))
+
+    def test_a_start_at_zero_is_no_start(self):
+        self.assertNotIn("-ss", self.command(start=0))
+        self.assertEqual(self.after(self.command(start=0.5), "-ss"), "0.500")
+
+    def test_a_probe_without_video_height_is_not_scaled(self):
+        probe = info()
+        del probe["video"]["height"]
+        self.assertEqual(self.after(self.command(probe, decision=self.TRANSCODE, max_height=720), "-vf"), "format=yuv420p")
 
     def test_a_track_missing_from_the_probe_is_taken_as_stereo(self):
         cmd = self.command(info(tracks=[]), decision={**self.TRANSCODE, "audio": 3, "copy_video": True}, channels=6)

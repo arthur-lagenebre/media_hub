@@ -103,6 +103,87 @@ class TestLibraries(TempCase):
         with self.assertRaisesRegex(ValueError, "genre de bibliothèque inconnu"):
             config._libraries(self.describe([{"id": "x", "kind": "jeux", "path": "/x"}]), self.tmp)
 
+    def test_a_library_is_found_by_its_id(self):
+        cfg = config.Config(libraries=[config.Library("a", "A", "movies", self.tmp), config.Library("b", "B", "books", self.tmp)], data=self.tmp, repo=None)
+        self.assertEqual(cfg.library("b").label, "B")
+        self.assertIsNone(cfg.library("c"))
+
+
+class TestFindRepo(TempCase):
+    def test_the_repo_named_by_the_environment_is_used_when_it_holds_libraries(self):
+        repo = self.tmp / "ml"
+        (repo / "libraries").mkdir(parents=True)
+        self.assertEqual(config._find_repo({"HUB_REPO": str(repo)}), repo)
+
+    def test_a_repo_without_libraries_is_skipped(self):
+        repo = self.tmp / "ml"
+        repo.mkdir()
+        self.assertNotEqual(config._find_repo({"HUB_REPO": str(repo)}), repo)
+
+    def test_nothing_is_required_to_look_for_it(self):
+        found = config._find_repo({})
+        self.assertTrue(found is None or (found / "libraries").is_dir())
+
+
+class TestDotenvKey(TempCase):
+    def write(self, folder, text):
+        (folder).mkdir(parents=True, exist_ok=True)
+        (folder / ".env").write_text(text, encoding="utf-8")
+
+    def test_without_a_repo_there_is_no_key(self):
+        self.assertEqual(config._read_dotenv_key(None), "")
+
+    def test_the_key_is_read_without_its_quotes_from_the_repo(self):
+        repo = self.tmp / "ml"
+        self.write(repo, "AUTRE=1\nTMDB_KEY_X=non\n TMDB_KEY = 'abc' \n")
+        self.assertEqual(config._read_dotenv_key(repo), "abc")
+        self.write(repo, 'TMDB_KEY="déf"\n')
+        self.assertEqual(config._read_dotenv_key(repo), "déf")
+
+    def test_an_empty_key_is_skipped_and_the_parent_folder_is_the_next_place(self):
+        repo = self.tmp / "ml"
+        self.write(repo, "TMDB_KEY=\nTMDB_KEY=  \n")
+        self.write(self.tmp, "TMDB_KEY=parent\n")
+        self.assertEqual(config._read_dotenv_key(repo), "parent")
+
+    def test_no_file_no_key(self):
+        repo = self.tmp / "ml"
+        repo.mkdir()
+        self.assertEqual(config._read_dotenv_key(repo), "")
+
+
+class TestLoad(TempCase):
+    def load(self, **env):
+        base = {"HUB_DATA": str(self.tmp / "data"), "HUB_SRV": str(self.tmp / "srv")}
+        with mock.patch("hub.config.shutil.which", return_value=None):
+            return config.load({**base, **env})
+
+    def test_the_defaults(self):
+        cfg = self.load()
+        self.assertEqual((cfg.bind, cfg.port, cfg.password, cfg.admin, cfg.max_streams, cfg.autoscan_hours, cfg.ffmpeg, cfg.ffprobe),
+                         ("127.0.0.1", 8080, "", "admin", 2, 0.0, "", ""))
+        self.assertEqual(cfg.data, (self.tmp / "data").resolve())
+        self.assertEqual(cfg.libraries, [])
+
+    def test_every_setting_can_be_given(self):
+        cfg = self.load(HUB_BIND="0.0.0.0", HUB_PORT="9000", HUB_PASSWORD="secret", HUB_ADMIN=" chef ", HUB_MAX_STREAMS="5", HUB_AUTOSCAN_HOURS="1.5", TMDB_KEY="clé")
+        self.assertEqual((cfg.bind, cfg.port, cfg.password, cfg.admin, cfg.max_streams, cfg.autoscan_hours, cfg.tmdb_key),
+                         ("0.0.0.0", 9000, "secret", "chef", 5, 1.5, "clé"))
+
+    def test_an_empty_admin_name_falls_back_to_admin(self):
+        self.assertEqual(self.load(HUB_ADMIN="  ").admin, "admin")
+
+    def test_there_is_always_at_least_one_stream(self):
+        self.assertEqual(self.load(HUB_MAX_STREAMS="0").max_streams, 1)
+        self.assertEqual(self.load(HUB_MAX_STREAMS="-3").max_streams, 1)
+
+    def test_the_tmdb_key_comes_from_the_environment_before_the_dotenv_file(self):
+        repo = self.tmp / "ml"
+        (repo / "libraries").mkdir(parents=True)
+        (repo / ".env").write_text("TMDB_KEY=fichier\n", encoding="utf-8")
+        self.assertEqual(self.load(HUB_REPO=str(repo)).tmdb_key, "fichier")
+        self.assertEqual(self.load(HUB_REPO=str(repo), TMDB_KEY="env").tmdb_key, "env")
+
 
 if __name__ == "__main__":
     unittest.main()

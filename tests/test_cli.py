@@ -39,6 +39,11 @@ class TestUserCommand(unittest.TestCase):
         db = Database(Path(self.tmp) / "hub.db")
         return [(r["name"], r["role"]) for r in accounts.rows(db)]
 
+    def test_an_action_is_required(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:
+            cli.user_command([])
+        self.assertEqual(stop.exception.code, 2)
+
     def test_list_is_empty_without_accounts(self):
         self.assertEqual(self.run_cli("list"), "")
 
@@ -111,6 +116,23 @@ class TestReadSecret(unittest.TestCase):
         asked.assert_called_once_with("Mot de passe : ")
 
 
+class Console(io.StringIO):
+    """Une sortie qui retient ce qui a été écrit sans être vidé : ce que `docker logs` ne verrait pas encore."""
+
+    def __init__(self):
+        super().__init__()
+        self.unflushed = ""
+        self.flushes = []
+
+    def write(self, text):
+        self.unflushed += text
+        return super().write(text)
+
+    def flush(self):
+        self.flushes.append(self.unflushed)
+        self.unflushed = ""
+
+
 def fake_config(tmp, **over):
     lib = types.SimpleNamespace(label="Films", kind="movies", path=Path(tmp) / "Films")
     return types.SimpleNamespace(**{"bind": "127.0.0.1", "port": 8080, "libraries": [lib], "ffmpeg": "/usr/bin/ffmpeg", "repo": tmp, **over})
@@ -122,10 +144,17 @@ class TestAnnounce(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
     def said(self, cfg, auth=True):
-        out, err = io.StringIO(), io.StringIO()
+        out, err = Console(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             cli.announce(cfg, types.SimpleNamespace(auth=lambda: auth))
+        self.console = out
         return out.getvalue(), err.getvalue()
+
+    def test_the_address_and_each_library_are_flushed_at_once(self):
+        self.said(fake_config(self.tmp))
+        self.assertEqual(self.console.unflushed, "")
+        self.assertEqual(len(self.console.flushes), 2)                                      # l'adresse, puis la bibliothèque
+        self.assertTrue(self.console.flushes[0].startswith("media_hub "))
 
     def test_a_healthy_start_says_where_it_listens_and_warns_of_nothing(self):
         (Path(self.tmp) / "Films").mkdir()
@@ -156,7 +185,7 @@ class TestMain(unittest.TestCase):
         hub = mock.Mock()
         hub.auth.return_value = True
         server = mock.Mock(hub=hub, serve_forever=serve_forever)
-        out = io.StringIO()
+        out = self.console = Console()
         with mock.patch.object(sys, "argv", ["hub", *argv]), mock.patch.object(cli.config, "load", return_value=fake_config(tmp)),                 mock.patch.object(cli.config, "use_media_library"), mock.patch.dict(sys.modules, {"hub.server.app": types.SimpleNamespace(make_server=lambda cfg: server)}), contextlib.redirect_stdout(out):
             cli.main()
         return server, hub, out.getvalue()
@@ -167,6 +196,7 @@ class TestMain(unittest.TestCase):
         hub.autoscan.assert_called_once_with()
         server.server_close.assert_called_once_with()
         self.assertIn("arrêt.", out)
+        self.assertEqual(self.console.unflushed, "")
 
     def test_user_hands_over_to_the_account_commands(self):
         with mock.patch.object(cli, "user_command") as users:
