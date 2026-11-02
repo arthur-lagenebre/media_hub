@@ -20,6 +20,33 @@
 - [ ] **« Compter »** : afficher les 20 premiers fichiers qu'il supprimerait, pour voir ce qui partira avant de confirmer.
 - [ ] **Sagas de `sagas.json`** : cacher aussi un film listé qui n'est pas encore sorti (aujourd'hui, il s'affiche toujours, puisqu'on l'a écrit exprès).
 
+## Évolutions souhaitées
+
+### Films
+
+- [ ] **Bouton « … » sur les films et les sagas** : *Voir / Revoir*, *Marquer vu / non vu*, *Ajouter à une saga*, *TMDB*.
+- [ ] **Changer les affiches.** Aujourd'hui le hub prend `folder.jpg` à côté du film, sinon la jaquette `cover.jpg` embarquée dans le `.mkv`. Si l'on en choisit une autre, la glisser aussi dans le `.mkv` : le hub appellerait `media_library` (qui sait déjà remplacer cette jaquette avec `mkvpropedit`, mais seulement à partir d'une affiche TMDB : il lui faut une fonction qui prenne n'importe quelle image). À régler avant : `mkvpropedit` n'est pas dans le conteneur, le volume `Films` est monté en `:ro` dans le compose du dépôt, un film en cours de lecture est ouvert pendant l'écriture, et le cache d'images doit être invalidé après le changement. Deux temps possibles : d'abord écrire `folder.jpg` (sans toucher au `.mkv`), puis l'intégration au `.mkv`.
+
+### Séries et animations
+
+- [ ] **Bouton « … » sur les séries et les animations** : *Voir / Revoir*, *Marquer vu / non vu*, *TMDB*.
+- [ ] **Changer les textes** : « Marquer comme vu » / « Marquer non vu » deviennent « Marquer toutes les saisons comme vu » / « Marquer toutes les saisons non vu ».
+- [ ] **« Marquer comme vu » / « Marquer non vu » sur chaque épisode**, éventuellement derrière un bouton « … ».
+
+### Global
+
+- [ ] **Télécharger** les films, les séries, les animations, la musique et les livres.
+
+### Interface
+
+- [ ] **Renommer « Admin » en « Paramètres ».**
+- [ ] **Séparer les paramètres en onglets**, en haut de la page et qui restent flottants :
+  - *Gestion* (bibliothèques, sagas, entretien) : admin ;
+  - *Comptes* : « Mon compte » pour tout le monde, « Comptes » pour l'admin ;
+  - *Tâches* (avec la possibilité de tout déplier et de tout voir) : admin ;
+  - *Serveur* : admin.
+- [ ] **Une autre page d'accueil.** Pas d'idée encore : à chercher.
+
 ## Limites connues, non traitées
 
 - [ ] Avec **deux bibliothèques de films**, les collections TMDB sont repérées par le seul nom de saga : la seconde peut être sautée.
