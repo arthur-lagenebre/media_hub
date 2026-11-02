@@ -405,7 +405,7 @@ def save_photo(cfg, artist_id, data, home=None, box=None, mbid=""):
     for path in other_photos(legacy, artist_id, mbid, home):
         if path != target:
             try:
-                path.unlink(missing_ok=True)
+                path.unlink()
             except OSError:
                 pass
     return target
