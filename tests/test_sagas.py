@@ -118,6 +118,14 @@ class TestReading(TempCase):
             self.assertEqual(store.all(), [("A", [1, 2])])
             self.assertEqual(read.call_count, 2)
 
+    def test_a_file_removed_after_a_save_is_empty_and_not_damaged(self):
+        store = Sagas(self.path)
+        store.save([("A", [1])])
+        self.assertEqual(store.all(), [("A", [1])])
+        store.save([("B", [2])])
+        self.path.unlink()
+        self.assertEqual((store.all(), store.ignored(), store.damaged(), store.version()), ([], [], False, ""))
+
     def test_the_version_changes_with_the_content(self):
         store = Sagas(self.path)
         self.write({"sagas": [{"name": "A"}]})

@@ -256,6 +256,30 @@ class TestSagaRanks(unittest.TestCase):
         self.assertEqual(home, {"a": "Saga", "b": "Saga"})
 
 
+class TestFirstScan(RouteCase):
+    def test_only_the_libraries_never_scanned_are_scanned_at_startup(self):
+        other = config.Library("autre", "Autre", self.kind, self.root / "autre")
+        self.hub.cfg.libraries = [self.lib, other]
+        self.db.kv_set("scanned:lib", {"at": 1})
+        self.hub.first_scan()
+        self.hub.jobs.scan.assert_called_once_with(other)
+
+
+class TestGroupRanks(RouteCase):
+    def setUp(self):
+        super().setUp()
+        self.fill([item("m1", title="Film 1", meta={"tmdb": "movie/1"})], [])
+        self.rows = self.db.query("SELECT * FROM items")
+        self.custom = {"Saga": [({"id": "m1"}, 1)], "": [({"id": "m1"}, 1)]}
+
+    def test_a_saga_of_the_file_ranks_its_films_by_their_place_in_the_list(self):
+        self.assertEqual(app.group_ranks(self.hub, self.rows, self.custom, "Saga", True), ({"m1": 1}, []))
+
+    def test_a_page_that_is_not_films_or_a_group_without_a_name_has_no_ranks(self):
+        for movies, group in ((False, "Saga"), (True, ""), (False, "")):
+            self.assertEqual(app.group_ranks(self.hub, self.rows, self.custom, group, movies), (None, []), (movies, group))
+
+
 class TestMovieSagas(RouteCase):
     def setUp(self):
         super().setUp()

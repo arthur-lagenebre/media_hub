@@ -142,8 +142,11 @@ class TestDispatch(RootCase):
         self.assertEqual((reply.status, reply.body), (200, b""))
 
     def test_the_query_is_read_with_the_last_value_winning(self):
-        _, reply = call(self.hub, "GET", "/api/search?q=aa&q=zz")
-        self.assertEqual(reply.json(), {"results": []})
+        seen = []
+        rig = self.rig("GET", "/q?a=1&a=2&b=x")
+        rig.routes = [("GET", re.compile("/q"), lambda handler, match, query: seen.append(query))]
+        rig.dispatch()
+        self.assertEqual(seen, [{"a": "2", "b": "x"}])
 
     def test_a_failing_route_is_a_500_that_does_not_stop_the_server(self):
         def boom(h, m, q):

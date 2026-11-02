@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import types
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -215,6 +216,252 @@ class TestArtistJournal(TempCase):
     def test_an_empty_sheet_is_said_to_be_empty(self):
         _, log = self.run_pass({})
         self.assertEqual(log, ["  Daft : fiche vide"])
+
+
+class TestMainRole(unittest.TestCase):
+    def test_the_role_with_the_most_episodes_wins_and_one_without_a_count_comes_last(self):
+        self.assertEqual(enrich.main_role({"roles": [{"character": "Sans compte"}, {"character": "Un épisode", "episode_count": 1}]}), "Un épisode")
+        self.assertEqual(enrich.main_role({"roles": [{"character": "Un", "episode_count": 1}, {"character": "Dix", "episode_count": 10}]}), "Dix")
+
+    def test_no_role_or_no_character_gives_nothing(self):
+        for person in ({}, {"roles": []}, {"roles": [{"episode_count": 3}]}, {"roles": [{"character": None}]}):
+            self.assertEqual(enrich.main_role(person), "", person)
+
+
+class TestTmdbClient(TempCase):
+    def client(self, read=None, data=None):
+        cfg = types.SimpleNamespace(tmdb_key="cle", data=data or self.tmp / "nouveau" / "donnees")
+        extra = {} if read is None else {"read": read}
+        with mock.patch.object(enrich, "Tmdb") as tmdb, mock.patch.object(enrich.tmdb_cache, "Cache") as cache:
+            result = enrich.tmdb_client(cfg, **extra)
+        return cfg, result, tmdb, cache
+
+    def test_the_cache_is_read_by_default_and_not_when_asked(self):
+        _, _, _, cache = self.client()
+        self.assertEqual(cache.call_args.kwargs, {"folder": self.tmp / "nouveau" / "donnees" / "tmdb-cache", "read": True})
+        self.assertIs(self.client(read=False)[3].call_args.kwargs["read"], False)
+
+    def test_the_folder_of_the_posters_is_created_with_its_parents_and_again_without_error(self):
+        cfg, (_, posters), _, _ = self.client()
+        self.assertEqual((posters, posters.is_dir()), (cfg.data / "tmdb", True))
+        self.client(data=cfg.data)
+
+    def test_without_a_key_it_is_an_error(self):
+        with self.assertRaisesRegex(RuntimeError, "Pas de clé TMDB"):
+            enrich.tmdb_client(types.SimpleNamespace(tmdb_key="", data=self.tmp))
+
+
+class FakeShow:
+    """Un TMDB qui connaît une série, et note les affiches qu'on lui demande."""
+
+    def __init__(self, poster="/p.jpg"):
+        self.poster, self.saved = poster, []
+
+    def series(self, show_id):
+        return {"name": "Dark", "overview": "Résumé", "first_air_date": "2017-12-01", "poster_path": self.poster, "genres": []}
+
+    def save_image(self, path, size, dest):
+        self.saved.append((path, size, dest))
+
+    def season(self, show_id, number):
+        return {}
+
+    def aggregate_credits(self, show_id):
+        return {"cast": []}
+
+
+class TestEnrichShow(TempCase):
+    def run_show(self, meta, tmdb=None):
+        lib = types.SimpleNamespace(id="series", path=self.tmp / "lib")
+        self.db.replace_library("series", [item("s1", "series", "show", meta=meta)], [])
+        row = self.db.one("SELECT * FROM items WHERE id=?", ("s1",))
+        tmdb = tmdb or FakeShow()
+        with mock.patch.object(enrich.lookup, "resolve_show_id", return_value=42) as resolve:
+            found = enrich.enrich_show(tmdb, self.tmp / "posters", self.db, lib, row)
+        return found, resolve, tmdb, lib
+
+    def test_a_pinned_identifier_is_given_to_the_search_and_none_otherwise(self):
+        _, resolve, tmdb, lib = self.run_show({"folder": "Dark", "tmdb_pinned": 123})
+        self.assertEqual(resolve.call_args.args, (tmdb, lib.path / "Dark", 123))
+        self.assertIsNone(self.run_show({"folder": "Dark"})[1].call_args.args[2])
+
+    def test_the_poster_is_saved_in_the_folder_of_the_posters_under_the_identifier_of_the_show(self):
+        (_, data), _, tmdb, _ = self.run_show({})
+        self.assertEqual(tmdb.saved, [("/p.jpg", "w500", self.tmp / "posters" / "42.jpg")])
+        self.assertEqual(data["poster_file"], "42.jpg")
+
+    def test_a_show_without_a_poster_keeps_none(self):
+        (_, data), _, tmdb, _ = self.run_show({}, FakeShow(poster=None))
+        self.assertEqual(tmdb.saved, [])
+        self.assertNotIn("poster_file", data)
+
+
+class TestEnrichShows(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.lib = types.SimpleNamespace(id="series", path=self.tmp / "lib")
+        self.cfg = types.SimpleNamespace(tmdb_key="cle", data=self.tmp)
+        self.db.replace_library("series", [item(name.lower(), "series", "show", title=name) for name in ("A", "B", "C", "D")], [])
+
+    def run_pass(self, outcomes, **options):
+        log, seen = [], []
+
+        def enrich_show(tmdb, posters, db, lib, row):
+            seen.append(row["title"])
+            outcome = outcomes[row["title"]]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        with mock.patch.object(enrich, "tmdb_client", return_value=(None, self.tmp)), mock.patch.object(enrich, "enrich_show", enrich_show):
+            counts = enrich.enrich_shows(self.cfg, self.db, self.lib, log.append, **options)
+        return counts, log, seen
+
+    def test_the_counts_and_the_journal_tell_what_happened_to_each_show(self):
+        found = ({"name": "Dark"}, {"year": "2017"})
+        counts, log, _ = self.run_pass({"A": found, "B": None, "C": enrich.TmdbError("boum"), "D": OSError("disque plein")})
+        self.assertEqual(counts, {"enriched": 1, "failed": 3})
+        self.assertEqual(log, ["  A -> Dark (2017)", "  B : série introuvable sur TMDB", "  C : boum", "  D : disque plein"])
+
+    def test_a_show_already_done_is_skipped_unless_forced(self):
+        done = self.db.one("SELECT * FROM items WHERE id=?", ("a",))
+        self.db.kv_set(enrich.show_key(self.lib, done), {"season_summaries": {}})
+        found = ({"name": "Nom"}, {"year": ""})
+        outcomes = {name: found for name in "ABCD"}
+        self.assertEqual(self.run_pass(outcomes)[2], ["B", "C", "D"])
+        self.assertEqual(self.run_pass(outcomes, force=True)[2], ["A", "B", "C", "D"])
+
+    def test_an_authentication_error_stops_the_pass(self):
+        with self.assertRaisesRegex(RuntimeError, "TMDB : clé refusée"):
+            self.run_pass({"A": enrich.TmdbAuthError("clé refusée")})
+
+
+class TestSagaPoster(TempCase):
+    def poster(self, force=False, present=False):
+        posters = self.tmp / "posters"
+        posters.mkdir(exist_ok=True)
+        saved = []
+
+        class Tmdb:
+            def save_image(self, path, size, dest):
+                saved.append((path, size, dest.name))
+                dest.write_bytes(b"jpeg")
+
+        if present:
+            (posters / "film-5.jpg").write_bytes(b"ancienne")
+        run = enrich.SagaPass(Tmdb(), posters, {"films": {}, "collections": {}}, {}, print, force)
+        return run.poster({"id": 5, "poster_path": "/x.jpg"}, "Film 5"), saved, (posters / "film-5.jpg").read_bytes()
+
+    def test_a_missing_poster_is_downloaded_and_a_present_one_is_kept(self):
+        self.assertEqual(self.poster(), ("film-5.jpg", [("/x.jpg", "w342", "film-5.jpg.tmp")], b"jpeg"))
+        self.assertEqual(self.poster(present=True), ("film-5.jpg", [], b"ancienne"))
+
+    def test_force_downloads_it_again(self):
+        self.assertEqual(self.poster(force=True, present=True), ("film-5.jpg", [("/x.jpg", "w342", "film-5.jpg.tmp")], b"jpeg"))
+
+
+class TestRefreshAge(unittest.TestCase):
+    def refresh(self, known, force=False, now=10 * enrich.missing.STALE):
+        run = enrich.SagaPass(None, None, {"films": {}, "collections": {"Saga": known}}, {}, print, force)
+        run.now = now
+        with mock.patch.object(run, "collection_of", return_value=None) as asked, mock.patch.object(run, "describe_missing") as only_new:
+            run.refresh("Saga", [])
+        return asked.called, only_new.called
+
+    def test_a_collection_known_for_less_than_a_month_only_describes_the_new_films(self):
+        now = 10 * enrich.missing.STALE
+        self.assertEqual(self.refresh({"films": [], "at": now - enrich.missing.STALE + 1}), (False, True))
+
+    def test_a_collection_known_for_exactly_a_month_is_asked_again(self):
+        now = 10 * enrich.missing.STALE
+        self.assertEqual(self.refresh({"films": [], "at": now - enrich.missing.STALE}), (True, False))
+
+    def test_a_collection_without_a_date_is_as_old_as_the_clock(self):
+        self.assertEqual(self.refresh({"films": []}), (True, False))
+        self.assertEqual(self.refresh({"films": []}, now=enrich.missing.STALE), (True, False))
+        self.assertEqual(self.refresh({"films": []}, now=enrich.missing.STALE - 1), (False, True))
+
+    def test_force_asks_again_whatever_the_age(self):
+        self.assertEqual(self.refresh({"films": [], "at": 10 * enrich.missing.STALE}, force=True), (True, False))
+
+
+class TestEnrichSagas(TempCase):
+    def read_asked(self, **options):
+        lib = types.SimpleNamespace(id="films", path=self.tmp)
+        with mock.patch.object(enrich, "tmdb_client", return_value=(object(), self.tmp)) as client:
+            enrich.enrich_sagas(types.SimpleNamespace(data=self.tmp), self.db, lib, lambda line: None, **options)
+        return client.call_args.kwargs["read"]
+
+    def test_the_cache_of_tmdb_is_read_unless_forced(self):
+        self.assertIs(self.read_asked(), True)
+        self.assertIs(self.read_asked(force=True), False)
+
+
+class TestWantedLinks(unittest.TestCase):
+    def links(self, kind, url):
+        return enrich.wanted_links({"relations": [{"type": kind, "url": {"resource": url}}]})
+
+    def test_a_wanted_type_on_a_web_address_is_kept_with_its_label(self):
+        self.assertEqual(self.links("youtube", "https://www.youtube.com/c/x"), [{"label": "YouTube", "url": "https://www.youtube.com/c/x"}])
+        self.assertEqual(self.links("official homepage", "http://exemple.fr"), [{"label": "Site officiel", "url": "http://exemple.fr"}])
+
+    def test_the_type_the_scheme_and_the_host_must_each_be_right(self):
+        for kind, url in (("wikipedia", "https://youtube.com/x"), ("youtube", "ftp://youtube.com/x"), ("youtube", "https://"), ("youtube", "javascript:alert(1)"),
+                          ("youtube", "")):
+            self.assertEqual(self.links(kind, url), [], (kind, url))
+
+
+class TestSheetIsFresh(unittest.TestCase):
+    def sheet(self, days=0, **info):
+        info = {"photo": "", "sheet": enrich.SHEET_VERSION, **info}
+        return {"fetched": (date.today() - timedelta(days=days)).isoformat(), "info": info}
+
+    def test_a_recent_sheet_with_its_photo_and_the_current_version_is_fresh(self):
+        self.assertTrue(enrich.sheet_is_fresh(self.sheet()))
+
+    def test_anything_less_is_done_again(self):
+        old = self.sheet()
+        del old["info"]["photo"]
+        for kept in (None, {}, self.sheet(days=400), old, self.sheet(sheet=enrich.SHEET_VERSION - 1), self.sheet(sheet=None)):
+            self.assertFalse(enrich.sheet_is_fresh(kept), kept)
+
+
+class TestArtistPass(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.lib = types.SimpleNamespace(id="musique", path=self.tmp)
+        self.cfg = types.SimpleNamespace(data=self.tmp)
+        self.db.replace_library("musique", [item("alb1", "musique", "album", grp="Zeta", meta={"artist_mbid": "a-id", "artist_id": "a1"}),
+                                            item("alb2", "musique", "album", grp="alpha", meta={"artist_mbid": "z-id", "artist_id": "a2"})], [])
+
+    def run_pass(self, fail=(), **options):
+        log, asked = [], []
+
+        def fetch(mb, mbid):
+            asked.append(mbid)
+            if mbid in fail:
+                raise enrich.MusicBrainzError("hors ligne")
+            return {}
+
+        with mock.patch.object(enrich, "musicbrainz"), mock.patch.object(enrich, "fetch_artist", fetch):
+            counts = enrich.enrich_artists(self.cfg, self.db, self.lib, log.append, **options)
+        return counts, log, asked
+
+    def test_the_artists_are_taken_in_the_order_of_their_names_not_of_their_identifiers(self):
+        _, log, asked = self.run_pass()
+        self.assertEqual((asked, [line.split(" :")[0] for line in log]), (["z-id", "a-id"], ["  alpha", "  Zeta"]))
+
+    def test_a_sheet_that_cannot_be_fetched_is_counted_and_said(self):
+        counts, log, _ = self.run_pass(fail=("a-id",))
+        self.assertEqual(counts, {"enriched": 1, "failed": 1})
+        self.assertIn("  Zeta : hors ligne", log)
+
+    def test_a_fresh_sheet_is_not_fetched_again_unless_forced(self):
+        sheet = {"fetched": date.today().isoformat(), "info": {"photo": "", "sheet": enrich.SHEET_VERSION}}
+        self.db.kv_set(enrich.artist_key("a-id"), sheet)
+        self.assertEqual(self.run_pass()[2], ["z-id"])
+        self.db.kv_set(enrich.artist_key("a-id"), sheet)
+        self.assertEqual(self.run_pass(force=True)[2], ["z-id", "a-id"])
 
 
 if __name__ == "__main__":
