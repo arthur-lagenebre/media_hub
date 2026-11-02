@@ -291,6 +291,35 @@ class TestMoreSources(ServiceCase):
         row = self.db.one("SELECT * FROM items WHERE id=?", ("i1",))
         self.assertEqual(self.service.item_source(self.cfg.library("lib"), row), fixtures.PNG)
 
+    def source(self, ident="i1"):
+        row = self.db.one("SELECT * FROM items WHERE id=?", (ident,))
+        return self.service.item_source(self.cfg.library("lib"), row)
+
+    def test_an_album_has_its_cover_file_and_nothing_else(self):
+        (self.root / "Artiste").mkdir()
+        (self.root / "Artiste" / "cover.png").write_bytes(fixtures.PNG)
+        (self.root / "Artiste" / "folder.jpg").write_bytes(b"jpeg")
+        self.fill([item("i1", kind="album", meta={"folder": "Artiste", "cover_file": "cover.png"}), item("i2", kind="album", meta={"folder": "Artiste"})])
+        self.assertEqual(self.source("i1"), fixtures.PNG)
+        self.assertIsNone(self.source("i2"))
+
+    def test_the_poster_comes_before_the_image_of_the_folder_which_comes_before_the_entries(self):
+        (self.cfg.data / "tmdb").mkdir()
+        (self.cfg.data / "tmdb" / "poster.png").write_bytes(b"affiche")
+        (self.root / "folder.jpg").write_bytes(b"dossier")
+        self.fill([item("i1", meta={"poster_file": "poster.png", "image": "folder.jpg"}), item("i2", meta={"poster_file": "absente.png", "image": "folder.jpg"}),
+                   item("i3", meta={"poster_file": "absente.png", "image": "absente.jpg"})], [entry("e3", "i3", "ep.mkv", kind="video")])
+        self.assertEqual(self.source("i1"), b"affiche")
+        self.assertEqual(self.source("i2"), b"dossier")
+        with mock.patch.object(images.ebml, "read_cover", return_value=(b"jaquette", "cover.jpg")) as read:
+            self.assertEqual(self.source("i3"), b"jaquette")
+        self.assertEqual(read.call_args.args[0], self.root / "ep.mkv")
+
+    def test_an_item_with_no_image_anywhere_has_none(self):
+        self.fill([item("i1", meta={"image": "absente.jpg"}), item("i2", meta={"image": "absente.jpg"})], [entry("e2", "i2", "ep.txt", kind="video")])
+        self.assertIsNone(self.source("i1"))
+        self.assertIsNone(self.source("i2"))
+
     def test_an_album_cover_stamp_needs_a_library_and_a_cover_file(self):
         row = {"meta": json.dumps({"cover_file": "cover.jpg"})}
         self.assertEqual(self.service._cover_stamp(None, row), "")

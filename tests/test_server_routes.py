@@ -256,6 +256,15 @@ class TestSagaRanks(unittest.TestCase):
         self.assertEqual(home, {"a": "Saga", "b": "Saga"})
 
 
+class TestFirstScan(RouteCase):
+    def test_only_the_libraries_never_scanned_are_scanned_at_startup(self):
+        other = config.Library("autre", "Autre", self.kind, self.root / "autre")
+        self.hub.cfg.libraries = [self.lib, other]
+        self.db.kv_set("scanned:lib", {"at": 1})
+        self.hub.first_scan()
+        self.hub.jobs.scan.assert_called_once_with(other)
+
+
 class TestGroupRanks(RouteCase):
     def setUp(self):
         super().setUp()
