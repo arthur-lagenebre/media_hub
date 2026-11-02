@@ -1460,7 +1460,6 @@ def api_progress(h, m, q):
     done = bool(body.get("done")) or is_finished(entry["kind"], position, duration)
     if entry["kind"] == "audio":                 # la musique n'a pas de reprise : seulement « écouté »
         done = done or (duration > 0 and position / duration > 0.8)
-        position = 0 if done else position
     h.hub.db.save_progress(h.user["id"], entry["id"], duration if done and entry["kind"] != "book" else position, duration, done)
     h.send_json({"ok": True, "done": done})
 
