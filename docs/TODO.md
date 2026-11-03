@@ -57,6 +57,12 @@
   - Côté serveur, la liste de la bibliothèque rend des albums : il faudra une liste d'artistes (nom, nombre d'albums, présence d'une photo), avec les filtres qui existent déjà (lettre, genre, recherche).
   - Côté interface : une carte ronde ou carrée par artiste, la photo chargée par `/img/artist/...` (le cache d'images en tient déjà compte), le focus à la télécommande comme les autres cartes.
 
+- [ ] **Les artistes de chaque piste, sous son titre, dans la liste des pistes d'un album.** Cas vu : une bande originale (« Various Artists ») où chaque piste a ses artistes, qu'on ne voit nulle part dans la liste ; seuls les invités (`feat.`) y apparaissent.
+  - Vérifié : la donnée existe déjà. C'est le tag **`ARTIST`** de chaque fichier (`info.artist`, lu au scan par `media_library`), à ne pas confondre avec **`ALBUMARTIST`**, qui donne l'artiste de l'album et son groupement. `GET /api/item/<id>` la rend pour chaque piste (`entries[].artist`) et la barre de lecture l'affiche déjà : **aucun changement serveur**, seule la liste de la fiche (`views.js`, `tracks`) ne la montre pas.
+  - À faire : sous le titre de la piste, l'artiste de la piste quand il **diffère** de l'artiste de l'album (sinon le même nom se répète sur chaque ligne d'un album d'un seul artiste) ; une seule ligne, qui absorbe les « feat. » d'aujourd'hui plutôt que d'en ajouter une seconde.
+  - À vérifier : si les listes de la file d'attente et des playlists montrent bien l'artiste de chaque piste (elles mélangent des albums, donc l'artiste y compte encore plus).
+  - Test : un album d'essai dont les pistes ont des artistes différents (les fixtures n'en ont pas), et un test d'interface qui lit la ligne sous le titre.
+
 ### Interface
 
 - [ ] **Réglages d'affichage dans Paramètres, pour tout le monde (administrateur ou non).** Les réglages d'affichage vont dans les Paramètres, qui servent maintenant surtout aux comptes ordinaires : un onglet (ou la suite de *Lecture*) avec
