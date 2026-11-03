@@ -89,8 +89,19 @@
     cells.sort(function (a, b) { return a.rank - b.rank; });
     return cells.map(function (c) { return c.node; });
   }
+  // La carte d'un artiste (vue « Artistes » de la musique) : sa photo, à défaut la pochette de son plus ancien album, à défaut une lettre ; un clic ouvre sa fiche.
+  function artistCard(it) {
+    var pic = H.picture('', it.title, 'sq'), fallback = false;
+    pic.appendChild(h('img', { src: '/img/artist/' + it.lib + '/' + it.id + '?w=300', alt: '', loading: 'lazy', decoding: 'async', onload: function () { this.classList.add('in'); }, onerror: function () {
+      if (fallback || !it.album) { if (this.parentNode) this.parentNode.removeChild(this); return; }
+      fallback = true;
+      this.src = '/img/item/' + it.album + '?w=300';
+    } }));
+    return h('a', { class: 'card f sq', href: '#/artist/' + it.lib + '/' + it.id, 'data-key': it.id, 'data-type': 'artist', title: it.title }, pic, h('div', { class: 't' }, it.title), h('div', { class: 's' }, H.plural(it.n, 'album')));
+  }
   H.card = function (it, withGroup, withPart) {
     if (it.type === 'saga') return sagaCard(it);
+    if (it.type === 'artist') return artistCard(it);
     var square = it.type === 'album';
     var a = h('a', { class: 'card f' + (square ? ' sq' : ''), href: '#/i/' + it.id, 'data-key': it.id, 'data-type': it.type, title: it.title });
     var pic = H.picture('/img/item/' + it.id + '?w=300', it.title, square ? 'sq' : '');
@@ -205,6 +216,8 @@
     var sorts = SORTS[kind] || SORTS.movies;
     var st = { q: '', letter: '', genre: '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '', sagas: kind === 'movies' };       // les films sont toujours regroupés en sagas
     var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { letters: [], genres: [], sections: [] };
+    function artistMode() { return kind === 'music' && H.setting('music_view') === 'artists'; }      // le choix du compte : les albums sous leurs artistes, ou un artiste par carte
+    var shownMode = artistMode();
     var grid = h('div', { class: 'grid' + (kind === 'music' ? ' sq' : '') });
     var sentinel = h('div', { class: 'sentinel' });
     var count = h('span', { class: 'count' });
@@ -227,7 +240,7 @@
       bSeen.setAttribute('aria-pressed', st.unseen ? 'true' : 'false');
       bSeen.classList.toggle('on', st.unseen);
       bGenre.hidden = !facets.genres.length;
-      var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: 'album', books: 'série' }[kind] || 'élément';
+      var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
       count.textContent = total ? (kind === 'movies' && st.sagas && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word)) : '';
     }
     // Les accès rapides des livres : une pastille par section (Manga, BD, Comics, Artbook…), avec ce qu'elle contient.
@@ -265,12 +278,13 @@
       if (st.section) q.push('section=' + encodeURIComponent(st.section));
       if (st.unseen) q.push('filter=unseen');
       if (st.sagas) q.push('sagas=1');
+      if (artistMode()) q.push('view=artists');
       return '/api/library/' + libId + '?' + q.join('&');
     }
     function append(list) {
       var frag = document.createDocumentFragment();
       list.forEach(function (it) {
-        if ((kind === 'music' || kind === 'books') && st.sort === 'title' && it.grp !== lastGrp) {
+        if ((kind === 'music' || kind === 'books') && st.sort === 'title' && !artistMode() && it.grp !== lastGrp) {
           lastGrp = it.grp;
           var heading = it.grp || (kind === 'music' ? 'Artiste inconnu' : 'Sans collection');
           frag.appendChild(h('h3', { class: 'grp' }, kind === 'music' && it.artist_id ? h('a', { class: 'f head', href: '#/artist/' + libId + '/' + it.artist_id }, heading) : heading));
@@ -321,6 +335,7 @@
     return {
       el: el, lib: libId, nav: '#/l/' + libId,
       refresh: function () {      // au retour d'une fiche : les pastilles « vu » ont pu changer
+        if (artistMode() !== shownMode) { shownMode = artistMode(); reset(); return; }          // le choix de la vue a changé dans les paramètres : on repart de zéro
         var mine = ++token, keep = items.length;
         H.api(query(0).replace('limit=240', 'limit=' + Math.min(600, Math.max(240, keep)))).then(function (res) {
           if (mine !== token) return;

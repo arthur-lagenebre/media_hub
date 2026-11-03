@@ -79,12 +79,13 @@ Trois façons de se présenter :
 
 ```json
 {"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true}],
- "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin"}, "busy": false, "streams": 0, "max_streams": 2}
+ "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin"}, "settings": {"music_view": "albums"}, "busy": false, "streams": 0, "max_streams": 2}
 ```
 
 - `libraries[].kind` : `movies` | `shows` | `music` | `books`. `scanned` : horodatage du dernier scan, ou `null`. `exists` : le dossier est présent.
 - `ffmpeg` / `ffprobe` : disponibles sur le serveur (sans eux : lecture directe seulement).
 - `auth` : le serveur a des comptes. `user` : **le compte de la requête** (`role` : `admin` ou `user`) ; serveur ouvert : `{"id": "default", "name": <HUB_ADMIN>, "role": "admin"}`. Un client masque les actions d'administration quand `role` n'est pas `admin`.
+- `settings` : les réglages d'affichage **du compte de la requête** (voir `GET /api/me/settings`), pour qu'un client n'ait pas d'appel de plus au démarrage.
 - `busy` : une tâche de fond tourne. `streams` / `max_streams` : conversions en cours / maximum.
 - **Ambigu** : la route demande l'authentification ; `api` n'est donc lisible qu'après avoir obtenu le jeton.
 
@@ -164,6 +165,7 @@ Paramètres (tous optionnels) :
 | `filter=unseen` | seulement ce qui n'est pas entièrement vu |
 | `offset`, `limit` | pagination (`limit` : 240 par défaut, 600 au plus) |
 | `sagas=1` | films : regroupe les sagas (au moins deux films) en une vignette `type: "saga"` |
+| `view=artists` | musique : une vignette par **artiste**, sans ses albums, au lieu des albums. Chaque vignette : `id` (celui de sa fiche, `/api/artist/<lib>/<id>`), `lib`, `type: "artist"`, `title` (le nom ; « Various Artists » se dit « Artistes divers »), `n` (nombre d'albums), `letter`, `album` (son plus ancien album : sa pochette, faute de photo ; la photo est `/img/artist/<lib>/<id>`). Les filtres `letter`, `genre`, `q` (un titre d'album trouve son artiste) et la pagination s'appliquent ; les artistes sans nom connu (« Artiste inconnu », « Artistes divers ») viennent en dernier ; `letters` et `genres` comptent des artistes |
 | `group` | films : les films d'une saga, par son nom (`grp`, ou le nom d'une saga du fichier `sagas.json`) ; désactive `sagas` |
 | `section` | livres : une section (Manga, BD…) |
 
@@ -239,6 +241,8 @@ Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la cass
 | `POST /api/users` | `{"name": "…", "password": "…", "role": "user"}` (`role` facultatif, `user` par défaut) | **201**, `<compte>`. 400 (nom, mot de passe ou rôle invalide), 409 `ce nom est déjà pris`. Administrateur seulement. |
 | `POST /api/user/<id>/password` | `{"password": "…"}` ; pour **son propre** compte : `{"password": "…", "current": "…"}` | `{"ok": true}`. L'administrateur donne un nouveau mot de passe à un autre compte, sans connaître l'ancien ; les sessions de ce compte sont fermées. Pour son propre compte (`<id>` = celui de l'appelant), `current` (le mot de passe actuel) est **obligatoire** comme pour `POST /api/me/password` : 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) s'il manque ou s'il est faux, et rien n'est changé ; la réponse porte alors le nouveau jeton (`{"ok": true, "token": "…"}`, plus un `Set-Cookie`). 404 `compte inconnu`. Administrateur seulement. |
 | `POST /api/user/<id>/delete` | `{}` | `{"ok": true}`. Supprime le compte, sa progression, ses playlists et ses entrées « retirer de Reprendre ». 400 `impossible de supprimer le dernier administrateur` ; 404 `compte inconnu`. Administrateur seulement. Un administrateur peut supprimer son propre compte tant qu'il en reste un autre. **Le jeton de média est global** : le compte supprimé perd son jeton de session, mais s'il a gardé des URLs `?token=<media_token>`, elles continuent de donner la lecture des fichiers (`/media/`, `/img/`, `/book/`, `/api/subs/`) tant que le secret du serveur n'a pas changé. |
+| `GET /api/me/settings` | | `{"settings": {"music_view": "albums"}}` : les réglages d'affichage du compte de la requête, gardés sur le serveur (ils le suivent d'un appareil à l'autre). `music_view` : `albums` (par défaut) ou `artists`, la façon dont s'ouvre la bibliothèque de musique |
+| `POST /api/me/settings` | `{"music_view": "artists"}` (un ou plusieurs réglages) | `{"settings": {…}}` : tous les réglages. 400 pour un réglage ou une valeur inconnus, sans rien changer. Supprimer un compte supprime ses réglages |
 | `POST /api/me/password` | `{"current": "…", "new": "…"}` | `{"ok": true, "token": "<nouveau jeton de session>"}`, avec un `Set-Cookie` qui renouvelle le cookie du navigateur. Tout compte. 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) ou mot de passe neuf invalide. |
 
 - `<compte>` : `{"id", "name", "role", "created"}` (`created` : horodatage Unix). Le haché du mot de passe ne sort jamais. L'`id` est opaque ; celui du premier compte est `default`.

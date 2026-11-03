@@ -657,7 +657,7 @@ class TestArtistsView(RouteCase):
 
     def test_an_artist_card_gives_the_oldest_album_for_the_cover_and_no_album_list(self):
         card = {a["id"]: a for a in self.artists()["items"]}["ar1"]
-        self.assertEqual((card["type"], card["album"], card["title"]), ("artist", "d2", "Daft Punk"))
+        self.assertEqual((card["type"], card["album"], card["title"], card["lib"]), ("artist", "d2", "Daft Punk", "lib"))
         self.assertNotIn("albums", card)
 
     def test_various_artists_is_said_in_french_without_changing_its_page(self):

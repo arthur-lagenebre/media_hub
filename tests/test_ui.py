@@ -1135,6 +1135,72 @@ class TestHeroImage(UiCase):
             self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
 
 
+class TestArtistsView(UiCase):
+    """La bibliothèque de musique par artiste : un artiste par carte, sans ses albums, quand le compte l'a choisi dans ses paramètres."""
+
+    def choose(self, view):
+        self.api("/api/me/settings", {"music_view": view})
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+
+    def artists(self):
+        return self.view(".grid .card[data-type=artist]")
+
+    def test_by_default_the_library_shows_the_albums_under_their_artists(self):
+        self.open("#/l/musique")
+        self.view(".grid .card").first.wait_for()
+        self.assertGreaterEqual(self.view(".grid .card[data-type=album]").count(), 1)
+        self.assertEqual(self.artists().count(), 0)
+        self.assertGreaterEqual(self.view("h3.grp").count(), 1)
+
+    def test_an_account_that_chose_artists_sees_one_card_per_artist_without_albums(self):
+        self.choose("artists")
+        self.open("#/l/musique")
+        self.artists().first.wait_for()
+        self.assertEqual(self.view(".grid .card[data-type=album]").count(), 0)
+        self.assertEqual(self.view("h3.grp").count(), 0)
+        total = self.api("/api/library/musique?view=artists")["total"]
+        self.assertEqual(self.artists().count(), total)
+        self.assertIn("album", self.artists().first.inner_text())
+        self.assertEqual(self.view(".count").inner_text(), f"{total} artiste" + ("s" if total > 1 else ""))      # le décompte parle d'artistes, pas d'albums
+
+    def test_a_card_opens_the_page_of_its_artist(self):
+        self.choose("artists")
+        self.open("#/l/musique")
+        card = self.artists().first
+        card.wait_for()
+        name = card.get_attribute("title")
+        card.click()
+        self.page.wait_for_url("**#/artist/musique/*")
+        self.view("h1", has_text=name).wait_for()
+
+    def test_the_card_falls_back_to_the_cover_of_the_first_album_when_there_is_no_photo(self):
+        self.choose("artists")
+        self.open("#/l/musique")
+        self.artists().first.wait_for()
+        self.until(lambda: "/img/item/" in (self.artists().first.locator("img").first.get_attribute("src") or ""))
+
+    def test_an_album_title_in_the_filter_finds_its_artist(self):
+        self.choose("artists")
+        self.open("#/l/musique")
+        self.artists().first.wait_for()
+        self.view("input[type=search]").fill("discovery")
+        self.until(lambda: self.artists().count() == 1)
+        self.assertEqual(self.artists().first.get_attribute("title"), "Daft Punk")
+
+    def test_the_choice_made_in_the_settings_applies_when_coming_back_to_the_library(self):
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+        self.open("#/l/musique")
+        self.view(".grid .card[data-type=album]").first.wait_for()
+        self.open("#/settings?tab=comptes")
+        panel = self.view(".panel", has_text="Affichage")
+        panel.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text="Artistes").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "artists")
+        self.page.locator("#nav .link", has_text="Musique").click()
+        self.artists().first.wait_for()
+        self.assertEqual(self.view(".grid .card[data-type=album]").count(), 0)
+
+
 class TestSettings(UiCase):
     """La page « Paramètres » : des onglets en haut, qui restent affichés, au lieu d'une seule longue page de gestion."""
 

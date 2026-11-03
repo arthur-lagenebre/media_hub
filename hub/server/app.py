@@ -959,7 +959,7 @@ def artist_rows(rows):
 
 def artist_card(row):
     """La carte d'un artiste dans la liste : son identifiant (celui de sa fiche, `/api/artist/<lib>/<id>`), son nom, son nombre d'albums et l'album dont on prendra la pochette faute de photo."""
-    return {"id": row["id"], "type": "artist", "title": row["title"], "n": row["count"], "letter": row["letter"], "album": safe_json(row["meta"], {}).get("album", "")}
+    return {"id": row["id"], "lib": row["lib"], "type": "artist", "title": row["title"], "n": row["count"], "letter": row["letter"], "album": safe_json(row["meta"], {}).get("album", "")}
 
 
 def library_counts(rows, kind):
