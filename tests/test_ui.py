@@ -494,10 +494,21 @@ class TestCleanupConfirmation(UiCase):
     def test_deleting_junk_asks_first(self):
         self.open("#/admin")
         self.view("[data-key=junk-del]").click()
-        self.page.locator(".menu .opt", has_text="Supprimer définitivement").wait_for()
-        self.page.locator(".menu .opt", has_text="Annuler").click()
+        dialog = self.page.locator(".menu.form", has_text="Supprimer les fichiers parasites ?")
+        dialog.locator("button.danger", has_text="Supprimer définitivement").wait_for()
+        dialog.locator("button", has_text="Annuler").click()
         self.page.wait_for_timeout(300)
-        self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if "Nettoyage" in j["label"]])          # annuler ne lance rien
+        self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if "Nettoyage" in j["label"] and "simulation" not in j["label"]])          # annuler ne lance rien
+
+    def test_the_dialog_can_count_again_without_closing(self):
+        self.open("#/admin")
+        self.view("[data-key=junk-del]").click()
+        dialog = self.page.locator(".menu.form", has_text="Supprimer les fichiers parasites ?")
+        dialog.locator("[data-key=junk-recount]").click()
+        dialog.locator("p.lead", has_text="a compté").wait_for()
+        self.assertRegex(dialog.locator("p.lead").last.inner_text(), r"en a compté \d+\.")
+        self.assertTrue(dialog.is_visible())                                                              # la fenêtre reste ouverte
+        self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if "Nettoyage" in j["label"] and "simulation" not in j["label"]])          # compter n'efface rien
 
 class TestMusicQueueAndPlaylists(UiCase):
     def open_music(self):
