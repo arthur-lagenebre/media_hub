@@ -1075,6 +1075,30 @@ class TestTmdbSheet(UiCase):
         self.assertEqual(self.view(".actions .btn", has_text="Changer la fiche TMDB").count(), 0)
 
 
+class TestHeroImage(UiCase):
+    """L'image de gauche de l'en-tête d'une fiche part du haut de l'encart, même quand le texte à côté est plus haut qu'elle."""
+
+    def gap(self, target):
+        self.open(target)
+        self.view(".hero-in").wait_for()
+        return self.view(".hero-in").evaluate("el => el.firstElementChild.getBoundingClientRect().top - el.getBoundingClientRect().top")
+
+    def pages(self):
+        album = self.item("musique", "Discovery")
+        return {"film": "#/i/" + self.item("films", "Inception")["id"], "série": "#/i/" + self.item("series", "Dark")["id"], "album": "#/i/" + album["id"],
+                "artiste": "#/artist/musique/" + self.api("/api/item/" + album["id"])["artist_id"], "saga": "#/saga/films?g=Saga%20DCEU"}
+
+    def test_the_image_starts_at_the_top_on_every_kind_of_page(self):
+        self.page.set_viewport_size({"width": 1000, "height": 800})            # des boutons qui passent à la ligne : le texte est plus haut que l'image
+        for name, target in self.pages().items():
+            self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
+
+    def test_and_on_a_phone(self):
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        for name, target in self.pages().items():
+            self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
+
+
 class TestSettings(UiCase):
     """La page « Paramètres » : des onglets en haut, qui restent affichés, au lieu d'une seule longue page de gestion."""
 
