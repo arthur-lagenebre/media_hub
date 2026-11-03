@@ -118,20 +118,28 @@
   }
   H.playHref = playHref;
   // `onRemove(card)` : appelée une fois la carte retirée de « Reprendre » (clic sur ✕, clic droit / appui long, touche Suppr ou Menu)
-  function resumeCard(c, onRemove) {
-    var href = playHref(c);
-    var label;
-    if (c.item.type === 'show') label = 'S' + (c.season || 1) + ' · E' + (c.number || '?') + (c.title ? ' · ' + c.title : '');
-    else if (c.kind === 'book') label = (c.label ? 'Tome ' + c.label : c.title);
-    else label = c.item.type === 'movie' ? '' : c.title;
+  // La ligne « S1 · E2 · Titre » (série), « Tome 3 » (livre), ou le titre de l'épisode ; rien pour un film.
+  function resumeLabel(c) {
+    if (c.item.type === 'show') return 'S' + (c.season || 1) + ' · E' + (c.number || '?') + (c.title ? ' · ' + c.title : '');
+    if (c.kind === 'book') return c.label ? 'Tome ' + c.label : c.title;
+    return c.item.type === 'movie' ? '' : c.title;
+  }
+  // Où on en est : « À 12:30 », « Page 4 », ou ce qui vient ensuite.
+  function resumeNote(c) {
+    if (c.resume) return c.kind === 'book' ? 'Page ' + (Math.floor(c.position) + 1) : 'À ' + H.time(c.position);
+    return c.kind === 'book' ? 'Volume suivant' : 'Épisode suivant';
+  }
+  // La vignette : l'image du fichier, à défaut celle de l'élément, à défaut une lettre ; une barre dit où on en est.
+  function resumePicture(c) {
     var ratio = c.total ? Math.min(1, c.position / c.total) : 0;
-    var note = c.resume ? (c.kind === 'book' ? 'Page ' + (Math.floor(c.position) + 1) : 'À ' + H.time(c.position)) : 'Épisode suivant';
-    if (c.kind === 'book' && !c.resume) note = 'Volume suivant';
     var pic = h('div', { class: 'poster wide' }, h('span', { class: 'ph', style: '--h:' + H.hue(c.item.title) }, initial(c.item.title)));
     var tryItem = function () { this.onerror = function () { if (this.parentNode) this.parentNode.removeChild(this); }; this.src = '/img/item/' + c.item.id + '?w=480'; };
     pic.appendChild(h('img', { src: '/img/entry/' + c.id + '?w=480', alt: '', loading: 'lazy', onload: function () { this.classList.add('in'); }, onerror: tryItem }));
     if (c.resume && ratio > 0) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(ratio * 100) + '%' })));
-    var card;
+    return pic;
+  }
+  function resumeCard(c, onRemove) {
+    var pic = resumePicture(c), card;
     function remove() {
       H.menu('Retirer « ' + c.item.title + ' » de Reprendre ?', [{ label: 'Retirer de Reprendre', detail: 'La progression est gardée', value: 'yes' }, { label: 'Garder', value: 'no' }], 'no', function (v) {
         if (v !== 'yes') return;
@@ -139,10 +147,10 @@
           .catch(function (e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.'); });
       });
     }
-    card = h('a', { class: 'card wide f', href: href, 'data-key': 'c' + c.id,
+    card = h('a', { class: 'card wide f', href: playHref(c), 'data-key': 'c' + c.id,
       oncontextmenu: function (e) { e.preventDefault(); remove(); },
       onkeydown: function (e) { if (e.key === 'Delete' || e.key === 'ContextMenu' || e.keyCode === 46 || e.keyCode === 93) { e.preventDefault(); remove(); } } },
-      pic, h('div', { class: 't' }, c.item.title), h('div', { class: 's' }, [label, note].filter(Boolean).join(' · ')));
+      pic, h('div', { class: 't' }, c.item.title), h('div', { class: 's' }, [resumeLabel(c), resumeNote(c)].filter(Boolean).join(' · ')));
     pic.appendChild(h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Retirer de Reprendre', title: 'Retirer de Reprendre',
       onclick: function (e) { e.preventDefault(); e.stopPropagation(); remove(); } }, H.icon('close'))));
     return card;
@@ -503,13 +511,34 @@
       H.audio.mark(list);
       return sec;
     }
+    function episodeNumber(e) { return e.number === null || e.number === undefined ? '' : e.number; }
+    // La vignette d'un épisode : l'image du fichier sur une lettre, avec une barre quand il est commencé.
+    function episodeThumb(d, e) {
+      var p = entryProgress(e), ratio = p && e.duration ? Math.min(1, p.position / e.duration) : 0;
+      var thumb = h('div', { class: 'poster wide' }, h('span', { class: 'ph', style: '--h:' + H.hue(d.title + e.number) }, episodeNumber(e)),
+        h('img', { src: '/img/entry/' + e.id + '?w=400', alt: '', loading: 'lazy', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } }));
+      if (ratio) thumb.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(ratio * 100) + '%' })));
+      return thumb;
+    }
+    // Une ligne de la liste : la vignette, le titre, le résumé, la durée, « vu », et le bouton « … » de l'épisode.
+    function episodeRow(d, e) {
+      var done = e.progress && e.progress.done, no = episodeNumber(e);
+      return h('div', { class: 'epwrap' }, h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { H.go(playHref(e)); } }, h('div', { class: 'thumb' }, episodeThumb(d, e)),
+        h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, no === '' ? '' : no + '.'), ' ', e.title || 'Épisode'),
+          e.summary ? h('div', { class: 'su' }, e.summary) : null,
+          h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
+        done ? h('span', { class: 'seen' }, H.icon('check')) : null),
+        H.button('', 'more', { class: 'epmore', 'aria-label': 'Actions de l’épisode', 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load); } }));
+    }
+    // La saison ouverte au début : celle de l'épisode où reprendre, sinon la première.
+    function firstSeason(d, seasons) {
+      var r = d.entries.filter(function (e) { return e.id === d.resume; })[0];
+      return r && seasons.indexOf(r.season) >= 0 ? r.season : seasons[0];
+    }
     function episodes(d) {
       var sec = h('section', { class: 'episodes' });
       var seasons = d.seasons && d.seasons.length ? d.seasons : [1];
-      if (season === null || seasons.indexOf(season) < 0) {
-        var r = d.entries.filter(function (e) { return e.id === d.resume; })[0];
-        season = r && seasons.indexOf(r.season) >= 0 ? r.season : seasons[0];
-      }
+      if (season === null || seasons.indexOf(season) < 0) season = firstSeason(d, seasons);
       var list = h('div', { class: 'eps' }), blurb = h('p', { class: 'seasonsum' }), bSeason = null;
       function seasonDone() { return d.entries.filter(function (e) { return e.season === season; }).every(function (e) { return e.progress && e.progress.done; }); }
       function fill() {
@@ -521,18 +550,7 @@
         H.clear(list);
         var text = (d.season_summaries || {})[String(season)] || '';
         blurb.textContent = text; blurb.hidden = !text;
-        d.entries.filter(function (e) { return (e.season === null || e.season === undefined ? 1 : e.season) === season; }).forEach(function (e) {
-          var p = entryProgress(e), done = e.progress && e.progress.done, ratio = p && e.duration ? Math.min(1, p.position / e.duration) : 0;
-          var thumb = h('div', { class: 'poster wide' }, h('span', { class: 'ph', style: '--h:' + H.hue(d.title + e.number) }, e.number === null || e.number === undefined ? '' : e.number),
-            h('img', { src: '/img/entry/' + e.id + '?w=400', alt: '', loading: 'lazy', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } }));
-          if (ratio) thumb.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(ratio * 100) + '%' })));
-          list.appendChild(h('div', { class: 'epwrap' }, h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { H.go(playHref(e)); } }, h('div', { class: 'thumb' }, thumb),
-            h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, e.number === null || e.number === undefined ? '' : e.number + '.'), ' ', e.title || 'Épisode'),
-              e.summary ? h('div', { class: 'su' }, e.summary) : null,
-              h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
-            done ? h('span', { class: 'seen' }, H.icon('check')) : null),
-            H.button('', 'more', { class: 'epmore', 'aria-label': 'Actions de l’épisode', 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load); } })));
-        });
+        d.entries.filter(function (e) { return (e.season === null || e.season === undefined ? 1 : e.season) === season; }).forEach(function (e) { list.appendChild(episodeRow(d, e)); });
       }
       var chips = h('div', { class: 'chips' });
       if (seasons.length > 1 || seasons[0] !== 1) seasons.forEach(function (s) {

@@ -311,10 +311,20 @@
         H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Artiste introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + lib, 'data-autofocus': '1' }, 'Retour à la musique')));
       });
     }
-    function render() {
-      var d = data, info = d.info || null, list = d.tracks;
-      var focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
-      H.clear(el);
+    // Les boutons de la fiche d'un artiste : lire, mettre en file, et pour l'administrateur la photo.
+    function artistActions(d, info, list) {
+      return h('div', { class: 'actions' },
+        H.button('Tout lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }),
+        H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
+        H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
+        H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }),
+        H.device === 'tv' || !H.isAdmin() ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
+        H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button('Recadrer', 'full', { 'data-key': 'crop', onclick: recrop }),
+        info && info.wiki && H.isAdmin() ? H.button('Photo de Wikipédia', 'refresh', { 'data-key': 'wikiphoto', onclick: fromWikipedia }) : null);
+    }
+    // Le texte à droite de la photo : nom, faits, genres, totaux, résumé Wikipédia, boutons.
+    function artistInfo(d, info) {
+      var list = d.tracks;
       var meta = [H.plural(d.albums.length, 'album'), H.plural(list.length, 'piste'), d.duration ? H.dur(d.duration) : ''].filter(Boolean).join(' · ');
       var box = h('div', { class: 'info' }, h('h1', null, d.name));
       if (info && info.facts) box.appendChild(h('p', { class: 'meta' }, info.facts));
@@ -322,39 +332,51 @@
       if (tags) box.appendChild(h('p', { class: 'genres' }, tags));
       box.appendChild(h('p', { class: info && info.facts ? 'credit' : 'meta' }, meta));
       if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, 'Wikipédia')));
-      box.appendChild(h('div', { class: 'actions' },
-        H.button('Tout lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }),
-        H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
-        H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
-        H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }),
-        H.device === 'tv' || !H.isAdmin() ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
-        H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button('Recadrer', 'full', { 'data-key': 'crop', onclick: recrop }),
-        info && info.wiki && H.isAdmin() ? H.button('Photo de Wikipédia', 'refresh', { 'data-key': 'wikiphoto', onclick: fromWikipedia }) : null));
+      box.appendChild(artistActions(d, info, list));
+      return box;
+    }
+    function artistHero(d, box) {
       var first = d.albums[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id, v = stamp ? '&v=' + stamp : '';       // la photo de l'artiste, sinon la pochette de son premier album
-      el.appendChild(picker);
-      el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320' + v + ')' }),
-        h('div', { class: 'hero-in' }, H.picture(face + '?w=480' + v, d.name, 'sq big'), box)));
-
+      return h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320' + v + ')' }),
+        h('div', { class: 'hero-in' }, H.picture(face + '?w=480' + v, d.name, 'sq big'), box));
+    }
+    function albumsSection(d) {
+      return h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, shelf(d).map(function (a) { return a.wanted ? wantedCard(a) : H.card(a, false); })));
+    }
+    // Les membres du groupe : les actuels, puis les anciens.
+    function memberSections(info) {
+      if (!(info && info.members && info.members.length)) return [];
+      var current = info.members.filter(function (p) { return !p.former; }), former = info.members.filter(function (p) { return p.former; });
+      var members = function (title, list) {
+        if (!list.length) return null;
+        return h('section', { class: 'cast' }, h('h2', null, title), h('ul', null, list.map(function (p) {
+          return h('li', null, h('b', null, p.name), [p.roles.join(', '), p.period].filter(Boolean).length ? h('span', null, [p.roles.join(', '), p.period].filter(Boolean).join(' · ')) : null);
+        })));
+      };
+      return [members(former.length ? 'Membres actuels' : 'Membres', current), members('Anciens membres', former)];       // « actuels » ne veut dire quelque chose que s'il y en a d'anciens
+    }
+    function linksSection(info) {
+      if (!(info && info.links && info.links.length)) return null;
+      return h('section', { class: 'links-out' }, h('h2', null, 'Liens'), h('div', { class: 'actions' }, info.links.map(function (l) {
+        return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label);
+      })));
+    }
+    function noSheetNote(info) {
+      if (info) return null;
+      return h('p', { class: 'muted' }, H.isAdmin() ? 'Pas encore de fiche : lance « Fiches artistes » dans Paramètres > Gestion pour récupérer le résumé, les membres et les liens.' : 'Pas encore de fiche pour cet artiste.');
+    }
+    function artistBody(d, info) {
       var body = h('div', { class: 'body' });
-      body.appendChild(h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, shelf(d).map(function (a) { return a.wanted ? wantedCard(a) : H.card(a, false); }))));
-      if (info && info.members && info.members.length) {
-        var current = info.members.filter(function (p) { return !p.former; }), former = info.members.filter(function (p) { return p.former; });
-        var members = function (title, list) {
-          if (!list.length) return;
-          body.appendChild(h('section', { class: 'cast' }, h('h2', null, title), h('ul', null, list.map(function (p) {
-            return h('li', null, h('b', null, p.name), [p.roles.join(', '), p.period].filter(Boolean).length ? h('span', null, [p.roles.join(', '), p.period].filter(Boolean).join(' · ')) : null);
-          }))));
-        };
-        members(former.length ? 'Membres actuels' : 'Membres', current);       // « actuels » ne veut dire quelque chose que s'il y en a d'anciens
-        members('Anciens membres', former);
-      }
-      if (info && info.links && info.links.length) {
-        body.appendChild(h('section', { class: 'links-out' }, h('h2', null, 'Liens'), h('div', { class: 'actions' }, info.links.map(function (l) {
-          return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label);
-        }))));
-      }
-      if (!info) body.appendChild(h('p', { class: 'muted' }, H.isAdmin() ? 'Pas encore de fiche : lance « Fiches artistes » dans Paramètres > Gestion pour récupérer le résumé, les membres et les liens.' : 'Pas encore de fiche pour cet artiste.'));
-      el.appendChild(body);
+      [albumsSection(d)].concat(memberSections(info), [linksSection(info), noSheetNote(info)]).forEach(function (node) { if (node) body.appendChild(node); });
+      return body;
+    }
+    function render() {
+      var d = data, info = d.info || null;
+      var focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      H.clear(el);
+      el.appendChild(picker);
+      el.appendChild(artistHero(d, artistInfo(d, info)));
+      el.appendChild(artistBody(d, info));
       H.audio.mark();
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
