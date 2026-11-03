@@ -157,12 +157,7 @@ class TestNavigation(UiCase):
         total = self.view(".grid .card").count()
         self.view("input[type=search]").fill("dceu")
         self.page.wait_for_timeout(700)
-        self.assertEqual(self.view(".grid .card.saga").count(), 1)          # les sagas sont regroupées par défaut : une seule vignette
-        self.view(".tools .btn", has_text="Sagas").click()
-        self.page.wait_for_timeout(500)
-        self.assertEqual(self.view(".grid .card").count(), 2)               # sagas dépliées : les deux films
-        self.view(".tools .btn", has_text="Sagas").click()
-        self.page.wait_for_timeout(500)
+        self.assertEqual(self.view(".grid .card.saga").count(), 1)          # les films sont regroupés en sagas : une seule vignette
         self.view("input[type=search]").fill("")
         self.page.wait_for_timeout(700)
         self.assertEqual(self.view(".grid .card").count(), total)
