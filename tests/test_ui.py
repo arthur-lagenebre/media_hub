@@ -249,7 +249,7 @@ class TestDetailPages(UiCase):
         self.open("#/admin")
         self.view(".panel").first.wait_for()
         self.view("button", has_text="Tout mettre à jour").click()
-        status = self.view(".job .jt span").first
+        status = self.view(".job", has_text="Mise à jour · tout").locator(".jt span")       # la liste montre d'abord les mises à jour du démarrage, terminées : c'est la nouvelle qu'on attend
         status.wait_for()
         for _ in range(60):
             if status.inner_text() == "terminée":
