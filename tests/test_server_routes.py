@@ -595,5 +595,97 @@ class TestTmdbSheetRoutes(RouteCase):
         self.client.search_tv.assert_not_called()
 
 
+class TestSettingsRoutes(RouteCase):
+    def setUp(self):
+        super().setUp()
+        self.alice = accounts.create(self.db, "alice", "motdepasse1")
+        self.bob = accounts.create(self.db, "bob", "motdepasse1")
+
+    def as_(self, who):
+        return self.hub.cookie(who)
+
+    def test_the_settings_of_an_account_start_at_the_defaults(self):
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums"}})
+
+    def test_a_choice_is_kept_for_the_account_that_made_it(self):
+        reply = self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
+        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists"}}))
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "artists")
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.alice)).json()["settings"]["music_view"], "albums")
+
+    def test_the_state_carries_the_settings_so_the_page_needs_no_second_call(self):
+        self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums"})
+
+    def test_a_wrong_setting_is_a_400_with_the_reason(self):
+        for body, reason in (({"couleur": "rouge"}, "réglage inconnu"), ({"music_view": "mosaique"}, "valeur inconnue"), ({}, "aucun réglage")):
+            reply = self.post("/api/me/settings", body, headers=self.as_(self.bob))
+            self.assertEqual(reply.status, 400, body)
+            self.assertIn(reason, reply.json()["error"])
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "albums")
+
+    def test_an_open_server_has_one_profile_with_its_own_settings(self):
+        (self.root / "ouvert").mkdir()
+        (self.root / "ouvert" / "web").mkdir()
+        hub = MiniHub(self.root / "ouvert", [])
+        self.assertEqual(call(hub, "POST", "/api/me/settings", {"music_view": "artists"})[1].json()["settings"]["music_view"], "artists")
+        self.assertEqual(call(hub, "GET", "/api/state")[1].json()["settings"]["music_view"], "artists")
+
+
+class TestArtistsView(RouteCase):
+    kind = "music"
+
+    def setUp(self):
+        super().setUp()
+        albums = [item("d1", "album", title="Discovery", grp="Daft Punk", year="2001", genres=json.dumps(["Electro", "House"]), meta={"artist_id": "ar1"}),
+                  item("d2", "album", title="Homework", grp="Daft Punk", year="1997", genres=json.dumps(["Electro"]), meta={"artist_id": "ar1"}),
+                  item("a1", "album", title="Moon Safari", grp="Air", year="1998", genres=json.dumps(["Pop"]), meta={"artist_id": "ar2"}),
+                  item("v1", "album", title="Diablo III Soundtrack", grp="Various Artists", year="2012", meta={"artist_id": "ar3"}),
+                  item("u1", "album", title="Sans nom", grp="Artiste inconnu", meta={"artist_id": "ar4"}),
+                  item("z1", "album", title="Zéro", grp="Zaz", year="2010", meta={"artist_id": "ar5"})]
+        self.fill(albums, [])
+
+    def artists(self, query=""):
+        return self.get("/api/library/lib?view=artists" + query).json()
+
+    def test_the_artists_come_in_order_with_the_unknown_ones_last_and_the_albums_counted(self):
+        out = self.artists()
+        self.assertEqual([(a["title"], a["n"]) for a in out["items"]], [("Air", 1), ("Daft Punk", 2), ("Zaz", 1), ("Artiste inconnu", 1), ("Artistes divers", 1)])
+        self.assertEqual(out["total"], 5)
+        self.assertEqual({a["id"] for a in out["items"]}, {"ar1", "ar2", "ar3", "ar4", "ar5"})
+
+    def test_an_artist_card_gives_the_oldest_album_for_the_cover_and_no_album_list(self):
+        card = {a["id"]: a for a in self.artists()["items"]}["ar1"]
+        self.assertEqual((card["type"], card["album"], card["title"], card["lib"]), ("artist", "d2", "Daft Punk", "lib"))
+        self.assertNotIn("albums", card)
+
+    def test_various_artists_is_said_in_french_without_changing_its_page(self):
+        various = {a["id"]: a for a in self.artists()["items"]}["ar3"]
+        self.assertEqual(various["title"], "Artistes divers")
+
+    def test_the_letters_and_the_genres_count_the_artists_not_the_albums(self):
+        out = self.artists()
+        self.assertEqual(dict(out["letters"]), {"A": 3, "D": 1, "Z": 1})
+        self.assertEqual(dict(out["genres"]), {"Electro": 1, "House": 1, "Pop": 1})
+
+    def test_the_filters_of_the_library_work_on_artists(self):
+        self.assertEqual([a["title"] for a in self.artists("&letter=D")["items"]], ["Daft Punk"])
+        self.assertEqual([a["title"] for a in self.artists("&genre=Electro")["items"]], ["Daft Punk"])
+        self.assertEqual([a["title"] for a in self.artists("&q=zaz")["items"]], ["Zaz"])
+
+    def test_an_album_title_finds_its_artist(self):
+        self.assertEqual([a["title"] for a in self.artists("&q=homework")["items"]], ["Daft Punk"])
+        self.assertEqual([a["title"] for a in self.artists("&q=diablo")["items"]], ["Artistes divers"])
+
+    def test_the_artists_are_paged_like_the_albums(self):
+        out = self.artists("&limit=2&offset=1")
+        self.assertEqual(([a["title"] for a in out["items"]], out["total"], out["offset"]), (["Daft Punk", "Zaz"], 5, 1))
+
+    def test_without_the_view_the_albums_stay_and_another_kind_of_library_ignores_it(self):
+        self.assertEqual(len(self.get("/api/library/lib").json()["items"]), 6)
+        self.assertEqual(self.get("/api/library/lib?view=albums").json()["items"][0]["type"], "album")
+
+
 if __name__ == "__main__":
     unittest.main()

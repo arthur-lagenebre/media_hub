@@ -1135,6 +1135,72 @@ class TestHeroImage(UiCase):
             self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
 
 
+class TestArtistsView(UiCase):
+    """La bibliothèque de musique par artiste : un artiste par carte, sans ses albums, quand le compte l'a choisi dans ses paramètres."""
+
+    def choose(self, view):
+        self.api("/api/me/settings", {"music_view": view})
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+
+    def artists(self):
+        return self.view(".grid .card[data-type=artist]")
+
+    def test_by_default_the_library_shows_the_albums_under_their_artists(self):
+        self.open("#/l/musique")
+        self.view(".grid .card").first.wait_for()
+        self.assertGreaterEqual(self.view(".grid .card[data-type=album]").count(), 1)
+        self.assertEqual(self.artists().count(), 0)
+        self.assertGreaterEqual(self.view("h3.grp").count(), 1)
+
+    def test_an_account_that_chose_artists_sees_one_card_per_artist_without_albums(self):
+        self.choose("artists")
+        self.open("#/l/musique")
+        self.artists().first.wait_for()
+        self.assertEqual(self.view(".grid .card[data-type=album]").count(), 0)
+        self.assertEqual(self.view("h3.grp").count(), 0)
+        total = self.api("/api/library/musique?view=artists")["total"]
+        self.assertEqual(self.artists().count(), total)
+        self.assertIn("album", self.artists().first.inner_text())
+        self.assertEqual(self.view(".count").inner_text(), f"{total} artiste" + ("s" if total > 1 else ""))      # le décompte parle d'artistes, pas d'albums
+
+    def test_a_card_opens_the_page_of_its_artist(self):
+        self.choose("artists")
+        self.open("#/l/musique")
+        card = self.artists().first
+        card.wait_for()
+        name = card.get_attribute("title")
+        card.click()
+        self.page.wait_for_url("**#/artist/musique/*")
+        self.view("h1", has_text=name).wait_for()
+
+    def test_the_card_falls_back_to_the_cover_of_the_first_album_when_there_is_no_photo(self):
+        self.choose("artists")
+        self.open("#/l/musique")
+        self.artists().first.wait_for()
+        self.until(lambda: "/img/item/" in (self.artists().first.locator("img").first.get_attribute("src") or ""))
+
+    def test_an_album_title_in_the_filter_finds_its_artist(self):
+        self.choose("artists")
+        self.open("#/l/musique")
+        self.artists().first.wait_for()
+        self.view("input[type=search]").fill("discovery")
+        self.until(lambda: self.artists().count() == 1)
+        self.assertEqual(self.artists().first.get_attribute("title"), "Daft Punk")
+
+    def test_the_choice_made_in_the_settings_applies_when_coming_back_to_the_library(self):
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+        self.open("#/l/musique")
+        self.view(".grid .card[data-type=album]").first.wait_for()
+        self.open("#/settings?tab=comptes")
+        panel = self.view(".panel", has_text="Affichage")
+        panel.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text="Artistes").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "artists")
+        self.page.locator("#nav .link", has_text="Musique").click()
+        self.artists().first.wait_for()
+        self.assertEqual(self.view(".grid .card[data-type=album]").count(), 0)
+
+
 class TestSettings(UiCase):
     """La page « Paramètres » : des onglets en haut, qui restent affichés, au lieu d'une seule longue page de gestion."""
 
@@ -1164,7 +1230,7 @@ class TestSettings(UiCase):
     def test_each_tab_has_its_own_panels(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        for name, titles in (("Lecture", ["Lecture"]), ("Comptes", ["Mon compte"]), ("Tâches", ["Tâches"]), ("Serveur", ["Serveur"])):
+        for name, titles in (("Lecture", ["Lecture"]), ("Comptes", ["Mon compte", "Affichage"]), ("Tâches", ["Tâches"]), ("Serveur", ["Serveur"])):
             self.tab(name)
             self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == name)
             self.assertEqual(self.titles(), titles, name)
@@ -1192,6 +1258,21 @@ class TestSettings(UiCase):
         self.page.locator("#toast.on", has_text="Mise à jour lancée").wait_for()
         self.page.wait_for_timeout(2500)                # la page est reconstruite quand la mise à jour change l'état des bibliothèques
         self.assertEqual(self.page.evaluate("window.scrollY"), before)
+
+    def test_the_account_chooses_how_the_music_library_opens(self):
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+        self.open("#/settings?tab=comptes")
+        panel = self.view(".panel", has_text="Affichage")
+        panel.wait_for()
+        self.assertIn("Albums", panel.inner_text())
+        panel.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text="Artistes").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "artists")
+        self.until(lambda: "Artistes" in self.view(".panel", has_text="Affichage").inner_text())
+        panel = self.view(".panel", has_text="Affichage")
+        panel.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text="Albums").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "albums")
 
     def test_the_tab_chosen_is_remembered(self):
         self.open("#/settings")
@@ -1257,7 +1338,7 @@ class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
                 self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Lecture", "Comptes"])
                 page.locator(".tabs .tab", has_text="Comptes").click()
                 page.wait_for_selector(".panel h2")
-                self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte"])
+                self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte", "Affichage"])
                 page.goto(base + "/#/settings?tab=serveur")                       # un onglet réservé à l'administrateur ne s'ouvre pas
                 shown = page.locator("#views > .view:visible .tabs .tab[aria-selected=true]")       # l'ancienne page reste, cachée, derrière la nouvelle
                 shown.wait_for()
