@@ -738,6 +738,37 @@ class TestActionsMenu(UiCase):
         self.press("ContextMenu", wait=300)
         self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
 
+    def test_a_film_known_to_tmdb_offers_its_page_and_a_saga_to_join(self):
+        self.card("films", "Inception").locator(".qbtn").click()
+        self.page.locator(".menu .opt", has_text="Ajouter à une saga").wait_for()
+        self.page.evaluate("window.open = function (url) { window.opened = url; }")
+        self.choose("TMDB")
+        self.until(lambda: self.page.evaluate("window.opened") == "https://www.themoviedb.org/movie/27205")
+
+    def test_the_menu_can_add_the_film_to_a_saga(self):
+        self.card("films", "Inception").locator(".qbtn").click()
+        self.choose("Ajouter à une saga")
+        self.assertEqual(self.page.locator(".menu h3").inner_text(), "Ajouter « Inception » à une saga")
+        self.page.locator(".menu .opt", has_text="Nouvelle saga").wait_for()
+
+    def test_a_film_unknown_to_tmdb_offers_neither(self):
+        self.card("films", "Sans Etiquette").locator(".qbtn").click()
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu"])
+
+    def test_a_show_knows_its_tmdb_page_once_enriched_and_a_saga_never_does(self):
+        item = self.item("series", "Dark")
+        self.run_.hub.db.update_item_meta(item["id"], meta={"tmdb": 70523})
+        self.addCleanup(self.run_.hub.db.update_item_meta, item["id"], meta={"tmdb": None})
+        self.card("series", "Dark").locator(".qbtn").click()
+        self.page.evaluate("window.open = function (url) { window.opened = url; }")
+        self.choose("TMDB")
+        self.until(lambda: self.page.evaluate("window.opened") == "https://www.themoviedb.org/tv/70523")
+        self.open("#/l/films")
+        self.view(".grid .card.saga .qbtn").first.click()
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu"])
+
     def test_a_show_card_marks_every_season(self):
         self.forget("series", "Dark")
         self.card("series", "Dark").locator(".qbtn").click()

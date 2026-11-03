@@ -41,13 +41,25 @@
     });
   }
 
-  A.menu = function (it) {
-    var done = finished(it);
+  // `d` : la fiche de l'élément (/api/item), qui sait si TMDB le connaît ; null pour une saga, ou quand la fiche ne vient pas.
+  function showMenu(it, d) {
+    var done = finished(it), tmdb = d && d.links ? d.links.filter(function (l) { return l.label === 'TMDB'; })[0] : null;
     var options = [{ label: done ? 'Revoir' : (it.seen || it.started ? 'Reprendre' : 'Voir'), value: 'play' }, { label: A.seenLabel(it.type, done), value: 'seen' }];
+    if (it.type === 'movie' && d && d.tmdb && H.isAdmin() && H.sagas) options.push({ label: 'Ajouter à une saga', value: 'saga' });      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
+    if (tmdb) options.push({ label: 'TMDB', detail: 'Ouvre la fiche dans un nouvel onglet', value: 'tmdb' });
     H.menu(it.title, options, null, function (v) {
       if (v === 'play') (it.type === 'saga' ? playSaga : play)(it, done).catch(fail);
+      else if (v === 'saga') H.sagas.addTo(d, refresh);
+      else if (v === 'tmdb') window.open(tmdb.url, '_blank', 'noopener');
       else mark(it, !done).then(refresh).catch(fail);
     });
+  }
+  var asking = false;      // la touche « Menu » envoie la touche ET le clic droit : un seul menu s'ouvre
+  A.menu = function (it) {
+    if (asking || H.overlay.isOpen()) return;
+    if (it.type === 'saga') { showMenu(it, null); return; }
+    asking = true;
+    H.api('/api/item/' + it.id).then(function (d) { return d; }, function () { return null; }).then(function (d) { asking = false; showMenu(it, d); });
   };
 
   // Le bouton posé sur la carte (souris et doigt), et le menu au clic droit ou à la touche « Menu » (télécommande).
