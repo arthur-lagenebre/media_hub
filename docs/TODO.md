@@ -46,6 +46,13 @@
   - Serveur : `/media/<id>/file?download=1` en faisait déjà assez (`Content-Disposition: attachment`, `Range`, hors `HUB_MAX_STREAMS`), rien n'a changé côté serveur. L'enchaînement par saison ou album est du ressort de l'interface seule. Vérifier qu'un téléchargement long ne bloque pas les autres requêtes et ne compte pas dans `HUB_MAX_STREAMS`.
   - Interface : masquer le bouton sur `data-device="tv"` (les navigateurs de télé téléchargent mal). À grouper avec le bouton « … ». Le jeton de média reste global : une URL de téléchargement n'est pas liée au compte.
 
+### Musique
+
+- [ ] **La bibliothèque de musique par artiste.** Aujourd'hui la page montre tous les albums, regroupés sous le nom de leur artiste. À la place : la liste des **artistes seulement**, sans leurs albums, chacun avec **la photo qu'on a choisie pour lui** (*Changer la photo*, *Recadrer*, photo de Wikipédia : `GET /img/artist/<lib>/<id>`), et à défaut la pochette de son premier album. Un clic ouvre la fiche de l'artiste, où sont ses albums.
+  - À trancher : remplacer la vue actuelle, ou l'offrir en choix à côté (un réglage « Artistes / Albums », comme « Sagas » pour les films) ; et si les albums sans artiste (« Artiste inconnu ») ont leur carte.
+  - Côté serveur, la liste de la bibliothèque rend des albums : il faudra une liste d'artistes (nom, nombre d'albums, présence d'une photo), avec les filtres qui existent déjà (lettre, genre, recherche).
+  - Côté interface : une carte ronde ou carrée par artiste, la photo chargée par `/img/artist/...` (le cache d'images en tient déjà compte), le focus à la télécommande comme les autres cartes.
+
 ### Interface
 
 - [x] **Renommer « Admin » en « Paramètres ».**
