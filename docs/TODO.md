@@ -35,6 +35,7 @@
 - [x] **Bouton « … » sur les séries et les animations** : *Voir / Revoir*, *Marquer vu / non vu* et *TMDB* (une fois la série enrichie). À essayer à la télécommande.
 - [x] **Changer les textes** : « Marquer comme vu » / « Marquer non vu » deviennent « Marquer toutes les saisons comme vu » / « Marquer toutes les saisons non vu ».
 - [x] **« Marquer comme vu » / « Marquer non vu » sur chaque épisode**, éventuellement derrière un bouton « … ».
+- [x] **Une série qui tombe sur la mauvaise fiche TMDB** (deux séries portent le même titre : *Hercule*). Deux remèdes : l'enrichissement garde désormais les doutes de la recherche (`doubts`, affichés en avertissement sur la fiche pour l'administrateur, et dans le journal de la tâche) ; et *Changer la fiche TMDB* (nom de la série, ou adresse de sa fiche sur themoviedb.org) fixe l'identifiant dans la base du hub (`tmdb-pin:<id>`), *Fiche TMDB d'origine* le retire. La médiathèque n'est pas touchée : pour que media_library voie le même choix, il reste à écrire `{tmdb-4615}` dans le nom du dossier. Reste, si l'envie vient : proposer d'écrire ce marqueur depuis le hub quand le volume n'est pas en lecture seule.
 
 ### Global
 

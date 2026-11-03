@@ -364,6 +364,7 @@
       if (d.authors && d.authors.length) info.appendChild(h('p', { class: 'credit' }, 'Par ' + d.authors.join(', ')));
       if (d.type === 'album' && d.artist && d.artist_id) info.appendChild(h('p', { class: 'credit' }, h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + d.artist_id }, d.artist)));
       if (d.summary) info.appendChild(h('p', { class: 'synopsis' }, d.summary));
+      if (d.doubts && d.doubts.length && H.isAdmin()) info.appendChild(h('p', { class: 'warn doubt', role: 'note' }, 'Fiche TMDB à vérifier : ' + d.doubts.join(' ; ') + '.' + (H.device === 'tv' ? '' : ' Ce n’est pas la bonne série ? « Changer la fiche TMDB ».')));
 
       var actions = h('div', { class: 'actions' });
       if (d.type === 'album') {
@@ -382,6 +383,7 @@
       if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) actions.appendChild(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
       if (entries.length && H.actions.canDownload()) actions.appendChild(H.button(d.type === 'album' ? 'Télécharger l’album' : 'Télécharger', 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
       H.actions.posterTools(d, load).forEach(function (node) { actions.appendChild(node); });
+      H.actions.tmdbTools(d, load).forEach(function (node) { actions.appendChild(node); });
       (d.links || []).forEach(function (l) { actions.appendChild(h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label)); });
       info.appendChild(actions);
       var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),

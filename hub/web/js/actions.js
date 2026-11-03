@@ -121,6 +121,31 @@
     } }));
     return tools;
   };
+  // --- Changer la fiche TMDB (administrateur, séries et animations) ----------------------------
+  // Quand la recherche sur le nom du dossier tombe sur un homonyme. Le choix reste dans la base du hub : la médiathèque n'est pas touchée, et « Fiche TMDB d'origine » le retire.
+  // On cherche par le nom, ou on colle l'adresse de la fiche sur themoviedb.org (la façon sûre de tomber sur la bonne). `d` : la fiche (/api/item) ; `done` est appelé une fois la fiche changée.
+  var TMDB_URL = /^https?:\/\/(www\.)?themoviedb\.org\/tv\/\d+/i;
+  A.tmdbTools = function (d, done) {
+    if (d.type !== 'show' || !H.isAdmin() || H.device === 'tv') return [];
+    function choose(value) {
+      H.api('/api/item/' + d.id + '/tmdb', { tmdb: value }).then(function () { H.toast('Fiche TMDB enregistrée'); done(); }).catch(fail);
+    }
+    function search(text) {
+      H.api('/api/item/' + d.id + '/tmdb?q=' + encodeURIComponent(text)).then(function (r) {
+        H.menu('Quelle série ?', r.results.map(function (s) {
+          var overview = s.overview.length > 140 ? s.overview.slice(0, 140) + '…' : s.overview;
+          return { label: s.name + (s.year ? ' (' + s.year + ')' : ''), detail: [overview, 'TMDB ' + s.tmdb].filter(Boolean).join(' · '), value: s.tmdb };
+        }), d.tmdb || null, choose);
+      }).catch(fail);
+    }
+    var tools = [H.button('Changer la fiche TMDB', 'edit', { 'data-key': 'tmdb', onclick: function () {
+      H.prompt('Nom de la série, ou adresse de sa fiche TMDB', d.title, 'Chercher', function (text) { if (TMDB_URL.test(text)) choose(text); else search(text); });
+    } })];
+    if (d.tmdb_custom) tools.push(H.button('Fiche TMDB d’origine', 'refresh', { 'data-key': 'tmdb-reset', onclick: function () {
+      H.api('/api/item/' + d.id + '/tmdb/delete', {}).then(function () { H.toast('Fiche TMDB d’origine rétablie'); done(); }).catch(fail);
+    } }));
+    return tools;
+  };
   // Le bouton « … » d'une couverture de tome : le même menu que celui d'un épisode.
   A.entryTools = function (e, done) {
     return h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Plus d’actions', title: 'Plus d’actions',

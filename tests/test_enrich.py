@@ -17,7 +17,7 @@ from hub import config
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
 
-from hub import enrich  # noqa: E402
+from hub import enrich, scan  # noqa: E402
 from hub.db import Database  # noqa: E402
 
 JPEG = b"\xff\xd8\xff\xe0" + b"x" * 20
@@ -41,15 +41,19 @@ class TestShowIsDone(TempCase):
 
     def test_a_show_is_done_once_it_has_its_seasons(self):
         self.assertFalse(enrich.show_is_done(self.db, self.lib, self.show, False))
-        self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {}})
+        self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {}, "doubts": []})
         self.assertTrue(enrich.show_is_done(self.db, self.lib, self.show, False))
 
     def test_a_sheet_from_before_the_seasons_is_done_again(self):
         self.db.kv_set(enrich.show_key(self.lib, self.show), {"summary": "x"})
         self.assertFalse(enrich.show_is_done(self.db, self.lib, self.show, False))
 
-    def test_force_does_everything_again(self):
+    def test_a_sheet_from_before_the_doubts_is_done_again(self):
         self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {"1": "x"}})
+        self.assertFalse(enrich.show_is_done(self.db, self.lib, self.show, False))
+
+    def test_force_does_everything_again(self):
+        self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {"1": "x"}, "doubts": []})
         self.assertFalse(enrich.show_is_done(self.db, self.lib, self.show, True))
 
 
@@ -296,6 +300,80 @@ class TestEnrichShow(TempCase):
         self.assertNotIn("poster_file", data)
 
 
+class TestChosenSheet(TempCase):
+    """La fiche TMDB choisie à la main, et les doutes de la recherche."""
+
+    def setUp(self):
+        super().setUp()
+        self.lib = types.SimpleNamespace(id="series", path=self.tmp / "lib")
+        self.db.replace_library("series", [item("s1", "series", "show", meta={"folder": "Hercule", "tmdb_pinned": "99"})], [])
+        self.row = self.db.one("SELECT * FROM items WHERE id=?", ("s1",))
+        self.tmdb = FakeShow()
+
+    def enrich(self, resolve=42, show_id=None, **options):
+        with mock.patch.object(enrich.lookup, "resolve_show_id", **({"side_effect": resolve} if callable(resolve) else {"return_value": resolve})) as patched:
+            found = enrich.choose_show(self.tmdb, self.tmp / "posters", self.db, self.lib, self.row, show_id, **options)
+        return found, patched
+
+    def test_the_choice_made_in_the_hub_comes_before_the_folder_name(self):
+        _, resolve = self.enrich(show_id=4615)
+        self.assertEqual(resolve.call_args.args[2], 4615)
+        self.assertEqual(self.db.kv_get(enrich.pin_key(self.row)), 4615)
+
+    def test_without_a_choice_the_folder_name_decides_as_before(self):
+        _, resolve = self.enrich()
+        self.assertEqual(resolve.call_args.args[2], "99")
+        self.assertIsNone(self.db.kv_get(enrich.pin_key(self.row)))
+
+    def test_taking_the_choice_back_leaves_it_to_the_folder_again(self):
+        self.enrich(show_id=4615)
+        _, resolve = self.enrich(show_id=None)
+        self.assertEqual(resolve.call_args.args[2], "99")
+        self.assertIsNone(self.db.kv_get(enrich.pin_key(self.row)))
+
+    def test_the_choice_is_not_kept_when_tmdb_refuses_it(self):
+        self.enrich(show_id=4615)
+        self.tmdb.series = mock.Mock(side_effect=enrich.TmdbError("introuvable"))
+        with self.assertRaises(enrich.TmdbError):
+            self.enrich(show_id=777)
+        self.assertEqual(self.db.kv_get(enrich.pin_key(self.row)), 4615)          # celui d'avant
+
+    def test_the_choice_is_not_kept_when_the_search_finds_nothing(self):
+        self.enrich(show_id=4615)
+        found, _ = self.enrich(resolve=None, show_id=None)
+        self.assertIsNone(found)
+        self.assertEqual(self.db.kv_get(enrich.pin_key(self.row)), 4615)          # retirer le choix n'a rien donné : il reste
+
+    def test_the_choice_survives_what_a_scan_does_with_the_enrichment(self):
+        self.enrich(show_id=4615)
+        self.assertNotIn(enrich.pin_key(self.row), scan.enriched_for(self.db, "series").keys())
+        self.assertEqual(scan.enriched_for(self.db, "series")["s1"]["tmdb"], 42)
+
+    def test_the_doubts_of_the_search_are_kept_without_the_advice_for_the_command_line(self):
+        def search(*args):
+            print("recherche : 'Hercule' -> Hercule (1998)")
+            print("/!\\ titre partagé avec Hercule (1995) -> vérifie l'année, ou force --tmdb-id")
+            print("/!\\ titre trouvé éloigné de la recherche -> à vérifier")
+            return 42
+        (_, data), _ = self.enrich(resolve=search)
+        self.assertEqual(data["doubts"], ["titre partagé avec Hercule (1995)", "titre trouvé éloigné de la recherche"])
+        self.assertEqual(json.loads(self.db.one("SELECT meta FROM items WHERE id='s1'")["meta"])["doubts"], data["doubts"])
+
+    def test_a_doubt_that_is_lifted_disappears_from_the_sheet(self):
+        self.enrich(resolve=lambda *a: print("/!\\ titre partagé avec X") or 42)
+        self.enrich(show_id=4615)
+        self.assertEqual(json.loads(self.db.one("SELECT meta FROM items WHERE id='s1'")["meta"])["doubts"], [])
+
+    def test_the_journal_of_a_pass_tells_each_doubt(self):
+        log = []
+        found = ({"name": "Hercule"}, {"year": "1998", "doubts": ["titre partagé avec Hercule (1995)"]})
+        cfg = types.SimpleNamespace(tmdb_key="cle", data=self.tmp)
+        with mock.patch.object(enrich, "tmdb_client", return_value=(None, self.tmp)), mock.patch.object(enrich, "enrich_show", return_value=found):
+            enrich.enrich_shows(cfg, self.db, self.lib, log.append)
+        self.assertEqual(len(log), 2)
+        self.assertIn("titre partagé avec Hercule (1995)", log[1])
+
+
 class TestEnrichShows(TempCase):
     def setUp(self):
         super().setUp()
@@ -325,7 +403,7 @@ class TestEnrichShows(TempCase):
 
     def test_a_show_already_done_is_skipped_unless_forced(self):
         done = self.db.one("SELECT * FROM items WHERE id=?", ("a",))
-        self.db.kv_set(enrich.show_key(self.lib, done), {"season_summaries": {}})
+        self.db.kv_set(enrich.show_key(self.lib, done), {"season_summaries": {}, "doubts": []})
         found = ({"name": "Nom"}, {"year": ""})
         outcomes = {name: found for name in "ABCD"}
         self.assertEqual(self.run_pass(outcomes)[2], ["B", "C", "D"])

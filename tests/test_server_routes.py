@@ -514,5 +514,105 @@ class TestPosterRoutes(RouteCase):
         self.hub.images.clear_poster.assert_not_called()
 
 
+class TestTmdbSheetRoutes(RouteCase):
+    def setUp(self):
+        super().setUp()
+        self.fill([item("s1", "show", title="Hercule"), item("m1", "movie", title="Film")], [])
+        self.client = mock.Mock()
+        self.client.search_tv.return_value = [{"id": 2567, "name": "Hercule", "first_air_date": "1998-08-31", "overview": "Disney", "popularity": 9}] + [{"id": n, "name": f"Autre {n}"} for n in range(20)]
+        self.hub.cfg.tmdb_key = "cle"
+        real_tmdb_client = app.enrich.tmdb_client
+        for patched in (mock.patch.object(app.enrich, "tmdb_client", return_value=(self.client, self.root / "posters")), mock.patch.object(app.enrich, "choose_show")):
+            setattr(self, patched.attribute, patched.start())
+            self.addCleanup(patched.stop)
+        self.choose_show.return_value = ({"name": "Hercule"}, {"year": "1995"})
+        self.real_tmdb_client = real_tmdb_client
+
+    def test_the_search_gives_the_series_tmdb_proposes_ten_at_most(self):
+        reply = self.get("/api/item/s1/tmdb?q=Hercule")
+        self.client.search_tv.assert_called_once_with("Hercule")
+        results = reply.json()["results"]
+        self.assertEqual((reply.status, len(results)), (200, 10))
+        self.assertEqual(results[0], {"tmdb": 2567, "name": "Hercule", "year": "1998", "overview": "Disney"})
+        self.assertEqual(results[1], {"tmdb": 0, "name": "Autre 0", "year": "", "overview": ""})
+
+    def test_an_empty_search_is_refused(self):
+        for target in ("/api/item/s1/tmdb?q=", "/api/item/s1/tmdb?q=%20%20", "/api/item/s1/tmdb"):
+            self.assertEqual(self.get(target).status, 400, target)
+        self.client.search_tv.assert_not_called()
+
+    def test_a_number_or_the_address_of_the_sheet_chooses_it(self):
+        for given in (4615, "4615", " 4615 ", "https://www.themoviedb.org/tv/4615-hercules-the-legendary-journeys", "https://themoviedb.org/tv/4615", "http://www.themoviedb.org/tv/4615/seasons"):
+            self.choose_show.reset_mock()
+            reply = self.post("/api/item/s1/tmdb", {"tmdb": given})
+            self.assertEqual((reply.status, reply.json()), (200, {"ok": True}), given)
+            self.assertEqual(self.choose_show.call_args.args[-1], 4615, given)
+
+    def test_the_choice_is_made_for_the_series_in_its_library_with_the_client_and_the_posters(self):
+        self.post("/api/item/s1/tmdb", {"tmdb": 4615})
+        client, posters, db, lib, row, show_id = self.choose_show.call_args.args
+        self.assertEqual((client, posters, db, lib.id, row["id"], show_id), (self.client, self.root / "posters", self.db, "lib", "s1", 4615))
+
+    def test_what_is_not_a_series_of_tmdb_is_refused(self):
+        for given in ("", "Hercule", "https://example.com/tv/4615", "https://www.themoviedb.org/movie/4615", "movie/4615", -4, None, [4615], {}):
+            self.assertEqual(self.post("/api/item/s1/tmdb", {"tmdb": given}).status, 400, given)
+        self.assertEqual(self.post("/api/item/s1/tmdb", {}).status, 400)
+        self.choose_show.assert_not_called()
+
+    def test_taking_the_choice_back_asks_for_no_identifier(self):
+        reply = self.post("/api/item/s1/tmdb/delete")
+        self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
+        self.assertIsNone(self.choose_show.call_args.args[-1])
+
+    def test_only_a_series_has_a_sheet_to_choose(self):
+        self.assertEqual(self.post("/api/item/m1/tmdb", {"tmdb": 1}).status, 400)
+        self.assertEqual(self.post("/api/item/m1/tmdb/delete").status, 400)
+        self.assertEqual(self.get("/api/item/m1/tmdb?q=x").status, 400)
+        self.assertEqual(self.post("/api/item/inconnu/tmdb", {"tmdb": 1}).status, 404)
+        self.choose_show.assert_not_called()
+
+    def test_without_a_tmdb_key_nothing_is_possible(self):
+        self.hub.cfg.tmdb_key = ""
+        self.tmdb_client.side_effect = self.real_tmdb_client
+        for reply in (self.get("/api/item/s1/tmdb?q=x"), self.post("/api/item/s1/tmdb", {"tmdb": 1}), self.post("/api/item/s1/tmdb/delete")):
+            self.assertEqual((reply.status, "TMDB_KEY" in reply.json()["error"]), (400, True))
+        self.choose_show.assert_not_called()
+
+    def test_what_tmdb_answers_badly_is_a_gateway_error(self):
+        for failure in (app.tmdb.TmdbError("HTTP 500"), app.tmdb.TmdbAuthError("clé refusée")):
+            self.choose_show.side_effect = failure
+            self.client.search_tv.side_effect = failure
+            for reply in (self.post("/api/item/s1/tmdb", {"tmdb": 1}), self.post("/api/item/s1/tmdb/delete"), self.get("/api/item/s1/tmdb?q=x")):
+                self.assertEqual((reply.status, str(failure) in reply.json()["error"]), (502, True))
+
+    def test_a_series_that_tmdb_does_not_find_is_a_404(self):
+        self.choose_show.return_value = None
+        reply = self.post("/api/item/s1/tmdb/delete")
+        self.assertEqual((reply.status, "série" in reply.json()["error"]), (404, True))
+
+    def test_the_sheet_says_whether_the_tmdb_sheet_was_chosen_here(self):
+        self.assertNotIn("tmdb_custom", self.get("/api/item/s1").json())
+        self.db.kv_set(app.enrich.pin_key({"id": "s1"}), 4615)
+        self.assertIs(self.get("/api/item/s1").json()["tmdb_custom"], True)
+        self.db.kv_set(app.enrich.pin_key({"id": "m1"}), 4615)
+        self.assertNotIn("tmdb_custom", self.get("/api/item/m1").json())
+
+    def test_the_doubts_of_the_search_reach_the_sheet(self):
+        self.db.update_item_meta("s1", meta={"doubts": ["titre partagé avec Hercule (1995)"]})
+        self.assertEqual(self.get("/api/item/s1").json()["doubts"], ["titre partagé avec Hercule (1995)"])
+        self.db.update_item_meta("s1", meta={"doubts": []})
+        self.assertNotIn("doubts", self.get("/api/item/s1").json())
+
+    def test_an_ordinary_account_cannot_choose_a_sheet(self):
+        accounts.create(self.db, "root", "motdepasse1")
+        bob = accounts.create(self.db, "bob", "motdepasse1")
+        cookie = self.hub.cookie(bob)
+        self.assertEqual(self.get("/api/item/s1/tmdb?q=x", headers=cookie).status, 403)
+        for target in ("/api/item/s1/tmdb", "/api/item/s1/tmdb/delete"):
+            self.assertEqual(self.post(target, {"tmdb": 1}, headers=cookie).status, 403, target)
+        self.choose_show.assert_not_called()
+        self.client.search_tv.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

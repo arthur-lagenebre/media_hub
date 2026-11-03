@@ -92,10 +92,20 @@ def show_key(lib, item):
     return f"enrich:{lib.id}:{item['id']}"
 
 
+def pin_key(item):
+    """Où se garde la fiche TMDB choisie à la main pour une série (voir choose_show). Hors du préfixe `enrich:` : le scan reprend celui-là tel quel, ce choix-ci n'est pas une donnée de TMDB."""
+    return f"tmdb-pin:{item['id']}"
+
+
+def doubts_of(printed):
+    """Les doutes de la recherche (ses lignes « /!\\ »), sans le conseil qui vise la ligne de commande de media_library (« force --tmdb-id »)."""
+    return [line[4:].split(" -> ")[0].strip() for line in printed.splitlines() if line.startswith("/!\\ ")]
+
+
 def show_is_done(db, lib, item, force):
-    """Déjà enrichie, avec les saisons et le casting (une fiche d'avant leur ajout est refaite) ; `force` refait tout."""
+    """Déjà enrichie, avec les saisons, le casting et les doutes de la recherche (une fiche d'avant leur ajout est refaite) ; `force` refait tout."""
     before = db.kv_get(show_key(lib, item))
-    return not force and bool(before) and "season_summaries" in before
+    return not force and bool(before) and "season_summaries" in before and "doubts" in before
 
 
 def show_facts(show, show_id):
@@ -110,12 +120,14 @@ def enrich_show(tmdb, posters, db, lib, item):
     """Enrichit une série et garde le résultat (base et affiche sur le disque) ; (fiche TMDB, données gardées), ou None si TMDB ne la trouve pas."""
     meta = json.loads(item["meta"])
     folder = lib.path / meta.get("folder", "")
-    with contextlib.redirect_stdout(io.StringIO()):
-        show_id = lookup.resolve_show_id(tmdb, folder, meta.get("tmdb_pinned") or None)
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        show_id = lookup.resolve_show_id(tmdb, folder, db.kv_get(pin_key(item)) or meta.get("tmdb_pinned") or None)         # le choix fait dans le hub passe devant le nom du dossier
     if not show_id:
         return None
     show = tmdb.series(show_id)
     data = show_facts(show, show_id)
+    data["doubts"] = doubts_of(printed.getvalue())          # toujours écrit, même vide : `meta` se fusionne, un doute levé doit disparaître
     if show.get("poster_path"):
         name = f"{show_id}.jpg"
         tmdb.save_image(show["poster_path"], "w500", posters / name)
@@ -128,6 +140,27 @@ def enrich_show(tmdb, posters, db, lib, item):
         fields["year"] = data["year"]
     db.update_item_meta(item["id"], **fields)
     return show, data
+
+
+def set_pin(db, item, show_id):
+    if show_id:
+        db.kv_set(pin_key(item), int(show_id))
+    else:
+        db.kv_delete(pin_key(item))
+
+
+def choose_show(tmdb, posters, db, lib, item, show_id=None):
+    """Fixe la fiche TMDB de la série et l'enrichit à nouveau ; sans identifiant, retire le choix et laisse la recherche trancher. Rend ce que rend enrich_show. Si TMDB refuse ou ne trouve rien, le choix d'avant est rendu."""
+    before = db.kv_get(pin_key(item))
+    set_pin(db, item, show_id)
+    try:
+        found = enrich_show(tmdb, posters, db, lib, item)
+    except BaseException:
+        set_pin(db, item, before)
+        raise
+    if found is None:
+        set_pin(db, item, before)
+    return found
 
 
 def enrich_shows(cfg, db, lib, log=print, force=False):
@@ -150,6 +183,8 @@ def enrich_shows(cfg, db, lib, log=print, force=False):
         else:
             done += 1
             log(f"  {item['title']} -> {found[0].get('name')} ({found[1]['year']})")
+            for doubt in found[1].get("doubts", []):
+                log(f"    /!\\ {doubt} : à vérifier sur la fiche (Changer la fiche TMDB)")
     return {"enriched": done, "failed": failed}
 
 

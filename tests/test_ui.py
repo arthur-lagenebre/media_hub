@@ -963,6 +963,105 @@ class TestPosters(UiCase):
         self.assertEqual(self.view(".actions .btn", has_text="Changer l’affiche").count(), 0)
 
 
+class FakeShowTmdb:
+    """TMDB pour les séries : deux séries portent le titre « Dark », la plus connue en premier."""
+    found = [{"id": 70523, "name": "Dark", "first_air_date": "2017-12-01", "overview": "Série allemande", "vote_count": 5000, "popularity": 80},
+             {"id": 2567, "name": "Dark", "first_air_date": "1950-01-01", "overview": "Vieille série", "vote_count": 2, "popularity": 1}]
+
+    def __init__(self, key, language="fr-FR", **kwargs):
+        pass
+
+    def search_tv(self, name, year=None):
+        return [dict(show) for show in self.found]
+
+    def series(self, show_id):
+        show = next(s for s in self.found if s["id"] == int(show_id))
+        return {"name": show["name"], "overview": f"Fiche {show_id}", "first_air_date": show["first_air_date"], "poster_path": "/p.jpg", "genres": []}
+
+    def season(self, show_id, number):
+        return {}
+
+    def aggregate_credits(self, show_id):
+        return {"cast": []}
+
+    def save_image(self, image_path, size, dest):
+        Path(dest).write_bytes(fixtures.PNG)
+
+
+class TestTmdbSheet(UiCase):
+    """Choisir la fiche TMDB d'une série quand la recherche sur son nom tombe sur un homonyme (TMDB est simulé : voir FakeShowTmdb)."""
+
+    def setUp(self):
+        super().setUp()
+        hub = self.run_.hub
+        hub.cfg.tmdb_key = "fake"
+        patcher = mock.patch("hub.enrich.Tmdb", FakeShowTmdb)
+        patcher.start()
+        self.addCleanup(self.forget, patcher)
+        self.dark = self.item("series", "Dark")
+
+    def forget(self, patcher):
+        hub = self.run_.hub
+        patcher.stop()
+        hub.cfg.tmdb_key = ""
+        hub.db.execute("DELETE FROM kv WHERE key LIKE 'enrich:series:%' OR key LIKE 'tmdb-pin:%'")
+        hub.jobs.scan(hub.cfg.library("series"))                # le scan rend la série telle qu'elle était, sans fiche
+        self.run_.wait_jobs()
+
+    def open_sheet(self):
+        self.open("#/i/" + self.dark["id"])
+        self.view(".actions .btn", has_text="Changer la fiche TMDB").wait_for()
+
+    def sheet(self):
+        return self.api("/api/item/" + self.dark["id"])
+
+    def test_a_sheet_is_searched_by_name_and_chosen_then_the_original_one_comes_back(self):
+        self.open_sheet()
+        self.assertEqual(self.view(".actions .btn", has_text="Fiche TMDB d’origine").count(), 0)
+        self.view(".actions .btn", has_text="Changer la fiche TMDB").click()
+        self.page.locator(".prompt input").fill("Dark")
+        self.page.locator(".prompt .primary").click()
+        self.page.locator(".menu .opt", has_text="1950").click()
+        self.until(lambda: self.sheet().get("tmdb_custom") is True)
+        self.assertEqual((self.sheet()["tmdb"], self.sheet()["summary"]), (2567, "Fiche 2567"))
+        self.view(".actions .btn", has_text="Fiche TMDB d’origine").click()
+        self.until(lambda: not self.sheet().get("tmdb_custom"))
+        self.assertEqual(self.sheet()["tmdb"], 70523)                             # la recherche sur le nom, comme avant
+
+    def test_the_address_of_the_sheet_is_enough(self):
+        self.open_sheet()
+        self.view(".actions .btn", has_text="Changer la fiche TMDB").click()
+        self.page.locator(".prompt input").fill("https://www.themoviedb.org/tv/2567-dark")
+        self.page.locator(".prompt .primary").click()
+        self.until(lambda: self.sheet().get("tmdb") == 2567)
+        self.assertIs(self.sheet()["tmdb_custom"], True)
+
+    def test_a_search_that_hesitates_between_two_series_says_so_on_the_sheet(self):
+        self.api("/api/enrich", {"lib": "series"})
+        self.run_.wait_jobs()
+        self.open("#/i/" + self.dark["id"])
+        self.view(".info .doubt").wait_for()
+        self.assertIn("titre partagé avec Dark (1950)", self.view(".info .doubt").inner_text())
+        self.view(".actions .btn", has_text="Changer la fiche TMDB").click()
+        self.page.locator(".prompt input").fill("Dark")
+        self.page.locator(".prompt .primary").click()
+        self.page.locator(".menu .opt", has_text="2017").click()
+        self.until(lambda: self.sheet().get("tmdb_custom") is True)
+        self.view(".actions .btn", has_text="Fiche TMDB d’origine").wait_for()
+        self.assertEqual(self.view(".info .doubt").count(), 0)                    # le doute est levé : on a choisi
+
+    def test_a_film_has_no_such_button(self):
+        self.open("#/i/" + self.item("films", "Inception")["id"])
+        self.view(".actions .btn").first.wait_for()
+        self.assertEqual(self.view(".actions .btn", has_text="Changer la fiche TMDB").count(), 0)
+
+    def test_a_television_has_no_such_button(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.open("#/i/" + self.dark["id"])
+        self.view(".actions .btn").first.wait_for()
+        self.assertEqual(self.view(".actions .btn", has_text="Changer la fiche TMDB").count(), 0)
+
+
 class TestSettings(UiCase):
     """La page « Paramètres » : des onglets en haut, qui restent affichés, au lieu d'une seule longue page de gestion."""
 
