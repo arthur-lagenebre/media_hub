@@ -352,5 +352,62 @@ class TestMoreSources(ServiceCase):
         self.assertEqual((data, mime), (photo.read_bytes(), "image/png"))
 
 
+class TestCustomPoster(ServiceCase):
+    def setUp(self):
+        super().setUp()
+        (self.root / "folder.jpg").write_bytes(b"dossier")
+        self.fill([item("i1", meta={"image": "folder.jpg"}), item("i2", kind="album")])
+
+    def folder(self):
+        return self.cfg.data / "posters"
+
+    def test_a_poster_chosen_comes_before_every_other_source(self):
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        self.assertEqual(self.service.get("item", "i1")[:2], (fixtures.PNG, "image/png"))
+        self.assertTrue(self.service.has_poster("i1"))
+        self.assertFalse(self.service.has_poster("i2"))
+
+    def test_changing_the_poster_changes_the_image_served_and_its_stamp(self):
+        before = self.service.get("item", "i1")
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        first = self.service.get("item", "i1")
+        self.service.set_poster("i1", b"\xff\xd8\xff\xe0autre", ".jpg")
+        second = self.service.get("item", "i1")
+        self.assertEqual((before[0], first[0], second[0]), (b"dossier", fixtures.PNG, b"\xff\xd8\xff\xe0autre"))
+        self.assertEqual(len({before[2], first[2], second[2]}), 3)
+
+    def test_only_the_last_file_of_an_item_is_kept(self):
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        self.service.set_poster("i1", b"\xff\xd8\xff\xe0autre", ".jpg")
+        self.service.set_poster("i2", fixtures.PNG, ".png")
+        self.assertEqual(sorted(p.suffix for p in self.folder().iterdir()), [".jpg", ".png"])
+
+    def test_the_same_image_again_changes_nothing(self):
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        names = sorted(p.name for p in self.folder().iterdir())
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        self.assertEqual(sorted(p.name for p in self.folder().iterdir()), names)
+        self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
+
+    def test_clearing_gives_back_the_original_and_removes_the_file(self):
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        self.service.clear_poster("i1")
+        self.service.clear_poster("i1")
+        self.assertEqual(self.service.get("item", "i1")[0], b"dossier")
+        self.assertFalse(self.service.has_poster("i1"))
+        self.assertEqual(list(self.folder().iterdir()), [])
+
+    def test_a_poster_file_that_went_missing_falls_back_to_the_original(self):
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        for path in self.folder().iterdir():
+            path.unlink()
+        self.assertEqual(self.service.get("item", "i1")[0], b"dossier")
+
+    def test_a_name_that_could_be_a_path_is_never_read(self):
+        (self.cfg.data / "secret.png").write_bytes(b"secret")
+        self.db.kv_set("poster:i1", "../secret.png")
+        self.assertEqual(self.service.get("item", "i1")[0], b"dossier")
+
+
 if __name__ == "__main__":
     unittest.main()

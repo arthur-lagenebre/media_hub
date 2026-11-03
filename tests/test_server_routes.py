@@ -464,5 +464,55 @@ class TestImageRoutes(RouteCase):
         self.assertEqual(self.get("/img/film/123").status, 404)
 
 
+class TestPosterRoutes(RouteCase):
+    PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 20
+
+    def setUp(self):
+        super().setUp()
+        self.fill([item("m1", "movie", title="Film"), item("s1", "show", title="Serie"), item("a1", "album", title="Album")], [])
+
+    def test_a_poster_is_sent_as_the_body_and_kept_with_its_extension(self):
+        reply = self.post("/api/item/m1/poster", self.PNG)
+        self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
+        self.hub.images.set_poster.assert_called_once_with("m1", self.PNG, ".png")
+        self.assertEqual(self.post("/api/item/s1/poster", JPEG).status, 200)
+        self.hub.images.set_poster.assert_called_with("s1", JPEG, ".jpg")
+
+    def test_what_is_not_an_image_or_is_too_big_is_refused(self):
+        self.assertEqual(self.post("/api/item/m1/poster", b"du texte").status, 415)
+        self.assertEqual(self.post("/api/item/m1/poster", b"").status, 415)
+        too_big = JPEG + b"x" * app.PHOTO_UPLOAD_MAX
+        self.assertEqual(self.post("/api/item/m1/poster", too_big).status, 413)
+        self.hub.images.set_poster.assert_not_called()
+
+    def test_only_films_and_shows_have_a_poster_to_change(self):
+        reply = self.post("/api/item/a1/poster", self.PNG)
+        self.assertEqual((reply.status, "affiche" in reply.json()["error"]), (400, True))
+        self.assertEqual(self.post("/api/item/inconnu/poster", self.PNG).status, 404)
+        self.assertEqual(self.post("/api/item/a1/poster/delete").status, 400)
+        self.hub.images.set_poster.assert_not_called()
+
+    def test_the_original_poster_comes_back(self):
+        reply = self.post("/api/item/m1/poster/delete")
+        self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
+        self.hub.images.clear_poster.assert_called_once_with("m1")
+
+    def test_the_sheet_says_whether_the_poster_is_a_custom_one(self):
+        self.hub.images.has_poster.return_value = True
+        self.assertIs(self.get("/api/item/m1").json()["poster_custom"], True)
+        self.hub.images.has_poster.return_value = False
+        self.assertNotIn("poster_custom", self.get("/api/item/m1").json())
+        self.assertNotIn("poster_custom", self.get("/api/item/a1").json())
+
+    def test_an_ordinary_account_cannot_change_a_poster(self):
+        accounts.create(self.db, "root", "motdepasse1")
+        bob = accounts.create(self.db, "bob", "motdepasse1")
+        cookie = self.hub.cookie(bob)
+        for target in ("/api/item/m1/poster", "/api/item/m1/poster/delete"):
+            self.assertEqual(self.post(target, self.PNG, headers=cookie).status, 403, target)
+        self.hub.images.set_poster.assert_not_called()
+        self.hub.images.clear_poster.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

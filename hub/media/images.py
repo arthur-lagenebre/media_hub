@@ -32,6 +32,8 @@ warnings.filterwarnings("ignore", module="PIL")
 
 MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 WIDTHS = (160, 320, 480, 720, 1280)      # tailles demandables : le cache ne grossit pas au gré des paramètres
+POSTERS = "posters"                      # HUB_DATA/posters : les affiches choisies à la main (rien n'est écrit dans la médiathèque)
+POSTER_KEY = "poster:"                  # base de données : poster:<id de l'item> donne le nom du fichier
 
 
 def sniff(data):
@@ -227,6 +229,9 @@ class Images:
         return None
 
     def item_source(self, lib, item):
+        custom = self._custom_poster(item["id"])
+        if custom:
+            return custom
         meta = json.loads(item["meta"])
         entries = self.db.query("SELECT * FROM entries WHERE item_id=? ORDER BY season, disc, number, rel LIMIT 4", (item["id"],))
         base = Path(lib.path)
@@ -245,6 +250,43 @@ class Images:
             if data:
                 return data
         return None
+
+    # --- Affiche choisie à la main ----------------------------------------------
+    def has_poster(self, item_id):
+        return bool(self.db.kv_get(POSTER_KEY + item_id))
+
+    def _poster_file(self, name):
+        """Le chemin du fichier d'une affiche choisie ; None si `name` pourrait désigner autre chose qu'un fichier de HUB_DATA/posters."""
+        return self.cfg.data / POSTERS / name if name and Path(name).name == name else None
+
+    def _custom_poster(self, item_id):
+        path = self._poster_file(self.db.kv_get(POSTER_KEY + item_id))
+        return self._from_image_file(path) if path else None
+
+    def set_poster(self, item_id, data, ext):
+        """Garde `data` comme affiche de l'item (`ext` : .jpg, .png ou .webp) à la place de toute autre ; l'affiche d'avant disparaît."""
+        folder = self.cfg.data / POSTERS
+        folder.mkdir(exist_ok=True)           # HUB_DATA existe : le cache d'images y est créé au démarrage
+        name = f"{item_id}-{hashlib.sha1(data).hexdigest()[:10]}{ext}"
+        write_atomic(folder / name, data)
+        before = self.db.kv_get(POSTER_KEY + item_id)
+        self.db.kv_set(POSTER_KEY + item_id, name)
+        if before != name:
+            self._forget_file(before)
+
+    def clear_poster(self, item_id):
+        """L'item retrouve l'image de la médiathèque."""
+        before = self.db.kv_get(POSTER_KEY + item_id)
+        self.db.kv_delete(POSTER_KEY + item_id)
+        self._forget_file(before)
+
+    def _forget_file(self, name):
+        path = self._poster_file(name)
+        if path:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     # --- Accès -------------------------------------------------------------
     def _key(self, ref, stamp, width):
@@ -292,6 +334,9 @@ class Images:
             if row is None:
                 return None, ""
             stamp = f"{row['added']}|{row['count']}|{row['meta']}"
+            chosen = self.db.kv_get(POSTER_KEY + ident)
+            if chosen:
+                stamp += f"|poster:{chosen}"          # une autre affiche choisie : une autre image, donc un autre nom dans le cache
             return row, stamp + (self._cover_stamp(self.cfg.library(row["lib"]), row) if row["type"] == "album" else "")
         row = self.db.one("SELECT * FROM entries WHERE id=?", (ident,))
         return row, f"{row['size']}|{row['mtime']}" if row else ""

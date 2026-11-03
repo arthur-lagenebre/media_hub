@@ -1142,6 +1142,8 @@ def api_item(h, m, q):
         out["links"] = links
     out["entries"] = [entry_json(r, progress.get(r["id"])) for r in rows]
     out["resume"] = resume_target(rows, progress)
+    if item["type"] in POSTER_TYPES and hub.images.has_poster(item["id"]):
+        out["poster_custom"] = True
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
     if item["type"] == "movie":
@@ -1738,6 +1740,40 @@ def api_subs(h, m, q):
 # ---------------------------------------------------------------------------
 # Images
 # ---------------------------------------------------------------------------
+POSTER_TYPES = ("movie", "show")
+
+
+def poster_item(h, ident):
+    """L'item dont on change l'affiche (administrateur) : un film, une série ou une animation."""
+    require_admin(h)
+    item = h.hub.item(ident)
+    if item["type"] not in POSTER_TYPES:
+        h.discard_body()
+        raise HttpError(400, "seuls un film, une série ou une animation ont une affiche à changer")
+    return item
+
+
+@route("POST", r"/api/item/(\w+)/poster")
+def api_item_poster(h, m, q):
+    """Remplace l'affiche d'un film ou d'une série par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque."""
+    item = poster_item(h, m.group(1))
+    data = h.body_bytes(PHOTO_UPLOAD_MAX)
+    ext = enrich.image_ext(data)
+    if not ext:
+        raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
+    h.hub.images.set_poster(item["id"], data, ext)
+    h.send_json({"ok": True})
+
+
+@route("POST", r"/api/item/(\w+)/poster/delete")
+def api_item_poster_delete(h, m, q):
+    """Rend à un film ou à une série l'affiche de la médiathèque."""
+    item = poster_item(h, m.group(1))
+    h.discard_body()
+    h.hub.images.clear_poster(item["id"])
+    h.send_json({"ok": True})
+
+
 @route("GET", r"/img/(item|entry)/(\w+)")
 def image(h, m, q):
     try:

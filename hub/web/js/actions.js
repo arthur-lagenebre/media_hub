@@ -105,6 +105,22 @@
       A.download(ids(v === 'all' ? d.entries : d.entries.filter(function (e) { return String(e.season) === v; })));
     });
   };
+  // --- Changer l'affiche (administrateur) ---------------------------------------------------
+  // L'image envoyée reste dans HUB_DATA : la médiathèque n'est pas touchée, et « Affiche d'origine » la retire. Le sélecteur de fichiers d'une télé se pilote mal : rien n'y est proposé.
+  // `d` : la fiche (/api/item) ; `done` est appelé une fois l'affiche changée. Rend les éléments à poser parmi les boutons de la fiche.
+  A.posterTools = function (d, done) {
+    if ((d.type !== 'movie' && d.type !== 'show') || !H.isAdmin() || H.device === 'tv') return [];
+    var picker = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', hidden: 'hidden', 'aria-hidden': 'true', onchange: function () {
+      var file = this.files && this.files[0];
+      this.value = '';
+      if (file) H.api('/api/item/' + d.id + '/poster', file, { raw: true }).then(function () { H.toast('Affiche enregistrée'); done(); }).catch(fail);
+    } });
+    var tools = [picker, H.button('Changer l’affiche', 'edit', { 'data-key': 'poster', onclick: function () { picker.click(); } })];
+    if (d.poster_custom) tools.push(H.button('Affiche d’origine', 'refresh', { 'data-key': 'poster-reset', onclick: function () {
+      H.api('/api/item/' + d.id + '/poster/delete', {}).then(function () { H.toast('Affiche d’origine rétablie'); done(); }).catch(fail);
+    } }));
+    return tools;
+  };
   // Le bouton « … » d'une couverture de tome : le même menu que celui d'un épisode.
   A.entryTools = function (e, done) {
     return h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Plus d’actions', title: 'Plus d’actions',
