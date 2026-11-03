@@ -195,7 +195,7 @@
     var libId = m[1], lib = H.lib(libId);
     var kind = lib ? lib.kind : 'movies';
     var sorts = SORTS[kind] || SORTS.movies;
-    var st = { q: '', letter: '', genre: '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '', sagas: kind === 'movies' && H.pref('sagas.' + libId) !== '0' };
+    var st = { q: '', letter: '', genre: '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '', sagas: kind === 'movies' };       // les films sont toujours regroupés en sagas
     var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { letters: [], genres: [], sections: [] };
     var grid = h('div', { class: 'grid' + (kind === 'music' ? ' sq' : '') });
     var sentinel = h('div', { class: 'sentinel' });
@@ -205,9 +205,8 @@
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
     var bLetter = H.button('', null, { onclick: pickLetter }), bGenre = H.button('', null, { onclick: pickGenre }), bSort = H.button('', null, { onclick: pickSort });
     var bSeen = H.button('Non vus', null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
-    var bSagas = H.button('Sagas', null, { onclick: function () { st.sagas = !st.sagas; H.pref('sagas.' + libId, st.sagas ? '1' : '0'); reset(); }, 'aria-pressed': 'false' });
     var bLists = H.button('Playlists', 'queue', { onclick: function () { H.go('#/playlists'); } });
-    var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bSeen, kind === 'movies' ? bSagas : null, kind === 'music' ? bLists : null, count);
+    var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bSeen, kind === 'music' ? bLists : null, count);
     var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': 'Accès rapides', hidden: true });
     var empty = h('div', { class: 'blank', hidden: true });
     var el = h('section', { class: 'library' }, h('h1', null, lib ? lib.label : 'Bibliothèque'), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
@@ -219,8 +218,6 @@
       label(bSort, 'Tri', (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
       bSeen.setAttribute('aria-pressed', st.unseen ? 'true' : 'false');
       bSeen.classList.toggle('on', st.unseen);
-      bSagas.setAttribute('aria-pressed', st.sagas ? 'true' : 'false');
-      bSagas.classList.toggle('on', st.sagas);
       bGenre.hidden = !facets.genres.length;
       var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: 'album', books: 'série' }[kind] || 'élément';
       count.textContent = total ? (kind === 'movies' && st.sagas && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word)) : '';

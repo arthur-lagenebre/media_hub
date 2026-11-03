@@ -388,15 +388,16 @@ class TestSagasInLibrary(UiCase):
         self.press("Escape", wait=500)
         self.assertTrue(self.page.url.endswith("#/l/films"))
 
-    def test_the_sagas_choice_is_remembered(self):
+    def test_the_films_are_always_grouped_in_sagas_and_there_is_no_button_to_undo_it(self):
         self.open("#/l/films")
         self.view(".grid .card.saga").first.wait_for()
-        self.view(".tools .btn", has_text="Sagas").click()
-        self.page.wait_for_timeout(500)
-        self.assertEqual(self.view(".grid .card.saga").count(), 0)
-        self.page.reload()
-        self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.view(".grid .card.saga").count(), 0)
+        self.assertEqual(self.view(".tools .btn", has_text="Sagas").count(), 0)
+
+    def test_the_old_choice_not_to_group_is_ignored(self):
+        self.page.add_init_script("localStorage.setItem('hub.sagas.films', JSON.stringify('0'))")
+        self.open("#/l/films")
+        self.view(".grid .card.saga").first.wait_for()
+        self.assertEqual(self.view(".grid .card.saga").count(), 1)
 
 
 class TestSagaEditor(UiCase):
