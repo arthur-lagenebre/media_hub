@@ -88,6 +88,15 @@
 5. **Jeton révocable**, si l'envie vient.
 6. **Autre page d'accueil** : en dernier, tant qu'on n'a pas identifié ce que l'accueil actuel manque à l'usage.
 
+## Qualité du code (mesurée le 3 novembre 2026, après les PR #67 à #72)
+
+Verdict : **pas de nouvelle passe globale** (`crapper`, `dryer`, `mutator` sur tout le projet). Les changements faits depuis la dernière passe n'ont laissé ni duplication, ni mutant survivant dans le code Python ajouté (`enrich.py`, `app.py`), et le CRAP reste sous 10 partout sauf une fonction. Deux points seulement :
+
+- [ ] **`Images.item_source` est à CRAP 10** (complexité 10, couverture 100 %, seuil « sous 10 »), depuis l'ajout de l'affiche choisie à la main. Le découper (par exemple une fonction par source : affiche choisie, album, affiche TMDB, image du dossier, entrées), sans changer ce qu'il rend ; les tests de `test_images.py` couvrent déjà chaque source.
+- [ ] **Le JavaScript de l'interface n'est mesuré par aucun outil** (`crapper` ne trouve aucune fonction dans `hub/web/js/`, et il n'y a pas de couverture). Mesure grossière du 3 novembre : 2 948 lignes, 4 fonctions de 30 décisions ou plus, dont **`render` de la fiche dans `views.js` (81 décisions)**, qui a gagné des boutons à chaque lot (menu « … », télécharger, affiche, fiche TMDB). À découper avant le prochain ajout sur la fiche : un constructeur par bloc (actions, héros, corps selon le type), les tests d'interface existants servant de filet. À rejouer avec une vraie mesure si un outil de couverture JavaScript est ajouté un jour.
+
+À refaire une passe globale quand une série de PR aura touché beaucoup de fichiers Python d'un coup, ou avant une publication.
+
 ## Limites connues, non traitées
 
 - [ ] Avec **deux bibliothèques de films**, les collections TMDB sont repérées par le seul nom de saga : la seconde peut être sautée.
