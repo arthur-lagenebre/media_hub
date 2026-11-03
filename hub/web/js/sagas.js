@@ -106,7 +106,7 @@
     function load() {
       return H.api('/api/sagas').then(function (d) { data = d; render(); }).catch(function (e) {
         H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Sagas'), h('p', null, e.status === 403 ? 'Les sagas se composent depuis un compte administrateur.' : e.message),
-          h('a', { class: 'btn f', href: '#/admin', 'data-autofocus': '1' }, 'Retour à la gestion')));
+          h('a', { class: 'btn f', href: '#/settings?tab=gestion', 'data-autofocus': '1' }, 'Retour à la gestion')));
       });
     }
     function find(n) { for (var i = 0; i < data.sagas.length; i++) if (data.sagas[i].name === n) return i; return -1; }
@@ -149,7 +149,7 @@
       el.appendChild(h('p', { class: 'muted lead' }, 'Une saga est une liste de films dans l’ordre de ton choix : une trilogie que TMDB ne réunit pas, l’ordre du MCU… Elle s’ajoute à la saga de l’étiquette du fichier. ' +
         'Quand un film est dans plusieurs sagas, la grille le range dans la première de cette liste : monte celle que tu veux voir en vignette.'));
       el.appendChild(h('div', { class: 'tools' }, H.button('Nouvelle saga', 'plus', { class: 'primary', 'data-autofocus': '1', 'data-key': 'new', onclick: create }),
-        H.button('Retour à la gestion', 'back', { onclick: function () { H.go('#/admin'); } })));
+        H.button('Retour à la gestion', 'back', { onclick: function () { H.go('#/settings?tab=gestion'); } })));
       if (!data.sagas.length) el.appendChild(h('p', { class: 'muted lead' }, 'Aucune saga pour l’instant.'));
       var panel = h('section', { class: 'panel' });
       data.sagas.forEach(function (s, k) {
@@ -253,7 +253,7 @@
     }
 
     load();
-    return { el: el, nav: '#/admin', refresh: load };
+    return { el: el, nav: '#/settings', refresh: load };
   });
 
   // --- « Ajouter à une saga » (fiche d'un film) ---------------------------------------------

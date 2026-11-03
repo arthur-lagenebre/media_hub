@@ -18,7 +18,7 @@
       });
       nav.appendChild(links);
       nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': 'Recherche' }, H.icon('search')));
-      nav.appendChild(h('a', { class: 'tool f', href: '#/admin', 'data-nav': '#/admin', 'aria-label': 'Gestion' }, H.icon('gear')));
+      nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': 'Paramètres' }, H.icon('gear')));
     },
     mark: function (hash) {
       var back = document.querySelector('#nav .back');
@@ -164,7 +164,7 @@
           el.appendChild(h('div', { class: 'blank' },
             h('h1', null, 'Ta médiathèque est vide pour l’instant'),
             h('p', null, !H.isAdmin() ? 'Rien n’est encore indexé : l’administrateur doit lancer une mise à jour de la médiathèque.' : H.libs.length ? 'Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.' : 'Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Animations, Musique, Livres), ou décris-les avec HUB_LIBRARIES.'),
-            H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/admin', 'data-autofocus': '1' }, 'Ouvrir la gestion') : null));
+            H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/settings?tab=gestion', 'data-autofocus': '1' }, 'Ouvrir les paramètres') : null));
           clearTimeout(timer);
           timer = setTimeout(function () { if (document.body.contains(el) && !document.hidden) load(); }, 4000);
           return;
@@ -531,10 +531,10 @@
         h('div', { class: 'grid' }, sagaCells(films, absent, function (f) { return H.card(f, false, true); }, H.isAdmin() ? hide : null)))));
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
-    // Cache un film que la collection TMDB compte et pas nous : il ne sera plus montré comme manquant (Gestion > Sagas le rétablit).
+    // Cache un film que la collection TMDB compte et pas nous : il ne sera plus montré comme manquant (Paramètres > Gestion > Sagas le rétablit).
     function hide(m) {
       H.api('/api/sagas/ignore', { tmdb: m.tmdb }).then(function () {
-        H.toast('« ' + m.title + ' » ne sera plus montré comme manquant (Gestion > Sagas pour le rétablir)', 5000);
+        H.toast('« ' + m.title + ' » ne sera plus montré comme manquant (Paramètres > Gestion > Sagas pour le rétablir)', 5000);
         return load();
       }).catch(function (e) { H.toast(e.message, 5000); });
     }
@@ -621,18 +621,51 @@
     return '';
   }
 
-  H.route(/^\/admin$/, function () {
-    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '';
+  // `#/admin` est l'ancienne adresse de la page : les signets et les liens déjà donnés continuent d'y mener.
+  H.route(/^\/(?:admin|settings)$/, function (m, query) {
+    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, wasAdmin = null, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '';
+    var tab = query.tab || H.pref('settings.tab') || '', openJobs = {};
     function qualityLabel(v) { return { auto: 'Qualité d’origine quand c’est possible', '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': '480p · 1,5 Mb/s' }[v] || v; }
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
     }
+    var TABS = [{ id: 'gestion', label: 'Gestion', admin: true }, { id: 'lecture', label: 'Lecture' }, { id: 'comptes', label: 'Comptes' }, { id: 'taches', label: 'Tâches', admin: true }, { id: 'serveur', label: 'Serveur', admin: true }];
+    function visibleTabs() { return TABS.filter(function (t) { return !t.admin || H.isAdmin(); }); }
+    function activeTab() {          // un onglet réservé à l'administrateur ne s'ouvre pas pour un autre compte : on retombe sur le premier
+        var ids = visibleTabs().map(function (t) { return t.id; });
+        return ids.indexOf(tab) >= 0 ? tab : ids[0];
+    }
+    function choose(id) { tab = id; H.pref('settings.tab', id); render(); H.focus.key(el, 'tab-' + id); }
+    function tabBar() {
+      var active = activeTab();
+      return h('div', { class: 'tabs', role: 'tablist' }, visibleTabs().map(function (t) {
+        return h('button', { class: 'chip tab f' + (t.id === active ? ' on' : '') + (t.id === 'taches' && busy ? ' busy' : ''), role: 'tab', 'aria-selected': t.id === active ? 'true' : 'false', 'data-key': 'tab-' + t.id,
+          'data-autofocus': t.id === active ? '1' : null, onclick: function () { choose(t.id); } }, t.label);
+      }));
+    }
     function render() {
       var focus = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
       H.clear(el);
-      el.appendChild(h('h1', null, 'Gestion'));
+      logPanel = null;
+      el.appendChild(h('h1', null, 'Paramètres'));
+      var bar = tabBar();
+      el.appendChild(bar);
+      var on = bar.querySelector('.on');
+      if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir
+      var body = h('div', { class: 'tabbody' }), active = activeTab();
+      if (active === 'gestion') gestion(body);
+      else if (active === 'lecture') reading(body);
+      else if (active === 'comptes') accounts(body);
+      else if (active === 'taches') tasks(body);
+      else serverFacts(body);
+      el.appendChild(body);
+      wasAdmin = H.isAdmin();
+      if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
+      if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
+    }
+    function gestion(body) {
       var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, 'Bibliothèques'),
-        H.button('Tout mettre à jour', 'refresh', { class: 'primary', 'data-autofocus': '1', 'data-key': 'scan-all', title: 'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.', onclick: function () { start('/api/scan', {}, 'Mise à jour lancée'); } })));
+        H.button('Tout mettre à jour', 'refresh', { class: 'primary', 'data-key': 'scan-all', title: 'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.', onclick: function () { start('/api/scan', {}, 'Mise à jour lancée'); } })));
       state.libraries.forEach(function (l) {
         libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
           h('div', { class: 'what' }, h('b', null, l.label), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · mis à jour ' + ago(l.scanned) : 'dossier introuvable')),
@@ -641,11 +674,18 @@
           l.kind === 'music' ? H.button('Fiches artistes', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Fiches artistes demandées : ' + l.label); } }) : null,
           H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } })));
       });
-      if (H.isAdmin()) el.appendChild(libs);
-      if (H.isAdmin()) el.appendChild(h('section', { class: 'panel' }, h('h2', null, 'Sagas'), h('div', { class: 'line' },
+      body.appendChild(libs);
+      body.appendChild(h('section', { class: 'panel' }, h('h2', null, 'Sagas'), h('div', { class: 'line' },
         h('div', { class: 'what' }, h('b', null, 'Sagas composées à la main'), h('span', null, 'Une trilogie que TMDB ne réunit pas, l’ordre du MCU… : des listes de films dans l’ordre de ton choix, en plus de la saga de l’étiquette.')),
         h('a', { class: 'btn f', href: '#/sagas', 'data-key': 'sagas' }, H.icon('edit'), h('span', { class: 'lbl' }, 'Composer')))));
 
+      var tools = h('section', { class: 'panel' }, h('h2', null, 'Entretien'));
+      tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Fichiers parasites'), h('span', null, 'Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.')),
+        H.button('Compter', null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, 'Simulation lancée'); } }),
+        H.button('Supprimer', null, { 'data-key': 'junk-del', onclick: confirmCleanup })));
+      body.appendChild(tools);
+    }
+    function reading(body) {
       var play = h('section', { class: 'panel' }, h('h2', null, 'Lecture'));
       var q = H.pref('quality') || 'auto', surround = !!H.pref('surround');
       play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Qualité'), h('span', null, qualityLabel(q))),
@@ -663,26 +703,22 @@
         } })));
       play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Son surround 5.1'), h('span', null, surround ? 'Activé : le 5.1 est envoyé tel quel si l’appareil le lit.' : 'Désactivé : le son est ramené en stéréo (le plus sûr).')),
         H.button(surround ? 'Désactiver' : 'Activer', 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
-      el.appendChild(play);
-
-      var tools = h('section', { class: 'panel' }, h('h2', null, 'Entretien'));
-      tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Fichiers parasites'), h('span', null, 'Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.')),
-        H.button('Compter', null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, 'Simulation lancée'); } }),
-        H.button('Supprimer', null, { 'data-key': 'junk-del', onclick: confirmCleanup })));
-      el.appendChild(accountPanel());
-      if (H.session.auth && H.isAdmin()) el.appendChild(usersPanel());
-      if (H.isAdmin()) el.appendChild(tools);
-
+      body.appendChild(play);
+    }
+    function accounts(body) {
+      body.appendChild(accountPanel());
+      if (H.session.auth && H.isAdmin()) body.appendChild(usersPanel());
+    }
+    function tasks(body) {
+      logPanel = jobsPanel();
+      body.appendChild(logPanel);
+    }
+    function serverFacts(body) {
       var server = h('section', { class: 'panel' }, h('h2', null, 'Serveur'));
       var facts = [['Version', state.version], ['ffmpeg', state.ffmpeg ? 'présent' : 'absent : lecture directe uniquement'], ['TMDB', state.tmdb ? 'clé configurée' : 'pas de clé (TMDB_KEY)'],
         ['Conversions', state.streams + ' en cours sur ' + state.max_streams], ['Accès', state.auth ? 'protégé par mot de passe' : 'sans mot de passe']];
       server.appendChild(h('dl', null, facts.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })));
-      el.appendChild(server);
-
-      logPanel = H.isAdmin() ? jobsPanel() : null;                      // le journal des tâches est réservé à l'administrateur (le serveur refuse ?log=1 aux autres)
-      if (logPanel) el.appendChild(logPanel);
-      if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
-      if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
+      body.appendChild(server);
     }
     // Supprimer les fichiers parasites ne s'annule pas : on demande, en rappelant ce que la dernière simulation en a compté.
     function confirmCleanup() {
@@ -694,7 +730,7 @@
     }
     // Le compte connecté : nom, rôle, changement de mot de passe, déconnexion. Serveur ouvert : comment créer le premier compte.
     function accountPanel() {
-      var panel = h('section', { class: 'panel' }, h('h2', null, 'Compte'));
+      var panel = h('section', { class: 'panel' }, h('h2', null, 'Mon compte'));
       var me = H.session.user;
       if (!H.session.auth || !me) {
         panel.appendChild(h('p', { class: 'muted' }, 'Aucun compte n’existe : le serveur est ouvert, et toute personne qui peut l’atteindre voit et gère tout. Pour le protéger, crée le premier compte (il sera administrateur) sur le serveur avec ',
@@ -775,14 +811,26 @@
       poll().then(function () { if (!(key && H.focus.key(el, key))) H.focus.first(); });
     }
     function jobsPanel() {
-      var busy = jobs.some(function (j) { return j.status === 'waiting' || j.status === 'running'; });
-      var log = h('section', { class: 'panel' }, h('h2', null, 'Tâches', busy ? h('span', { class: 'busy' }, '…') : null));
+      var all = jobs.length > 0 && jobs.every(function (j) { return openJobs[j.id]; });
+      var log = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, 'Tâches', busy ? h('span', { class: 'busy' }, '…') : null),
+        jobs.length ? H.button(all ? 'Tout replier' : 'Tout déplier', null, { 'data-key': 'jobs-all', onclick: function () { jobs.forEach(function (j) { openJobs[j.id] = !all; }); showJobs('jobs-all'); } }) : null));
       if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, 'Aucune tâche pour l’instant.'));
-      jobs.slice(0, 6).forEach(function (j) {
-        var status = { waiting: 'en attente', running: 'en cours', done: 'terminée', failed: 'échec' }[j.status];
-        log.appendChild(h('div', { class: 'job ' + j.status }, h('div', { class: 'jt' }, h('b', null, j.label), h('span', null, status)), j.log && j.log.length ? h('pre', null, j.log.slice(-8).join('\n')) : null));
+      jobs.forEach(function (j) {
+        var status = { waiting: 'en attente', running: 'en cours', done: 'terminée', failed: 'échec' }[j.status], open = !!openJobs[j.id];
+        var node = h('div', { class: 'job ' + j.status }, h('button', { class: 'jhead f', 'aria-expanded': open ? 'true' : 'false', 'data-key': 'job-' + j.id,
+          onclick: function () { openJobs[j.id] = !open; showJobs('job-' + j.id); } }, h('span', { class: 'jt' }, h('b', null, j.label), h('span', null, status))));
+        if (open) node.appendChild(j.log && j.log.length ? h('pre', null, j.log.join('\n')) : h('p', { class: 'muted' }, 'Rien n’a été noté.'));
+        log.appendChild(node);
       });
       return log;
+    }
+    // Remplace le panneau des tâches sur place (la page garde son défilement), en rendant le focus à ce qui l'avait.
+    function showJobs(key) {
+      var focus = key || (document.activeElement && logPanel && logPanel.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null);
+      var fresh = jobsPanel();
+      logPanel.parentNode.replaceChild(fresh, logPanel);
+      logPanel = fresh;
+      if (focus) H.focus.key(fresh, focus, true);
     }
     function poll() {
       clearTimeout(timer);
@@ -795,17 +843,21 @@
       }).then(function (r) {
         var page = JSON.stringify([r[0], users, usersError]), tasks = JSON.stringify(r[1].jobs);
         state = r[0]; jobs = r[1].jobs; H.libs = state.libraries;
-        var busy = r[1].busy;
+        busy = r[1].busy;
         if (wasBusy && !busy) H.toast('Terminé');
         wasBusy = busy;
         // Pendant une tâche on revient ici toutes les 1,5 s : reconstruire la page entière coupait le défilement (molette, tactile). On ne refait que ce qui a changé.
-        if (page !== lastPage || (H.isAdmin() && !logPanel) || (!H.isAdmin() && logPanel)) render();
-        else if (logPanel && tasks !== lastTasks) { var fresh = jobsPanel(); el.replaceChild(fresh, logPanel); logPanel = fresh; }
+        if (page !== lastPage || H.isAdmin() !== wasAdmin) render();
+        else {
+          var mark = el.querySelector('[data-key="tab-taches"]');          // un point sur l'onglet des tâches tant qu'il y en a une en cours
+          if (mark) mark.classList.toggle('busy', !!busy);
+          if (logPanel && tasks !== lastTasks) showJobs();
+        }
         lastPage = page; lastTasks = tasks;
         if (busy) timer = setTimeout(poll, 1500);
       }).catch(function (e) { H.toast(e.message, 5000); });
     }
     poll();
-    return { el: el, nav: '#/admin', refresh: poll, destroy: function () { clearTimeout(timer); } };
+    return { el: el, nav: '#/settings', refresh: poll, destroy: function () { clearTimeout(timer); } };
   });
 })();
