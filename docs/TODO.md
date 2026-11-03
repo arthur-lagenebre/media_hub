@@ -30,6 +30,8 @@
   - *`folder.jpg` à côté du film* : passe déjà devant la jaquette du `.mkv`, visible par d'autres lecteurs. Coût : nouvelle exception à l'invariant d'écriture, volume `Films` à passer en lecture-écriture, et le cache d'images doit tenir compte de la date de `folder.jpg` (aujourd'hui seule la pochette d'un album entre dans la clé, `_cover_stamp`).
   - *Dans le `.mkv`* : déconseillé depuis le hub (`mkvpropedit` absent du conteneur, film ouvert en lecture pendant l'écriture, nouvelle fonction à écrire dans `media_library` pour une image quelconque). Si le besoin vient, le faire en ligne de commande côté `media_library`.
 
+- [ ] **Supprimer le choix « Sagas / pas Sagas » de la bibliothèque des films.** Décidé : plus de bouton, plus de réglage. Les films sont **toujours regroupés en sagas** (c'est l'état par défaut d'aujourd'hui : le bouton est allumé tant qu'on ne l'a pas éteint) ; la page de la saga montre ses films, et un film sans saga reste une carte seule. À faire : retirer le bouton « Sagas » et le réglage retenu (`sagas.<bibliothèque>`) de `hub/web/js/views.js`, et le test « le choix des sagas est retenu » de `tests/test_ui.py`. Le paramètre `sagas=1` de `GET /api/library/<id>` n'a pas à disparaître : un autre client peut encore vouloir la liste à plat (à garder, ou à retirer si personne d'autre ne s'en sert). *À confirmer* : si l'intention était plutôt de ne **jamais** regrouper, c'est l'inverse, mais cela cacherait les sagas dont le hub s'est donné tant de mal à numéroter les films.
+
 ### Séries et animations
 
 - [x] **Bouton « … » sur les séries et les animations** : *Voir / Revoir*, *Marquer vu / non vu* et *TMDB* (une fois la série enrichie). À essayer à la télécommande.
@@ -46,7 +48,28 @@
   - Serveur : `/media/<id>/file?download=1` en faisait déjà assez (`Content-Disposition: attachment`, `Range`, hors `HUB_MAX_STREAMS`), rien n'a changé côté serveur. L'enchaînement par saison ou album est du ressort de l'interface seule. Vérifier qu'un téléchargement long ne bloque pas les autres requêtes et ne compte pas dans `HUB_MAX_STREAMS`.
   - Interface : masquer le bouton sur `data-device="tv"` (les navigateurs de télé téléchargent mal). À grouper avec le bouton « … ». Le jeton de média reste global : une URL de téléchargement n'est pas liée au compte.
 
+### Musique
+
+- [ ] **La bibliothèque de musique par artiste.** Aujourd'hui la page montre tous les albums, regroupés sous le nom de leur artiste. En plus, au choix : la liste des **artistes seulement**, sans leurs albums, chacun avec **la photo qu'on a choisie pour lui** (*Changer la photo*, *Recadrer*, photo de Wikipédia : `GET /img/artist/<lib>/<id>`), et à défaut la pochette de son premier album. Un clic ouvre la fiche de l'artiste, où sont ses albums.
+  - Décidé : **les deux vues coexistent**, et c'est la personne qui choisit entre « Artistes » et « Albums ». **La vue par défaut reste celle d'aujourd'hui (les albums).** Le choix se fait dans **Paramètres**, pas dans la barre d'outils de la page : voir « Réglages d'affichage » plus bas.
+  - Décidé : les albums sans artiste ont leur carte dans la vue par artistes, sous un nom lisible (« Artiste inconnu », ou « Artistes divers » pour un « Various Artists » traduit en français), **en dernier** pour que les vrais artistes viennent d'abord (en premier si on préfère : un simple tri).
+  - À trancher : où se retient le choix : **par appareil** (comme les réglages de lecture, dans le navigateur) ou **par compte** (il suit la personne de la télé au téléphone, mais demande de garder les réglages côté serveur).
+  - Côté serveur, la liste de la bibliothèque rend des albums : il faudra une liste d'artistes (nom, nombre d'albums, présence d'une photo), avec les filtres qui existent déjà (lettre, genre, recherche).
+  - Côté interface : une carte ronde ou carrée par artiste, la photo chargée par `/img/artist/...` (le cache d'images en tient déjà compte), le focus à la télécommande comme les autres cartes.
+
+- [ ] **Les artistes de chaque piste, sous son titre, dans la liste des pistes d'un album.** Cas vu : une bande originale (« Various Artists ») où chaque piste a ses artistes, qu'on ne voit nulle part dans la liste ; seuls les invités (`feat.`) y apparaissent.
+  - Vérifié : la donnée existe déjà. C'est le tag **`ARTIST`** de chaque fichier (`info.artist`, lu au scan par `media_library`), à ne pas confondre avec **`ALBUMARTIST`**, qui donne l'artiste de l'album et son groupement. `GET /api/item/<id>` la rend pour chaque piste (`entries[].artist`) et la barre de lecture l'affiche déjà : **aucun changement serveur**, seule la liste de la fiche (`views.js`, `tracks`) ne la montre pas.
+  - À faire : sous le titre de la piste, l'artiste de la piste quand il **diffère** de l'artiste de l'album (sinon le même nom se répète sur chaque ligne d'un album d'un seul artiste) ; une seule ligne, qui **remplace** l'affichage des « feat. » d'aujourd'hui (décidé : pas une seconde ligne en plus). Règle **validée** : sur un album d'un artiste, « Deep Purple feat. X » montre « feat. X » (la part qui s'ajoute à l'artiste de l'album) ; sur une compilation, chaque piste montre son artiste en entier.
+  - Ce qui classe un album « Various Artists » ou « Deep Purple » : rien de particulier, aucune règle « compilation » n'existe dans `media_library` ni dans le hub. L'artiste de l'album est, dans l'ordre, le tag **`ALBUMARTIST`** (la valeur la plus répandue parmi les pistes), sinon le tag `ARTIST` (idem), sinon le nom lu dans le dossier, sinon « Artiste inconnu ». « Various Artists » n'est donc que le texte écrit dans `ALBUMARTIST`, et tous les albums qui l'écrivent (à la casse et aux accents près) partagent la même fiche d'artiste. Piège : une compilation **sans** `ALBUMARTIST` est rangée sous l'artiste qui revient le plus dans ses pistes. Pour « Artistes divers » (traduction française voulue), c'est un simple affichage de ce nom, sans changer le classement.
+  - À vérifier : si les listes de la file d'attente et des playlists montrent bien l'artiste de chaque piste (elles mélangent des albums, donc l'artiste y compte encore plus).
+  - Test : un album d'essai dont les pistes ont des artistes différents (les fixtures n'en ont pas), et un test d'interface qui lit la ligne sous le titre.
+
 ### Interface
+
+- [ ] **L'image de l'en-tête, à gauche, accrochée en haut et non en bas.** Sur toutes les fiches (film, série, animation, album, artiste), l'image de gauche doit partir du **haut** de l'encart, aligné sur le premier titre, et non du bas. Aujourd'hui la grille de l'en-tête aligne ses deux colonnes par le bas (`.hero-in { align-items: end }` dans `hub/web/style.css`), si bien qu'une affiche plus haute que le texte descend avec lui. Probablement une seule règle CSS à changer (`start`), mais à vérifier fiche par fiche (la fiche de l'artiste a sa propre disposition ?) et dans la version téléphone, où l'image est réduite (`.hero-in` à 7 rem). Test : un test d'interface qui compare le haut de l'image au haut du bloc de texte sur chaque type de fiche.
+- [ ] **Réglages d'affichage dans Paramètres, pour tout le monde (administrateur ou non).** Les réglages d'affichage vont dans les Paramètres, qui servent maintenant surtout aux comptes ordinaires : un onglet (ou la suite de *Lecture*) avec
+  - **Musique** : la vue ouverte par défaut, *Albums* (valeur d'aujourd'hui) ou *Artistes* ;
+  - la place des réglages qu'on ajoutera ensuite (tri par défaut, section ouverte des livres…).
 
 - [x] **Renommer « Admin » en « Paramètres ».**
 - [x] **Séparer les paramètres en onglets**, en haut de la page et qui restent flottants (fait ; j'ai ajouté un onglet *Lecture* pour la qualité, l'appareil et le son 5.1, qui servent à tout le monde) :
@@ -64,6 +87,15 @@
 4. **Affiches** : après avoir tranché entre `HUB_DATA` et `folder.jpg` (voir plus haut).
 5. **Jeton révocable**, si l'envie vient.
 6. **Autre page d'accueil** : en dernier, tant qu'on n'a pas identifié ce que l'accueil actuel manque à l'usage.
+
+## Qualité du code (mesurée le 3 novembre 2026, après les PR #67 à #72)
+
+Verdict : **pas de nouvelle passe globale** (`crapper`, `dryer`, `mutator` sur tout le projet). Les changements faits depuis la dernière passe n'ont laissé ni duplication, ni mutant survivant dans le code Python ajouté (`enrich.py`, `app.py`), et le CRAP reste sous 10 partout sauf une fonction. Deux points seulement :
+
+- [ ] **`Images.item_source` est à CRAP 10** (complexité 10, couverture 100 %, seuil « sous 10 »), depuis l'ajout de l'affiche choisie à la main. Le découper (par exemple une fonction par source : affiche choisie, album, affiche TMDB, image du dossier, entrées), sans changer ce qu'il rend ; les tests de `test_images.py` couvrent déjà chaque source.
+- [ ] **Le JavaScript de l'interface n'est mesuré par aucun outil** (`crapper` ne trouve aucune fonction dans `hub/web/js/`, et il n'y a pas de couverture). Mesure grossière du 3 novembre : 2 948 lignes, 4 fonctions de 30 décisions ou plus, dont **`render` de la fiche dans `views.js` (81 décisions)**, qui a gagné des boutons à chaque lot (menu « … », télécharger, affiche, fiche TMDB). À découper avant le prochain ajout sur la fiche : un constructeur par bloc (actions, héros, corps selon le type), les tests d'interface existants servant de filet. À rejouer avec une vraie mesure si un outil de couverture JavaScript est ajouté un jour.
+
+À refaire une passe globale quand une série de PR aura touché beaucoup de fichiers Python d'un coup, ou avant une publication.
 
 ## Limites connues, non traitées
 
