@@ -30,6 +30,8 @@
   - *`folder.jpg` à côté du film* : passe déjà devant la jaquette du `.mkv`, visible par d'autres lecteurs. Coût : nouvelle exception à l'invariant d'écriture, volume `Films` à passer en lecture-écriture, et le cache d'images doit tenir compte de la date de `folder.jpg` (aujourd'hui seule la pochette d'un album entre dans la clé, `_cover_stamp`).
   - *Dans le `.mkv`* : déconseillé depuis le hub (`mkvpropedit` absent du conteneur, film ouvert en lecture pendant l'écriture, nouvelle fonction à écrire dans `media_library` pour une image quelconque). Si le besoin vient, le faire en ligne de commande côté `media_library`.
 
+- [ ] **Supprimer le choix « Sagas / pas Sagas » de la bibliothèque des films.** Décidé : plus de bouton, plus de réglage. Les films sont **toujours regroupés en sagas** (c'est l'état par défaut d'aujourd'hui : le bouton est allumé tant qu'on ne l'a pas éteint) ; la page de la saga montre ses films, et un film sans saga reste une carte seule. À faire : retirer le bouton « Sagas » et le réglage retenu (`sagas.<bibliothèque>`) de `hub/web/js/views.js`, et le test « le choix des sagas est retenu » de `tests/test_ui.py`. Le paramètre `sagas=1` de `GET /api/library/<id>` n'a pas à disparaître : un autre client peut encore vouloir la liste à plat (à garder, ou à retirer si personne d'autre ne s'en sert). *À confirmer* : si l'intention était plutôt de ne **jamais** regrouper, c'est l'inverse, mais cela cacherait les sagas dont le hub s'est donné tant de mal à numéroter les films.
+
 ### Séries et animations
 
 - [x] **Bouton « … » sur les séries et les animations** : *Voir / Revoir*, *Marquer vu / non vu* et *TMDB* (une fois la série enrichie). À essayer à la télécommande.
@@ -57,9 +59,8 @@
 
 ### Interface
 
-- [ ] **Réglages d'affichage dans Paramètres, pour tout le monde (administrateur ou non).** Aujourd'hui « Sagas » (films) est un bouton de la barre d'outils, retenu par appareil. Les réglages d'affichage vont dans les Paramètres, qui servent maintenant surtout aux comptes ordinaires : un onglet (ou la suite de *Lecture*) avec
+- [ ] **Réglages d'affichage dans Paramètres, pour tout le monde (administrateur ou non).** Les réglages d'affichage vont dans les Paramètres, qui servent maintenant surtout aux comptes ordinaires : un onglet (ou la suite de *Lecture*) avec
   - **Musique** : la vue ouverte par défaut, *Albums* (valeur d'aujourd'hui) ou *Artistes* ;
-  - **Films** : regrouper les films en sagas, ou non (le bouton « Sagas » de la bibliothèque peut rester comme raccourci) ;
   - la place des réglages qu'on ajoutera ensuite (tri par défaut, section ouverte des livres…).
 
 - [x] **Renommer « Admin » en « Paramètres ».**
