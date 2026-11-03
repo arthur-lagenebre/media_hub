@@ -12,6 +12,13 @@
     return d.entries.map(function (e) { return { id: e.id, title: e.title, artist: e.artist || d.artist || '', album: d.title, item: d.id, duration: e.duration }; });
   };
   M.tracksOf = function (itemId) { return H.api('/api/item/' + itemId).then(M.fromDetail); };
+
+  // Les invités d'une piste, à montrer sous son titre : « Kavinsky feat. Havoc » (l'artiste de la piste) ou « Protovision (feat. Havoc) » (le titre, qui perd alors sa parenthèse).
+  var GUEST_ARTIST = /\s(?:feat|ft|featuring)\.?\s+(.+)$/i, GUEST_TITLE = /\s*[(\[]\s*(?:feat|ft|featuring)\.?\s+([^)\]]+?)\s*[)\]]/i;
+  M.guests = function (title, artist) {
+    var inArtist = GUEST_ARTIST.exec(artist || ''), inTitle = GUEST_TITLE.exec(title || ''), bare = inTitle ? title.replace(inTitle[0], '').trim() : '';
+    return { title: bare || title, guests: inArtist ? inArtist[1] : inTitle ? inTitle[1] : '' };
+  };
   function fail(e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.'); }
 
   M.playItem = function (itemId, shuffle) { return M.tracksOf(itemId).then(function (list) { if (list.length) H.audio.play(list, 0, shuffle); }).catch(fail); };

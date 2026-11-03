@@ -245,6 +245,15 @@ class TestDetailPages(UiCase):
         self.page.locator("#abar .btn").last.click()                 # fermer
         self.assertTrue(self.page.locator("#abar").is_hidden())
 
+    def test_guests_of_a_track_come_from_its_artist_or_its_title(self):
+        self.open("#/i/" + self.item("musique", "Discovery")["id"])
+        self.view(".trk").first.wait_for()
+        guests = lambda title, artist: self.page.evaluate("([t, a]) => Hub.music.guests(t, a)", [title, artist])
+        self.assertEqual(guests("Protovision", "Kavinsky feat. Havoc"), {"title": "Protovision", "guests": "Havoc"})
+        self.assertEqual(guests("Alive 1997 (feat. Quelqu'un)", "Mouss"), {"title": "Alive 1997", "guests": "Quelqu'un"})
+        self.assertEqual(guests("One More Time", "Daft Punk"), {"title": "One More Time", "guests": ""})
+        self.assertEqual(self.view(".trk .ti small").count(), 0)           # aucune piste de l'album n'a d'invité : rien sous les titres
+
     def test_admin_runs_an_update(self):
         self.open("#/admin")
         self.view(".panel").first.wait_for()
