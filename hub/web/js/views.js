@@ -340,60 +340,124 @@
     }
     function setSeen(done, seasonNo) { H.api('/api/item/' + id + '/seen', { done: done, season: seasonNo === undefined ? null : seasonNo }).then(load); }
 
-    function render() {
-      var d = data, focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
-      H.clear(el);
-      el.setAttribute('data-lib', d.library.id);
-      var square = d.type === 'album', entries = d.entries;
-      var resume = entries.filter(function (e) { return e.id === d.resume; })[0] || entries[0];
-      var prog = resume ? entryProgress(resume) : null;
-      var allDone = entries.length > 0 && entries.every(function (e) { return e.progress && e.progress.done; });
-      var meta = [];
-      if (d.type === 'movie') { if (d.year) meta.push(d.year); var secs = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (secs) meta.push(H.dur(secs)); }
-      else if (d.type === 'show') { if (d.year) meta.push(d.year); if (d.seasons && d.seasons.length) meta.push(H.plural(d.seasons.filter(function (s) { return s > 0; }).length || 1, 'saison')); meta.push(H.plural(entries.length, 'épisode')); if (d.status) meta.push(SHOW_STATUS[d.status] || d.status); }
-      else if (d.type === 'album') { if (d.artist && !d.artist_id) meta.push(d.artist); if (d.year) meta.push(d.year); meta.push(H.plural(entries.length, 'piste')); var t = entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); if (t) meta.push(H.dur(t)); if (d.formats && d.formats.length) meta.push(d.formats.join(' / ')); }
-      else { meta.push(d.grp || 'Livres'); meta.push(H.plural(entries.length, d.unit || 'volume', d.units)); if (d.year) meta.push(d.year); }
-      var genres = (d.genres || []).join(', ');
+    // Ce que la fiche tire de ses fichiers : où reprendre, la position en cours, et si tout est vu.
+    function viewing(d) {
+      var entries = d.entries, resume = entries.filter(function (e) { return e.id === d.resume; })[0] || entries[0];
+      return { resume: resume, prog: resume ? entryProgress(resume) : null, allDone: entries.length > 0 && entries.every(function (e) { return e.progress && e.progress.done; }) };
+    }
+    function totalDuration(entries) { return entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); }
 
-      var info = h('div', { class: 'info' }, h('h1', null, d.title), h('p', { class: 'meta' }, meta.filter(Boolean).join(' · ')));
-      if (genres) info.appendChild(h('p', { class: 'genres' }, genres));
-      if (d.directors && d.directors.length) info.appendChild(h('p', { class: 'credit' }, 'De ' + d.directors.join(', ')));
-      if (d.authors && d.authors.length) info.appendChild(h('p', { class: 'credit' }, 'Par ' + d.authors.join(', ')));
-      if (d.type === 'album' && d.artist && d.artist_id) info.appendChild(h('p', { class: 'credit' }, h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + d.artist_id }, d.artist)));
-      if (d.summary) info.appendChild(h('p', { class: 'synopsis' }, d.summary));
-      if (d.doubts && d.doubts.length && H.isAdmin()) info.appendChild(h('p', { class: 'warn doubt', role: 'note' }, 'Fiche TMDB à vérifier : ' + d.doubts.join(' ; ') + '.' + (H.device === 'tv' ? '' : ' Ce n’est pas la bonne série ? « Changer la fiche TMDB ».')));
-
-      var actions = h('div', { class: 'actions' });
-      if (d.type === 'album') {
-        actions.appendChild(H.button('Lire l’album', 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.audio.play(trackList(), 0); } }));
-        actions.appendChild(H.button('Aléatoire', 'shuffle', { onclick: function () { H.audio.play(trackList(), 0, true); } }));
-        actions.appendChild(H.button('Jouer ensuite', null, { onclick: function () { H.music.queueTracks(trackList(), 'next', d.title); } }));
-        actions.appendChild(H.button('À la file', 'queue', { onclick: function () { H.music.queueTracks(trackList(), 'end', d.title); } }));
-        actions.appendChild(H.button('Playlist', 'plus', { onclick: function () { H.music.addToPlaylist(trackList().map(function (t) { return t.id; }), d.title); } }));
-      } else if (resume) {
-        var what = d.type === 'show' ? epLabel(resume) : (d.type === 'series' ? 'tome ' + (resume.label || resume.number || '') : '');
-        var main = prog ? 'Reprendre' + (what ? ' ' + what : '') + (resume.kind === 'book' ? ' (page ' + (Math.floor(prog.position) + 1) + ')' : ' à ' + H.time(prog.position)) : (d.type === 'movie' && allDone ? 'Revoir' : 'Lire' + (what ? ' ' + what : ''));
-        actions.appendChild(H.button(main, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go(playHref(resume)); } }));
-        if (prog) actions.appendChild(H.button('Depuis le début', 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
+    // La ligne grise sous le titre, selon ce qu'est la fiche : l'année, la durée, les saisons, les pistes, les volumes.
+    var META = {
+      movie: function (d) {
+        var meta = [];
+        if (d.year) meta.push(d.year);
+        var secs = totalDuration(d.entries);
+        if (secs) meta.push(H.dur(secs));
+        return meta;
+      },
+      show: function (d) {
+        var meta = [];
+        if (d.year) meta.push(d.year);
+        if (d.seasons && d.seasons.length) meta.push(H.plural(d.seasons.filter(function (s) { return s > 0; }).length || 1, 'saison'));
+        meta.push(H.plural(d.entries.length, 'épisode'));
+        if (d.status) meta.push(SHOW_STATUS[d.status] || d.status);
+        return meta;
+      },
+      album: function (d) {
+        var meta = [];
+        if (d.artist && !d.artist_id) meta.push(d.artist);
+        if (d.year) meta.push(d.year);
+        meta.push(H.plural(d.entries.length, 'piste'));
+        var t = totalDuration(d.entries);
+        if (t) meta.push(H.dur(t));
+        if (d.formats && d.formats.length) meta.push(d.formats.join(' / '));
+        return meta;
+      },
+      books: function (d) {
+        var meta = [d.grp || 'Livres', H.plural(d.entries.length, d.unit || 'volume', d.units)];
+        if (d.year) meta.push(d.year);
+        return meta;
       }
-      if (d.type !== 'album' && entries.length) actions.appendChild(H.button(H.actions.seenLabel(d.type, allDone), 'check', { onclick: function () { setSeen(!allDone); } }));
-      if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) actions.appendChild(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
-      if (entries.length && H.actions.canDownload()) actions.appendChild(H.button(d.type === 'album' ? 'Télécharger l’album' : 'Télécharger', 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
-      H.actions.posterTools(d, load).forEach(function (node) { actions.appendChild(node); });
-      H.actions.tmdbTools(d, load).forEach(function (node) { actions.appendChild(node); });
-      (d.links || []).forEach(function (l) { actions.appendChild(h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label)); });
-      info.appendChild(actions);
-      var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),
-        h('div', { class: 'hero-in' }, H.picture('/img/item/' + d.id + '?w=500', d.title, square ? 'sq big' : 'big'), info));
-      el.appendChild(hero);
+    };
+    function metaLine(d) { return (META[d.type] || META.books)(d).filter(Boolean).join(' · '); }
 
-      var body = h('div', { class: 'body' });
-      if (d.type === 'show') body.appendChild(episodes(d));
-      else if (d.type === 'album') body.appendChild(tracks(d));
-      else if (d.type === 'series') body.appendChild(volumes(d));
-      else if (entries.length > 1) body.appendChild(parts(d));
-      if (d.actors && d.actors.length) body.appendChild(h('section', { class: 'cast' }, h('h2', null, 'Distribution'), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); }))));
-      (d.sagas || []).forEach(function (saga, k) {
+    // Les lignes « De », « Par » et l'artiste d'un album, sous les genres.
+    function credits(d) {
+      var out = [];
+      if (d.directors && d.directors.length) out.push(h('p', { class: 'credit' }, 'De ' + d.directors.join(', ')));
+      if (d.authors && d.authors.length) out.push(h('p', { class: 'credit' }, 'Par ' + d.authors.join(', ')));
+      if (d.type === 'album' && d.artist && d.artist_id) out.push(h('p', { class: 'credit' }, h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + d.artist_id }, d.artist)));
+      return out;
+    }
+    function doubtNote(d) {
+      return h('p', { class: 'warn doubt', role: 'note' }, 'Fiche TMDB à vérifier : ' + d.doubts.join(' ; ') + '.' + (H.device === 'tv' ? '' : ' Ce n’est pas la bonne série ? « Changer la fiche TMDB ».'));
+    }
+
+    // Les boutons de lecture d'un album.
+    function albumButtons(d) {
+      return [
+        H.button('Lire l’album', 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.audio.play(trackList(), 0); } }),
+        H.button('Aléatoire', 'shuffle', { onclick: function () { H.audio.play(trackList(), 0, true); } }),
+        H.button('Jouer ensuite', null, { onclick: function () { H.music.queueTracks(trackList(), 'next', d.title); } }),
+        H.button('À la file', 'queue', { onclick: function () { H.music.queueTracks(trackList(), 'end', d.title); } }),
+        H.button('Playlist', 'plus', { onclick: function () { H.music.addToPlaylist(trackList().map(function (t) { return t.id; }), d.title); } })
+      ];
+    }
+    // Les boutons de lecture d'un film, d'une série ou de tomes : lire ou reprendre là où on s'est arrêté, et repartir du début.
+    function playButtons(d, view) {
+      var resume = view.resume, prog = view.prog;
+      if (!resume) return [];
+      var what = d.type === 'show' ? epLabel(resume) : (d.type === 'series' ? 'tome ' + (resume.label || resume.number || '') : '');
+      var main = prog ? 'Reprendre' + (what ? ' ' + what : '') + (resume.kind === 'book' ? ' (page ' + (Math.floor(prog.position) + 1) + ')' : ' à ' + H.time(prog.position)) : (d.type === 'movie' && view.allDone ? 'Revoir' : 'Lire' + (what ? ' ' + what : ''));
+      var out = [H.button(main, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go(playHref(resume)); } })];
+      if (prog) out.push(H.button('Depuis le début', 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
+      return out;
+    }
+    // Les autres boutons : vu / non vu, saga, télécharger, affiche, fiche TMDB, liens.
+    function otherButtons(d, view) {
+      var out = [], entries = d.entries;
+      if (d.type !== 'album' && entries.length) out.push(H.button(H.actions.seenLabel(d.type, view.allDone), 'check', { onclick: function () { setSeen(!view.allDone); } }));
+      if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) out.push(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
+      if (entries.length && H.actions.canDownload()) out.push(H.button(d.type === 'album' ? 'Télécharger l’album' : 'Télécharger', 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
+      return out.concat(H.actions.posterTools(d, load), H.actions.tmdbTools(d, load),
+        (d.links || []).map(function (l) { return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label); }));
+    }
+    function actionsRow(d, view) {
+      var actions = h('div', { class: 'actions' });
+      (d.type === 'album' ? albumButtons(d) : playButtons(d, view)).concat(otherButtons(d, view)).forEach(function (node) { actions.appendChild(node); });
+      return actions;
+    }
+
+    // Le texte à droite de l'image : titre, ligne grise, genres, crédits, résumé, doutes TMDB, boutons.
+    function infoBlock(d, view) {
+      var genres = (d.genres || []).join(', ');
+      var info = h('div', { class: 'info' }, h('h1', null, d.title), h('p', { class: 'meta' }, metaLine(d)));
+      if (genres) info.appendChild(h('p', { class: 'genres' }, genres));
+      credits(d).forEach(function (node) { info.appendChild(node); });
+      if (d.summary) info.appendChild(h('p', { class: 'synopsis' }, d.summary));
+      if (d.doubts && d.doubts.length && H.isAdmin()) info.appendChild(doubtNote(d));
+      info.appendChild(actionsRow(d, view));
+      return info;
+    }
+    function heroBlock(d, info) {
+      return h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),
+        h('div', { class: 'hero-in' }, H.picture('/img/item/' + d.id + '?w=500', d.title, d.type === 'album' ? 'sq big' : 'big'), info));
+    }
+
+    // Sous l'en-tête : la liste propre au type (épisodes, pistes, tomes, parties), la distribution, les sagas.
+    function mainSection(d) {
+      if (d.type === 'show') return episodes(d);
+      if (d.type === 'album') return tracks(d);
+      if (d.type === 'series') return volumes(d);
+      return d.entries.length > 1 ? parts(d) : null;
+    }
+    function castSection(d) {
+      if (!(d.actors && d.actors.length)) return null;
+      return h('section', { class: 'cast' }, h('h2', null, 'Distribution'), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); })));
+    }
+    function sagaBoxes(d) {
+      return (d.sagas || []).map(function (saga, k) {
         var cards = sagaCells(saga.films, saga.missing, function (s) {
           var c = H.card(s, false, true);
           c.setAttribute('data-key', k + ':' + s.id);                     // le même film peut figurer dans plusieurs sagas de la page
@@ -401,11 +465,23 @@
           return c;
         });
         var absent = (saga.missing || []).length;
-        body.appendChild(h('section', { class: 'sagabox' },
+        return h('section', { class: 'sagabox' },
           h('h2', null, h('a', { class: 'f head', href: sagaHref(d.library.id, saga.name) }, saga.name), h('span', { class: 'n' }, H.plural(saga.films.length, 'film') + (absent ? ' · ' + H.plural(absent, 'manquant') : ''))),
-          h('div', { class: 'grid small' }, cards)));
+          h('div', { class: 'grid small' }, cards));
       });
-      el.appendChild(body);
+    }
+    function bodyBlock(d) {
+      var body = h('div', { class: 'body' });
+      [mainSection(d), castSection(d)].concat(sagaBoxes(d)).forEach(function (node) { if (node) body.appendChild(node); });
+      return body;
+    }
+
+    function render() {
+      var d = data, focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      H.clear(el);
+      el.setAttribute('data-lib', d.library.id);
+      el.appendChild(heroBlock(d, infoBlock(d, viewing(d))));
+      el.appendChild(bodyBlock(d));
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
 
