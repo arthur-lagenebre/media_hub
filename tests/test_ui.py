@@ -1121,6 +1121,18 @@ class TestSettings(UiCase):
         top = self.view(".tabs").evaluate("el => el.getBoundingClientRect().top")
         self.assertTrue(0 <= top < 120, top)
 
+    def test_a_button_of_the_management_tab_does_not_scroll_the_page_back_to_the_top(self):
+        self.page.set_viewport_size({"width": 1280, "height": 300})
+        self.open("#/settings")
+        self.view(".tabs").wait_for()
+        button = self.view("[data-key^='scan-']:not([data-key='scan-all'])").last
+        button.click()                                  # Playwright amène le bouton à l'écran avant de cliquer : on mesure après
+        before = self.page.evaluate("window.scrollY")
+        self.assertGreater(before, 50)
+        self.page.locator("#toast.on", has_text="Mise à jour lancée").wait_for()
+        self.page.wait_for_timeout(2500)                # la page est reconstruite quand la mise à jour change l'état des bibliothèques
+        self.assertEqual(self.page.evaluate("window.scrollY"), before)
+
     def test_the_tab_chosen_is_remembered(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
