@@ -49,12 +49,18 @@
 ### Musique
 
 - [ ] **La bibliothèque de musique par artiste.** Aujourd'hui la page montre tous les albums, regroupés sous le nom de leur artiste. En plus, au choix : la liste des **artistes seulement**, sans leurs albums, chacun avec **la photo qu'on a choisie pour lui** (*Changer la photo*, *Recadrer*, photo de Wikipédia : `GET /img/artist/<lib>/<id>`), et à défaut la pochette de son premier album. Un clic ouvre la fiche de l'artiste, où sont ses albums.
-  - Décidé : **les deux vues coexistent**, et c'est la personne qui choisit entre « Artistes » et « Albums » (un réglage dans la barre d'outils de la page, comme « Sagas » pour les films, retenu d'une visite à l'autre). La vue actuelle ne disparaît pas.
-  - À trancher : la vue ouverte par défaut, si le choix se retient par appareil (comme « Sagas ») ou par compte, et si les albums sans artiste (« Artiste inconnu ») ont leur carte.
+  - Décidé : **les deux vues coexistent**, et c'est la personne qui choisit entre « Artistes » et « Albums ». **La vue par défaut reste celle d'aujourd'hui (les albums).** Le choix se fait dans **Paramètres**, pas dans la barre d'outils de la page : voir « Réglages d'affichage » plus bas.
+  - Décidé : les albums sans artiste ont leur carte dans la vue par artistes, sous un nom lisible (« Artiste inconnu », ou « Artistes divers » pour un « Various Artists » traduit en français), **en dernier** pour que les vrais artistes viennent d'abord (en premier si on préfère : un simple tri).
+  - À trancher : où se retient le choix : **par appareil** (comme les réglages de lecture, dans le navigateur) ou **par compte** (il suit la personne de la télé au téléphone, mais demande de garder les réglages côté serveur).
   - Côté serveur, la liste de la bibliothèque rend des albums : il faudra une liste d'artistes (nom, nombre d'albums, présence d'une photo), avec les filtres qui existent déjà (lettre, genre, recherche).
   - Côté interface : une carte ronde ou carrée par artiste, la photo chargée par `/img/artist/...` (le cache d'images en tient déjà compte), le focus à la télécommande comme les autres cartes.
 
 ### Interface
+
+- [ ] **Réglages d'affichage dans Paramètres, pour tout le monde (administrateur ou non).** Aujourd'hui « Sagas » (films) est un bouton de la barre d'outils, retenu par appareil. Les réglages d'affichage vont dans les Paramètres, qui servent maintenant surtout aux comptes ordinaires : un onglet (ou la suite de *Lecture*) avec
+  - **Musique** : la vue ouverte par défaut, *Albums* (valeur d'aujourd'hui) ou *Artistes* ;
+  - **Films** : regrouper les films en sagas, ou non (le bouton « Sagas » de la bibliothèque peut rester comme raccourci) ;
+  - la place des réglages qu'on ajoutera ensuite (tri par défaut, section ouverte des livres…).
 
 - [x] **Renommer « Admin » en « Paramètres ».**
 - [x] **Séparer les paramètres en onglets**, en haut de la page et qui restent flottants (fait ; j'ai ajouté un onglet *Lecture* pour la qualité, l'appareil et le son 5.1, qui servent à tout le monde) :
