@@ -932,6 +932,36 @@ def letter_of(row, kind):
     return initial(row["grp"]) if kind == "music" else row["letter"]
 
 
+UNKNOWN_ARTISTS = ("artiste inconnu", "various artists", "artistes divers")        # rangés en dernier : ce ne sont pas des artistes qu'on cherche par leur nom
+
+
+def artist_name(grp):
+    """Le nom que montre la carte d'un artiste : « Various Artists » se dit en français, un album sans artiste est « Artiste inconnu »."""
+    return "Artistes divers" if fold(grp) == "various artists" else grp or "Artiste inconnu"
+
+
+def artist_rows(rows):
+    """Les albums d'une bibliothèque de musique regroupés par artiste : une ligne par artiste, de la forme d'une ligne d'item, si bien que les filtres, le tri et la pagination de la bibliothèque s'y appliquent
+    tels quels. `title` est le nom de l'artiste, `count` son nombre d'albums, `meta.album` le plus ancien (sa pochette, quand il n'a pas de photo) ; `albums` les titres de tous, pour que la recherche d'un
+    album trouve son artiste. Les artistes sans nom connu viennent en dernier."""
+    groups = {}
+    for row in rows:
+        groups.setdefault(safe_json(row["meta"], {}).get("artist_id") or fold(row["grp"]), []).append(row)
+    out = []
+    for key, albums in groups.items():
+        albums.sort(key=lambda r: (r["year"] or "9999", r["sort"]))
+        name = artist_name(albums[0]["grp"])
+        out.append({"id": key, "lib": albums[0]["lib"], "type": "artist", "title": name, "grp": name, "letter": initial(name), "year": "", "summary": "",
+                    "sort": ("~" if fold(name) in UNKNOWN_ARTISTS else "") + fold(name), "genres": json.dumps(sorted({g for a in albums for g in safe_json(a["genres"], [])}), ensure_ascii=False),
+                    "meta": json.dumps({"album": albums[0]["id"]}), "added": max(a["added"] for a in albums), "count": len(albums), "albums": [a["title"] for a in albums]})
+    return out
+
+
+def artist_card(row):
+    """La carte d'un artiste dans la liste : son identifiant (celui de sa fiche, `/api/artist/<lib>/<id>`), son nom, son nombre d'albums et l'album dont on prendra la pochette faute de photo."""
+    return {"id": row["id"], "type": "artist", "title": row["title"], "n": row["count"], "letter": row["letter"], "album": safe_json(row["meta"], {}).get("album", "")}
+
+
 def library_counts(rows, kind):
     """Ce que la barre latérale compte : ({lettre: n}, {genre: n}, {section: n}, {id: section}). Les sections, pour les livres seulement."""
     letters = Counter(letter_of(row, kind) for row in rows)
@@ -1008,11 +1038,11 @@ def library_filters(q, kind, ranks, of, in_custom, seen):
     return tests
 
 
-def library_order(kind, q, ranks):
-    """(tri, clé, sens) du tri demandé ; la musique n'a qu'un ordre : par artiste."""
+def library_order(kind, q, ranks, artists=False):
+    """(tri, clé, sens) du tri demandé ; la musique n'a qu'un ordre : par artiste (dans la liste des artistes, par leur nom, les inconnus à la fin)."""
     sort = "title" if kind == "music" else q.get("sort", "title")
     key, reverse = SORTS.get(sort, SORTS["title"])
-    if sort == "title" and kind in TITLE_SORTS:
+    if sort == "title" and kind in TITLE_SORTS and not artists:
         key = TITLE_SORTS[kind]
     if sort == "part" and ranks is not None:
         key = lambda r: ranks[r["id"]]
@@ -1028,6 +1058,8 @@ def page_bounds(q):
 
 
 def library_item(row, seen):
+    if row["type"] == "artist":
+        return artist_card(row)
     return saga_json(row, seen) if row["type"] == "saga" else with_seen(row, seen)
 
 
@@ -1050,15 +1082,20 @@ def api_library(h, m, q):
     seen = seen_counts(hub, h.user["id"], lib.id)
     movies = lib.kind == "movies"
     custom = hub.sagas.of_movies(rows) if movies else {}          # les sagas du fichier, voir sagas.py
+    extra_names = sagas_of_films(custom)
+    artists = lib.kind == "music" and q.get("view") == "artists"
+    if artists:                                                   # la liste des artistes, sans leurs albums : un album se cherche par son titre, et trouve son artiste
+        rows = artist_rows(rows)
+        extra_names = {row["id"]: row["albums"] for row in rows}
     group = q.get("group", "")
     sagas = movies and q.get("sagas") == "1" and not group
     if sagas:
         rows = collapse_sagas(rows, seen, custom)
     letters, genres, sections, of = library_counts(rows, lib.kind)
     ranks, absent = group_ranks(hub, rows, custom, group, movies)
-    tests = library_filters(q, lib.kind, ranks, of, sagas_of_films(custom), seen)
+    tests = library_filters(q, lib.kind, ranks, of, extra_names, seen)
     chosen = [row for row in rows if all(test(row) for test in tests)]
-    sort, key, reverse = library_order(lib.kind, q, ranks)
+    sort, key, reverse = library_order(lib.kind, q, ranks, artists)
     chosen.sort(key=key, reverse=reverse)
     offset, limit = page_bounds(q)
     page = chosen[offset:offset + limit]
