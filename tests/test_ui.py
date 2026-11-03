@@ -1164,7 +1164,7 @@ class TestSettings(UiCase):
     def test_each_tab_has_its_own_panels(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        for name, titles in (("Lecture", ["Lecture"]), ("Comptes", ["Mon compte"]), ("Tâches", ["Tâches"]), ("Serveur", ["Serveur"])):
+        for name, titles in (("Lecture", ["Lecture"]), ("Comptes", ["Mon compte", "Affichage"]), ("Tâches", ["Tâches"]), ("Serveur", ["Serveur"])):
             self.tab(name)
             self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == name)
             self.assertEqual(self.titles(), titles, name)
@@ -1192,6 +1192,21 @@ class TestSettings(UiCase):
         self.page.locator("#toast.on", has_text="Mise à jour lancée").wait_for()
         self.page.wait_for_timeout(2500)                # la page est reconstruite quand la mise à jour change l'état des bibliothèques
         self.assertEqual(self.page.evaluate("window.scrollY"), before)
+
+    def test_the_account_chooses_how_the_music_library_opens(self):
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+        self.open("#/settings?tab=comptes")
+        panel = self.view(".panel", has_text="Affichage")
+        panel.wait_for()
+        self.assertIn("Albums", panel.inner_text())
+        panel.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text="Artistes").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "artists")
+        self.until(lambda: "Artistes" in self.view(".panel", has_text="Affichage").inner_text())
+        panel = self.view(".panel", has_text="Affichage")
+        panel.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text="Albums").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "albums")
 
     def test_the_tab_chosen_is_remembered(self):
         self.open("#/settings")
@@ -1257,7 +1272,7 @@ class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
                 self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Lecture", "Comptes"])
                 page.locator(".tabs .tab", has_text="Comptes").click()
                 page.wait_for_selector(".panel h2")
-                self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte"])
+                self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte", "Affichage"])
                 page.goto(base + "/#/settings?tab=serveur")                       # un onglet réservé à l'administrateur ne s'ouvre pas
                 shown = page.locator("#views > .view:visible .tabs .tab[aria-selected=true]")       # l'ancienne page reste, cachée, derrière la nouvelle
                 shown.wait_for()

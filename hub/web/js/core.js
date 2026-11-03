@@ -91,9 +91,16 @@
 
   // Qui est connecté : rempli à partir de /api/state (démarrage, page Gestion). Serveur ouvert (`auth` faux) : un seul profil, administrateur.
   // Masquer une action n'est qu'un confort : le serveur refuse (403) ce que le rôle ne permet pas.
-  H.session = { auth: false, user: null };
+  H.session = { auth: false, user: null, settings: {} };
   H.setSession = function (state) {
-    H.session = { auth: !!(state && state.auth), user: (state && state.user) || null };
+    H.session = { auth: !!(state && state.auth), user: (state && state.user) || null, settings: (state && state.settings) || {} };
+  };
+  // Les réglages du compte (gardés sur le serveur : ils le suivent d'un appareil à l'autre) ; `name` : « music_view »...
+  H.setting = function (name) { return (H.session.settings || {})[name]; };
+  H.saveSetting = function (name, value) {
+    var change = {};
+    change[name] = value;
+    return H.api('/api/me/settings', change).then(function (res) { H.session.settings = res.settings; return res.settings; });
   };
   // Ce navigateur peut servir à plusieurs comptes : ce qui est propre à un compte (la file audio) ne doit pas passer de l'un à l'autre.
   // On retient l'id du dernier compte vu ; s'il change, on purge. Serveur ouvert : pas de compte, rien à purger. À appeler au démarrage, avant de relire la file.

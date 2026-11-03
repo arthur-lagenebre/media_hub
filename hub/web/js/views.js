@@ -801,8 +801,25 @@
         H.button(surround ? 'Désactiver' : 'Activer', 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
       body.appendChild(play);
     }
+    // Les réglages d'affichage du compte : chacun se choisit dans une liste.
+    var DISPLAY = [{ key: 'music_view', title: 'Bibliothèque de musique', note: 'Comment elle s’ouvre',
+      choices: [{ label: 'Albums', detail: 'Tous les albums, regroupés sous le nom de leur artiste', value: 'albums' }, { label: 'Artistes', detail: 'Un artiste par carte, avec sa photo, sans ses albums', value: 'artists' }] }];
+    function displayPanel() {
+      var panel = h('section', { class: 'panel' }, h('h2', null, 'Affichage'));
+      DISPLAY.forEach(function (setting) {
+        var current = H.setting(setting.key), shown = setting.choices.filter(function (c) { return c.value === current; })[0] || setting.choices[0];
+        panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, setting.title), h('span', null, setting.note + ' : ' + shown.label)),
+          H.button('Changer', 'edit', { 'data-key': 'display-' + setting.key, onclick: function () {
+            H.menu(setting.title, setting.choices, shown.value, function (v) {
+              H.saveSetting(setting.key, v).then(function () { render(); H.focus.key(el, 'display-' + setting.key); }).catch(function (e) { H.toast(e.message, 5000); });
+            });
+          } })));
+      });
+      return panel;
+    }
     function accounts(body) {
       body.appendChild(accountPanel());
+      body.appendChild(displayPanel());
       if (H.session.auth && H.isAdmin()) body.appendChild(usersPanel());
     }
     function tasks(body) {
