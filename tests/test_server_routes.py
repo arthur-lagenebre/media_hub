@@ -559,14 +559,8 @@ class TestTmdbSheetRoutes(RouteCase):
         self.assertEqual(self.post("/api/item/s1/tmdb", {}).status, 400)
         self.choose_show.assert_not_called()
 
-    def test_taking_the_choice_back_asks_for_no_identifier(self):
-        reply = self.post("/api/item/s1/tmdb/delete")
-        self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
-        self.assertIsNone(self.choose_show.call_args.args[-1])
-
     def test_only_a_series_has_a_sheet_to_choose(self):
         self.assertEqual(self.post("/api/item/m1/tmdb", {"tmdb": 1}).status, 400)
-        self.assertEqual(self.post("/api/item/m1/tmdb/delete").status, 400)
         self.assertEqual(self.get("/api/item/m1/tmdb?q=x").status, 400)
         self.assertEqual(self.post("/api/item/inconnu/tmdb", {"tmdb": 1}).status, 404)
         self.choose_show.assert_not_called()
@@ -574,7 +568,7 @@ class TestTmdbSheetRoutes(RouteCase):
     def test_without_a_tmdb_key_nothing_is_possible(self):
         self.hub.cfg.tmdb_key = ""
         self.tmdb_client.side_effect = self.real_tmdb_client
-        for reply in (self.get("/api/item/s1/tmdb?q=x"), self.post("/api/item/s1/tmdb", {"tmdb": 1}), self.post("/api/item/s1/tmdb/delete")):
+        for reply in (self.get("/api/item/s1/tmdb?q=x"), self.post("/api/item/s1/tmdb", {"tmdb": 1})):
             self.assertEqual((reply.status, "TMDB_KEY" in reply.json()["error"]), (400, True))
         self.choose_show.assert_not_called()
 
@@ -582,20 +576,8 @@ class TestTmdbSheetRoutes(RouteCase):
         for failure in (app.tmdb.TmdbError("HTTP 500"), app.tmdb.TmdbAuthError("clé refusée")):
             self.choose_show.side_effect = failure
             self.client.search_tv.side_effect = failure
-            for reply in (self.post("/api/item/s1/tmdb", {"tmdb": 1}), self.post("/api/item/s1/tmdb/delete"), self.get("/api/item/s1/tmdb?q=x")):
+            for reply in (self.post("/api/item/s1/tmdb", {"tmdb": 1}), self.get("/api/item/s1/tmdb?q=x")):
                 self.assertEqual((reply.status, str(failure) in reply.json()["error"]), (502, True))
-
-    def test_a_series_that_tmdb_does_not_find_is_a_404(self):
-        self.choose_show.return_value = None
-        reply = self.post("/api/item/s1/tmdb/delete")
-        self.assertEqual((reply.status, "série" in reply.json()["error"]), (404, True))
-
-    def test_the_sheet_says_whether_the_tmdb_sheet_was_chosen_here(self):
-        self.assertNotIn("tmdb_custom", self.get("/api/item/s1").json())
-        self.db.kv_set(app.enrich.pin_key({"id": "s1"}), 4615)
-        self.assertIs(self.get("/api/item/s1").json()["tmdb_custom"], True)
-        self.db.kv_set(app.enrich.pin_key({"id": "m1"}), 4615)
-        self.assertNotIn("tmdb_custom", self.get("/api/item/m1").json())
 
     def test_the_doubts_of_the_search_reach_the_sheet(self):
         self.db.update_item_meta("s1", meta={"doubts": ["titre partagé avec Hercule (1995)"]})
@@ -608,8 +590,7 @@ class TestTmdbSheetRoutes(RouteCase):
         bob = accounts.create(self.db, "bob", "motdepasse1")
         cookie = self.hub.cookie(bob)
         self.assertEqual(self.get("/api/item/s1/tmdb?q=x", headers=cookie).status, 403)
-        for target in ("/api/item/s1/tmdb", "/api/item/s1/tmdb/delete"):
-            self.assertEqual(self.post(target, {"tmdb": 1}, headers=cookie).status, 403, target)
+        self.assertEqual(self.post("/api/item/s1/tmdb", {"tmdb": 1}, headers=cookie).status, 403)
         self.choose_show.assert_not_called()
         self.client.search_tv.assert_not_called()
 

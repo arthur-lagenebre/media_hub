@@ -142,25 +142,18 @@ def enrich_show(tmdb, posters, db, lib, item):
     return show, data
 
 
-def set_pin(db, item, show_id):
-    if show_id:
-        db.kv_set(pin_key(item), int(show_id))
-    else:
-        db.kv_delete(pin_key(item))
-
-
-def choose_show(tmdb, posters, db, lib, item, show_id=None):
-    """Fixe la fiche TMDB de la série et l'enrichit à nouveau ; sans identifiant, retire le choix et laisse la recherche trancher. Rend ce que rend enrich_show. Si TMDB refuse ou ne trouve rien, le choix d'avant est rendu."""
+def choose_show(tmdb, posters, db, lib, item, show_id):
+    """Fixe la fiche TMDB de la série et l'enrichit à nouveau ; rend ce que rend enrich_show. Si TMDB refuse, le choix d'avant est rendu."""
     before = db.kv_get(pin_key(item))
-    set_pin(db, item, show_id)
+    db.kv_set(pin_key(item), int(show_id))
     try:
-        found = enrich_show(tmdb, posters, db, lib, item)
+        return enrich_show(tmdb, posters, db, lib, item)
     except BaseException:
-        set_pin(db, item, before)
+        if before:
+            db.kv_set(pin_key(item), before)
+        else:
+            db.kv_delete(pin_key(item))
         raise
-    if found is None:
-        set_pin(db, item, before)
-    return found
 
 
 def enrich_shows(cfg, db, lib, log=print, force=False):
