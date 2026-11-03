@@ -254,6 +254,46 @@ class TestDetailPages(UiCase):
         self.assertEqual(guests("One More Time", "Daft Punk"), {"title": "One More Time", "guests": ""})
         self.assertEqual(self.view(".trk .ti small").count(), 0)           # aucune piste de l'album n'a d'invité : rien sous les titres
 
+    def test_the_line_under_a_track_title_follows_the_album_artist(self):
+        self.open("")
+        credit = lambda title, artist, album: self.page.evaluate("([t, a, b]) => Hub.music.credit(t, a, b)", [title, artist, album])
+        self.assertEqual(credit("One More Time", "Daft Punk", "Daft Punk"), {"title": "One More Time", "line": ""})
+        self.assertEqual(credit("Protovision", "Kavinsky feat. Havoc", "Kavinsky"), {"title": "Protovision", "line": "feat. Havoc"})
+        self.assertEqual(credit("Alive 1997 (feat. Quelqu'un)", "Mouss", "mouss "), {"title": "Alive 1997", "line": "feat. Quelqu'un"})
+        self.assertEqual(credit("New Tristram", "Russell Brower, Laurence Juber & Matt Uelmen", "Various Artists"), {"title": "New Tristram", "line": "Russell Brower, Laurence Juber & Matt Uelmen"})
+        self.assertEqual(credit("Titre (feat. Invité)", "Mouss", "Various Artists"), {"title": "Titre", "line": "Mouss feat. Invité"})
+        self.assertEqual(credit("Titre", "", "Various Artists"), {"title": "Titre", "line": ""})
+
+    def set_track_artists(self, album, album_artist, artists):
+        """Donne aux pistes de l'album les artistes `artists` (dans l'ordre) et à l'album l'artiste `album_artist` ; tout est remis après."""
+        db = self.run_.hub.db
+        rows = db.query("SELECT id, meta FROM entries WHERE item_id=? ORDER BY number", (album["id"],))
+        row = db.one("SELECT grp, meta FROM items WHERE id=?", (album["id"],))
+        self.addCleanup(db.execute, "UPDATE items SET grp=?, meta=? WHERE id=?", (row["grp"], row["meta"], album["id"]))
+        for r in rows:
+            self.addCleanup(db.execute, "UPDATE entries SET meta=? WHERE id=?", (r["meta"], r["id"]))
+        for r, artist in zip(rows, artists):
+            meta = json.loads(r["meta"])
+            meta.setdefault("info", {})["artist"] = artist
+            db.execute("UPDATE entries SET meta=? WHERE id=?", (json.dumps(meta), r["id"]))
+        meta = json.loads(row["meta"])
+        meta["artist"] = album_artist
+        db.execute("UPDATE items SET grp=?, meta=? WHERE id=?", (album_artist, json.dumps(meta), album["id"]))
+
+    def test_a_compilation_shows_the_artist_of_each_track_under_its_title(self):
+        album = self.item("musique", "Discovery")
+        self.set_track_artists(album, "Various Artists", ["Russell Brower & Laurence Juber", "Matt Uelmen feat. Quelqu'un", "Daft Punk"])
+        self.open("#/i/" + album["id"])
+        self.view(".trk").first.wait_for()
+        self.assertEqual(self.view(".trk .ti small").all_inner_texts()[:3], ["Russell Brower & Laurence Juber", "Matt Uelmen feat. Quelqu'un", "Daft Punk"])
+
+    def test_an_album_of_one_artist_shows_nothing_under_the_titles_but_the_guests(self):
+        album = self.item("musique", "Discovery")
+        self.set_track_artists(album, "Daft Punk", ["Daft Punk", "Daft Punk feat. Quelqu'un", "daft punk"])
+        self.open("#/i/" + album["id"])
+        self.view(".trk").first.wait_for()
+        self.assertEqual(self.view(".trk .ti small").all_inner_texts(), ["feat. Quelqu'un"])
+
     def test_admin_runs_an_update(self):
         self.open("#/admin")
         self.view(".panel").first.wait_for()

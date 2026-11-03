@@ -19,6 +19,14 @@
     var inArtist = GUEST_ARTIST.exec(artist || ''), inTitle = GUEST_TITLE.exec(title || ''), bare = inTitle ? title.replace(inTitle[0], '').trim() : '';
     return { title: bare || title, guests: inArtist ? inArtist[1] : inTitle ? inTitle[1] : '' };
   };
+  // La ligne sous le titre d'une piste, dans la liste des pistes d'un album : ses artistes quand ils diffèrent de ceux de l'album (une compilation, une bande originale),
+  // et seulement ce qui s'y ajoute (« feat. X ») quand la piste est de l'artiste de l'album.
+  function same(a, b) { return String(a || '').replace(/\s+/g, ' ').trim().toLowerCase() === String(b || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+  M.credit = function (title, artist, albumArtist) {
+    var shown = M.guests(title, artist), found = GUEST_ARTIST.exec(artist || ''), own = (found ? artist.slice(0, found.index) : artist || '').trim();
+    if (!own || same(own, albumArtist)) return { title: shown.title, line: shown.guests ? 'feat. ' + shown.guests : '' };
+    return { title: shown.title, line: own + (shown.guests ? ' feat. ' + shown.guests : '') };
+  };
   function fail(e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.'); }
 
   M.playItem = function (itemId, shuffle) { return M.tracksOf(itemId).then(function (list) { if (list.length) H.audio.play(list, 0, shuffle); }).catch(fail); };
