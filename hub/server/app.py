@@ -1083,7 +1083,7 @@ def video_links(item, meta):
 
 
 ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
-                  "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries")
+                  "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries", "doubts")
 
 
 def tagged_saga(hub, item, movies, seen, info):
@@ -1146,6 +1146,8 @@ def api_item(h, m, q):
         out["poster_custom"] = True
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
+        if hub.db.kv_get(enrich.pin_key(item)):
+            out["tmdb_custom"] = True
     if item["type"] == "movie":
         out.update(movie_sagas(hub, item, lib, h.user["id"]))
     if item["type"] == "album":
@@ -1772,6 +1774,80 @@ def api_item_poster_delete(h, m, q):
     h.discard_body()
     h.hub.images.clear_poster(item["id"])
     h.send_json({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Fiche TMDB d'une série
+# ---------------------------------------------------------------------------
+TMDB_SHOW_RE = re.compile(r"^(?:https?://(?:www\.)?themoviedb\.org/tv/)?([0-9]+)(?:[-/?#].*)?$", re.IGNORECASE)         # un nombre, ou l'adresse de la fiche : « …/tv/4615-hercules-the-legendary-journeys »
+TMDB_RESULTS = 10
+
+
+def tmdb_show(h, ident):
+    """(série, bibliothèque, client TMDB, dossier des affiches) pour choisir sa fiche TMDB (administrateur) ; 400 pour autre chose qu'une série ou une animation, ou sans clé TMDB."""
+    require_admin(h)
+    item = h.hub.item(ident)
+    if item["type"] != "show":
+        h.discard_body()
+        raise HttpError(400, "seules une série ou une animation ont une fiche TMDB à choisir")
+    lib = library_or_404(h.hub, item["lib"])
+    try:
+        client, posters = enrich.tmdb_client(h.hub.cfg)
+    except RuntimeError as e:
+        h.discard_body()
+        raise HttpError(400, str(e))
+    return item, lib, client, posters
+
+
+def tmdb_failure(e):
+    """Un échec de TMDB, rendu en réponse HTTP : 502, avec ce que TMDB a dit."""
+    return HttpError(502, f"TMDB : {e}")
+
+
+@route("GET", r"/api/item/(\w+)/tmdb")
+def api_item_tmdb_search(h, m, q):
+    """Les séries que TMDB propose pour `q` (10 au plus, dans l'ordre de TMDB) : `{"results": [{"tmdb", "name", "year", "overview"}]}`. Administrateur seulement."""
+    _, _, client, _ = tmdb_show(h, m.group(1))
+    query = q.get("q", "").strip()
+    if not query:
+        raise HttpError(400, "q est vide")
+    try:
+        found = client.search_tv(query)
+    except (tmdb.TmdbError, tmdb.TmdbAuthError) as e:
+        raise tmdb_failure(e)
+    h.send_json({"results": [{"tmdb": r["id"], "name": r.get("name") or "", "year": (r.get("first_air_date") or "")[:4], "overview": r.get("overview") or ""} for r in found[:TMDB_RESULTS]]})
+
+
+@route("POST", r"/api/item/(\w+)/tmdb")
+def api_item_tmdb(h, m, q):
+    """Fixe la fiche TMDB d'une série ou d'une animation (`{"tmdb": 4615}`, ou l'adresse de sa fiche) et l'enrichit à nouveau. Le choix reste dans la base du hub : la médiathèque n'est pas touchée. Administrateur seulement."""
+    item, lib, client, posters = tmdb_show(h, m.group(1))
+    found = TMDB_SHOW_RE.match(str(h.body_json().get("tmdb", "")).strip())
+    if not found:
+        raise HttpError(400, "tmdb doit être l'identifiant d'une série TMDB, ou l'adresse de sa fiche")
+    choose_show(h, item, lib, client, posters, int(found.group(1)))
+    h.send_json({"ok": True})
+
+
+@route("POST", r"/api/item/(\w+)/tmdb/delete")
+def api_item_tmdb_delete(h, m, q):
+    """Retire le choix fait à la main : la série retrouve la fiche que donnent son dossier (identifiant épinglé) ou, à défaut, une recherche sur son nom. Administrateur seulement."""
+    item, lib, client, posters = tmdb_show(h, m.group(1))
+    h.discard_body()
+    choose_show(h, item, lib, client, posters, None)
+    h.send_json({"ok": True})
+
+
+def choose_show(h, item, lib, client, posters, show_id):
+    """enrich.choose_show, ses échecs rendus en réponses HTTP : 404 (TMDB ne trouve aucune fiche), 502 (TMDB ne répond pas ou refuse la clé)."""
+    try:
+        found = enrich.choose_show(client, posters, h.hub.db, lib, item, show_id)
+    except (tmdb.TmdbError, tmdb.TmdbAuthError) as e:
+        raise tmdb_failure(e)
+    except OSError as e:
+        raise HttpError(500, f"affiche impossible à écrire : {e}")
+    if found is None:
+        raise HttpError(404, "TMDB ne trouve aucune série pour ce dossier")
 
 
 @route("GET", r"/img/(item|entry)/(\w+)")
