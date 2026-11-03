@@ -66,6 +66,7 @@
 
 ### Interface
 
+- [ ] **L'image de l'en-tête, à gauche, accrochée en haut et non en bas.** Sur toutes les fiches (film, série, animation, album, artiste), l'image de gauche doit partir du **haut** de l'encart, aligné sur le premier titre, et non du bas. Aujourd'hui la grille de l'en-tête aligne ses deux colonnes par le bas (`.hero-in { align-items: end }` dans `hub/web/style.css`), si bien qu'une affiche plus haute que le texte descend avec lui. Probablement une seule règle CSS à changer (`start`), mais à vérifier fiche par fiche (la fiche de l'artiste a sa propre disposition ?) et dans la version téléphone, où l'image est réduite (`.hero-in` à 7 rem). Test : un test d'interface qui compare le haut de l'image au haut du bloc de texte sur chaque type de fiche.
 - [ ] **Réglages d'affichage dans Paramètres, pour tout le monde (administrateur ou non).** Les réglages d'affichage vont dans les Paramètres, qui servent maintenant surtout aux comptes ordinaires : un onglet (ou la suite de *Lecture*) avec
   - **Musique** : la vue ouverte par défaut, *Albums* (valeur d'aujourd'hui) ou *Artistes* ;
   - la place des réglages qu'on ajoutera ensuite (tri par défaut, section ouverte des livres…).
