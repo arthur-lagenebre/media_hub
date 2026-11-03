@@ -336,7 +336,7 @@
           return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label);
         }))));
       }
-      if (!info) body.appendChild(h('p', { class: 'muted' }, H.isAdmin() ? 'Pas encore de fiche : lance « Fiches artistes » dans Gestion pour récupérer le résumé, les membres et les liens.' : 'Pas encore de fiche pour cet artiste.'));
+      if (!info) body.appendChild(h('p', { class: 'muted' }, H.isAdmin() ? 'Pas encore de fiche : lance « Fiches artistes » dans Paramètres > Gestion pour récupérer le résumé, les membres et les liens.' : 'Pas encore de fiche pour cet artiste.'));
       el.appendChild(body);
       H.audio.mark();
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();

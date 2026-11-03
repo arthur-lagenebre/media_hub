@@ -183,11 +183,20 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .panel dl { display: grid; grid-template-columns: max-content 1fr; grid-gap: 0.4rem 1.4rem; margin: 0.5rem 0 0.8rem; }
 .panel dt { color: var(--mute); }
 .panel dd { margin: 0; }
-.job { border-top: 1px solid var(--line); padding: 0.6rem 0; }
-.jt { display: flex; justify-content: space-between; }
+.job { border-top: 1px solid var(--line); padding: 0.3rem 0; }
+.jhead { display: block; width: 100%; background: transparent; border: 0; border-radius: 0.5rem; padding: 0.4rem 0.5rem; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.jhead::before { content: "▸"; display: inline-block; width: 1.1rem; color: var(--mute); }
+.jhead[aria-expanded=true]::before { content: "▾"; }
+.jt { display: inline-flex; width: calc(100% - 1.1rem); justify-content: space-between; }
 .job.running .jt span { color: var(--accent); }
 .job.failed .jt span { color: #ff8b8b; }
-.job pre { margin: 0.4rem 0 0; color: var(--mute); font-size: 0.8rem; white-space: pre-wrap; max-height: 9rem; overflow: auto; }
+.job pre, .job .muted { margin: 0.4rem 0 0.4rem 1.6rem; color: var(--mute); font-size: 0.8rem; white-space: pre-wrap; max-height: 24rem; overflow: auto; }
+
+/* Les onglets des paramètres : restent sous la barre du haut quand la page défile */
+.tabs { position: sticky; top: var(--navh, 3.6rem); z-index: 9; display: flex; flex-wrap: wrap; padding: 0.6rem var(--gut) 0.1rem; margin-bottom: 0.9rem; background: var(--bg); border-bottom: 1px solid var(--line); }
+@media (max-width: 40rem) { .tabs { flex-wrap: nowrap; overflow-x: auto; } .tabs .tab { flex: 0 0 auto; } }          /* sur un téléphone, une seule ligne qui défile plutôt que deux qui mangent l'écran */
+.tab.busy::after { content: ""; display: inline-block; width: 0.5rem; height: 0.5rem; margin-left: 0.5rem; border-radius: 50%; background: var(--accent); }
+.tab.on.busy::after { background: var(--on-accent); }
 
 /* Fenêtres de choix */
 .veil { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(5, 7, 9, 0.78); }

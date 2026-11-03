@@ -249,6 +249,7 @@ class TestDetailPages(UiCase):
         self.open("#/admin")
         self.view(".panel").first.wait_for()
         self.view("button", has_text="Tout mettre à jour").click()
+        self.view(".tabs .tab", has_text="Tâches").click()
         status = self.view(".job", has_text="Mise à jour · tout").locator(".jt span")       # la liste montre d'abord les mises à jour du démarrage, terminées : c'est la nouvelle qu'on attend
         status.wait_for()
         for _ in range(60):
@@ -787,6 +788,127 @@ class TestActionsMenu(UiCase):
         self.choose("Marquer comme vu")
         self.until(lambda: all(all(self.done("films", title)) for title in titles))
         self.until(lambda: self.view(".grid .card.saga .badge.done").count() == 1)
+
+
+class TestSettings(UiCase):
+    """La page « Paramètres » : des onglets en haut, qui restent affichés, au lieu d'une seule longue page de gestion."""
+
+    def tabs(self):
+        return self.view(".tabs .tab").all_inner_texts()
+
+    def tab(self, name):
+        self.view(".tabs .tab", has_text=name).click()
+
+    def titles(self):
+        return self.view(".panel h2").all_inner_texts()
+
+    def test_the_page_is_called_settings_and_opens_on_the_management_tab(self):
+        self.open("#/settings")
+        self.view(".panel").first.wait_for()
+        self.assertEqual(self.view("h1").inner_text(), "Paramètres")
+        self.assertEqual(self.page.locator("#nav .tool[data-nav='#/settings']").get_attribute("aria-label"), "Paramètres")
+        self.assertEqual(self.tabs(), ["Gestion", "Lecture", "Comptes", "Tâches", "Serveur"])
+        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Gestion")
+        self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien"])
+
+    def test_the_old_address_still_leads_to_the_page(self):
+        self.open("#/admin")
+        self.view(".tabs").wait_for()
+        self.assertEqual(self.view("h1").inner_text(), "Paramètres")
+
+    def test_each_tab_has_its_own_panels(self):
+        self.open("#/settings")
+        self.view(".tabs").wait_for()
+        for name, titles in (("Lecture", ["Lecture"]), ("Comptes", ["Mon compte"]), ("Tâches", ["Tâches"]), ("Serveur", ["Serveur"])):
+            self.tab(name)
+            self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == name)
+            self.assertEqual(self.titles(), titles, name)
+        self.tab("Serveur")
+        self.assertIn("Version", self.view("dl").inner_text())
+
+    def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
+        self.page.set_viewport_size({"width": 1280, "height": 300})
+        self.open("#/settings")
+        self.view(".tabs").wait_for()
+        self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        self.page.wait_for_timeout(200)
+        self.assertGreater(self.page.evaluate("window.scrollY"), 50)
+        top = self.view(".tabs").evaluate("el => el.getBoundingClientRect().top")
+        self.assertTrue(0 <= top < 120, top)
+
+    def test_the_tab_chosen_is_remembered(self):
+        self.open("#/settings")
+        self.view(".tabs").wait_for()
+        self.tab("Serveur")
+        self.page.reload()
+        self.view(".tabs").wait_for()
+        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Serveur")
+        self.open("#/settings?tab=comptes")
+        self.view(".tabs").wait_for()
+        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Comptes")
+
+    def test_the_tabs_are_reached_with_the_remote(self):
+        self.open("#/settings?tab=gestion")
+        self.view(".tabs .tab").first.wait_for()
+        self.view(".tabs .tab", has_text="Gestion").focus()
+        self.press("ArrowRight", "Enter", wait=300)
+        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Lecture")
+
+    def test_the_tasks_unfold_one_by_one_or_all_at_once(self):
+        self.open("#/settings")
+        self.view(".tabs").wait_for()
+        self.tab("Tâches")
+        self.view(".job").first.wait_for()
+        jobs = self.view(".job .jhead")
+        total = jobs.count()
+        self.assertGreaterEqual(total, 2)
+        self.assertEqual(self.view(".job .jhead[aria-expanded=true]").count(), 0)
+        jobs.nth(1).click()
+        self.assertEqual(self.view(".job .jhead[aria-expanded=true]").count(), 1)
+        self.view("button", has_text="Tout déplier").click()
+        self.assertEqual(self.view(".job .jhead[aria-expanded=true]").count(), total)
+        self.assertEqual(self.view("button", has_text="Tout replier").count(), 1)
+        self.view("button", has_text="Tout replier").click()
+        self.assertEqual(self.view(".job .jhead[aria-expanded=true]").count(), 0)
+
+    def test_every_task_of_the_history_is_listed_not_only_the_last_six(self):
+        self.open("#/settings?tab=taches")
+        self.view(".job").first.wait_for()
+        listed = self.view(".job").count()
+        self.assertEqual(listed, min(30, len(self.api("/api/jobs")["jobs"])))
+
+
+class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
+    @unittest.skipUnless(sync_playwright, "Playwright absent")
+    def test_only_the_tabs_for_everyone_are_shown(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            run = Running(tmp, password="secret")
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch()
+                context = browser.new_context()
+                base = f"http://127.0.0.1:{run.port}"
+                form = {"Content-Type": "application/x-www-form-urlencoded"}
+                context.request.post(base + "/api/login", data="password=secret", headers=form)
+                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse1", "role": "user"}), headers={"Content-Type": "application/json"})
+                context.request.post(base + "/api/logout")
+                context.clear_cookies()
+                context.request.post(base + "/api/login", data="user=lea&password=motdepasse1", headers=form)
+                page = context.new_page()
+                page.goto(base + "/#/settings")
+                page.wait_for_selector(".tabs .tab")
+                self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Lecture", "Comptes"])
+                page.locator(".tabs .tab", has_text="Comptes").click()
+                page.wait_for_selector(".panel h2")
+                self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte"])
+                page.goto(base + "/#/settings?tab=serveur")                       # un onglet réservé à l'administrateur ne s'ouvre pas
+                shown = page.locator("#views > .view:visible .tabs .tab[aria-selected=true]")       # l'ancienne page reste, cachée, derrière la nouvelle
+                shown.wait_for()
+                self.assertEqual(shown.inner_text(), "Lecture")
+                browser.close()
+            run.stop()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
