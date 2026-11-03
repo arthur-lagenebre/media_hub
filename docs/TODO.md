@@ -38,11 +38,11 @@
 
 ### Global
 
-- [ ] **Télécharger** les films, les séries, les animations, la musique et les livres. Décision prise : **toujours un fichier à la fois, jamais de zip** (une coupure ne fait perdre qu'un fichier, et la reprise se fait par requête `Range`).
+- [x] **Télécharger** les films, les séries, les animations, la musique et les livres (fait ; à essayer sur un vrai navigateur : Chrome et Firefox demandent d'autoriser les téléchargements multiples la première fois). Décision prise : **toujours un fichier à la fois, jamais de zip** (une coupure ne fait perdre qu'un fichier, et la reprise se fait par requête `Range`).
   - Films : un fichier.
   - Séries et animations : un épisode, ou une saison / la série entière ; dans ces deux cas le navigateur enchaîne les téléchargements, un par épisode.
   - Musique et livres : même principe, une piste ou un tome, ou un album / une série de tomes enchaînés.
-  - Serveur : une route (ou une option de `/media`) qui sert le fichier tel quel avec `Content-Disposition: attachment` ; à vérifier si `/media` n'en fait pas déjà assez. L'enchaînement par saison ou album est du ressort de l'interface seule. Vérifier qu'un téléchargement long ne bloque pas les autres requêtes et ne compte pas dans `HUB_MAX_STREAMS`.
+  - Serveur : `/media/<id>/file?download=1` en faisait déjà assez (`Content-Disposition: attachment`, `Range`, hors `HUB_MAX_STREAMS`), rien n'a changé côté serveur. L'enchaînement par saison ou album est du ressort de l'interface seule. Vérifier qu'un téléchargement long ne bloque pas les autres requêtes et ne compte pas dans `HUB_MAX_STREAMS`.
   - Interface : masquer le bouton sur `data-device="tv"` (les navigateurs de télé téléchargent mal). À grouper avec le bouton « … ». Le jeton de média reste global : une URL de téléchargement n'est pas liée au compte.
 
 ### Interface
