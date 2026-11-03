@@ -1082,6 +1082,15 @@ def video_links(item, meta):
     return [{"label": "TMDB", "url": f"{tmdb.WEB_BASE}/{kind}/{found.group(2)}"}]
 
 
+MBID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE)
+
+
+def album_links(meta):
+    """Le lien d'un album vers sa sortie sur MusicBrainz, quand les fichiers en donnent l'identifiant (tous le même) ; vide sinon."""
+    mbid = str(meta.get("mbid") or "")
+    return [{"label": "MusicBrainz", "url": musicbrainz.release_url(mbid)}] if MBID_RE.fullmatch(mbid) else []
+
+
 ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
                   "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries", "doubts")
 
@@ -1137,7 +1146,7 @@ def api_item(h, m, q):
     out = summary(item)
     out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
     out.update({key: meta[key] for key in ITEM_META_KEYS if meta.get(key) not in (None, "", [])})
-    links = video_links(item, meta)
+    links = album_links(meta) if item["type"] == "album" else video_links(item, meta)
     if links:
         out["links"] = links
     out["entries"] = [entry_json(r, progress.get(r["id"])) for r in rows]
