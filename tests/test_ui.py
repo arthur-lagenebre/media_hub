@@ -755,7 +755,7 @@ class TestActionsMenu(UiCase):
     def test_a_film_unknown_to_tmdb_offers_neither(self):
         self.card("films", "Sans Etiquette").locator(".qbtn").click()
         self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
-        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu"])
+        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu", "Télécharger"])
 
     def test_a_show_knows_its_tmdb_page_once_enriched_and_a_saga_never_does(self):
         item = self.item("series", "Dark")
@@ -788,6 +788,113 @@ class TestActionsMenu(UiCase):
         self.choose("Marquer comme vu")
         self.until(lambda: all(all(self.done("films", title)) for title in titles))
         self.until(lambda: self.view(".grid .card.saga .badge.done").count() == 1)
+
+
+class TestDownloads(UiCase):
+    """Télécharger : toujours un fichier à la fois, jamais de zip ; une saison, une série ou un album sont des téléchargements enchaînés."""
+
+    def watch(self):
+        names = []
+        self.page.on("download", lambda d: names.append(d.suggested_filename))
+        return names
+
+    def settled(self, names, expected):
+        self.until(lambda: len(names) >= expected, tries=120)
+        self.page.wait_for_timeout(1800)               # rien de plus que prévu n'arrive ensuite
+        self.assertEqual(len(names), expected, names)
+        return sorted(names)
+
+    def choose(self, label):
+        self.page.locator(".menu .opt", has_text=label).click()
+
+    def count(self, lib, title):
+        return len(self.entries(lib, title))
+
+    def test_a_film_card_downloads_the_file(self):
+        names = self.watch()
+        self.open("#/l/films")
+        card = self.view(f'.card[data-key="{self.item("films", "Inception")["id"]}"]')
+        card.wait_for()
+        card.locator(".qbtn").click()
+        self.choose("Télécharger")
+        self.assertEqual(self.settled(names, 1), ["Inception (2010).mkv"])
+
+    def test_a_film_page_has_a_download_button(self):
+        names = self.watch()
+        self.open("#/i/" + self.item("films", "Inception")["id"])
+        self.view(".actions .btn", has_text="Télécharger").click()
+        self.assertEqual(self.settled(names, 1), ["Inception (2010).mkv"])
+
+    def test_a_show_downloads_one_season_or_all_of_them(self):
+        names = self.watch()
+        self.open("#/i/" + self.item("series", "Dark")["id"])
+        self.view(".actions .btn", has_text="Télécharger").click()
+        self.choose("Saison 1")
+        self.assertEqual(self.settled(names, 2), ["01 - Pilote.mkv", "02 - Suite.mkv"])
+        del names[:]
+        self.view(".actions .btn", has_text="Télécharger").click()
+        self.choose("Toute la série")
+        self.assertEqual(len(self.settled(names, 3)), 3)
+
+    def test_an_episode_has_its_own_download(self):
+        names = self.watch()
+        self.open("#/i/" + self.item("series", "Dark")["id"])
+        self.view(".epmore").first.click()
+        self.choose("Télécharger")
+        self.assertEqual(self.settled(names, 1), ["01 - Pilote.mkv"])
+
+    def test_a_show_card_downloads_every_episode(self):
+        names = self.watch()
+        self.open("#/l/series")
+        card = self.view(f'.card[data-key="{self.item("series", "Dark")["id"]}"]')
+        card.wait_for()
+        card.locator(".qbtn").click()
+        self.choose("Télécharger")
+        self.assertEqual(len(self.settled(names, self.count("series", "Dark"))), 3)
+
+    def test_an_album_downloads_its_tracks_and_a_track_its_own_file(self):
+        names = self.watch()
+        tracks = self.count("musique", "Discovery")
+        self.open("#/i/" + self.item("musique", "Discovery")["id"])
+        self.view(".trk").first.wait_for()
+        self.view(".actions .btn", has_text="Télécharger").click()
+        self.assertEqual(len(self.settled(names, tracks)), tracks)
+        del names[:]
+        self.view(".trkmore").first.click()
+        self.choose("Télécharger")
+        self.assertEqual(len(self.settled(names, 1)), 1)
+
+    def test_a_book_series_downloads_its_volumes_and_a_volume_its_own_file(self):
+        names = self.watch()
+        volumes = self.count("livres", "Naruto")
+        self.open("#/i/" + self.item("livres", "Naruto")["id"])
+        self.view(".volumes .card").first.wait_for()
+        self.view(".actions .btn", has_text="Télécharger").click()
+        self.assertEqual(len(self.settled(names, volumes)), volumes)
+        del names[:]
+        self.view(".volumes .card .qbtn").first.click()
+        self.choose("Télécharger")
+        self.assertEqual(len(self.settled(names, 1)), 1)
+
+    def test_the_download_is_a_whole_file_with_its_ranges_and_never_counts_as_a_conversion(self):
+        entry = self.entries("films", "Inception")[0]["id"]
+        req = urllib.request.Request(self.base + f"/media/{entry}/file?download=1", headers={"Range": "bytes=0-9"})
+        reply = urllib.request.urlopen(req)
+        self.assertEqual(reply.status, 206)
+        self.assertIn("attachment", reply.headers["Content-Disposition"])
+        self.assertEqual(self.api("/api/state")["streams"], 0)
+
+    def test_a_television_is_not_offered_downloads(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.open("#/i/" + self.item("films", "Inception")["id"])
+        self.view(".actions").wait_for()
+        self.assertEqual(self.view(".actions .btn", has_text="Télécharger").count(), 0)
+        self.open("#/l/films")
+        card = self.view(f'.card[data-key="{self.item("films", "Inception")["id"]}"]')
+        card.wait_for()
+        card.click(button="right")
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        self.assertEqual(self.page.locator(".menu .opt", has_text="Télécharger").count(), 0)
 
 
 class TestSettings(UiCase):
