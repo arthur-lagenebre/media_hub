@@ -48,8 +48,9 @@
 
 ### Musique
 
-- [ ] **La bibliothèque de musique par artiste.** Aujourd'hui la page montre tous les albums, regroupés sous le nom de leur artiste. À la place : la liste des **artistes seulement**, sans leurs albums, chacun avec **la photo qu'on a choisie pour lui** (*Changer la photo*, *Recadrer*, photo de Wikipédia : `GET /img/artist/<lib>/<id>`), et à défaut la pochette de son premier album. Un clic ouvre la fiche de l'artiste, où sont ses albums.
-  - À trancher : remplacer la vue actuelle, ou l'offrir en choix à côté (un réglage « Artistes / Albums », comme « Sagas » pour les films) ; et si les albums sans artiste (« Artiste inconnu ») ont leur carte.
+- [ ] **La bibliothèque de musique par artiste.** Aujourd'hui la page montre tous les albums, regroupés sous le nom de leur artiste. En plus, au choix : la liste des **artistes seulement**, sans leurs albums, chacun avec **la photo qu'on a choisie pour lui** (*Changer la photo*, *Recadrer*, photo de Wikipédia : `GET /img/artist/<lib>/<id>`), et à défaut la pochette de son premier album. Un clic ouvre la fiche de l'artiste, où sont ses albums.
+  - Décidé : **les deux vues coexistent**, et c'est la personne qui choisit entre « Artistes » et « Albums » (un réglage dans la barre d'outils de la page, comme « Sagas » pour les films, retenu d'une visite à l'autre). La vue actuelle ne disparaît pas.
+  - À trancher : la vue ouverte par défaut, si le choix se retient par appareil (comme « Sagas ») ou par compte, et si les albums sans artiste (« Artiste inconnu ») ont leur carte.
   - Côté serveur, la liste de la bibliothèque rend des albums : il faudra une liste d'artistes (nom, nombre d'albums, présence d'une photo), avec les filtres qui existent déjà (lettre, genre, recherche).
   - Côté interface : une carte ronde ou carrée par artiste, la photo chargée par `/img/artist/...` (le cache d'images en tient déjà compte), le focus à la télécommande comme les autres cartes.
 
