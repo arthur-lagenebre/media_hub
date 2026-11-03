@@ -207,5 +207,14 @@ class TestProgress(TempCase):
         self.assertEqual(self.db.progress_for("p", []), {})
 
 
+class TestKeyValueDelete(TempCase):
+    def test_a_deleted_key_is_gone_and_the_others_stay(self):
+        self.db.kv_set("a", 1)
+        self.db.kv_set("b", 2)
+        self.db.kv_delete("a")
+        self.db.kv_delete("absente")
+        self.assertEqual((self.db.kv_get("a"), self.db.kv_get("b")), (None, 2))
+
+
 if __name__ == "__main__":
     unittest.main()

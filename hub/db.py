@@ -166,6 +166,9 @@ class Database:
     def kv_set(self, key, value):
         self.execute("INSERT INTO kv(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, json.dumps(value, ensure_ascii=False)))
 
+    def kv_delete(self, key):
+        self.execute("DELETE FROM kv WHERE key=?", (key,))
+
     # --- Scans ---------------------------------------------------------------
     def known_entries(self, lib):
         """{rel: Row} des entrées d'une bibliothèque : de quoi ne relire que les fichiers qui ont bougé."""
