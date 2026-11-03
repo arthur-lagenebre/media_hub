@@ -229,23 +229,30 @@ class Images:
         return None
 
     def item_source(self, lib, item):
+        """Octets de l'image d'un item : la première de ses sources qui en donne une."""
         custom = self._custom_poster(item["id"])
         if custom:
             return custom
         meta = json.loads(item["meta"])
-        entries = self.db.query("SELECT * FROM entries WHERE item_id=? ORDER BY season, disc, number, rel LIMIT 4", (item["id"],))
-        base = Path(lib.path)
-        if item["type"] == "album":       # cover.{ext} du dossier, rien d'autre : ni folder.jpg, ni pochette embarquée dans les pistes
-            return self._from_image_file(base / meta.get("folder", "") / meta["cover_file"]) if meta.get("cover_file") else None
-        if meta.get("poster_file"):
-            data = self._from_image_file(self.cfg.data / "tmdb" / meta["poster_file"])
-            if data:
-                return data
-        if meta.get("image"):
-            data = self._from_image_file(base / meta["image"])
-            if data:
-                return data
-        for entry in entries:
+        if item["type"] == "album":
+            return self._album_cover(lib, meta)
+        return self._kept_poster(meta) or self._folder_image(lib, meta) or self._first_entry_image(lib, item)
+
+    def _album_cover(self, lib, meta):
+        """cover.{ext} du dossier, rien d'autre : ni folder.jpg, ni pochette embarquée dans les pistes."""
+        return self._from_image_file(Path(lib.path) / meta.get("folder", "") / meta["cover_file"]) if meta.get("cover_file") else None
+
+    def _kept_poster(self, meta):
+        """L'affiche TMDB gardée par l'enrichissement (HUB_DATA/tmdb)."""
+        return self._from_image_file(self.cfg.data / "tmdb" / meta["poster_file"]) if meta.get("poster_file") else None
+
+    def _folder_image(self, lib, meta):
+        """folder.jpg (ou poster.png...) posée à côté du film ou de la série."""
+        return self._from_image_file(Path(lib.path) / meta["image"]) if meta.get("image") else None
+
+    def _first_entry_image(self, lib, item):
+        """L'image du premier fichier qui en a une (la jaquette d'un .mkv, la vignette d'un épisode, la couverture d'un tome)."""
+        for entry in self.db.query("SELECT * FROM entries WHERE item_id=? ORDER BY season, disc, number, rel LIMIT 4", (item["id"],)):
             data = self.entry_source(lib, entry)
             if data:
                 return data

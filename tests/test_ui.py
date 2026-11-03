@@ -157,12 +157,7 @@ class TestNavigation(UiCase):
         total = self.view(".grid .card").count()
         self.view("input[type=search]").fill("dceu")
         self.page.wait_for_timeout(700)
-        self.assertEqual(self.view(".grid .card.saga").count(), 1)          # les sagas sont regroupées par défaut : une seule vignette
-        self.view(".tools .btn", has_text="Sagas").click()
-        self.page.wait_for_timeout(500)
-        self.assertEqual(self.view(".grid .card").count(), 2)               # sagas dépliées : les deux films
-        self.view(".tools .btn", has_text="Sagas").click()
-        self.page.wait_for_timeout(500)
+        self.assertEqual(self.view(".grid .card.saga").count(), 1)          # les films sont regroupés en sagas : une seule vignette
         self.view("input[type=search]").fill("")
         self.page.wait_for_timeout(700)
         self.assertEqual(self.view(".grid .card").count(), total)
@@ -253,6 +248,46 @@ class TestDetailPages(UiCase):
         self.assertEqual(guests("Alive 1997 (feat. Quelqu'un)", "Mouss"), {"title": "Alive 1997", "guests": "Quelqu'un"})
         self.assertEqual(guests("One More Time", "Daft Punk"), {"title": "One More Time", "guests": ""})
         self.assertEqual(self.view(".trk .ti small").count(), 0)           # aucune piste de l'album n'a d'invité : rien sous les titres
+
+    def test_the_line_under_a_track_title_follows_the_album_artist(self):
+        self.open("")
+        credit = lambda title, artist, album: self.page.evaluate("([t, a, b]) => Hub.music.credit(t, a, b)", [title, artist, album])
+        self.assertEqual(credit("One More Time", "Daft Punk", "Daft Punk"), {"title": "One More Time", "line": ""})
+        self.assertEqual(credit("Protovision", "Kavinsky feat. Havoc", "Kavinsky"), {"title": "Protovision", "line": "feat. Havoc"})
+        self.assertEqual(credit("Alive 1997 (feat. Quelqu'un)", "Mouss", "mouss "), {"title": "Alive 1997", "line": "feat. Quelqu'un"})
+        self.assertEqual(credit("New Tristram", "Russell Brower, Laurence Juber & Matt Uelmen", "Various Artists"), {"title": "New Tristram", "line": "Russell Brower, Laurence Juber & Matt Uelmen"})
+        self.assertEqual(credit("Titre (feat. Invité)", "Mouss", "Various Artists"), {"title": "Titre", "line": "Mouss feat. Invité"})
+        self.assertEqual(credit("Titre", "", "Various Artists"), {"title": "Titre", "line": ""})
+
+    def set_track_artists(self, album, album_artist, artists):
+        """Donne aux pistes de l'album les artistes `artists` (dans l'ordre) et à l'album l'artiste `album_artist` ; tout est remis après."""
+        db = self.run_.hub.db
+        rows = db.query("SELECT id, meta FROM entries WHERE item_id=? ORDER BY number", (album["id"],))
+        row = db.one("SELECT grp, meta FROM items WHERE id=?", (album["id"],))
+        self.addCleanup(db.execute, "UPDATE items SET grp=?, meta=? WHERE id=?", (row["grp"], row["meta"], album["id"]))
+        for r in rows:
+            self.addCleanup(db.execute, "UPDATE entries SET meta=? WHERE id=?", (r["meta"], r["id"]))
+        for r, artist in zip(rows, artists):
+            meta = json.loads(r["meta"])
+            meta.setdefault("info", {})["artist"] = artist
+            db.execute("UPDATE entries SET meta=? WHERE id=?", (json.dumps(meta), r["id"]))
+        meta = json.loads(row["meta"])
+        meta["artist"] = album_artist
+        db.execute("UPDATE items SET grp=?, meta=? WHERE id=?", (album_artist, json.dumps(meta), album["id"]))
+
+    def test_a_compilation_shows_the_artist_of_each_track_under_its_title(self):
+        album = self.item("musique", "Discovery")
+        self.set_track_artists(album, "Various Artists", ["Russell Brower & Laurence Juber", "Matt Uelmen feat. Quelqu'un", "Daft Punk"])
+        self.open("#/i/" + album["id"])
+        self.view(".trk").first.wait_for()
+        self.assertEqual(self.view(".trk .ti small").all_inner_texts()[:3], ["Russell Brower & Laurence Juber", "Matt Uelmen feat. Quelqu'un", "Daft Punk"])
+
+    def test_an_album_of_one_artist_shows_nothing_under_the_titles_but_the_guests(self):
+        album = self.item("musique", "Discovery")
+        self.set_track_artists(album, "Daft Punk", ["Daft Punk", "Daft Punk feat. Quelqu'un", "daft punk"])
+        self.open("#/i/" + album["id"])
+        self.view(".trk").first.wait_for()
+        self.assertEqual(self.view(".trk .ti small").all_inner_texts(), ["feat. Quelqu'un"])
 
     def test_admin_runs_an_update(self):
         self.open("#/admin")
@@ -388,15 +423,16 @@ class TestSagasInLibrary(UiCase):
         self.press("Escape", wait=500)
         self.assertTrue(self.page.url.endswith("#/l/films"))
 
-    def test_the_sagas_choice_is_remembered(self):
+    def test_the_films_are_always_grouped_in_sagas_and_there_is_no_button_to_undo_it(self):
         self.open("#/l/films")
         self.view(".grid .card.saga").first.wait_for()
-        self.view(".tools .btn", has_text="Sagas").click()
-        self.page.wait_for_timeout(500)
-        self.assertEqual(self.view(".grid .card.saga").count(), 0)
-        self.page.reload()
-        self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.view(".grid .card.saga").count(), 0)
+        self.assertEqual(self.view(".tools .btn", has_text="Sagas").count(), 0)
+
+    def test_the_old_choice_not_to_group_is_ignored(self):
+        self.page.add_init_script("localStorage.setItem('hub.sagas.films', JSON.stringify('0'))")
+        self.open("#/l/films")
+        self.view(".grid .card.saga").first.wait_for()
+        self.assertEqual(self.view(".grid .card.saga").count(), 1)
 
 
 class TestSagaEditor(UiCase):
@@ -1073,6 +1109,30 @@ class TestTmdbSheet(UiCase):
         self.open("#/i/" + self.dark["id"])
         self.view(".actions .btn").first.wait_for()
         self.assertEqual(self.view(".actions .btn", has_text="Changer la fiche TMDB").count(), 0)
+
+
+class TestHeroImage(UiCase):
+    """L'image de gauche de l'en-tête d'une fiche part du haut de l'encart, même quand le texte à côté est plus haut qu'elle."""
+
+    def gap(self, target):
+        self.open(target)
+        self.view(".hero-in").wait_for()
+        return self.view(".hero-in").evaluate("el => el.firstElementChild.getBoundingClientRect().top - el.getBoundingClientRect().top")
+
+    def pages(self):
+        album = self.item("musique", "Discovery")
+        return {"film": "#/i/" + self.item("films", "Inception")["id"], "série": "#/i/" + self.item("series", "Dark")["id"], "album": "#/i/" + album["id"],
+                "artiste": "#/artist/musique/" + self.api("/api/item/" + album["id"])["artist_id"], "saga": "#/saga/films?g=Saga%20DCEU"}
+
+    def test_the_image_starts_at_the_top_on_every_kind_of_page(self):
+        self.page.set_viewport_size({"width": 1000, "height": 800})            # des boutons qui passent à la ligne : le texte est plus haut que l'image
+        for name, target in self.pages().items():
+            self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
+
+    def test_and_on_a_phone(self):
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        for name, target in self.pages().items():
+            self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
 
 
 class TestSettings(UiCase):
