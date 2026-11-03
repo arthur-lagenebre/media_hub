@@ -24,7 +24,7 @@
 
 ### Films
 
-- [ ] **Bouton « … » sur les films et les sagas** : *Voir / Revoir*, *Marquer vu / non vu*, *Ajouter à une saga*, *TMDB*.
+- [ ] **Bouton « … » sur les films et les sagas** : *Voir / Revoir* et *Marquer vu / non vu* sont faits (carte, clic droit, touche « Menu »). Reste *Ajouter à une saga* et *TMDB*.
 - [ ] **Changer les affiches** (pour le confort, le hub est le seul lecteur visé). Aujourd'hui le hub ne garde jamais l'original d'un film : il le relit dans la médiathèque, `folder.jpg` à côté du film, sinon la jaquette embarquée dans le `.mkv` (`hub/media/images.py`, `item_source`). Seules les versions réduites vivent dans `HUB_DATA/img`, et l'affiche TMDB de `HUB_DATA/tmdb/` ne concerne que les séries et les animations. À décider avant de commencer :
   - *Dans `HUB_DATA`* (avis : préférable si le hub est le seul lecteur) : l'affiche choisie est gardée comme celle des séries (`poster_file`). Rien n'est écrit dans la médiathèque, le `:ro` du volume `Films` ne gêne pas, l'invariant « le hub n'écrit pas dans la médiathèque » est respecté. Coût : un autre lecteur (Jellyfin, Kodi) ne la verrait pas.
   - *`folder.jpg` à côté du film* : passe déjà devant la jaquette du `.mkv`, visible par d'autres lecteurs. Coût : nouvelle exception à l'invariant d'écriture, volume `Films` à passer en lecture-écriture, et le cache d'images doit tenir compte de la date de `folder.jpg` (aujourd'hui seule la pochette d'un album entre dans la clé, `_cover_stamp`).
@@ -32,9 +32,9 @@
 
 ### Séries et animations
 
-- [ ] **Bouton « … » sur les séries et les animations** : *Voir / Revoir*, *Marquer vu / non vu*, *TMDB*.
-- [ ] **Changer les textes** : « Marquer comme vu » / « Marquer non vu » deviennent « Marquer toutes les saisons comme vu » / « Marquer toutes les saisons non vu ».
-- [ ] **« Marquer comme vu » / « Marquer non vu » sur chaque épisode**, éventuellement derrière un bouton « … ».
+- [ ] **Bouton « … » sur les séries et les animations** : *Voir / Revoir* et *Marquer vu / non vu* sont faits. Reste *TMDB*.
+- [x] **Changer les textes** : « Marquer comme vu » / « Marquer non vu » deviennent « Marquer toutes les saisons comme vu » / « Marquer toutes les saisons non vu ».
+- [x] **« Marquer comme vu » / « Marquer non vu » sur chaque épisode**, éventuellement derrière un bouton « … ».
 
 ### Global
 
