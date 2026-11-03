@@ -726,12 +726,30 @@
       body.appendChild(server);
     }
     // Supprimer les fichiers parasites ne s'annule pas : on demande, en rappelant ce que la dernière simulation en a compté.
+    // « Compter » relance une simulation depuis la fenêtre et en met le nombre à jour sans la fermer.
     function confirmCleanup() {
       var sim = jobs.filter(function (j) { return j.status === 'done' && j.result && j.label.indexOf('simulation') >= 0; })[0];
-      var detail = sim ? 'La dernière simulation en a compté ' + sim.result.found : 'Lance « Compter » d’abord pour savoir combien';
-      H.menu('Supprimer les fichiers parasites ?', [{ label: 'Supprimer définitivement', detail: detail, value: 'yes' }, { label: 'Annuler', value: 'no' }], 'no', function (v) {
-        if (v === 'yes') start('/api/cleanup', { apply: true }, 'Nettoyage lancé');
-      });
+      var counting = false;
+      function said(found) { return found === 1 ? 'La dernière simulation en a compté 1.' : 'La dernière simulation en a compté ' + found + '.'; }
+      var count = h('p', { class: 'lead', role: 'status' }, sim ? said(sim.result.found) : 'Aucune simulation faite : lance « Compter » pour savoir combien il y en a.');
+      var recount = H.button('Compter', null, { 'data-key': 'junk-recount', 'aria-label': 'Compter de nouveau les fichiers parasites', onclick: function () {
+        if (counting) return;
+        counting = true; count.textContent = 'Comptage en cours…';
+        function wait(id) {
+          return H.api('/api/jobs').then(function (r) {
+            var job = r.jobs.filter(function (j) { return j.id === id; })[0];
+            if (job && (job.status === 'waiting' || job.status === 'running')) return new Promise(function (go) { setTimeout(function () { go(wait(id)); }, 700); });
+            return job;
+          });
+        }
+        H.api('/api/cleanup', {}).then(function (r) { return wait(r.job.id); }).then(function (job) {
+          count.textContent = job && job.status === 'done' && job.result ? said(job.result.found) : 'Le comptage a échoué : voir l’onglet Tâches.';
+        }, function (e) { count.textContent = e.message; }).then(function () { counting = false; poll(); });
+      } });
+      dialog({ title: 'Supprimer les fichiers parasites ?', ok: 'Supprimer définitivement', danger: true, fields: [],
+        lead: ['Les fichiers parasites seront supprimés de la médiathèque, et cela ne s’annule pas.'], extra: [count, recount],
+        submit: function () { return H.api('/api/cleanup', { apply: true }); },
+        done: function () { H.toast('Nettoyage lancé'); poll(); } });
     }
     // Le compte connecté : nom, rôle, changement de mot de passe, déconnexion. Serveur ouvert : comment créer le premier compte.
     function accountPanel() {
