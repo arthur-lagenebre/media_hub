@@ -595,5 +595,43 @@ class TestTmdbSheetRoutes(RouteCase):
         self.client.search_tv.assert_not_called()
 
 
+class TestSettingsRoutes(RouteCase):
+    def setUp(self):
+        super().setUp()
+        self.alice = accounts.create(self.db, "alice", "motdepasse1")
+        self.bob = accounts.create(self.db, "bob", "motdepasse1")
+
+    def as_(self, who):
+        return self.hub.cookie(who)
+
+    def test_the_settings_of_an_account_start_at_the_defaults(self):
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums"}})
+
+    def test_a_choice_is_kept_for_the_account_that_made_it(self):
+        reply = self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
+        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists"}}))
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "artists")
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.alice)).json()["settings"]["music_view"], "albums")
+
+    def test_the_state_carries_the_settings_so_the_page_needs_no_second_call(self):
+        self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums"})
+
+    def test_a_wrong_setting_is_a_400_with_the_reason(self):
+        for body, reason in (({"couleur": "rouge"}, "réglage inconnu"), ({"music_view": "mosaique"}, "valeur inconnue"), ({}, "aucun réglage")):
+            reply = self.post("/api/me/settings", body, headers=self.as_(self.bob))
+            self.assertEqual(reply.status, 400, body)
+            self.assertIn(reason, reply.json()["error"])
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "albums")
+
+    def test_an_open_server_has_one_profile_with_its_own_settings(self):
+        (self.root / "ouvert").mkdir()
+        (self.root / "ouvert" / "web").mkdir()
+        hub = MiniHub(self.root / "ouvert", [])
+        self.assertEqual(call(hub, "POST", "/api/me/settings", {"music_view": "artists"})[1].json()["settings"]["music_view"], "artists")
+        self.assertEqual(call(hub, "GET", "/api/state")[1].json()["settings"]["music_view"], "artists")
+
+
 if __name__ == "__main__":
     unittest.main()

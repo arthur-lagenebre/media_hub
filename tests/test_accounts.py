@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hub import accounts
+from hub import accounts, prefs
 from hub.accounts import AccountError
 from hub.db import Database
 
@@ -46,6 +46,19 @@ class TestCreate(unittest.TestCase):
         for password in ("", None, 1234, b"octets"):
             self.assertIn("mot de passe vide", self.refused(lambda: accounts.create(self.db, "alice", password, check=False)), repr(password))
         self.assertEqual(accounts.rows(self.db), [])
+
+
+class TestDeleteKeepsNothingOfTheAccount(unittest.TestCase):
+    def test_the_settings_of_a_deleted_account_go_with_it(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        db = Database(root / "hub.db")
+        accounts.create(db, "alice", "un-mot-de-passe")
+        bob = accounts.create(db, "bob", "un-mot-de-passe")
+        db.kv_set(prefs.KEY + bob["id"], {"music_view": "artists"})
+        db.kv_set(prefs.KEY + accounts.FIRST_ID, {"music_view": "artists"})
+        accounts.delete(db, bob["id"])
+        self.assertEqual((db.kv_get(prefs.KEY + bob["id"]), db.kv_get(prefs.KEY + accounts.FIRST_ID)), (None, {"music_view": "artists"}))
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ from .. import countries
 from .. import enrich
 from .. import missing
 from .. import playlists
+from .. import prefs
 from .. import urls
 from .. import sagas as sagafile
 from ..sagas import Sagas
@@ -652,6 +653,22 @@ def api_me_password(h, m, q):
     h.send_json(out, 200, headers)
 
 
+@route("GET", r"/api/me/settings")
+def api_me_settings(h, m, q):
+    """Les réglages d'affichage du compte (gardés sur le serveur : ils le suivent d'un appareil à l'autre)."""
+    h.send_json({"settings": prefs.load(h.hub.db, h.user["id"])})
+
+
+@route("POST", r"/api/me/settings")
+def api_me_settings_save(h, m, q):
+    """Change un ou plusieurs réglages du compte, `{"music_view": "artists"}` ; rend tous les réglages. 400 pour un réglage ou une valeur inconnus."""
+    try:
+        settings = prefs.save(h.hub.db, h.user["id"], h.body_json())
+    except ValueError as e:
+        raise HttpError(400, str(e))
+    h.send_json({"settings": settings})
+
+
 @route("GET", r"/api/logout")
 def logout(h, m, q):
     h.send_body(b"", "text/plain", 303, {"Location": "/login", "Set-Cookie": "hub=; Path=/; Max-Age=0"})
@@ -692,7 +709,7 @@ def api_state(h, m, q):
         count = hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]
         libs.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir()})
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
-                 "auth": hub.auth(), "user": h.user, "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
+                 "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
 
 
 def next_entry(hub, entry):

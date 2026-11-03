@@ -16,6 +16,8 @@ import secrets
 import threading
 import time
 
+from . import prefs
+
 FIRST_ID = "default"
 ROLES = ("admin", "user")
 MIN_PASSWORD = 8
@@ -259,6 +261,7 @@ def delete(db, uid):
             conn.execute("DELETE FROM playlists WHERE profile=?", (uid,))
             prefix = f"dismiss:{uid}:"
             conn.execute("DELETE FROM kv WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
+            conn.execute("DELETE FROM kv WHERE key=?", (prefs.KEY + uid,))
             conn.execute("DELETE FROM users WHERE id=?", (uid,))
             conn.commit()
         except Exception:
