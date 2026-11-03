@@ -380,6 +380,7 @@
       }
       if (d.type !== 'album' && entries.length) actions.appendChild(H.button(H.actions.seenLabel(d.type, allDone), 'check', { onclick: function () { setSeen(!allDone); } }));
       if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) actions.appendChild(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
+      if (entries.length && H.actions.canDownload()) actions.appendChild(H.button(d.type === 'album' ? 'Télécharger l’album' : 'Télécharger', 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
       (d.links || []).forEach(function (l) { actions.appendChild(h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label)); });
       info.appendChild(actions);
       var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),
@@ -477,6 +478,7 @@
       d.entries.forEach(function (e) {
         var p = entryProgress(e), done = e.progress && e.progress.done;
         var pic = H.picture('/img/entry/' + e.id + '?w=300', e.title || d.title);
+        if (H.actions.canDownload()) pic.appendChild(H.actions.entryTools(e, load));
         if (done) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
         else if (p) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(Math.min(1, p.position / Math.max(1, p.duration || 1)) * 100) + '%' })));
         grid.appendChild(h('a', { class: 'card f', href: playHref(e), 'data-key': e.id }, pic, h('div', { class: 't' }, e.label ? 'N° ' + e.label : (e.title || '')), h('div', { class: 's' }, [(e.format || '').toUpperCase(), e.pages ? e.pages + ' p.' : ''].filter(Boolean).join(' · '))));

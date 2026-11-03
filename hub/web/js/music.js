@@ -47,8 +47,9 @@
     H.menu(title, [
       { label: 'Lire l’album', value: 'play' }, { label: 'Lecture aléatoire', value: 'shuffle' },
       { label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }, { label: 'Ajouter à une playlist…', value: 'list' }
-    ], null, function (v) {
-      if (v === 'play') M.playItem(itemId);
+    ].concat(H.actions.canDownload() ? [{ label: 'Télécharger l’album', value: 'download' }] : []), null, function (v) {
+      if (v === 'download') M.tracksOf(itemId).then(function (list) { H.actions.download(list.map(function (t) { return t.id; })); }).catch(fail);
+      else if (v === 'play') M.playItem(itemId);
       else if (v === 'shuffle') M.playItem(itemId, true);
       else if (v === 'next' || v === 'end') M.queueItem(itemId, v, title);
       else M.tracksOf(itemId).then(function (list) { M.addToPlaylist(list.map(function (t) { return t.id; }), title); }).catch(fail);
@@ -56,9 +57,10 @@
   };
   // `extra` : actions propres à l'endroit où l'on est (dans une playlist : monter, descendre, retirer) : [{label, value, run}]
   M.trackMenu = function (track, extra) {
-    var options = [{ label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }, { label: 'Ajouter à une playlist…', value: 'list' }].concat(extra || []);
+    var options = [{ label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }, { label: 'Ajouter à une playlist…', value: 'list' }].concat(H.actions.canDownload() ? [{ label: 'Télécharger', value: 'download' }] : [], extra || []);
     H.menu(track.title, options, null, function (v) {
-      if (v === 'next' || v === 'end') queueTracks([track], v, track.title);
+      if (v === 'download') H.actions.download([track.id]);
+      else if (v === 'next' || v === 'end') queueTracks([track], v, track.title);
       else if (v === 'list') M.addToPlaylist([track.id], track.title);
       else (extra || []).forEach(function (x) { if (x.value === v) x.run(); });
     });

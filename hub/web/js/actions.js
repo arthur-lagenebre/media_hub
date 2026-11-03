@@ -47,10 +47,12 @@
     var options = [{ label: done ? 'Revoir' : (it.seen || it.started ? 'Reprendre' : 'Voir'), value: 'play' }, { label: A.seenLabel(it.type, done), value: 'seen' }];
     if (it.type === 'movie' && d && d.tmdb && H.isAdmin() && H.sagas) options.push({ label: 'Ajouter à une saga', value: 'saga' });      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
     if (tmdb) options.push({ label: 'TMDB', detail: 'Ouvre la fiche dans un nouvel onglet', value: 'tmdb' });
+    if (d && d.entries && d.entries.length && A.canDownload()) options.push({ label: 'Télécharger', detail: d.entries.length > 1 ? d.entries.length + ' fichiers, l’un après l’autre' : '', value: 'download' });
     H.menu(it.title, options, null, function (v) {
       if (v === 'play') (it.type === 'saga' ? playSaga : play)(it, done).catch(fail);
       else if (v === 'saga') H.sagas.addTo(d, refresh);
       else if (v === 'tmdb') window.open(tmdb.url, '_blank', 'noopener');
+      else if (v === 'download') A.download(d.entries.map(function (e) { return e.id; }));
       else mark(it, !done).then(refresh).catch(fail);
     });
   }
@@ -72,11 +74,51 @@
     card.addEventListener('keydown', function (e) { if (e.key === 'ContextMenu' || e.keyCode === 93) { e.preventDefault(); A.menu(it); } });
   };
 
+  // --- Télécharger ----------------------------------------------------------------------
+  // Toujours un fichier à la fois, jamais de zip : une coupure ne fait perdre qu'un fichier, et la reprise passe par `Range`.
+  // Plusieurs fichiers (une saison, une série, un album) : on les demande l'un après l'autre ; le navigateur peut demander d'autoriser les téléchargements multiples la première fois.
+  var GAP = 1200;
+  A.canDownload = function () { return H.device !== 'tv'; };        // les navigateurs de télé téléchargent mal
+  A.download = function (ids) {
+    ids.forEach(function (id, i) {
+      setTimeout(function () {
+        var link = document.createElement('a');
+        link.href = '/media/' + id + '/file?download=1';
+        link.setAttribute('download', '');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }, i * GAP);
+    });
+    H.toast(ids.length > 1 ? 'Téléchargement de ' + ids.length + ' fichiers, l’un après l’autre' : 'Téléchargement lancé', 4000);
+  };
+  // Le bouton de la fiche : une série à plusieurs saisons demande laquelle.
+  A.downloadItem = function (d) {
+    function ids(entries) { return entries.map(function (e) { return e.id; }); }
+    var seasons = d.type === 'show' && d.seasons ? d.seasons.filter(function (s) { return d.entries.some(function (e) { return e.season === s; }); }) : [];
+    if (seasons.length < 2) { A.download(ids(d.entries)); return; }
+    var options = [{ label: 'Toute la série', detail: H.plural(d.entries.length, 'épisode'), value: 'all' }].concat(seasons.map(function (s) {
+      var of = d.entries.filter(function (e) { return e.season === s; });
+      return { label: s === 0 ? 'Spéciaux' : 'Saison ' + s, detail: H.plural(of.length, 'épisode'), value: String(s) };
+    }));
+    H.menu('Télécharger', options, null, function (v) {
+      A.download(ids(v === 'all' ? d.entries : d.entries.filter(function (e) { return String(e.season) === v; })));
+    });
+  };
+  // Le bouton « … » d'une couverture de tome : le même menu que celui d'un épisode.
+  A.entryTools = function (e, done) {
+    return h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Plus d’actions', title: 'Plus d’actions',
+      onclick: function (ev) { ev.preventDefault(); ev.stopPropagation(); A.episodeMenu(e, done); } }, H.icon('more')));
+  };
+
   // Le menu d'un épisode : `done` est appelé une fois l'épisode marqué.
   A.episodeMenu = function (e, done) {
     var seen = !!(e.progress && e.progress.done);
-    H.menu(e.title || 'Épisode', [{ label: seen ? 'Revoir' : 'Lire', value: 'play' }, { label: A.seenLabel('episode', seen), value: 'seen' }], null, function (v) {
+    var options = [{ label: seen ? 'Revoir' : 'Lire', value: 'play' }, { label: A.seenLabel('episode', seen), value: 'seen' }];
+    if (A.canDownload()) options.push({ label: 'Télécharger', value: 'download' });
+    H.menu(e.title || 'Épisode', options, null, function (v) {
       if (v === 'play') H.go(H.playHref(e, seen ? 0 : undefined));
+      else if (v === 'download') A.download([e.id]);
       else H.api('/api/entry/' + e.id + '/seen', { done: !seen }).then(done).catch(fail);
     });
   };
