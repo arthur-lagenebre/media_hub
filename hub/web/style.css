@@ -312,6 +312,9 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .trk .ti { display: flex; flex-direction: column; }
 .trk .ti small { color: var(--mute); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; }
 .btn.trkmore { background: transparent; padding: 0.5rem; margin-left: 0.2rem; }
+.epwrap { position: relative; }
+.epwrap .ep { padding-right: 4rem; }
+.btn.epmore { position: absolute; right: 0.9rem; top: 50%; transform: translateY(-50%); background: transparent; padding: 0.5rem; }
 #abar .qn { margin-left: 0.3rem; font-size: 0.75rem; color: var(--mute); font-variant-numeric: tabular-nums; }
 .menu.queue { width: min(46rem, 94vw); }
 .qlist { min-height: 4rem; }

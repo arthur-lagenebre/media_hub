@@ -69,6 +69,8 @@
     a.appendChild(h('div', { class: 't' }, it.title));
     var years = it.years && it.years.length ? (it.years[0] === it.years[1] ? it.years[0] : it.years[0] + '–' + it.years[1]) : '';
     a.appendChild(h('div', { class: 's' }, [H.plural(it.n, 'film'), years].filter(Boolean).join(' · ')));
+    stack.appendChild(H.actions.tools(it));
+    H.actions.bind(a, it);
     return a;
   }
   // Un film qui manque à une saga : son affiche grisée, rien à ouvrir ni à lire (la case n'est donc pas dans la navigation à la télécommande, comme un album manquant).
@@ -96,6 +98,7 @@
     if (it.seen >= total && it.seen > 0) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
     else if (it.seen || it.started) pic.appendChild(h('span', { class: 'badge' }, it.type === 'movie' ? 'En cours' : (it.seen || 0) + '/' + total));
     if (square && H.music) pic.appendChild(H.music.cardTools(it));
+    if (it.type === 'movie' || it.type === 'show') { pic.appendChild(H.actions.tools(it)); H.actions.bind(a, it); }
     if (withPart && it.part !== undefined && it.part !== null) pic.appendChild(h('span', { class: 'part' }, it.part));
     a.appendChild(pic);
     a.appendChild(h('div', { class: 't' }, it.title));
@@ -113,6 +116,7 @@
   function playHref(entry, start) {
     return (entry.kind === 'book' ? '#/read/' : '#/play/') + entry.id + (start === 0 ? '?t=0' : '');
   }
+  H.playHref = playHref;
   // `onRemove(card)` : appelée une fois la carte retirée de « Reprendre » (clic sur ✕, clic droit / appui long, touche Suppr ou Menu)
   function resumeCard(c, onRemove) {
     var href = playHref(c);
@@ -374,7 +378,7 @@
         actions.appendChild(H.button(main, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go(playHref(resume)); } }));
         if (prog) actions.appendChild(H.button('Depuis le début', 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
       }
-      if (d.type !== 'album' && entries.length) actions.appendChild(H.button(allDone ? 'Marquer non vu' : 'Marquer comme vu', 'check', { onclick: function () { setSeen(!allDone); } }));
+      if (d.type !== 'album' && entries.length) actions.appendChild(H.button(H.actions.seenLabel(d.type, allDone), 'check', { onclick: function () { setSeen(!allDone); } }));
       if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) actions.appendChild(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
       (d.links || []).forEach(function (l) { actions.appendChild(h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label)); });
       info.appendChild(actions);
@@ -445,11 +449,12 @@
           var thumb = h('div', { class: 'poster wide' }, h('span', { class: 'ph', style: '--h:' + H.hue(d.title + e.number) }, e.number === null || e.number === undefined ? '' : e.number),
             h('img', { src: '/img/entry/' + e.id + '?w=400', alt: '', loading: 'lazy', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } }));
           if (ratio) thumb.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(ratio * 100) + '%' })));
-          list.appendChild(h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { H.go(playHref(e)); } }, h('div', { class: 'thumb' }, thumb),
+          list.appendChild(h('div', { class: 'epwrap' }, h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { H.go(playHref(e)); } }, h('div', { class: 'thumb' }, thumb),
             h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, e.number === null || e.number === undefined ? '' : e.number + '.'), ' ', e.title || 'Épisode'),
               e.summary ? h('div', { class: 'su' }, e.summary) : null,
               h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
-            done ? h('span', { class: 'seen' }, H.icon('check')) : null));
+            done ? h('span', { class: 'seen' }, H.icon('check')) : null),
+            H.button('', 'more', { class: 'epmore', 'aria-label': 'Actions de l’épisode', 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load); } })));
         });
       }
       var chips = h('div', { class: 'chips' });
