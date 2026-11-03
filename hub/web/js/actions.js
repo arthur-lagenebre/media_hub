@@ -122,7 +122,7 @@
     return tools;
   };
   // --- Changer la fiche TMDB (administrateur, séries et animations) ----------------------------
-  // Quand la recherche sur le nom du dossier tombe sur un homonyme. Le choix reste dans la base du hub : la médiathèque n'est pas touchée, et « Fiche TMDB d'origine » le retire.
+  // Quand la recherche sur le nom du dossier tombe sur un homonyme. Le choix reste dans la base du hub : la médiathèque n'est pas touchée.
   // On cherche par le nom, ou on colle l'adresse de la fiche sur themoviedb.org (la façon sûre de tomber sur la bonne). `d` : la fiche (/api/item) ; `done` est appelé une fois la fiche changée.
   var TMDB_URL = /^https?:\/\/(www\.)?themoviedb\.org\/tv\/\d+/i;
   A.tmdbTools = function (d, done) {
@@ -138,13 +138,9 @@
         }), d.tmdb || null, choose);
       }).catch(fail);
     }
-    var tools = [H.button('Changer la fiche TMDB', 'edit', { 'data-key': 'tmdb', onclick: function () {
+    return [H.button('Changer la fiche TMDB', 'edit', { 'data-key': 'tmdb', onclick: function () {
       H.prompt('Nom de la série, ou adresse de sa fiche TMDB', d.title, 'Chercher', function (text) { if (TMDB_URL.test(text)) choose(text); else search(text); });
     } })];
-    if (d.tmdb_custom) tools.push(H.button('Fiche TMDB d’origine', 'refresh', { 'data-key': 'tmdb-reset', onclick: function () {
-      H.api('/api/item/' + d.id + '/tmdb/delete', {}).then(function () { H.toast('Fiche TMDB d’origine rétablie'); done(); }).catch(fail);
-    } }));
-    return tools;
   };
   // Le bouton « … » d'une couverture de tome : le même menu que celui d'un épisode.
   A.entryTools = function (e, done) {

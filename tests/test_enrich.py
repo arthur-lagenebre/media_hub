@@ -310,9 +310,9 @@ class TestChosenSheet(TempCase):
         self.row = self.db.one("SELECT * FROM items WHERE id=?", ("s1",))
         self.tmdb = FakeShow()
 
-    def enrich(self, resolve=42, show_id=None, **options):
+    def enrich(self, resolve=42, show_id=4615):
         with mock.patch.object(enrich.lookup, "resolve_show_id", **({"side_effect": resolve} if callable(resolve) else {"return_value": resolve})) as patched:
-            found = enrich.choose_show(self.tmdb, self.tmp / "posters", self.db, self.lib, self.row, show_id, **options)
+            found = enrich.choose_show(self.tmdb, self.tmp / "posters", self.db, self.lib, self.row, show_id)
         return found, patched
 
     def test_the_choice_made_in_the_hub_comes_before_the_folder_name(self):
@@ -321,15 +321,9 @@ class TestChosenSheet(TempCase):
         self.assertEqual(self.db.kv_get(enrich.pin_key(self.row)), 4615)
 
     def test_without_a_choice_the_folder_name_decides_as_before(self):
-        _, resolve = self.enrich()
+        with mock.patch.object(enrich.lookup, "resolve_show_id", return_value=42) as resolve:
+            enrich.enrich_show(self.tmdb, self.tmp / "posters", self.db, self.lib, self.row)
         self.assertEqual(resolve.call_args.args[2], "99")
-        self.assertIsNone(self.db.kv_get(enrich.pin_key(self.row)))
-
-    def test_taking_the_choice_back_leaves_it_to_the_folder_again(self):
-        self.enrich(show_id=4615)
-        _, resolve = self.enrich(show_id=None)
-        self.assertEqual(resolve.call_args.args[2], "99")
-        self.assertIsNone(self.db.kv_get(enrich.pin_key(self.row)))
 
     def test_the_choice_is_not_kept_when_tmdb_refuses_it(self):
         self.enrich(show_id=4615)
@@ -338,11 +332,11 @@ class TestChosenSheet(TempCase):
             self.enrich(show_id=777)
         self.assertEqual(self.db.kv_get(enrich.pin_key(self.row)), 4615)          # celui d'avant
 
-    def test_the_choice_is_not_kept_when_the_search_finds_nothing(self):
-        self.enrich(show_id=4615)
-        found, _ = self.enrich(resolve=None, show_id=None)
-        self.assertIsNone(found)
-        self.assertEqual(self.db.kv_get(enrich.pin_key(self.row)), 4615)          # retirer le choix n'a rien donné : il reste
+    def test_a_choice_that_tmdb_refuses_leaves_no_choice_when_there_was_none(self):
+        self.tmdb.series = mock.Mock(side_effect=enrich.TmdbError("introuvable"))
+        with self.assertRaises(enrich.TmdbError):
+            self.enrich(show_id=777)
+        self.assertIsNone(self.db.kv_get(enrich.pin_key(self.row)))
 
     def test_the_choice_survives_what_a_scan_does_with_the_enrichment(self):
         self.enrich(show_id=4615)

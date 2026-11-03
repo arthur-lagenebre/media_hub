@@ -1015,18 +1015,14 @@ class TestTmdbSheet(UiCase):
     def sheet(self):
         return self.api("/api/item/" + self.dark["id"])
 
-    def test_a_sheet_is_searched_by_name_and_chosen_then_the_original_one_comes_back(self):
+    def test_a_sheet_is_searched_by_name_and_chosen(self):
         self.open_sheet()
-        self.assertEqual(self.view(".actions .btn", has_text="Fiche TMDB d’origine").count(), 0)
         self.view(".actions .btn", has_text="Changer la fiche TMDB").click()
         self.page.locator(".prompt input").fill("Dark")
         self.page.locator(".prompt .primary").click()
         self.page.locator(".menu .opt", has_text="1950").click()
-        self.until(lambda: self.sheet().get("tmdb_custom") is True)
-        self.assertEqual((self.sheet()["tmdb"], self.sheet()["summary"]), (2567, "Fiche 2567"))
-        self.view(".actions .btn", has_text="Fiche TMDB d’origine").click()
-        self.until(lambda: not self.sheet().get("tmdb_custom"))
-        self.assertEqual(self.sheet()["tmdb"], 70523)                             # la recherche sur le nom, comme avant
+        self.until(lambda: self.sheet().get("tmdb") == 2567)
+        self.assertEqual(self.sheet()["summary"], "Fiche 2567")
 
     def test_the_address_of_the_sheet_is_enough(self):
         self.open_sheet()
@@ -1034,7 +1030,6 @@ class TestTmdbSheet(UiCase):
         self.page.locator(".prompt input").fill("https://www.themoviedb.org/tv/2567-dark")
         self.page.locator(".prompt .primary").click()
         self.until(lambda: self.sheet().get("tmdb") == 2567)
-        self.assertIs(self.sheet()["tmdb_custom"], True)
 
     def test_a_search_that_hesitates_between_two_series_says_so_on_the_sheet(self):
         self.api("/api/enrich", {"lib": "series"})
@@ -1046,9 +1041,7 @@ class TestTmdbSheet(UiCase):
         self.page.locator(".prompt input").fill("Dark")
         self.page.locator(".prompt .primary").click()
         self.page.locator(".menu .opt", has_text="2017").click()
-        self.until(lambda: self.sheet().get("tmdb_custom") is True)
-        self.view(".actions .btn", has_text="Fiche TMDB d’origine").wait_for()
-        self.assertEqual(self.view(".info .doubt").count(), 0)                    # le doute est levé : on a choisi
+        self.until(lambda: self.view(".info .doubt").count() == 0)                # le doute est levé : on a choisi
 
     def test_a_film_has_no_such_button(self):
         self.open("#/i/" + self.item("films", "Inception")["id"])
