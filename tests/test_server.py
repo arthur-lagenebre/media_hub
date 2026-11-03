@@ -193,7 +193,16 @@ class TestBrowse(ServerCase):
         inception = self.detail(self.item_by_title("films", "Inception")["id"])
         self.assertEqual(inception["links"], [{"label": "TMDB", "url": "https://www.themoviedb.org/movie/27205"}])
         self.assertNotIn("links", self.detail(self.item_by_title("series", "Dark")["id"]))          # pas d'identifiant TMDB tant que la série n'est pas enrichie
-        self.assertNotIn("links", self.detail(self.item_by_title("musique", "Discovery")["id"]))
+
+    def test_album_links_to_its_musicbrainz_release(self):
+        discovery = self.detail(self.item_by_title("musique", "Discovery")["id"])
+        self.assertEqual(discovery["links"], [{"label": "MusicBrainz", "url": "https://musicbrainz.org/release/11111111-2222-3333-4444-555555555555"}])
+
+    def test_album_links_edge_cases(self):
+        from hub.server.app import album_links
+        self.assertEqual(album_links({}), [])                                                  # pas d'identifiant : pas de lien
+        self.assertEqual(album_links({"mbid": "../../etc"}), [])                               # ce qui n'est pas un identifiant est ignoré
+        self.assertEqual(album_links({"mbid": "11111111-2222-3333-4444-555555555555/x"}), [])
 
     def test_video_links_edge_cases(self):
         from hub.server.app import video_links
