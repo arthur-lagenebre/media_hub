@@ -655,8 +655,6 @@
       el.appendChild(h('h1', null, 'Paramètres'));
       var bar = tabBar();
       el.appendChild(bar);
-      var on = bar.querySelector('.on');
-      if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir
       var body = h('div', { class: 'tabbody' }), active = activeTab();
       if (active === 'gestion') gestion(body);
       else if (active === 'lecture') reading(body);
@@ -664,6 +662,8 @@
       else if (active === 'taches') tasks(body);
       else serverFacts(body);
       el.appendChild(body);
+      var on = bar.querySelector('.on');
+      if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir (après le contenu : lire offsetLeft sur une page à moitié reconstruite la ramenait en haut)
       wasAdmin = H.isAdmin();
       if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
       if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
