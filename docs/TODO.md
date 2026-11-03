@@ -47,8 +47,8 @@
 
 ### Interface
 
-- [ ] **Renommer « Admin » en « Paramètres ».**
-- [ ] **Séparer les paramètres en onglets**, en haut de la page et qui restent flottants :
+- [x] **Renommer « Admin » en « Paramètres ».**
+- [x] **Séparer les paramètres en onglets**, en haut de la page et qui restent flottants (fait ; j'ai ajouté un onglet *Lecture* pour la qualité, l'appareil et le son 5.1, qui servent à tout le monde) :
   - *Gestion* (bibliothèques, sagas, entretien) : admin ;
   - *Comptes* : « Mon compte » pour tout le monde, « Comptes » pour l'admin ;
   - *Tâches* (avec la possibilité de tout déplier et de tout voir) : admin ;
