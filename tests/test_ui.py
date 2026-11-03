@@ -897,6 +897,72 @@ class TestDownloads(UiCase):
         self.assertEqual(self.page.locator(".menu .opt", has_text="Télécharger").count(), 0)
 
 
+class TestPosters(UiCase):
+    """Changer l'affiche d'un film ou d'une série : l'image reste dans HUB_DATA, la médiathèque n'est pas touchée."""
+
+    def served(self, item):
+        return urllib.request.urlopen(self.base + "/img/item/" + item["id"]).read()
+
+    def reset_later(self, item):
+        self.addCleanup(lambda: self.api("/api/item/" + item["id"] + "/poster/delete", {}))
+
+    def send(self, payload):
+        with self.page.expect_file_chooser() as chooser:
+            self.view(".actions .btn", has_text="Changer l’affiche").click()
+        chooser.value.set_files(payload)
+
+    CHOSEN = b"\xff\xd8\xff\xe0affiche choisie"
+
+    def chosen(self):
+        return {"name": "affiche.jpg", "mimeType": "image/jpeg", "buffer": self.CHOSEN}
+
+    def test_the_poster_is_replaced_and_the_original_comes_back(self):
+        item = self.item("films", "Inception")
+        self.reset_later(item)
+        original = self.served(item)
+        self.open("#/i/" + item["id"])
+        self.view(".actions .btn", has_text="Changer l’affiche").wait_for()
+        self.assertEqual(self.view(".actions .btn", has_text="Affiche d’origine").count(), 0)
+        self.send(self.chosen())
+        self.until(lambda: self.api("/api/item/" + item["id"]).get("poster_custom") is True)
+        self.assertEqual(self.served(item), self.CHOSEN)
+        self.assertNotEqual(self.served(item), original)
+        self.view(".actions .btn", has_text="Affiche d’origine").click()
+        self.until(lambda: not self.api("/api/item/" + item["id"]).get("poster_custom"))
+        self.assertEqual(self.served(item), original)
+        self.assertEqual(self.view(".actions .btn", has_text="Affiche d’origine").count(), 0)
+
+    def test_a_show_has_the_same_buttons(self):
+        item = self.item("series", "Dark")
+        self.reset_later(item)
+        self.open("#/i/" + item["id"])
+        self.view(".actions .btn", has_text="Changer l’affiche").wait_for()
+        self.send(self.chosen())
+        self.until(lambda: self.api("/api/item/" + item["id"]).get("poster_custom") is True)
+        self.assertEqual(self.served(item), self.CHOSEN)
+
+    def test_a_file_that_is_not_an_image_is_refused_with_a_message(self):
+        item = self.item("films", "Inception")
+        self.reset_later(item)
+        self.open("#/i/" + item["id"])
+        self.view(".actions .btn", has_text="Changer l’affiche").wait_for()
+        self.send({"name": "notes.txt", "mimeType": "text/plain", "buffer": b"du texte"})
+        self.page.locator("#toast.on", has_text="pas une image").wait_for()
+        self.assertNotIn("poster_custom", self.api("/api/item/" + item["id"]))
+        del self.errors[:]                      # le navigateur note la réponse 415, attendue ici
+
+    def test_an_album_has_no_poster_button(self):
+        self.open("#/i/" + self.item("musique", "Discovery")["id"])
+        self.view(".actions .btn").first.wait_for()
+        self.assertEqual(self.view(".actions .btn", has_text="Changer l’affiche").count(), 0)
+
+    def test_a_television_has_no_poster_button(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.open("#/i/" + self.item("films", "Inception")["id"])
+        self.view(".actions .btn").first.wait_for()
+        self.assertEqual(self.view(".actions .btn", has_text="Changer l’affiche").count(), 0)
+
+
 class TestSettings(UiCase):
     """La page « Paramètres » : des onglets en haut, qui restent affichés, au lieu d'une seule longue page de gestion."""
 

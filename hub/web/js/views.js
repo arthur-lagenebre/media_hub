@@ -381,6 +381,7 @@
       if (d.type !== 'album' && entries.length) actions.appendChild(H.button(H.actions.seenLabel(d.type, allDone), 'check', { onclick: function () { setSeen(!allDone); } }));
       if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) actions.appendChild(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
       if (entries.length && H.actions.canDownload()) actions.appendChild(H.button(d.type === 'album' ? 'Télécharger l’album' : 'Télécharger', 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
+      H.actions.posterTools(d, load).forEach(function (node) { actions.appendChild(node); });
       (d.links || []).forEach(function (l) { actions.appendChild(h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label)); });
       info.appendChild(actions);
       var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),
