@@ -661,5 +661,133 @@ class TestLogin(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestActionsMenu(UiCase):
+    """Le bouton « … » : voir / revoir et vu / non vu sur les films, les sagas, les séries et chaque épisode."""
+
+    def done(self, lib, title):
+        return [bool((e.get("progress") or {}).get("done")) for e in self.entries(lib, title)]
+
+    def forget(self, lib, title):
+        self.addCleanup(lambda: self.api("/api/item/" + self.item(lib, title)["id"] + "/seen", {"done": False}))
+
+    def choose(self, label):
+        self.page.locator(".menu .opt", has_text=label).click()
+
+    def card(self, lib, title):
+        self.open("#/l/" + lib)
+        card = self.view(f'.card[data-key="{self.item(lib, title)["id"]}"]')
+        card.wait_for()
+        return card
+
+    def test_a_film_has_its_seen_button_and_a_show_speaks_of_every_season(self):
+        self.open("#/i/" + self.item("films", "Inception")["id"])
+        self.view(".actions .btn", has_text="Marquer comme vu").wait_for()
+        self.open("#/i/" + self.item("series", "Dark")["id"])
+        self.view(".actions .btn", has_text="Marquer toutes les saisons comme vu").wait_for()
+        self.assertEqual(self.view(".actions .btn", has_text="Marquer comme vu").count(), 0)
+
+    def test_the_show_button_marks_every_season_then_none(self):
+        self.forget("series", "Dark")
+        self.open("#/i/" + self.item("series", "Dark")["id"])
+        self.view(".actions .btn", has_text="Marquer toutes les saisons comme vu").click()
+        self.until(lambda: all(self.done("series", "Dark")))
+        self.view(".actions .btn", has_text="Marquer toutes les saisons non vu").click()
+        self.until(lambda: not any(self.done("series", "Dark")))
+
+    def test_an_episode_is_marked_seen_from_its_own_menu(self):
+        self.forget("series", "Dark")
+        self.open("#/i/" + self.item("series", "Dark")["id"])
+        self.view(".epmore").first.wait_for()
+        self.view(".epmore").first.click()
+        self.choose("Marquer comme vu")
+        self.until(lambda: sum(self.done("series", "Dark")) == 1)
+        self.view(".ep .seen").first.wait_for()
+        self.view(".epmore").first.click()
+        self.choose("Marquer non vu")
+        self.until(lambda: sum(self.done("series", "Dark")) == 0)
+
+    def test_a_film_card_marks_the_film_seen_and_updates_its_badge(self):
+        self.forget("films", "Inception")
+        card = self.card("films", "Inception")
+        card.locator(".qbtn").click()
+        self.assertEqual(self.page.locator(".menu h3").inner_text(), "Inception")
+        self.choose("Marquer comme vu")
+        self.until(lambda: all(self.done("films", "Inception")))
+        self.until(lambda: self.view(".card .badge.done").count() == 1)
+        card.locator(".qbtn").click()
+        self.choose("Marquer non vu")
+        self.until(lambda: not any(self.done("films", "Inception")))
+
+    def test_a_film_card_plays_the_film_and_a_seen_one_is_watched_again_from_the_start(self):
+        self.forget("films", "Inception")
+        self.card("films", "Inception").locator(".qbtn").click()
+        self.choose("Voir")
+        self.page.wait_for_url("**#/play/*")
+        self.assertNotIn("t=0", self.page.url)
+        self.api("/api/item/" + self.item("films", "Inception")["id"] + "/seen", {"done": True})
+        self.card("films", "Inception").locator(".qbtn").click()
+        self.choose("Revoir")
+        self.page.wait_for_url("**#/play/*t=0")
+
+    def test_the_context_menu_key_or_a_right_click_opens_the_same_menu(self):
+        card = self.card("films", "Inception")
+        card.click(button="right")
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        self.press("Escape", wait=300)
+        card.focus()
+        self.press("ContextMenu", wait=300)
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+
+    def test_a_film_known_to_tmdb_offers_its_page_and_a_saga_to_join(self):
+        self.card("films", "Inception").locator(".qbtn").click()
+        self.page.locator(".menu .opt", has_text="Ajouter à une saga").wait_for()
+        self.page.evaluate("window.open = function (url) { window.opened = url; }")
+        self.choose("TMDB")
+        self.until(lambda: self.page.evaluate("window.opened") == "https://www.themoviedb.org/movie/27205")
+
+    def test_the_menu_can_add_the_film_to_a_saga(self):
+        self.card("films", "Inception").locator(".qbtn").click()
+        self.choose("Ajouter à une saga")
+        self.assertEqual(self.page.locator(".menu h3").inner_text(), "Ajouter « Inception » à une saga")
+        self.page.locator(".menu .opt", has_text="Nouvelle saga").wait_for()
+
+    def test_a_film_unknown_to_tmdb_offers_neither(self):
+        self.card("films", "Sans Etiquette").locator(".qbtn").click()
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu"])
+
+    def test_a_show_knows_its_tmdb_page_once_enriched_and_a_saga_never_does(self):
+        item = self.item("series", "Dark")
+        self.run_.hub.db.update_item_meta(item["id"], meta={"tmdb": 70523})
+        self.addCleanup(self.run_.hub.db.update_item_meta, item["id"], meta={"tmdb": None})
+        self.card("series", "Dark").locator(".qbtn").click()
+        self.page.evaluate("window.open = function (url) { window.opened = url; }")
+        self.choose("TMDB")
+        self.until(lambda: self.page.evaluate("window.opened") == "https://www.themoviedb.org/tv/70523")
+        self.open("#/l/films")
+        self.view(".grid .card.saga .qbtn").first.click()
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu"])
+
+    def test_a_show_card_marks_every_season(self):
+        self.forget("series", "Dark")
+        self.card("series", "Dark").locator(".qbtn").click()
+        self.choose("Marquer toutes les saisons comme vu")
+        self.until(lambda: all(self.done("series", "Dark")))
+
+    def test_a_saga_card_marks_every_film_of_the_saga(self):
+        titles = ("Man of Steel", "Batman v Superman")
+        for title in titles:
+            self.forget("films", title)
+        self.open("#/l/films")
+        saga = self.view(".grid .card.saga").first
+        saga.wait_for()
+        saga.locator(".qbtn").click()
+        self.assertEqual(self.page.locator(".menu h3").inner_text(), "Saga DCEU")
+        self.choose("Marquer comme vu")
+        self.until(lambda: all(all(self.done("films", title)) for title in titles))
+        self.until(lambda: self.view(".grid .card.saga .badge.done").count() == 1)
+
+
 if __name__ == "__main__":
     unittest.main()
