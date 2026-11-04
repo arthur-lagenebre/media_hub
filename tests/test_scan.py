@@ -202,6 +202,30 @@ class TestRows(unittest.TestCase):
         self.assertLess(common.sort_key("Rocky 2"), common.sort_key("Rocky 10"))
         self.assertEqual(common.sort_key("Éléphant"), "elephant")
 
+    def test_invisible_formatting_characters_of_a_tag_do_not_reach_the_title_the_sort_or_the_letter(self):
+        # « La Bataille de Gaulle: J'écris ton nom » portait une marque de sens de lecture (U+200E) en tête : invisible, mais rangée après le Z
+        for invisible in ("\u200e", "\u200b", "\ufeff", "\u200f", "\u2060", "\u00ad"):
+            row = common.item_row("lib", "key", "movie", f"{invisible}La Bataille de Gaulle: J'écris ton nom{invisible}", grp=f"{invisible}La Bataille de Gaulle")
+            self.assertEqual((row["title"], row["sort"], row["letter"], row["grp"]), ("La Bataille de Gaulle: J'écris ton nom", "la bataille de gaulle: j'ecris ton nom", "L", "La Bataille de Gaulle"), repr(invisible))
+
+    def test_the_title_of_a_file_is_cleaned_like_the_title_of_an_item(self):
+        row = common.entry_row("lib", "item", "r", "audio", title="\u200eOne More Time ")
+        self.assertEqual(row["title"], "One More Time")
+
+    def test_the_two_joiners_stay_in_the_title_but_never_decide_the_order(self):
+        row = common.item_row("lib", "key", "movie", "\u200cabc\u200d")
+        self.assertEqual((row["title"], row["sort"]), ("\u200cabc\u200d", "abc"))
+
+    def test_a_film_with_an_invisible_character_is_sorted_between_its_neighbours_not_after_the_z(self):
+        titles = ["Zootopie 2", "\u200eLa Bataille de Gaulle: J'écris ton nom", "Yoroï", "Batman"]
+        rows = sorted((common.item_row("lib", t, "movie", t) for t in titles), key=lambda r: r["sort"])
+        self.assertEqual([r["title"] for r in rows], ["Batman", "La Bataille de Gaulle: J'écris ton nom", "Yoroï", "Zootopie 2"])
+
+    def test_visible_text_is_left_alone_accents_apostrophes_and_inner_spaces_included(self):
+        row = common.item_row("lib", "key", "movie", "  L’Âge de fer : Œuvre  ", grp="Saga d'été")
+        self.assertEqual((row["title"], row["grp"]), ("L’Âge de fer : Œuvre", "Saga d'été"))
+        self.assertEqual(common.item_row("lib", "key", "movie", "\u200e")["title"], "")
+
     def test_a_file_is_unchanged_only_when_size_and_date_are_the_same(self):
         row = {"size": 10, "mtime": 20}
         self.assertTrue(common.unchanged(row, 10, 20))
