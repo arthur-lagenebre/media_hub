@@ -169,23 +169,19 @@
 
   // --- Accueil -------------------------------------------------------------------
   // Les derniers ajouts de toutes les bibliothèques, mêlés, du plus récent au plus ancien (à date égale, l'ordre des bibliothèques puis celui de leur liste) ; chacun garde sa bibliothèque.
+  // `n` : au plus ce nombre en tout. Le serveur a déjà fait ce qui est propre à une bibliothèque : en musique, l'arrivée d'un artiste n'est qu'une carte (voir recent_music).
+  var LATEST = 24;          // quatre lignes pleines de six, trois de huit
   H.latest = function (libraries, n) {
     var all = [];
     libraries.forEach(function (lib, i) { lib.recent.forEach(function (it, k) { all.push({ item: it, lib: lib, at: it.added || 0, order: i * 1000 + k }); }); });
     all.sort(function (a, b) { return b.at - a.at || a.order - b.order; });
     return all.slice(0, n).map(function (x) { return { item: x.item, lib: x.lib }; });
   };
-  var KIND_WORDS = { movies: 'Film', music: 'Album', books: 'Livre' };
-  // La carte d'un ajout récent : la carte ordinaire, avec sous le titre un point de la couleur de sa bibliothèque et ce qu'elle est (« ● Film · 2010 »).
+  // La carte d'un ajout récent : la carte ordinaire, avec devant sa ligne sous le titre un point de la couleur de sa bibliothèque (« ● 2010 », « ● Artiste · 2010 »).
   function latestCard(entry) {
     var card = H.card(entry.item, entry.lib.kind === 'music'), sub = card.querySelector('.s');
     card.setAttribute('data-lib', entry.lib.id);
-    if (sub) {
-      var word = KIND_WORDS[entry.lib.kind] || (entry.lib.id === 'animations' ? 'Animation' : 'Série'), rest = sub.textContent;
-      H.clear(sub);
-      sub.appendChild(h('i', { class: 'dot' }));
-      sub.appendChild(document.createTextNode(rest ? word + ' · ' + rest : word));
-    }
+    if (sub) sub.insertBefore(h('i', { class: 'dot' }), sub.firstChild);
     return card;
   }
   function latestSection(latest) {
@@ -214,7 +210,7 @@
         var me = H.session.auth && H.session.user && H.session.user.name;
         el.appendChild(h('h1', { class: 'greeting' }, me ? 'Bonjour ' + me : 'Bonjour'));
         if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
-        var latest = H.latest(data.libraries, 20);
+        var latest = H.latest(data.libraries, LATEST);
         if (latest.length) el.appendChild(latestSection(latest));
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;

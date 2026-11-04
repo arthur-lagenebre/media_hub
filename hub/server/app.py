@@ -782,8 +782,11 @@ def api_home(h, m, q):
     seen = seen_counts(hub, h.user["id"])
     rows = []
     for lib in hub.cfg.libraries:
-        recent = hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))
-        rows.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": [with_seen(r, seen) for r in recent],
+        if lib.kind == "music":
+            recent = recent_music(hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,)), seen, 24)
+        else:
+            recent = [with_seen(r, seen) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
+        rows.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": recent,
                      "count": hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]})
     h.send_json({"continue": continue_row(hub, h.user["id"]), "libraries": rows})
 
@@ -959,7 +962,26 @@ def artist_rows(rows):
 
 def artist_card(row):
     """La carte d'un artiste dans la liste : son identifiant (celui de sa fiche, `/api/artist/<lib>/<id>`), son nom, son nombre d'albums et l'album dont on prendra la pochette faute de photo."""
-    return {"id": row["id"], "lib": row["lib"], "type": "artist", "title": row["title"], "n": row["count"], "letter": row["letter"], "album": safe_json(row["meta"], {}).get("album", "")}
+    return {"id": row["id"], "lib": row["lib"], "type": "artist", "title": row["title"], "n": row["count"], "letter": row["letter"], "added": row["added"],
+            "album": safe_json(row["meta"], {}).get("album", "")}
+
+
+ARTIST_ARRIVAL = 7 * 24 * 3600       # les albums d'un artiste arrivés à moins d'une semaine les uns des autres sont l'arrivée de l'artiste
+
+
+def recent_music(rows, seen, limit):
+    """Les derniers ajouts d'une bibliothèque de musique, du plus récent au plus ancien. Un album ajouté à un artiste qu'on avait déjà reste un album ; l'arrivée d'un artiste (au moins deux albums,
+    tous arrivés à une semaine d'écart au plus) n'est qu'une carte, la sienne. Les compilations et les artistes inconnus restent des albums : les regrouper cacherait ce qui est arrivé."""
+    groups = {}
+    for row in rows:
+        groups.setdefault(safe_json(row["meta"], {}).get("artist_id") or fold(row["grp"]), []).append(row)
+    entries = []
+    for albums in groups.values():
+        added = [a["added"] for a in albums]
+        arrived = len(albums) > 1 and max(added) - min(added) <= ARTIST_ARRIVAL and fold(albums[0]["grp"]) not in UNKNOWN_ARTISTS
+        entries += artist_rows(albums) if arrived else albums
+    entries.sort(key=lambda r: (-r["added"], r["sort"]))
+    return [artist_card(r) if r["type"] == "artist" else with_seen(r, seen) for r in entries[:limit]]
 
 
 def library_counts(rows, kind):

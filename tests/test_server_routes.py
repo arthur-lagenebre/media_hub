@@ -687,5 +687,54 @@ class TestArtistsView(RouteCase):
         self.assertEqual(self.get("/api/library/lib?view=albums").json()["items"][0]["type"], "album")
 
 
+class TestHomeMusic(RouteCase):
+    """Les nouveautés de la musique à l'accueil : un album ajouté à un artiste connu reste un album ; l'arrivée d'un artiste n'est que sa carte."""
+    kind = "music"
+    DAY = 86400
+    T = 1_700_000_000
+
+    def album(self, ident, title, grp, artist, added):
+        return item(ident, "album", title=title, grp=grp, year="2020", meta={"artist_id": artist}, added=self.T + added)
+
+    def recent(self):
+        return self.get("/api/home").json()["libraries"][0]["recent"]
+
+    def setUp(self):
+        super().setUp()
+        D = self.DAY
+        self.fill([
+            self.album("f1", "Echoes", "Foo Fighters", "ar1", -10), self.album("f2", "Wasting Light", "Foo Fighters", "ar1", -D), self.album("f3", "Concrete", "Foo Fighters", "ar1", -2 * D),
+            self.album("a1", "Talkie", "Air", "ar2", -20), self.album("a2", "Moon Safari", "Air", "ar2", -200 * D),
+            self.album("z1", "Zaz", "Zaz", "ar3", -30),
+            self.album("v1", "Compil 1", "Various Artists", "ar4", -40), self.album("v2", "Compil 2", "Various Artists", "ar4", -D - 40),
+            self.album("o1", "Perdu", "Orelsan", "ar5", -10 * D), self.album("o2", "Le chant", "Orelsan", "ar5", -17 * D),
+            self.album("s1", "Roots", "Skindred", "ar6", -11 * D), self.album("s2", "Big Tings", "Skindred", "ar6", -18 * D - 1),
+        ], [])
+
+    def test_an_artist_who_just_arrived_is_one_card_and_an_album_added_to_a_known_artist_stays_an_album(self):
+        out = [(r["type"], r["id"]) for r in self.recent()]
+        self.assertEqual(out, [("artist", "ar1"), ("album", "a1"), ("album", "z1"), ("album", "v1"), ("album", "v2"), ("artist", "ar5"), ("album", "s1"), ("album", "s2"), ("album", "a2")])
+
+    def test_the_card_of_an_arrived_artist_has_his_name_his_albums_counted_and_the_date_of_the_latest(self):
+        card = self.recent()[0]
+        self.assertEqual((card["title"], card["n"], card["lib"], card["added"]), ("Foo Fighters", 3, "lib", self.T - 10))
+        self.assertEqual(card["album"], "f3")                                  # le plus ancien : sa pochette, faute de photo
+        self.assertNotIn("f1", [r["id"] for r in self.recent()])               # ses albums ne sont plus là un par un
+
+    def test_two_albums_a_week_apart_count_as_an_arrival_and_a_second_more_do_not(self):
+        types = {r["id"]: r["type"] for r in self.recent()}
+        self.assertEqual((types["ar5"], types["s1"], types["s2"]), ("artist", "album", "album"))
+
+    def test_compilations_and_unknown_artists_stay_albums_even_when_they_arrive_together(self):
+        self.assertEqual({r["id"]: r["type"] for r in self.recent()}["v1"], "album")
+        self.fill([self.album("u1", "Un", "Artiste inconnu", "ar9", -1), self.album("u2", "Deux", "Artiste inconnu", "ar9", -2)], [])
+        self.assertEqual([(r["type"], r["id"]) for r in self.recent()], [("album", "u1"), ("album", "u2")])
+
+    def test_a_single_album_artist_stays_an_album_and_the_list_stops_at_24(self):
+        self.fill([self.album(f"x{n:02d}", f"Titre {n:02d}", f"Artiste {n:02d}", f"id{n:02d}", -n) for n in range(30)], [])
+        out = self.recent()
+        self.assertEqual((len(out), {r["type"] for r in out}, out[0]["id"]), (24, {"album"}, "x00"))
+
+
 if __name__ == "__main__":
     unittest.main()
