@@ -2270,7 +2270,7 @@ class TestAccountPermissions(AccountsCase):
     def restricted(self):
         """Ce qu'un compte `user` n'a pas le droit de faire : (méthode, chemin, corps)."""
         admin = self.admin.session["user"]["id"]
-        return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/cleanup", {"apply": True}),
+        return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/images/refresh", {"lib": "films"}), ("POST", "/api/cleanup", {"apply": True}),
                 ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG),
                 ("POST", f"/api/artist/musique/{self.artist}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1}),
                 ("GET", "/api/sagas", None), ("POST", "/api/sagas", {"sagas": []}), ("POST", "/api/sagas/add", {"name": "intrus", "films": [1]}), ("GET", "/api/sagas/films", None), ("POST", "/api/sagas/ignore", {"tmdb": 1}),

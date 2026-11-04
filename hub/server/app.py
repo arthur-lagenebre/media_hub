@@ -2170,6 +2170,14 @@ def api_scan(h, m, q):
     h.send_json({"job": job.public()}, 202)
 
 
+@route("POST", r"/api/images/refresh")
+def api_images_refresh(h, m, q):
+    """Fait relire à une bibliothèque ses images (`{"lib": "<id>"}`) : le cache des vignettes de ses éléments et de ses fichiers est vidé, chaque image se refait depuis le disque à la prochaine demande. Les affiches choisies à la main et celles de TMDB sont gardées. Administrateur seulement ; rend `{"ok": true, "removed": <fichiers retirés du cache>}`."""
+    require_admin(h)
+    lib = library_or_404(h.hub, str(h.body_json().get("lib", "")))
+    h.send_json({"ok": True, "removed": h.hub.images.forget_library(lib.id)})
+
+
 @route("POST", r"/api/enrich")
 def api_enrich(h, m, q):
     require_admin(h)

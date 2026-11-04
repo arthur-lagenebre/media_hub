@@ -382,6 +382,29 @@ class Images:
         row = self.db.one("SELECT * FROM entries WHERE id=?", (ident,))
         return row, f"{row['size']}|{row['mtime']}" if row else ""
 
+    def _forget_cached(self, kind, ident, stamp):
+        """Retire du cache l'image (à chaque largeur possible) et la marque « pas d'image » d'un élément ou d'un fichier ; le nombre de fichiers retirés."""
+        removed = 0
+        for width in (0, *WIDTHS):
+            key = self._key(f"{kind}:{ident}", stamp, width)
+            for suffix in (".jpg", ".none"):
+                try:
+                    (self.cache / f"{key}{suffix}").unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        return removed
+
+    def forget_library(self, lib_id):
+        """Oublie les images gardées des éléments et des fichiers d'une bibliothèque : elles se refont depuis le disque (folder.jpg, jaquette du .mkv...) à la prochaine demande. Ni l'affiche choisie à la main ni celle de TMDB ne bougent. Rend le nombre de fichiers retirés du cache."""
+        removed = 0
+        for row in self.db.query("SELECT id FROM items WHERE lib=?", (lib_id,)):
+            _, stamp = self._row_and_stamp("item", row["id"])
+            removed += self._forget_cached("item", row["id"], stamp)
+        for row in self.db.query("SELECT e.id, e.size, e.mtime FROM entries e JOIN items i ON i.id=e.item_id WHERE i.lib=?", (lib_id,)):
+            removed += self._forget_cached("entry", row["id"], f"{row['size']}|{row['mtime']}")
+        return removed
+
     def get(self, kind, ident, width=0):
         """(octets, type MIME, étiquette) ou None. `kind` : "item" ou "entry"."""
         width = snap_width(width)

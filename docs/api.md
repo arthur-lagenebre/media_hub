@@ -27,7 +27,7 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 | --- | --- |
 | 400 | requête invalide (paramètre, corps, fichier d'un autre genre que celui demandé) |
 | 401 | `connexion requise` (routes `/api/*`) ; `mot de passe incorrect` ou `nom d'utilisateur requis` pour `/api/token` |
-| 403 | `réservé à l'administrateur` : scan, enrichissement, nettoyage, photos d'artistes et gestion des comptes demandés par un compte `user` |
+| 403 | `réservé à l'administrateur` : scan, enrichissement, nettoyage, relecture des covers, photos d'artistes et gestion des comptes demandés par un compte `user` |
 | 302 | **hors `/api/`**, une requête non authentifiée n'a pas de 401 : elle est redirigée vers `/login`. Un client natif qui lit `/media/…`, `/img/…` ou `/book/…` sans jeton reçoit donc `302`, pas `401`. |
 | 404 | identifiant inconnu, image absente, route inconnue (`introuvable`). Une route existante appelée avec la mauvaise méthode donne aussi 404. |
 | 409 | ce nom de compte est déjà pris |
@@ -403,6 +403,7 @@ Une seule tâche tourne à la fois, les autres attendent. `POST /api/scan`, `/ap
 | `GET /api/jobs?log=1` | | Idem, avec le journal de chaque tâche (`log`). Administrateur seulement : 403 sinon. |
 | `POST /api/scan` | `{"lib": "<id>"}` (sans `lib` : tout) | **202** `{"job": <tâche>}` |
 | `POST /api/enrich` | `{"lib": "<id>", "force": false}` | **202** `{"job": <tâche>}`. Séries / animations : TMDB (400 `pas de clé TMDB…` sans clé) ; films : les films qui manquent aux sagas, décrits par TMDB (400 sans clé ; une collection déjà connue n'est redemandée qu'après un mois, ou avec `force`) ; musique : fiches artistes ; autre genre : 400 |
+| `POST /api/images/refresh` | `{"lib": "<id>"}` | `{"ok": true, "removed": 12}` : vide le cache des vignettes des éléments et des fichiers de cette bibliothèque (à chaque largeur, marques « pas d'image » comprises) ; chaque image se refait depuis le disque (`folder.jpg`, jaquette du `.mkv`…) à la prochaine demande, utile quand un fichier image a changé sans changer de nom. Les affiches choisies à la main et celles de TMDB sont gardées. Administrateur seulement ; 404 bibliothèque inconnue |
 | `POST /api/cleanup` | `{"apply": false}` | **202** `{"job": <tâche>}` ; sans `apply`, simule. Le `result` de la tâche terminée : `{"found": 12, "removed": 0, "sample": ["Musique/Daft Punk/Thumbs.db", …]}` : `sample` nomme les 20 premiers fichiers (dans l'ordre alphabétique, depuis le dossier de leur bibliothèque), `found` les compte tous ; une simulation les écrit aussi dans le journal |
 
 `<tâche>` : `{"id", "label", "status": "waiting" \| "running" \| "done" \| "failed", "queued", "started", "ended", "result", "log"?}`. `started` / `ended` : `null` tant qu'ils n'ont pas eu lieu. **Ambigu** : la forme de `result` dépend de la tâche (compte rendu du scan, liste des fichiers du nettoyage…) et n'est pas figée ; ne pas en dépendre. Ces routes **modifient l'index et, pour `cleanup` avec `apply`, suppriment des fichiers parasites** de la médiathèque : un client de lecture n'a pas à les appeler.
