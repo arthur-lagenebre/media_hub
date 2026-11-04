@@ -91,9 +91,13 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .head { display: inline-flex; align-items: center; text-decoration: none; padding: 0.2rem 0.6rem; margin-left: -0.6rem; border-radius: 0.5rem; }
 .shelf[data-lib] .head::before { content: ""; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--accent); margin-right: 0.6rem; }
 .row { display: flex; overflow-x: auto; padding: 0.9rem var(--gut) 1.2rem; scroll-behavior: smooth; scrollbar-width: none; }
+.shelf .row { margin: 0 var(--gut) 0 calc(var(--gut) - 0.6rem); padding-left: 0.6rem; padding-right: 0; }      /* la première carte part de la marge ; une rangée qui défile est coupée à la même marge à droite, et non au bord de l'écran */
 .row::-webkit-scrollbar { display: none; }
 .row > .card { flex: 0 0 var(--cw); margin-right: 1rem; }
 .row > .card.wide { flex-basis: 17rem; }
+.greeting { padding: 1.4rem var(--gut) 0; font-size: 1.7rem; }
+.latest .grid { padding-top: 0.9rem; }
+.card .s .dot { display: inline-block; width: 0.55rem; height: 0.55rem; margin-right: 0.4rem; border-radius: 50%; background: var(--accent); vertical-align: 0.04rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--cw), 1fr)); grid-gap: 1.5rem 1.1rem; padding: 0.6rem var(--gut) 1rem; }
 .grid .card { width: auto; }
 .grid.small { --cw: 7.5rem; padding-left: 0; padding-right: 0; }

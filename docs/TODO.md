@@ -77,7 +77,7 @@
   - *Comptes* : « Mon compte » pour tout le monde, « Comptes » pour l'admin ;
   - *Tâches* (avec la possibilité de tout déplier et de tout voir) : admin ;
   - *Serveur* : admin.
-- [ ] **Une autre page d'accueil.** Pas d'idée encore : à chercher.
+- [x] **Une autre page d'accueil** (faite : « Bonjour » et le nom du compte ; « Reprendre » comme avant ; puis « Nouveautés », les 20 derniers ajouts de toutes les bibliothèques mêlés, du plus récent au plus ancien, en grille, chaque carte avec un point de la couleur de sa bibliothèque et son genre : « ● Film · 2024 » ; plus d'étagère par bibliothèque ni de « Tout voir » ; une rangée qui défile est coupée à la même marge à droite qu'à gauche). Pas faits, de côté : « Pas encore vu » et « À revoir » (suggestions calculées par compte), un réglage pour masquer ou régler « Nouveautés », un accueil par personne (« depuis ta dernière visite »). Texte d'origine : pas d'idée encore.
 
 ## Ordre proposé
 

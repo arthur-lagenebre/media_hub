@@ -168,6 +168,29 @@
   }
 
   // --- Accueil -------------------------------------------------------------------
+  // Les derniers ajouts de toutes les bibliothèques, mêlés, du plus récent au plus ancien (à date égale, l'ordre des bibliothèques puis celui de leur liste) ; chacun garde sa bibliothèque.
+  H.latest = function (libraries, n) {
+    var all = [];
+    libraries.forEach(function (lib, i) { lib.recent.forEach(function (it, k) { all.push({ item: it, lib: lib, at: it.added || 0, order: i * 1000 + k }); }); });
+    all.sort(function (a, b) { return b.at - a.at || a.order - b.order; });
+    return all.slice(0, n).map(function (x) { return { item: x.item, lib: x.lib }; });
+  };
+  var KIND_WORDS = { movies: 'Film', music: 'Album', books: 'Livre' };
+  // La carte d'un ajout récent : la carte ordinaire, avec sous le titre un point de la couleur de sa bibliothèque et ce qu'elle est (« ● Film · 2010 »).
+  function latestCard(entry) {
+    var card = H.card(entry.item, entry.lib.kind === 'music'), sub = card.querySelector('.s');
+    card.setAttribute('data-lib', entry.lib.id);
+    if (sub) {
+      var word = KIND_WORDS[entry.lib.kind] || (entry.lib.id === 'animations' ? 'Animation' : 'Série'), rest = sub.textContent;
+      H.clear(sub);
+      sub.appendChild(h('i', { class: 'dot' }));
+      sub.appendChild(document.createTextNode(rest ? word + ' · ' + rest : word));
+    }
+    return card;
+  }
+  function latestSection(latest) {
+    return h('section', { class: 'shelf latest' }, h('h2', null, 'Nouveautés'), h('div', { class: 'grid' }, latest.map(latestCard)));
+  }
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
     var timer = null;
@@ -188,14 +211,11 @@
           timer = setTimeout(function () { if (document.body.contains(el) && !document.hidden) load(); }, 4000);
           return;
         }
+        var me = H.session.auth && H.session.user && H.session.user.name;
+        el.appendChild(h('h1', { class: 'greeting' }, me ? 'Bonjour ' + me : 'Bonjour'));
         if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
-        data.libraries.forEach(function (lib) {
-          if (!lib.recent.length) return;
-          var more = lib.count > lib.recent.length ? h('a', { class: 'card more f', href: '#/l/' + lib.id }, h('div', null, H.icon('fwd'), h('span', null, 'Tout voir'), h('small', null, H.number(lib.count)))) : null;
-          var shelf = row(lib.label, '#/l/' + lib.id, lib.recent.map(function (it) { return H.card(it, lib.kind === 'music'); }), more);
-          shelf.setAttribute('data-lib', lib.id);
-          el.appendChild(shelf);
-        });
+        var latest = H.latest(data.libraries, 20);
+        if (latest.length) el.appendChild(latestSection(latest));
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
         if (!a || a === document.body || (a.closest && a.closest('#nav')) && el.style.display !== 'none') H.focus.first();
