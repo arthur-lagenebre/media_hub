@@ -419,6 +419,58 @@ class TestCacheFolderGone(ServiceCase):
             self.assertIsNone(self.service.get("item", "i2"))
 
 
+class TestForgetLibrary(ServiceCase):
+    OTHER = fixtures.PNG + b"autre"
+
+    def test_a_cached_image_is_remade_from_the_disk_after_forgetting(self):
+        (self.root / "poster.png").write_bytes(fixtures.PNG)
+        self.fill([item("i1", meta={"image": "poster.png"})])
+        self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
+        (self.root / "poster.png").write_bytes(self.OTHER)                 # même nom, autre image : le cache ne le voit pas
+        self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
+        self.assertGreaterEqual(self.service.forget_library("lib"), 1)
+        self.assertEqual(self.service.get("item", "i1")[0], self.OTHER)
+
+    def test_every_width_is_forgotten(self):
+        (self.root / "poster.png").write_bytes(fixtures.PNG)
+        self.fill([item("i1", meta={"image": "poster.png"})])
+        for width in (0, 160, 480, 1280):
+            self.service.get("item", "i1", width)
+        self.assertEqual(len(list(self.service.cache.glob("*.jpg"))), 4)
+        self.assertEqual(self.service.forget_library("lib"), 4)
+        self.assertEqual(list(self.service.cache.glob("*.jpg")), [])
+
+    def test_the_no_image_mark_is_forgotten_so_a_new_image_is_found(self):
+        self.fill([item("i1", meta={"image": "poster.png"})])
+        self.assertIsNone(self.service.get("item", "i1"))
+        (self.root / "poster.png").write_bytes(fixtures.PNG)
+        self.assertIsNone(self.service.get("item", "i1"))                  # « pas d'image » est gardé
+        self.assertEqual(self.service.forget_library("lib"), 1)
+        self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
+
+    def test_the_image_of_a_file_is_forgotten_too(self):
+        self.fill([item("i1", kind="show")], [entry("e1", "i1", "ep.mkv", kind="video")])
+        with mock.patch.object(self.service, "entry_source", return_value=fixtures.PNG):
+            self.assertEqual(self.service.get("entry", "e1")[0], fixtures.PNG)
+        self.assertEqual(self.service.forget_library("lib"), 1)
+        self.assertEqual(list(self.service.cache.glob("*.jpg")), [])
+
+    def test_the_poster_chosen_by_hand_stays(self):
+        self.fill([item("i1")])
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        self.service.get("item", "i1")
+        self.service.forget_library("lib")
+        self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
+        self.assertEqual(len(list((self.cfg.data / "posters").iterdir())), 1)
+
+    def test_another_library_or_an_empty_one_has_nothing_to_forget(self):
+        (self.root / "poster.png").write_bytes(fixtures.PNG)
+        self.fill([item("i1", meta={"image": "poster.png"})])
+        self.service.get("item", "i1")
+        self.assertEqual(self.service.forget_library("ailleurs"), 0)
+        self.assertEqual(len(list(self.service.cache.glob("*.jpg"))), 1)
+
+
 class TestCustomPoster(ServiceCase):
     def setUp(self):
         super().setUp()

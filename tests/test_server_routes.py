@@ -531,6 +531,25 @@ class TestPosterRoutes(RouteCase):
         self.hub.images.set_poster.assert_not_called()
 
 
+class TestImageRefreshRoute(RouteCase):
+    def test_the_library_forgets_its_images_and_says_how_many(self):
+        self.hub.images.forget_library.return_value = 12
+        reply = self.post("/api/images/refresh", {"lib": "lib"})
+        self.assertEqual((reply.status, reply.json()), (200, {"ok": True, "removed": 12}))
+        self.hub.images.forget_library.assert_called_once_with("lib")
+
+    def test_an_unknown_or_missing_library_is_a_404(self):
+        self.assertEqual(self.post("/api/images/refresh", {"lib": "ailleurs"}).status, 404)
+        self.assertEqual(self.post("/api/images/refresh", {}).status, 404)
+        self.hub.images.forget_library.assert_not_called()
+
+    def test_an_ordinary_account_cannot_do_it(self):
+        accounts.create(self.db, "root", "motdepasse1")
+        bob = accounts.create(self.db, "bob", "motdepasse1")
+        self.assertEqual(self.post("/api/images/refresh", {"lib": "lib"}, headers=self.hub.cookie(bob)).status, 403)
+        self.hub.images.forget_library.assert_not_called()
+
+
 class TestTmdbSheetRoutes(RouteCase):
     def setUp(self):
         super().setUp()

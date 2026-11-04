@@ -1572,6 +1572,19 @@ class TestSettings(UiCase):
     def titles(self):
         return self.view(".panel h2").all_inner_texts()
 
+    def test_the_films_library_can_reread_its_covers(self):
+        film = self.item("films", "Inception")
+        urllib.request.urlopen(self.base + "/img/item/" + film["id"] + "?w=160").read()          # la vignette est dans le cache
+        cache = self.run_.hub.images.cache
+        before = len(list(cache.glob("*.jpg")))
+        self.assertGreater(before, 0)
+        self.open("#/settings")
+        self.view("[data-key=covers-films]").click()
+        self.page.locator("#toast.on", has_text="Covers à relire").wait_for()
+        self.assertLess(len(list(cache.glob("*.jpg"))), before)
+        self.assertEqual(self.view("[data-key^=covers-]").count(), 1)                              # seule la bibliothèque de films a ce bouton
+        urllib.request.urlopen(self.base + "/img/item/" + film["id"] + "?w=160").read()          # et elle se refait à la demande
+
     def test_the_page_is_called_settings_and_opens_on_the_management_tab(self):
         self.open("#/settings")
         self.view(".panel").first.wait_for()

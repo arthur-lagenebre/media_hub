@@ -817,6 +817,10 @@
       if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
       if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
     }
+    function refreshCovers(l) {
+      H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast('Covers à relire : ' + l.label + ' (' + H.plural(r.removed, 'vignette') + ' oubliée' + (r.removed > 1 ? 's' : '') + ')'); })
+        .catch(function (e) { H.toast(e.message, 5000); });
+    }
     function gestion(body) {
       var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, 'Bibliothèques'),
         H.button('Tout mettre à jour', 'refresh', { class: 'primary', 'data-key': 'scan-all', title: 'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.', onclick: function () { start('/api/scan', {}, 'Mise à jour lancée'); } })));
@@ -826,6 +830,7 @@
           l.kind === 'shows' ? H.button('Enrichir (TMDB)', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Enrichissement lancé : ' + l.label); } }) : null,
           l.kind === 'movies' ? H.button('Sagas (TMDB)', null, { 'data-key': 'enrich-' + l.id, title: 'Cherche chez TMDB les films qui manquent à tes sagas.', onclick: function () { start('/api/enrich', { lib: l.id }, 'Recherche des films manquants lancée : ' + l.label); } }) : null,
           l.kind === 'music' ? H.button('Fiches artistes', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Fiches artistes demandées : ' + l.label); } }) : null,
+          l.kind === 'movies' ? H.button('Relire les covers', null, { 'data-key': 'covers-' + l.id, title: 'Vide les vignettes gardées : chacune se refait depuis folder.jpg ou la jaquette du .mkv. Les affiches choisies à la main restent.', onclick: function () { refreshCovers(l); } }) : null,
           H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } })));
       });
       body.appendChild(libs);
