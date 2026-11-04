@@ -914,6 +914,7 @@
       }
       panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, me.name), h('span', null, ROLES[me.role] || me.role)),
         H.button('Changer mon mot de passe', 'edit', { 'data-key': 'mypw', onclick: changeMine }),
+        H.button('Déconnecter les autres appareils', null, { 'data-key': 'signout-others', onclick: signOutOthers }),
         h('a', { class: 'btn f', href: '/api/logout', 'data-key': 'logout', onclick: function () { H.forgetAccount(); } }, 'Se déconnecter')));
       return panel;
     }
@@ -927,6 +928,17 @@
           return H.api('/api/me/password', { current: v.current, 'new': v.next });   // le serveur renouvelle le cookie : rien à garder ici
         },
         done: function () { H.toast('Mot de passe changé. Les autres appareils devront se reconnecter.', 5000); H.focus.key(el, 'mypw'); } });
+    }
+    // Les autres appareils du compte (téléphone, télé, navigateur oublié) sont déconnectés ; celui-ci reste connecté : le serveur renouvelle son cookie.
+    function signOutOthers() {
+      dialog({ title: 'Déconnecter les autres appareils', ok: 'Déconnecter',
+        lead: ['Tous les autres appareils connectés à ce compte devront se reconnecter. Celui-ci reste connecté. Ton mot de passe ne change pas.'],
+        fields: [{ key: 'current', label: 'Mot de passe actuel', type: 'password', auto: 'current-password' }],
+        submit: function (v) {
+          if (!v.current) return 'Saisis ton mot de passe actuel.';
+          return H.api('/api/me/signout-others', { current: v.current });
+        },
+        done: function () { H.toast('Les autres appareils sont déconnectés.', 5000); H.focus.key(el, 'signout-others'); } });
     }
     // Gestion des comptes (administrateur, serveur avec comptes).
     function usersPanel() {

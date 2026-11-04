@@ -24,6 +24,18 @@ class TestCreate(unittest.TestCase):
         self.assertEqual(caught.exception.status, status)
         return caught.exception.message
 
+    def test_revoking_the_sessions_of_an_account_keeps_its_password_and_spares_the_others(self):
+        alice = accounts.create(self.db, "alice", "un-mot-de-passe")
+        bob = accounts.create(self.db, "bob", "un-mot-de-passe")
+        old = accounts.session_token("s", alice)
+        bobs = accounts.session_token("s", bob)
+        row = accounts.revoke_sessions(self.db, alice["id"])
+        self.assertIsNone(accounts.user_for_token(self.db, "s", old))
+        self.assertEqual(accounts.user_for_token(self.db, "s", accounts.session_token("s", row))["id"], alice["id"])
+        self.assertEqual(accounts.user_for_token(self.db, "s", bobs)["id"], bob["id"])
+        self.assertEqual(accounts.authenticate(self.db, "alice", "un-mot-de-passe")["id"], alice["id"])
+        self.assertEqual(self.refused(lambda: accounts.revoke_sessions(self.db, "inconnu"), 404), "compte inconnu")
+
     def test_the_first_account_is_the_administrator_whatever_role_was_asked(self):
         row = accounts.create(self.db, "alice", "un-mot-de-passe", role="user")
         self.assertEqual((row["id"], row["name"], row["role"]), (accounts.FIRST_ID, "alice", "admin"))

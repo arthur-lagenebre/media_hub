@@ -2467,6 +2467,26 @@ class TestAccountManagement(AccountsCase):
         self.assertEqual(self.admin.get("/api/state")[0], 200)
         self.assertEqual(self.sign_in("bob", "nouveau-mdp-1").get("/api/state")[0], 200)
 
+    def test_signing_out_the_other_devices_asks_for_the_password_and_keeps_this_one_connected(self):
+        bob, lea = self.new_user("bob"), self.new_user("lea")
+        for body in ({}, {"current": "faux"}, {"current": 12}, {"current": None}):
+            status, answer = bob.json("/api/me/signout-others", body)
+            self.assertEqual((status, answer), (400, {"error": "mot de passe actuel incorrect"}), body)
+        self.assertEqual(bob.get("/api/state")[0], 200)                                           # rien n'a bougé
+        elsewhere = self.session_for("bob")                                                       # le même compte sur un autre appareil
+        status, headers, data = bob.request("POST", "/api/me/signout-others", body={"current": self.PASSWORD})
+        answer = json.loads(data)
+        self.assertEqual((status, answer["ok"]), (200, True))
+        self.assertEqual(bob.get("/api/state")[0], 401)                                           # l'ancien jeton ne vaut plus, celui-ci comme l'autre appareil
+        self.assertEqual(elsewhere.get("/api/state")[0], 401)
+        self.assertEqual(BearerClient(self.run_.port, answer["token"]).get("/api/state")[0], 200)
+        cookie = headers["Set-Cookie"]                                                            # le navigateur d'où vient la demande reste connecté
+        self.assertTrue(cookie.startswith(f"hub={answer['token']};") and "HttpOnly" in cookie, cookie)
+        self.assertEqual(Client(self.run_.port, cookie.split(";")[0]).get("/api/state")[0], 200)
+        self.assertEqual(lea.get("/api/state")[0], 200)                                           # les autres comptes ne sont pas touchés
+        self.assertEqual(self.sign_in("bob", self.PASSWORD).session["token"], answer["token"])    # le mot de passe est resté le même
+        self.assertEqual(self.anon.request("POST", "/api/me/signout-others", body={"current": self.PASSWORD})[0], 401)
+
     def test_a_user_changes_its_own_password(self):
         bob = self.new_user("bob")
         for body in ({"current": "faux", "new": "nouveau-mdp-1"}, {"new": "nouveau-mdp-1"}, {"current": 12, "new": "nouveau-mdp-1"}, {"current": "secret", "new": "nouveau-mdp-1"}):
@@ -2631,7 +2651,7 @@ class TestOpenServer(unittest.TestCase):
         conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
         self.addCleanup(conn.close)
         for path, body in (("/api/users", {"name": "intrus", "password": "motdepasse1"}), ("/api/user/default/password", {"password": "motdepasse1"}),
-                           ("/api/user/default/delete", {}), ("/api/me/password", {"current": "x", "new": "motdepasse1"})):
+                           ("/api/user/default/delete", {}), ("/api/me/password", {"current": "x", "new": "motdepasse1"}), ("/api/me/signout-others", {"current": "x"})):
             conn.request("POST", path, body=json.dumps(body), headers={"Content-Type": "application/json"})
             response = conn.getresponse()
             data = json.loads(response.read())
