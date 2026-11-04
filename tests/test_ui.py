@@ -1443,6 +1443,41 @@ class TestHomeGreeting(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestSignOutOthers(unittest.TestCase):
+    @unittest.skipUnless(sync_playwright, "Playwright absent")
+    def test_the_account_panel_signs_out_the_other_devices_and_keeps_this_one(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            run = Running(tmp, password="secret")
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch()
+                base = f"http://127.0.0.1:{run.port}"
+                form = {"Content-Type": "application/x-www-form-urlencoded"}
+                here, elsewhere = browser.new_context(), browser.new_context()
+                for context in (here, elsewhere):
+                    context.request.post(base + "/api/login", data="password=secret", headers=form)
+                    self.assertEqual(context.request.get(base + "/api/state").status, 200)
+                page = here.new_page()
+                page.goto(base + "/#/settings")
+                page.locator(".tabs .tab", has_text="Comptes").click()
+                page.locator("[data-key=signout-others]").click()
+                dialog = page.locator("[role=dialog]")
+                dialog.locator("input[type=password]").fill("faux")
+                dialog.get_by_role("button", name="Déconnecter").click()
+                page.wait_for_function("document.querySelector('.formerr').textContent.length > 0")
+                self.assertIn("incorrect", dialog.locator(".formerr").inner_text())
+                self.assertEqual(elsewhere.request.get(base + "/api/state").status, 200)             # un mauvais mot de passe ne coupe rien
+                dialog.locator("input[type=password]").fill("secret")
+                dialog.get_by_role("button", name="Déconnecter").click()
+                page.wait_for_function("document.getElementById('toast').textContent.includes('autres appareils')")
+                self.assertEqual(elsewhere.request.get(base + "/api/state").status, 401)
+                self.assertEqual(here.request.get(base + "/api/state").status, 200)                   # cet appareil reste connecté
+                browser.close()
+            run.stop()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class TestSettings(UiCase):
     """La page « Paramètres » : des onglets en haut, qui restent affichés, au lieu d'une seule longue page de gestion."""
 

@@ -653,6 +653,17 @@ def api_me_password(h, m, q):
     h.send_json(out, 200, headers)
 
 
+@route("POST", r"/api/me/signout-others")
+def api_me_signout_others(h, m, q):
+    """Chacun déconnecte tous ses appareils sauf celui-ci, en donnant son mot de passe (sans lui, un jeton volé suffirait à mettre dehors son propriétaire)."""
+    need_accounts(h)
+    body = body_dict(h)
+    row = check_current(h, body.get("current"))
+    row = account_call(accounts.revoke_sessions, h.hub.db, row["id"])
+    out, headers = renewed_session(h, row)
+    h.send_json(out, 200, headers)
+
+
 @route("GET", r"/api/me/settings")
 def api_me_settings(h, m, q):
     """Les réglages d'affichage du compte (gardés sur le serveur : ils le suivent d'un appareil à l'autre)."""

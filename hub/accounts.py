@@ -3,7 +3,7 @@
 Un compte a un identifiant, un nom (unique, sans tenir compte de la casse), un mot de passe haché et un rôle (`admin` ou `user`). L'identifiant est le « profil » de la progression, des playlists et des clés `dismiss:` de `kv` ;
 le premier compte créé reçoit l'identifiant `default` : c'est celui d'avant les comptes, il garde donc ce que le profil unique avait accumulé.
 
-Le jeton de session n'est pas gardé : c'est `HMAC(secret, "session:<identifiant>:<token_version>")`, présenté sous la forme `<identifiant>.<mac>`. Changer un mot de passe incrémente `token_version`, ce qui invalide d'un coup tous les jetons du compte.
+Le jeton de session n'est pas gardé : c'est `HMAC(secret, "session:<identifiant>:<token_version>")`, présenté sous la forme `<identifiant>.<mac>`. Changer un mot de passe, ou demander de déconnecter les autres appareils, incrémente `token_version`, ce qui invalide d'un coup tous les jetons du compte.
 Le jeton de média (`?token=`) reste unique pour tout le serveur : voir `Hub.media_token`.
 """
 
@@ -240,6 +240,17 @@ def set_password(db, uid, password, check=True):
     with db.write_lock:
         conn = db.connection()
         cursor = conn.execute("UPDATE users SET pass_hash=?, token_version=token_version+1 WHERE id=?", (hashed, uid))
+        conn.commit()
+    if cursor.rowcount == 0:
+        raise AccountError(404, "compte inconnu")
+    return by_id(db, uid)
+
+
+def revoke_sessions(db, uid):
+    """Tous les jetons de session du compte cessent de valoir (`token_version` + 1), sans toucher au mot de passe. Renvoie le compte à jour : son nouveau jeton est celui de l'appareil qui a demandé."""
+    with db.write_lock:
+        conn = db.connection()
+        cursor = conn.execute("UPDATE users SET token_version=token_version+1 WHERE id=?", (uid,))
         conn.commit()
     if cursor.rowcount == 0:
         raise AccountError(404, "compte inconnu")
