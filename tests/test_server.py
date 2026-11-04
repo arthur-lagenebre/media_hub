@@ -500,7 +500,7 @@ class TestJobs(ServerCase):
         log = []
         with mock.patch.object(jobs, "force_unlink", side_effect=OSError(errno.EROFS, "ro")):
             result = jobs.clean_junk(libs, True, log.append)
-        self.assertEqual(result, {"found": 4, "removed": 0})
+        self.assertEqual((result["found"], result["removed"], len(result["sample"])), (4, 0, 4))
         self.assertEqual(sum("lecture seule (retire" in line for line in log), 2)        # une par bibliothèque
         self.assertEqual(sum("… et 1 autre(s)" in line for line in log), 2)
 

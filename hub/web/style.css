@@ -191,6 +191,9 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .jt { display: inline-flex; width: calc(100% - 1.1rem); justify-content: space-between; }
 .job.running .jt span { color: var(--accent); }
 .job.failed .jt span { color: #ff8b8b; }
+.sample { margin: 0 0 0.8rem; padding: 0 0 0 1.2rem; max-height: 12rem; overflow: auto; color: var(--mute); font-size: 0.85rem; word-break: break-all; }
+.sample:empty { display: none; }
+.sample .more { list-style: none; margin-left: -1.2rem; padding-top: 0.2rem; }
 .job pre, .job .muted { margin: 0.4rem 0 0.4rem 1.6rem; color: var(--mute); font-size: 0.8rem; white-space: pre-wrap; max-height: 24rem; overflow: auto; }
 
 /* Les onglets des paramètres : restent sous la barre du haut quand la page défile */

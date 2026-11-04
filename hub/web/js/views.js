@@ -859,9 +859,17 @@
       var counting = false;
       function said(found) { return found === 1 ? 'La dernière simulation en a compté 1.' : 'La dernière simulation en a compté ' + found + '.'; }
       var count = h('p', { class: 'lead', role: 'status' }, sim ? said(sim.result.found) : 'Aucune simulation faite : lance « Compter » pour savoir combien il y en a.');
+      var sample = h('ul', { class: 'sample', 'aria-label': 'Les premiers fichiers qui seraient supprimés' });
+      function listed(result) {          // les premiers fichiers que la simulation a nommés, et combien d'autres
+        H.clear(sample);
+        var names = (result && result.sample) || [];
+        names.forEach(function (name) { sample.appendChild(h('li', null, name)); });
+        if (result && result.found > names.length) sample.appendChild(h('li', { class: 'more' }, '… et ' + (result.found - names.length) + ' autre(s)'));
+      }
+      listed(sim && sim.result);
       var recount = H.button('Compter', null, { 'data-key': 'junk-recount', 'aria-label': 'Compter de nouveau les fichiers parasites', onclick: function () {
         if (counting) return;
-        counting = true; count.textContent = 'Comptage en cours…';
+        counting = true; count.textContent = 'Comptage en cours…'; listed(null);
         function wait(id) {
           return H.api('/api/jobs').then(function (r) {
             var job = r.jobs.filter(function (j) { return j.id === id; })[0];
@@ -871,10 +879,11 @@
         }
         H.api('/api/cleanup', {}).then(function (r) { return wait(r.job.id); }).then(function (job) {
           count.textContent = job && job.status === 'done' && job.result ? said(job.result.found) : 'Le comptage a échoué : voir l’onglet Tâches.';
+          if (job && job.status === 'done') listed(job.result);
         }, function (e) { count.textContent = e.message; }).then(function () { counting = false; poll(); });
       } });
       dialog({ title: 'Supprimer les fichiers parasites ?', ok: 'Supprimer définitivement', danger: true, fields: [],
-        lead: ['Les fichiers parasites seront supprimés de la médiathèque, et cela ne s’annule pas.'], extra: [count, recount],
+        lead: ['Les fichiers parasites seront supprimés de la médiathèque, et cela ne s’annule pas.'], extra: [count, sample, recount],
         submit: function () { return H.api('/api/cleanup', { apply: true }); },
         done: function () { H.toast('Nettoyage lancé'); poll(); } });
     }
