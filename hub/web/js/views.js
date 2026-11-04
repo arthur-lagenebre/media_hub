@@ -184,8 +184,16 @@
     if (sub) sub.insertBefore(h('i', { class: 'dot' }), sub.firstChild);
     return card;
   }
-  function latestSection(latest) {
-    return h('section', { class: 'shelf latest' }, h('h2', null, 'Nouveautés'), h('div', { class: 'grid' }, latest.map(latestCard)));
+  // « Pas encore vu » : ce que le serveur propose (films et séries jamais touchés par ce compte), sans ce que `taken` (les nouveautés montrées) affiche déjà, 12 au plus ; chacun garde sa bibliothèque.
+  var UNSEEN_SHOWN = 12;
+  H.unseen = function (offered, libraries, taken) {
+    var byId = {}, skip = {};
+    libraries.forEach(function (lib) { byId[lib.id] = lib; });
+    taken.forEach(function (e) { skip[e.item.id] = true; });
+    return offered.filter(function (it) { return !skip[it.id] && byId[it.lib]; }).slice(0, UNSEEN_SHOWN).map(function (it) { return { item: it, lib: byId[it.lib] }; });
+  };
+  function cardsSection(cls, title, entries) {
+    return h('section', { class: 'shelf ' + cls }, h('h2', null, title), h('div', { class: 'grid' }, entries.map(latestCard)));
   }
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
@@ -210,8 +218,10 @@
         var me = H.session.auth && H.session.user && H.session.user.name;
         el.appendChild(h('h1', { class: 'greeting' }, me ? 'Bonjour ' + me : 'Bonjour'));
         if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
-        var latest = H.latest(data.libraries, LATEST);
-        if (latest.length) el.appendChild(latestSection(latest));
+        var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
+        if (latest.length) el.appendChild(cardsSection('latest', 'Nouveautés', latest));
+        var unseen = H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.unseen || [], data.libraries, latest);
+        if (unseen.length) el.appendChild(cardsSection('unseen', 'Pas encore vu', unseen));
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
         if (!a || a === document.body || (a.closest && a.closest('#nav')) && el.style.display !== 'none') H.focus.first();
@@ -835,10 +845,13 @@
       body.appendChild(play);
     }
     // Les réglages d'affichage du compte : chacun se choisit dans une liste.
+    var ON_OFF = [{ label: 'Affiché', detail: 'Le rayon est sur la page d’accueil', value: 'show' }, { label: 'Masqué', detail: 'Le rayon n’est pas sur la page d’accueil', value: 'hide' }];
     var DISPLAY = [{ key: 'music_view', title: 'Bibliothèque de musique', note: 'Comment elle s’ouvre',
       choices: [{ label: 'Albums', detail: 'Tous les albums, regroupés sous le nom de leur artiste', value: 'albums' }, { label: 'Artistes', detail: 'Un artiste par carte, avec sa photo, sans ses albums', value: 'artists' }] },
       { key: 'movie_view', title: 'Bibliothèque de films', note: 'Comment elle s’ouvre',
-        choices: [{ label: 'Sagas', detail: 'Les films d’une même saga sur une seule carte', value: 'sagas' }, { label: 'Films', detail: 'Tous les films, chacun sur sa carte', value: 'films' }] }];
+        choices: [{ label: 'Sagas', detail: 'Les films d’une même saga sur une seule carte', value: 'sagas' }, { label: 'Films', detail: 'Tous les films, chacun sur sa carte', value: 'films' }] },
+      { key: 'home_latest', title: 'Nouveautés', note: 'Sur la page d’accueil', choices: ON_OFF },
+      { key: 'home_unseen', title: 'Pas encore vu', note: 'Sur la page d’accueil', choices: ON_OFF }];
     function displayPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, 'Affichage'));
       DISPLAY.forEach(function (setting) {

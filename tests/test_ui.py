@@ -1312,6 +1312,75 @@ class TestHome(UiCase):
         self.assertLessEqual(last, self.page.evaluate("innerWidth") - edges[1] + 1)      # au bout, la dernière carte reste dans la marge
 
 
+class TestHomeUnseen(UiCase):
+    """« Pas encore vu » à l'accueil, après « Nouveautés » : des films et des séries que le compte n'a pas touchés ; chaque rayon se masque dans les réglages du compte."""
+
+    def setUp(self):
+        super().setUp()
+        db = self.run_.hub.db
+        films = [dict(r) for r in db.query("SELECT * FROM items WHERE lib='films'")]
+        entries = [dict(r) for r in db.query("SELECT * FROM entries WHERE lib='films'")]
+        old = [{**films[0], "id": f"vieux{n:03d}", "title": f"Vieux film {n:03d}", "sort": f"vieux film {n:03d}", "grp": "", "added": 100 + n, "meta": "{}"} for n in range(100)]
+        files = [{**entries[0], "id": f"vieuxf{n:03d}", "item_id": f"vieux{n:03d}", "rel": f"vieux{n:03d}/film.mkv"} for n in range(100)]
+        db.replace_library("films", films + old, entries + files)
+        self.addCleanup(db.replace_library, "films", films, entries)
+        day = mock.patch("hub.server.app.today", return_value="2026-11-04")          # le serveur tourne dans ce processus : l'ordre du jour ne change pas pendant le test
+        day.start()
+        self.addCleanup(day.stop)
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show"}))
+
+    def offered(self):
+        return [u["id"] for u in self.api("/api/home")["unseen"]]
+
+    def test_the_shelf_follows_the_new_ones_and_never_repeats_a_film_they_already_show(self):
+        self.open()
+        self.view(".shelf.unseen .card").first.wait_for()
+        self.assertEqual(self.view(".shelf h2").all_inner_texts(), ["Nouveautés", "Pas encore vu"])
+        latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        shown = self.view(".shelf.unseen .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        self.assertEqual(shown, [i for i in self.offered() if i not in latest][:12])
+        self.assertEqual(len(shown), 12)
+        self.assertFalse(set(shown) & set(latest))
+        self.assertEqual(self.view(".shelf.unseen .card[data-lib=films] .s .dot").count(), 12)             # comme les nouveautés : le point de sa bibliothèque
+
+    def test_a_film_that_is_started_leaves_the_shelf(self):
+        self.open()
+        self.view(".shelf.unseen .card").first.wait_for()
+        first = self.view(".shelf.unseen .card").first.get_attribute("data-key")
+        entry = self.run_.hub.db.one("SELECT id FROM entries WHERE item_id=?", (first,))["id"]
+        self.api("/api/progress", {"entry": entry, "position": 5, "duration": 100})
+        self.open()
+        self.view(".shelf.unseen .card").first.wait_for()
+        self.assertNotIn(first, self.view(".shelf.unseen .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))"))
+
+    def test_each_shelf_is_hidden_on_its_own_by_the_settings_of_the_account(self):
+        self.api("/api/me/settings", {"home_unseen": "hide"})
+        self.open()
+        self.view(".shelf.latest .card").first.wait_for()
+        self.assertEqual(self.view(".shelf h2").all_inner_texts(), ["Nouveautés"])
+        self.api("/api/me/settings", {"home_unseen": "show", "home_latest": "hide"})
+        self.open()
+        self.view(".shelf.unseen .card").first.wait_for()
+        self.assertEqual(self.view(".shelf h2").all_inner_texts(), ["Pas encore vu"])
+        shown = self.view(".shelf.unseen .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        self.assertEqual(shown, self.offered()[:12])                                                       # sans nouveautés, rien à ne pas répéter
+        self.api("/api/me/settings", {"home_unseen": "hide"})
+        self.open()
+        self.view(".greeting").wait_for()
+        self.until(lambda: self.view(".shelf").count() == 0)
+
+    def test_the_account_settings_have_a_choice_for_each_shelf(self):
+        self.open("#/settings?tab=comptes")
+        panel = self.view(".panel", has_text="Affichage")
+        for title, key, name in (("Nouveautés", "home_latest", "Nouveautés"), ("Pas encore vu", "home_unseen", "Pas encore vu")):
+            line = panel.locator(".line", has_text=title)
+            self.assertIn("Affiché", line.inner_text())
+            line.locator("button", has_text="Changer").click()
+            self.page.locator(".menu .opt .lbl", has_text="Masqué").click()
+            self.until(lambda key=key: self.api("/api/me/settings")["settings"][key] == "hide")
+            self.until(lambda line=line: "Masqué" in line.inner_text())
+
+
 class TestHomeNewArtist(UiCase):
     def test_the_arrival_of_an_artist_is_one_card_that_opens_his_page(self):
         db = self.run_.hub.db
