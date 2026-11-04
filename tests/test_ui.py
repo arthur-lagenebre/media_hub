@@ -1252,40 +1252,49 @@ class TestHome(UiCase):
         libs = self.api("/api/home")["libraries"]
         return {it["id"]: it["added"] for lib in libs for it in lib["recent"]}
 
+    def expected_latest(self):
+        """Les ids que l'accueil doit montrer : les 8 premiers de chaque bibliothèque, mêlés du plus récent au plus ancien, 24 au plus."""
+        mixed = [(-it["added"], i, k, it["id"]) for i, lib in enumerate(self.api("/api/home")["libraries"]) for k, it in enumerate(lib["recent"][:8])]
+        return [row[3] for row in sorted(mixed)][:24]
+
     def test_the_home_says_hello_and_mixes_the_latest_additions_of_every_library(self):
         self.open()
         self.view(".shelf.latest .card").first.wait_for()
         self.assertEqual(self.view(".greeting").inner_text(), "Bonjour")                       # serveur ouvert : pas de nom à dire
         cards = self.view(".shelf.latest .card")
         known = self.latest_from_api()
-        self.assertEqual(cards.count(), min(20, len(known)))
+        shown = cards.evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        self.assertEqual(shown, self.expected_latest())
+        self.assertLessEqual(len(shown), 24)
         libs = set(cards.evaluate_all("els => els.map(e => e.getAttribute('data-lib'))"))
         self.assertGreaterEqual(len(libs), 3)
-        added = [known[key] for key in cards.evaluate_all("els => els.map(e => e.getAttribute('data-key'))")]
+        added = [known[key] for key in shown]
         self.assertEqual(added, sorted(added, reverse=True))                                    # du plus récent au plus ancien
         self.assertEqual(self.view(".shelf[data-lib]").count(), 0)                              # plus d'étagère par bibliothèque
         self.assertEqual(self.view(".card.more").count(), 0)
 
-    def test_each_card_names_its_kind_with_a_dot_in_the_colour_of_its_library(self):
+    def test_each_card_has_a_dot_in_the_colour_of_its_library_and_no_word_for_its_kind(self):
         self.open()
         self.view(".shelf.latest .card").first.wait_for()
-        for lib, word, colour in (("films", "Film", "rgb(242, 180, 65)"), ("series", "Série", "rgb(76, 195, 176)"), ("animations", "Animation", "rgb(255, 122, 168)"),
-                                  ("musique", "Album", "rgb(255, 138, 92)"), ("livres", "Livre", "rgb(155, 209, 107)")):
+        for lib, colour in (("films", "rgb(242, 180, 65)"), ("series", "rgb(76, 195, 176)"), ("animations", "rgb(255, 122, 168)"), ("musique", "rgb(255, 138, 92)"), ("livres", "rgb(155, 209, 107)")):
             card = self.view(f".shelf.latest .card[data-lib={lib}]").first
             card.wait_for()
-            self.assertTrue(card.locator(".s").inner_text().startswith(word + " ·") or card.locator(".s").inner_text() == word, (lib, card.locator(".s").inner_text()))
             self.assertEqual(card.locator(".s .dot").evaluate("el => getComputedStyle(el).backgroundColor"), colour, lib)
+            self.assertNotRegex(card.locator(".s").inner_text(), r"^(Film|Série|Animation|Album|Livre)\b", lib)               # le point dit la bibliothèque : pas de mot en plus
 
-    def test_the_mix_keeps_twenty_at_most_newest_first_and_each_with_its_library(self):
+    def test_the_mix_keeps_eight_per_library_and_twenty_four_in_all_newest_first(self):
         self.open()
         out = self.page.evaluate("""() => {
           var mk = (id, added) => ({ id: id, added: added });
           var libs = [{ id: 'a', recent: [mk('a1', 50), mk('a2', 10)] }, { id: 'b', recent: [mk('b1', 60), mk('b2', 50)] }];
           var many = { id: 'c', recent: Array.from({ length: 24 }, (_, i) => mk('c' + i, 1000 - i)) };
-          return { few: Hub.latest(libs, 20).map(x => x.item.id + '@' + x.lib.id), many: Hub.latest([many], 20).length, firstMany: Hub.latest([many], 20)[0].item.id };
+          var flood = [{ id: 'm', recent: Array.from({ length: 24 }, (_, i) => mk('m' + i, 900 - i)) }, { id: 'f', recent: [mk('f1', 10), mk('f2', 5)] }];
+          return { few: Hub.latest(libs, 24, 8).map(x => x.item.id + '@' + x.lib.id), many: Hub.latest([many], 24, 8).length, firstMany: Hub.latest([many], 24, 8)[0].item.id,
+                   capped: Hub.latest(flood, 24, 8).map(x => x.item.id) };
         }""")
         self.assertEqual(out["few"], ["b1@b", "a1@a", "b2@b", "a2@a"])           # à date égale, l'ordre des bibliothèques puis celui de leur liste
-        self.assertEqual((out["many"], out["firstMany"]), (20, "c0"))
+        self.assertEqual((out["many"], out["firstMany"]), (8, "c0"))                                  # au plus 8 par bibliothèque
+        self.assertEqual(out["capped"], ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "f1", "f2"])      # un gros ajout de musique ne prend pas toute la place
 
     def test_a_row_that_scrolls_is_cut_at_the_margin_on_the_right_as_on_the_left(self):
         for lib, title in (("films", "Inception"), ("series", "Dark"), ("livres", "Naruto")):
