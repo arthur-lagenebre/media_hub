@@ -78,10 +78,13 @@
   function missingCard(m, hide) {
     var pic = H.picture(m.cover ? m.cover + '?w=300' : '', m.title, '');
     pic.appendChild(h('span', { class: 'part' }, m.rank));
-    var card = h('div', { class: 'card wanted', title: m.title + ' (manquant)' }, pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, 'Manquant'].filter(Boolean).join(' · ')));
+    var state = m.coming ? 'pas encore sorti' : 'manquant';           // un film annoncé est grisé comme les autres, mais il ne manque à personne
+    var card = h('div', { class: 'card wanted', title: m.title + ' (' + state + ')' }, pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, m.coming ? 'À venir' : 'Manquant'].filter(Boolean).join(' · ')));
     if (!hide || !m.ignorable) return card;
     return h('div', { class: 'mcell' }, card, H.button('Ne pas afficher', 'close', { class: 'mhide', 'data-key': 'hide-' + m.tmdb, 'aria-label': 'Ne pas afficher ' + m.title + ' comme manquant', onclick: function () { hide(m); } }));
   }
+  // Combien de ces films manquent vraiment : ceux qui ne sont pas encore sortis ne comptent pas.
+  function lacking(absent) { return (absent || []).filter(function (m) { return !m.coming; }).length; }
   // Les films qu'on a et ceux qui manquent, rangés ensemble par leur rang dans la saga ; `card(film)` fait la case d'un film qu'on a.
   function sagaCells(films, absent, card, hide) {
     var cells = films.map(function (f, i) { return { rank: f.part === undefined || f.part === null ? i + 1 : f.part, node: card(f) }; });
@@ -515,7 +518,7 @@
           if (s.id === d.id) c.classList.add('now');
           return c;
         });
-        var absent = (saga.missing || []).length;
+        var absent = lacking(saga.missing);
         return h('section', { class: 'sagabox' },
           h('h2', null, h('a', { class: 'f head', href: sagaHref(d.library.id, saga.name) }, saga.name), h('span', { class: 'n' }, H.plural(saga.films.length, 'film') + (absent ? ' · ' + H.plural(absent, 'manquant') : ''))),
           h('div', { class: 'grid small' }, cards));
@@ -656,7 +659,7 @@
       var next = films.filter(function (f) { return !(f.seen >= Math.max(1, f.n)); })[0];
       var years = films.map(function (f) { return f.year; }).filter(Boolean).sort();
       var meta = [H.plural(films.length, 'film')];
-      if (absent.length) meta.push(H.plural(absent.length, 'manquant'));
+      if (lacking(absent)) meta.push(H.plural(lacking(absent), 'manquant'));
       if (years.length) meta.push(years[0] === years[years.length - 1] ? years[0] : years[0] + '–' + years[years.length - 1]);
       if (done) meta.push(done === films.length ? 'Tous vus' : done + '/' + films.length + ' vus');
       var info = h('div', { class: 'info' }, h('h1', null, name), h('p', { class: 'meta' }, meta.join(' · ')));

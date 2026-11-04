@@ -70,5 +70,6 @@ def tagged(name, members, info, ignored):
 
 
 def listed(ids, owned, info):
-    """Les films qu'une saga du fichier liste, qu'on n'a pas (`owned` : les identifiants TMDB qu'on a) et que l'enrichissement a décrits ; leur rang est leur place dans la liste. Un film qu'on a écrit soi-même n'est jamais « ignoré »."""
-    return [entry(ident, rank, info) for rank, ident in enumerate(ids, 1) if ident not in owned and str(ident) in info["films"]]
+    """Les films qu'une saga du fichier liste, qu'on n'a pas (`owned` : les identifiants TMDB qu'on a) et que l'enrichissement a décrits ; leur rang est leur place dans la liste. Un film qu'on a écrit soi-même n'est jamais « ignoré ». Un film pas encore sorti y figure aussi, marqué `coming` : il est grisé comme les autres, mais il ne manque à personne."""
+    return [{**entry(ident, rank, info), **({} if released(info["films"][str(ident)]) else {"coming": True})}
+            for rank, ident in enumerate(ids, 1) if ident not in owned and str(ident) in info["films"]]
