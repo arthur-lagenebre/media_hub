@@ -214,10 +214,12 @@
     var libId = m[1], lib = H.lib(libId);
     var kind = lib ? lib.kind : 'movies';
     var sorts = SORTS[kind] || SORTS.movies;
-    var st = { q: '', letter: '', genre: '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '', sagas: kind === 'movies' };       // les films sont toujours regroupés en sagas
+    var st = { q: '', letter: '', genre: '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '' };
     var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { letters: [], genres: [], sections: [] };
     function artistMode() { return kind === 'music' && H.setting('music_view') === 'artists'; }      // le choix du compte : les albums sous leurs artistes, ou un artiste par carte
-    var shownMode = artistMode();
+    function sagaMode() { return kind === 'movies' && H.setting('movie_view') !== 'films'; }         // le choix du compte : les films d'une saga sur une carte, ou chacun sur la sienne
+    function viewMode() { return artistMode() + '/' + sagaMode(); }
+    var shownMode = viewMode();
     var grid = h('div', { class: 'grid' + (kind === 'music' ? ' sq' : '') });
     var sentinel = h('div', { class: 'sentinel' });
     var count = h('span', { class: 'count' });
@@ -241,7 +243,7 @@
       bSeen.classList.toggle('on', st.unseen);
       bGenre.hidden = !facets.genres.length;
       var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
-      count.textContent = total ? (kind === 'movies' && st.sagas && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word)) : '';
+      count.textContent = total ? (sagaMode() && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word)) : '';
     }
     // Les accès rapides des livres : une pastille par section (Manga, BD, Comics, Artbook…), avec ce qu'elle contient.
     function paintQuick() {
@@ -277,7 +279,7 @@
       if (st.genre) q.push('genre=' + encodeURIComponent(st.genre));
       if (st.section) q.push('section=' + encodeURIComponent(st.section));
       if (st.unseen) q.push('filter=unseen');
-      if (st.sagas) q.push('sagas=1');
+      if (sagaMode()) q.push('sagas=1');
       if (artistMode()) q.push('view=artists');
       return '/api/library/' + libId + '?' + q.join('&');
     }
@@ -335,7 +337,7 @@
     return {
       el: el, lib: libId, nav: '#/l/' + libId,
       refresh: function () {      // au retour d'une fiche : les pastilles « vu » ont pu changer
-        if (artistMode() !== shownMode) { shownMode = artistMode(); reset(); return; }          // le choix de la vue a changé dans les paramètres : on repart de zéro
+        if (viewMode() !== shownMode) { shownMode = viewMode(); reset(); return; }          // le choix de la vue a changé dans les paramètres : on repart de zéro
         var mine = ++token, keep = items.length;
         H.api(query(0).replace('limit=240', 'limit=' + Math.min(600, Math.max(240, keep)))).then(function (res) {
           if (mine !== token) return;
@@ -818,7 +820,9 @@
     }
     // Les réglages d'affichage du compte : chacun se choisit dans une liste.
     var DISPLAY = [{ key: 'music_view', title: 'Bibliothèque de musique', note: 'Comment elle s’ouvre',
-      choices: [{ label: 'Albums', detail: 'Tous les albums, regroupés sous le nom de leur artiste', value: 'albums' }, { label: 'Artistes', detail: 'Un artiste par carte, avec sa photo, sans ses albums', value: 'artists' }] }];
+      choices: [{ label: 'Albums', detail: 'Tous les albums, regroupés sous le nom de leur artiste', value: 'albums' }, { label: 'Artistes', detail: 'Un artiste par carte, avec sa photo, sans ses albums', value: 'artists' }] },
+      { key: 'movie_view', title: 'Bibliothèque de films', note: 'Comment elle s’ouvre',
+        choices: [{ label: 'Sagas', detail: 'Les films d’une même saga sur une seule carte', value: 'sagas' }, { label: 'Films', detail: 'Tous les films, chacun sur sa carte', value: 'films' }] }];
     function displayPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, 'Affichage'));
       DISPLAY.forEach(function (setting) {

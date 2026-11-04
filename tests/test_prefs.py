@@ -18,33 +18,38 @@ class TestPrefs(unittest.TestCase):
         self.db = Database(root / "hub.db")
 
     def test_an_account_without_a_choice_gets_the_defaults(self):
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums"})
+        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums", "movie_view": "sagas"})
 
     def test_a_choice_is_kept_for_that_account_only(self):
-        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "artists"}), {"music_view": "artists"})
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "artists"})
-        self.assertEqual(prefs.load(self.db, "u2"), {"music_view": "albums"})
+        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "artists"}), {"music_view": "artists", "movie_view": "sagas"})
+        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "artists", "movie_view": "sagas"})
+        self.assertEqual(prefs.load(self.db, "u2"), {"music_view": "albums", "movie_view": "sagas"})
+
+    def test_each_setting_is_kept_on_its_own(self):
+        prefs.save(self.db, "u1", {"music_view": "artists"})
+        self.assertEqual(prefs.save(self.db, "u1", {"movie_view": "films"}), {"music_view": "artists", "movie_view": "films"})
+        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "albums", "movie_view": "sagas"}), {"music_view": "albums", "movie_view": "sagas"})
 
     def test_a_new_choice_replaces_the_old_one(self):
         prefs.save(self.db, "u1", {"music_view": "artists"})
-        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "albums"}), {"music_view": "albums"})
+        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "albums", "movie_view": "sagas"}), {"music_view": "albums", "movie_view": "sagas"})
 
     def test_an_unknown_setting_or_value_is_refused_and_changes_nothing(self):
         prefs.save(self.db, "u1", {"music_view": "artists"})
-        for changes, message in (({"couleur": "rouge"}, "réglage inconnu : couleur"), ({"music_view": "mosaique"}, "valeur inconnue pour music_view : mosaique"),
+        for changes, message in (({"couleur": "rouge"}, "réglage inconnu : couleur"), ({"music_view": "mosaique"}, "valeur inconnue pour music_view : mosaique"), ({"movie_view": "albums"}, "valeur inconnue pour movie_view : albums"),
                                  ({"music_view": ["artists"]}, "valeur inconnue pour music_view"), ({}, "aucun réglage à changer"), ("artists", "aucun réglage à changer"),
                                  ({"music_view": "artists", "couleur": "rouge"}, "réglage inconnu : couleur")):
             with self.assertRaisesRegex(ValueError, message):
                 prefs.save(self.db, "u1", changes)
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "artists"})
+        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "artists", "movie_view": "sagas"})
 
     def test_a_stored_value_that_is_no_longer_allowed_falls_back_to_the_default(self):
         self.db.kv_set(prefs.KEY + "u1", {"music_view": "ancienne", "autre": 1})
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums"})
+        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums", "movie_view": "sagas"})
 
     def test_a_damaged_value_is_ignored(self):
         self.db.kv_set(prefs.KEY + "u1", "pas un dictionnaire")
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums"})
+        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums", "movie_view": "sagas"})
 
 
 if __name__ == "__main__":

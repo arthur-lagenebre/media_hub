@@ -423,10 +423,37 @@ class TestSagasInLibrary(UiCase):
         self.press("Escape", wait=500)
         self.assertTrue(self.page.url.endswith("#/l/films"))
 
-    def test_the_films_are_always_grouped_in_sagas_and_there_is_no_button_to_undo_it(self):
+    def choose_films(self, view):
+        self.api("/api/me/settings", {"movie_view": view})
+        self.addCleanup(lambda: self.api("/api/me/settings", {"movie_view": "sagas"}))
+
+    def test_by_default_the_films_are_grouped_in_sagas_and_the_page_has_no_button_for_it(self):
         self.open("#/l/films")
         self.view(".grid .card.saga").first.wait_for()
         self.assertEqual(self.view(".tools .btn", has_text="Sagas").count(), 0)
+
+    def test_an_account_that_chose_plain_films_sees_every_film_on_its_own(self):
+        self.choose_films("films")
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+        self.assertEqual(self.view(".grid .card.saga").count(), 0)
+        titles = self.view(".grid .card").evaluate_all("els => els.map(e => e.title)")
+        self.assertIn("Man of Steel", titles)
+        self.assertIn("Batman v Superman", titles)
+        self.assertEqual(self.view(".count").inner_text(), f"{len(titles)} films")
+
+    def test_the_films_choice_made_in_the_settings_applies_when_coming_back_to_the_library(self):
+        self.addCleanup(lambda: self.api("/api/me/settings", {"movie_view": "sagas"}))
+        self.open("#/l/films")
+        self.view(".grid .card.saga").first.wait_for()
+        self.open("#/settings?tab=comptes")
+        panel = self.view(".panel", has_text="Affichage")
+        panel.locator(".line", has_text="films").locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text="Films").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["movie_view"] == "films")
+        self.page.locator("#nav .link", has_text="Films").click()
+        self.view(".grid .card").first.wait_for()
+        self.until(lambda: self.view(".grid .card.saga").count() == 0)
 
     def test_the_old_choice_not_to_group_is_ignored(self):
         self.page.add_init_script("localStorage.setItem('hub.sagas.films', JSON.stringify('0'))")
@@ -1193,7 +1220,7 @@ class TestArtistsView(UiCase):
         self.view(".grid .card[data-type=album]").first.wait_for()
         self.open("#/settings?tab=comptes")
         panel = self.view(".panel", has_text="Affichage")
-        panel.locator("button", has_text="Changer").click()
+        panel.locator(".line", has_text="musique").locator("button", has_text="Changer").click()
         self.page.locator(".menu .opt .lbl", has_text="Artistes").click()
         self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "artists")
         self.page.locator("#nav .link", has_text="Musique").click()
@@ -1265,12 +1292,12 @@ class TestSettings(UiCase):
         panel = self.view(".panel", has_text="Affichage")
         panel.wait_for()
         self.assertIn("Albums", panel.inner_text())
-        panel.locator("button", has_text="Changer").click()
+        panel.locator(".line", has_text="musique").locator("button", has_text="Changer").click()
         self.page.locator(".menu .opt .lbl", has_text="Artistes").click()
         self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "artists")
         self.until(lambda: "Artistes" in self.view(".panel", has_text="Affichage").inner_text())
         panel = self.view(".panel", has_text="Affichage")
-        panel.locator("button", has_text="Changer").click()
+        panel.locator(".line", has_text="musique").locator("button", has_text="Changer").click()
         self.page.locator(".menu .opt .lbl", has_text="Albums").click()
         self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "albums")
 
