@@ -1,4 +1,4 @@
-"""L'enrichissement, sans réseau : ce qu'on retient d'une série, d'une collection de saga, la photo d'un artiste et le journal d'une passe."""
+"""L'enrichissement, sans réseau : ce qu'on retient d'une série, d'une collection de saga, les photos d'artistes déjà posées et le journal d'une passe."""
 
 from __future__ import annotations
 
@@ -150,46 +150,6 @@ class TestOtherPhotos(unittest.TestCase):
             self.assertEqual(len(names), 2 * len(enrich.PHOTO_EXTS), mbid)
 
 
-class TestPhotoBounds(unittest.TestCase):
-    def fetch(self, data):
-        class Reply:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def read(self, n):
-                return data[:n]
-
-        with mock.patch.object(enrich, "urlopen", lambda request, timeout=30: Reply()), mock.patch.object(enrich, "PHOTO_MAX", 40):
-            return enrich.fetch_photo("https://upload.wikimedia.org/a.jpg")
-
-    def test_a_photo_of_exactly_the_maximum_size_is_kept_and_a_byte_more_is_refused(self):
-        exact = JPEG + b"x" * (40 - len(JPEG))
-        self.assertEqual(self.fetch(exact), exact)
-        with self.assertRaises(OSError):
-            self.fetch(exact + b"x")
-
-
-class TestPhotoWidth(unittest.TestCase):
-    def urls(self, width):
-        page = {"thumbnail": {"source": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/D.jpg/320px-D.jpg"},
-                "originalimage": {"source": "https://upload.wikimedia.org/wikipedia/commons/a/ab/D.jpg", "width": width}}
-        mb = types.SimpleNamespace(external=lambda url: page)
-        return enrich.photo_urls(mb, {"lang": "fr", "title": "D"})
-
-    def test_an_original_as_wide_as_the_header_needs_no_bigger_version(self):
-        self.assertEqual(len(self.urls(enrich.PHOTO_WIDTH)), 2)
-        self.assertEqual(len(self.urls(enrich.PHOTO_WIDTH + 1)), 3)
-
-    def test_only_the_width_of_the_thumbnail_changes_even_when_the_file_name_looks_like_one(self):
-        page = {"thumbnail": {"source": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/120px-Daft.jpg/320px-120px-Daft.jpg"},
-                "originalimage": {"source": "https://upload.wikimedia.org/wikipedia/commons/a/ab/120px-Daft.jpg", "width": 5000}}
-        found = enrich.photo_urls(types.SimpleNamespace(external=lambda url: page), {"lang": "fr", "title": "D"})
-        self.assertEqual(found[0], f"https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/120px-Daft.jpg/{enrich.PHOTO_WIDTH}px-120px-Daft.jpg")
-
-
 class TestMusicBrainzClient(unittest.TestCase):
     def test_the_cache_is_read_in_its_own_folder(self):
         cfg = types.SimpleNamespace(data=Path("donnees"))
@@ -211,11 +171,9 @@ class TestArtistJournal(TempCase):
             counts = enrich.enrich_artists(cfg, self.db, lib, log.append)
         return counts, log
 
-    def test_the_journal_gives_the_facts_of_the_sheet_and_notes_a_photo(self):
-        (self.tmp / "artists").mkdir()
-        (self.tmp / "artists" / "a1.jpg").write_bytes(JPEG)
+    def test_the_journal_gives_the_facts_of_the_sheet(self):
         counts, log = self.run_pass({"type": "Group", "area": "France", "begin": "1993", "end": "2021"})
-        self.assertEqual((counts, log), ({"enriched": 1, "failed": 0}, ["  Daft : Groupe · France · 1993 – 2021 · photo"]))
+        self.assertEqual((counts, log), ({"enriched": 1, "failed": 0}, ["  Daft : Groupe · France · 1993 – 2021"]))
 
     def test_an_empty_sheet_is_said_to_be_empty(self):
         _, log = self.run_pass({})
@@ -485,16 +443,17 @@ class TestWantedLinks(unittest.TestCase):
 
 class TestSheetIsFresh(unittest.TestCase):
     def sheet(self, days=0, **info):
-        info = {"photo": "", "sheet": enrich.SHEET_VERSION, **info}
+        info = {"sheet": enrich.SHEET_VERSION, **info}
         return {"fetched": (date.today() - timedelta(days=days)).isoformat(), "info": info}
 
-    def test_a_recent_sheet_with_its_photo_and_the_current_version_is_fresh(self):
+    def test_a_recent_sheet_of_the_current_version_is_fresh(self):
         self.assertTrue(enrich.sheet_is_fresh(self.sheet()))
 
+    def test_a_sheet_kept_with_a_photo_key_by_an_older_version_is_still_fresh(self):
+        self.assertTrue(enrich.sheet_is_fresh(self.sheet(photo="a1.webp")))
+
     def test_anything_less_is_done_again(self):
-        old = self.sheet()
-        del old["info"]["photo"]
-        for kept in (None, {}, self.sheet(days=400), old, self.sheet(sheet=enrich.SHEET_VERSION - 1), self.sheet(sheet=None)):
+        for kept in (None, {}, self.sheet(days=400), self.sheet(sheet=enrich.SHEET_VERSION - 1), self.sheet(sheet=None)):
             self.assertFalse(enrich.sheet_is_fresh(kept), kept)
 
 
@@ -529,24 +488,11 @@ class TestArtistPass(TempCase):
         self.assertIn("  Zeta : hors ligne", log)
 
     def test_a_fresh_sheet_is_not_fetched_again_unless_forced(self):
-        sheet = {"fetched": date.today().isoformat(), "info": {"photo": "", "sheet": enrich.SHEET_VERSION}}
+        sheet = {"fetched": date.today().isoformat(), "info": {"sheet": enrich.SHEET_VERSION}}
         self.db.kv_set(enrich.artist_key("a-id"), sheet)
         self.assertEqual(self.run_pass()[2], ["z-id"])
         self.db.kv_set(enrich.artist_key("a-id"), sheet)
         self.assertEqual(self.run_pass(force=True)[2], ["z-id", "a-id"])
-
-
-class TestRefusedRedirect(unittest.TestCase):
-    def refusal(self, target):
-        from urllib.error import URLError
-        from urllib.request import Request
-        with self.assertRaises(URLError) as caught:
-            enrich._SameHosts().redirect_request(Request("https://upload.wikimedia.org/a.jpg"), None, 302, "Found", {}, target)
-        return caught.exception.reason
-
-    def test_the_refusal_names_the_host_it_would_have_gone_to_or_else_the_address(self):
-        self.assertEqual(self.refusal("https://exemple.org/b.jpg"), "redirection refusée vers exemple.org")
-        self.assertEqual(self.refusal("file:///etc/passwd"), "redirection refusée vers file:///etc/passwd")
 
 
 if __name__ == "__main__":

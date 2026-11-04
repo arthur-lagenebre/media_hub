@@ -534,27 +534,14 @@ class TestJobs(ServerCase):
         home = self.run_.libs["musique"] / "Daft Punk"
         self.addCleanup((home / "artist.webp").unlink, True)
 
-        class Download:                                                 # ce que Wikimedia répondrait : une image
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def read(self, n=-1):
-                return fixtures.PNG
-
-        with mock.patch("hub.enrich.fetch_artist", return_value=info), mock.patch("hub.enrich.photo_urls", return_value=["https://upload.wikimedia.org/x.png"]), \
-                mock.patch("hub.enrich.urlopen", return_value=Download()):
+        with mock.patch("hub.enrich.fetch_artist", return_value=info):
             self.assertEqual(self.api.json("/api/enrich", {"lib": "musique"})[0], 202)         # MusicBrainz ne demande pas de clé
             self.run_.wait_jobs()
         sheet = self.api.json(url)[1]
-        self.assertTrue(sheet["photo"])
-        self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # un fichier par artiste, dans son dossier
-        self.assertEqual(list((self.hub.cfg.data / "artists").glob("*.*")), [])         # et plus sous HUB_DATA
-        self.assertEqual((home / "artist.webp").read_bytes()[8:12], b"WEBP")
-        status, headers, body = self.api.get(photo)
-        self.assertEqual((status, headers["Content-Type"]), (200, "image/jpeg"))
+        self.assertFalse(sheet["photo"])                                                # les fiches ne téléchargent aucune photo, même avec un article Wikipédia
+        self.assertEqual(list(home.glob("artist.*")), [])
+        self.assertEqual(list((self.hub.cfg.data / "artists").glob("*.*")), [])
+        self.assertEqual(self.api.get(photo)[0], 404)
         self.assertIn("genres", sheet)
         self.assertEqual(sheet["info"]["facts"], "Groupe · France · 1993 – 2021")
         self.assertEqual(sheet["info"]["wiki"]["extract"], "Duo de musique électronique.")
@@ -586,8 +573,6 @@ class TestJobs(ServerCase):
         self.assertEqual([p.exists() for p in found], [True] * len(found))       # le nettoyage garde leurs images
 
     def test_artist_photo_is_one_file_that_each_new_photo_replaces(self):
-        from unittest import mock
-
         album = self.item_by_title("musique", "Discovery")
         detail = self.detail(album["id"])
         artist_id = detail["artist_id"]
@@ -610,36 +595,8 @@ class TestJobs(ServerCase):
         self.api.request("POST", base + "/photo", body=fixtures.PNG, headers={"Content-Type": "image/png"})
         self.assertEqual([p.name for p in home.glob("artist.*")], ["artist.webp"])       # la nouvelle prend la place de l'ancienne
 
-        self.assertEqual(self.api.get(base + "/photo/wikipedia")[0], 404)                             # sans article connu, rien à chercher
+        self.assertEqual(self.api.get(base + "/photo/wikipedia")[0], 404)                             # la photo de Wikipédia n'existe plus
         self.assertEqual(self.api.json(base + "/photo/delete", {})[0], 404)                           # et une photo ne se supprime pas
-        info = {"sheet": 2, "photo": "", "wiki": {"lang": "fr", "title": "Daft Punk", "url": "https://fr.wikipedia.org/wiki/Daft_Punk", "extract": "Duo."}}
-        self.hub.db.update_item_meta(album["id"], meta={"artist_mbid": "abc"})
-        self.addCleanup(self.hub.jobs.scan, next(l for l in self.hub.cfg.libraries if l.id == "musique"))
-        self.addCleanup(self.hub.db.kv_set, "artist:abc", None)         # la fiche posée ici ne doit pas empêcher celle du test des fiches
-        self.hub.db.kv_set("artist:abc", {"fetched": "2099-01-01", "info": info})
-        self.assertIn("wiki", self.api.json(base)[1]["info"])
-
-        class Download:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def read(self, n=-1):
-                return fixtures.PNG
-
-        folder.mkdir(parents=True, exist_ok=True)
-        before = (home / "artist.webp").read_bytes()
-        with mock.patch("hub.enrich.photo_urls", return_value=["https://upload.wikimedia.org/x.jpg"]), mock.patch("hub.enrich.urlopen", return_value=Download()):
-            status, headers, body = self.api.get(base + "/photo/wikipedia")
-        self.assertEqual((status, body), (200, fixtures.PNG))                                          # la photo est rendue telle quelle, pour le recadrage
-        self.assertEqual(headers.get("Content-Type"), "image/png")
-        self.assertEqual((home / "artist.webp").read_bytes(), before)                                 # et rien n'est enregistré avant la validation
-        self.assertEqual(list(folder.glob(f"{artist_id}.*")), [])
-        with mock.patch("hub.enrich.photo_urls", return_value=[]):
-            self.assertEqual(self.api.get(base + "/photo/wikipedia")[0], 502)
-        self.assertEqual((home / "artist.webp").read_bytes(), before)
 
     @unittest.skipUnless(images.Image is not None and images.can_webp(""), "Pillow absent")
     def test_artist_photo_keeps_only_the_frame_and_becomes_webp(self):
@@ -777,19 +734,6 @@ class TestJobs(ServerCase):
         self.assertEqual([(l["label"], l["url"]) for l in enrich.wanted_links(data)],
                          [("Site officiel", "https://x.example"), ("Bandcamp", "https://x.bandcamp.com"), ("SoundCloud", "https://soundcloud.com/x"), ("YouTube", "https://www.youtube.com/x")])
         self.assertEqual(enrich.wanted_links({}), [])
-
-    def test_artist_photo_only_comes_from_wikimedia(self):
-        from hub import enrich
-
-        class Wiki:
-            def external(self, url):
-                return {"thumbnail": {"source": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/92/F.jpg/330px-F.jpg?utm_source=fr.wikipedia.org"},
-                        "originalimage": {"source": "https://evil.example/x.jpg", "width": 4000}}
-
-        urls = enrich.photo_urls(Wiki(), {"lang": "fr", "title": "Daft Punk"})
-        self.assertEqual(urls[0], "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/92/F.jpg/960px-F.jpg?utm_source=fr.wikipedia.org")     # la plus grande d'abord
-        self.assertEqual(len(urls), 2)                                  # la vignette en repli ; l'adresse d'un autre site n'est jamais suivie
-        self.assertTrue(all(u.startswith("https://thumb.wikimedia.org/") for u in urls))
 
     def test_enrich_keeps_show_synopsis_seasons_and_cast(self):
         from unittest import mock
@@ -2327,7 +2271,7 @@ class TestAccountPermissions(AccountsCase):
         """Ce qu'un compte `user` n'a pas le droit de faire : (méthode, chemin, corps)."""
         admin = self.admin.session["user"]["id"]
         return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/cleanup", {"apply": True}),
-                ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG), ("GET", f"/api/artist/musique/{self.artist}/photo/wikipedia", None),
+                ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG),
                 ("POST", f"/api/artist/musique/{self.artist}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1}),
                 ("GET", "/api/sagas", None), ("POST", "/api/sagas", {"sagas": []}), ("POST", "/api/sagas/add", {"name": "intrus", "films": [1]}), ("GET", "/api/sagas/films", None), ("POST", "/api/sagas/ignore", {"tmdb": 1}),
                 ("GET", "/api/users", None), ("POST", "/api/users", {"name": "intrus", "password": self.PASSWORD}),
@@ -2837,20 +2781,6 @@ class TestImageConversions(unittest.TestCase):
                 thread.join()
         self.assertEqual(running[0], 0)
         self.assertEqual(peak[0], 2)                                                           # jamais plus que HUB_MAX_STREAMS, mais bien deux en parallèle
-
-
-class TestPhotoRedirects(unittest.TestCase):
-    def test_a_redirect_stays_on_wikimedia_over_https(self):
-        from urllib.error import URLError
-        from urllib.request import Request
-        from hub import enrich
-        handler = enrich._SameHosts()
-        request = Request("https://upload.wikimedia.org/a.jpg")
-        self.assertIsNotNone(handler.redirect_request(request, None, 302, "Found", {}, "https://upload.wikimedia.org/b.jpg"))
-        self.assertIsNotNone(handler.redirect_request(request, None, 302, "Found", {}, "https://thumb.wikimedia.org/b.jpg"))
-        for target in ("http://upload.wikimedia.org/b.jpg", "https://exemple.org/b.jpg", "http://169.254.169.254/latest", "https://192.168.1.1/x", "file:///etc/passwd"):
-            with self.assertRaises(URLError, msg=target):
-                handler.redirect_request(request, None, 302, "Found", {}, target)
 
 
 class TestAccountCommandLine(unittest.TestCase):

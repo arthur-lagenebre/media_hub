@@ -1312,7 +1312,7 @@ def artist_home(lib, rows):
 
 
 def artist_photo(hub, artist_id, kept, home=None):
-    """Le fichier de la photo d'un artiste, la seule qu'il ait (elle vient de Wikipédia, via « Fiches artistes », ou de l'utilisateur) ; None s'il n'en a pas."""
+    """Le fichier de la photo d'un artiste, la seule qu'il ait (celle que l'utilisateur a envoyée) ; None s'il n'en a pas."""
     return enrich.photo_file(hub.cfg.data / "artists", artist_id, (kept or {}).get("mbid", ""), home)
 
 
@@ -1406,23 +1406,6 @@ def api_artist_photo_crop(h, m, q):
         raise HttpError(500, f"photo illisible : {e}")
     save_artist_photo(hub, lib, rows, m.group(2), data, box)
     h.send_json({"ok": True})
-
-
-@route("GET", r"/api/artist/([\w-]+)/(\w+)/photo/wikipedia")
-def api_artist_photo_wikipedia(h, m, q):
-    """La photo de l'article Wikipédia d'un artiste (celui que sa fiche garde : il faut donc que « Fiches artistes » soit passé), telle quelle : rien n'est enregistré, l'interface la propose au recadrage et n'envoie que le résultat à `…/photo?crop=`. Administrateur seulement."""
-    require_admin(h)
-    hub = h.hub
-    _, rows = artist_albums(hub, m.group(1), m.group(2))
-    wiki = ((artist_kept(hub, rows) or {}).get("info") or {}).get("wiki")
-    if not wiki:
-        raise HttpError(404, "pas d'article Wikipédia connu pour cet artiste")
-    try:
-        data = enrich.wikipedia_photo(hub.cfg, wiki)
-    except OSError as e:
-        raise HttpError(502, f"photo non récupérée : {e}")
-    mime = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}[enrich.image_ext(data)]
-    h.send_body(data, mime, 200, {"Cache-Control": "no-store"})
 
 
 @route("GET", r"/img/artist/([\w-]+)/(\w+)")
@@ -1864,7 +1847,7 @@ def poster_item(h, ident):
 
 @route("POST", r"/api/item/(\w+)/poster")
 def api_item_poster(h, m, q):
-    """Remplace l'affiche d'un film ou d'une série par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque."""
+    """Remplace l'affiche d'un film ou d'une série par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). Un WebP est converti en JPEG ; 415 s'il ne se lit pas, 501 si rien ne sait le convertir. L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque. Il n'y a pas de retour à l'affiche d'avant : la nouvelle devient l'affiche."""
     item = poster_item(h, m.group(1))
     data = h.body_bytes(PHOTO_UPLOAD_MAX)
     ext = enrich.image_ext(data)

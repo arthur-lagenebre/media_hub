@@ -292,35 +292,20 @@
         return H.api('/api/artist/' + lib + '/' + id + '/photo/crop', f).then(function () { return saved('Photo recadrée'); });
       });
     }
-    function fromWikipedia() {       // proposée au recadrage ; rien n'est enregistré avant « Valider » (« Annuler » garde la photo d'avant)
-      H.toast('Recherche sur Wikipédia…');
-      fetch('/api/artist/' + lib + '/' + id + '/photo/wikipedia', { credentials: 'same-origin' }).then(function (r) {
-        if (r.status === 401) { location.href = '/login'; throw new Error('connexion requise'); }
-        if (r.ok) return r.blob();
-        return r.json().catch(function () { return null; }).then(function (d) { throw new Error((d && d.error) || ('Erreur ' + r.status)); });
-      }).then(function (blob) {
-        if (blob.size > 10 * 1024 * 1024) throw new Error('Image trop grosse (10 Mo au plus).');
-        var url = URL.createObjectURL(blob);
-        cropPhoto(url, function (f) {
-          return H.api('/api/artist/' + lib + '/' + id + '/photo?crop=' + [f.x, f.y, f.w, f.h].join(','), blob, { raw: true }).then(function () { return saved('Photo de Wikipédia enregistrée'); });
-        }, function () { URL.revokeObjectURL(url); });
-      }).catch(fail);
-    }
     function load() {
       return H.api('/api/artist/' + lib + '/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
         H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Artiste introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + lib, 'data-autofocus': '1' }, 'Retour à la musique')));
       });
     }
     // Les boutons de la fiche d'un artiste : lire, mettre en file, et pour l'administrateur la photo.
-    function artistActions(d, info, list) {
+    function artistActions(d, list) {
       return h('div', { class: 'actions' },
         H.button('Tout lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }),
         H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
         H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
         H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }),
         H.device === 'tv' || !H.isAdmin() ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
-        H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button('Recadrer', 'full', { 'data-key': 'crop', onclick: recrop }),
-        info && info.wiki && H.isAdmin() ? H.button('Photo de Wikipédia', 'refresh', { 'data-key': 'wikiphoto', onclick: fromWikipedia }) : null);
+        H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button('Recadrer', 'full', { 'data-key': 'crop', onclick: recrop }));
     }
     // Le texte à droite de la photo : nom, faits, genres, totaux, résumé Wikipédia, boutons.
     function artistInfo(d, info) {
@@ -332,7 +317,7 @@
       if (tags) box.appendChild(h('p', { class: 'genres' }, tags));
       box.appendChild(h('p', { class: info && info.facts ? 'credit' : 'meta' }, meta));
       if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, 'Wikipédia')));
-      box.appendChild(artistActions(d, info, list));
+      box.appendChild(artistActions(d, list));
       return box;
     }
     function artistHero(d, box) {

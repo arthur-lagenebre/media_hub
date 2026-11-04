@@ -38,7 +38,6 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 | 422 | livre illisible |
 | 500 | erreur interne, ou ffprobe / ffmpeg a échoué (le message le dit) |
 | 501 | ffmpeg est introuvable sur le serveur (flux converti impossible), ou ni Pillow ni ffmpeg pour recadrer une photo d'artiste |
-| 502 | service extérieur injoignable (photo Wikipédia) |
 | 503 | trop de conversions en cours (`HUB_MAX_STREAMS`) |
 
 ## Authentification
@@ -229,7 +228,7 @@ Musique seulement (404 sinon, ou si l'artiste n'a pas d'album).
 - `photo` : booléen (inchangé). **`image`** (optionnel) : URL de la photo, **présente seulement si `photo` est vrai** ; sinon utiliser la pochette du premier album.
 - `info` (optionnel, après « Fiches artistes » côté serveur) : `{"facts": "Groupe · France · 1993 – 2021", "disambiguation": "", "wiki": {"lang", "title", "url", "extract"} ou null, "members": [{"name", "roles", "period", "former"}], "links": [{"label", "url"}]}`.
 - `wanted` : albums de l'artiste qui manquent dans la médiathèque ; `cover` est une URL relative, ou `""` s'il n'y a pas d'image. Ce ne sont ni des éléments ni des fichiers : rien à lire.
-- Administration (usage interne de l'interface, **administrateur seulement**, 403 sinon) : `POST /api/artist/<lib>/<id>/photo[?crop=x,y,l,h]` (corps = image JPEG / PNG / WebP, 10 Mo au plus → `{"ok": true}`, 415 sinon) ; `crop` est un cadre en fractions de l'image (`0 ≤ x,y < 1`, `0 < l,h ≤ 1`, dans l'image, sinon 400) : ce qui est hors du cadre disparaît. La photo est convertie en WebP (1280 px au plus) et posée dans le dossier de l'artiste à la racine de la bibliothèque, `artist.webp` (sous `HUB_DATA/artists/` s'il n'en a pas, ou si ni Pillow ni ffmpeg ne convertissent : 501 alors si `crop` est demandé, 500 si le dossier n'est pas modifiable). `POST …/photo/crop` (corps JSON `{"x", "y", "w", "h"}`, mêmes fractions) recadre la photo gardée (404 s'il n'y en a pas). `GET …/photo/wikipedia` rend la photo de l'article, telle quelle et sans l'enregistrer (l'interface la recadre puis l'envoie à `…/photo?crop=` ; 404 sans article connu, 502 si Wikipédia ne répond pas).
+- Administration (usage interne de l'interface, **administrateur seulement**, 403 sinon) : `POST /api/artist/<lib>/<id>/photo[?crop=x,y,l,h]` (corps = image JPEG / PNG / WebP, 10 Mo au plus → `{"ok": true}`, 415 sinon) ; `crop` est un cadre en fractions de l'image (`0 ≤ x,y < 1`, `0 < l,h ≤ 1`, dans l'image, sinon 400) : ce qui est hors du cadre disparaît. La photo est convertie en WebP (1280 px au plus) et posée dans le dossier de l'artiste à la racine de la bibliothèque, `artist.webp` (sous `HUB_DATA/artists/` s'il n'en a pas, ou si ni Pillow ni ffmpeg ne convertissent : 501 alors si `crop` est demandé, 500 si le dossier n'est pas modifiable). `POST …/photo/crop` (corps JSON `{"x", "y", "w", "h"}`, mêmes fractions) recadre la photo gardée (404 s'il n'y en a pas).
 - `GET /img/artist/<lib>/<id>?w=` : la photo (404 s'il n'y en a pas). `GET /img/wanted/<lib>/<artist_id>/<clé>?w=` : pochette d'un album manquant. `GET /img/film/<tmdb>?w=` : l'affiche d'un film qui manque à une saga (404 s'il n'en a pas).
 
 ## Comptes
