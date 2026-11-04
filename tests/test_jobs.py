@@ -227,17 +227,51 @@ class TestCleanJunk(unittest.TestCase):
         self.log = []
 
     def clean(self, apply):
-        return jobs.clean_junk([self.lib], apply, self.log.append)
+        out = jobs.clean_junk([self.lib], apply, self.log.append)
+        self.sample = out.pop("sample")
+        return out
 
-    def test_a_simulation_counts_and_removes_nothing(self):
+    def named(self, *folders):
+        return sorted(f"{self.root.name}/{folder}/Thumbs.db" for folder in folders)
+
+    def test_a_simulation_counts_removes_nothing_and_names_the_files(self):
         self.assertEqual(self.clean(False), {"found": 3, "removed": 0})
-        self.assertEqual(self.log, ["3 fichier(s) de ce genre (simulation : rien n'a été effacé)."])
+        self.assertEqual(self.sample, self.named("a", "b", "c"))
+        self.assertEqual(self.log[-1], "3 fichier(s) de ce genre (simulation : rien n'a été effacé).")
+        self.assertEqual(sorted(self.log[:-1]), sorted("  " + name for name in self.sample))
         self.assertTrue((self.root / "a" / "Thumbs.db").exists())
 
-    def test_the_real_thing_removes_them(self):
+    def test_the_real_thing_removes_them_and_lists_nothing_in_the_log(self):
         self.assertEqual(self.clean(True), {"found": 3, "removed": 3})
+        self.assertEqual(self.sample, self.named("a", "b", "c"))
         self.assertEqual(self.log, ["3 fichier(s) de ce genre, 3 effacé(s)."])
         self.assertFalse((self.root / "a" / "Thumbs.db").exists())
+
+    def test_only_the_first_twenty_are_named_and_the_rest_is_counted(self):
+        for n in range(22):
+            (self.root / f"d{n:02d}").mkdir()
+            (self.root / f"d{n:02d}" / "Thumbs.db").write_bytes(b"x")
+        self.assertEqual(self.clean(False), {"found": 25, "removed": 0})
+        self.assertEqual(len(self.sample), 20)
+        self.assertEqual(self.sample, sorted(self.sample))
+        self.assertEqual(len(set(self.sample)), 20)
+        self.assertEqual(self.log[-2:], ["  … et 5 autre(s).", "25 fichier(s) de ce genre (simulation : rien n'a été effacé)."])
+        self.assertEqual(len(self.log), 22)
+
+    def test_exactly_twenty_files_have_no_and_more_line(self):
+        for n in range(17):
+            (self.root / f"d{n:02d}").mkdir()
+            (self.root / f"d{n:02d}" / "Thumbs.db").write_bytes(b"x")
+        self.assertEqual(self.clean(False), {"found": 20, "removed": 0})
+        self.assertEqual(len(self.log), 21)
+        self.assertNotIn("autre(s)", " ".join(self.log[:-1]))
+
+    def test_a_file_is_named_from_the_root_of_its_library_with_slashes(self):
+        deep = self.root / "Artiste" / "Album" / "CD1"
+        deep.mkdir(parents=True)
+        (deep / "Thumbs.db").write_bytes(b"x")
+        self.clean(False)
+        self.assertIn(f"{self.root.name}/Artiste/Album/CD1/Thumbs.db", self.sample)
 
     def test_a_read_only_volume_is_told_once_then_counted(self):
         with mock.patch.object(jobs, "force_unlink", side_effect=OSError(errno.EROFS, "lecture seule")):

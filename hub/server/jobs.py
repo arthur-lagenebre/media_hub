@@ -13,6 +13,7 @@ import stat
 import threading
 import time
 from collections import deque
+from pathlib import Path
 
 from libraries.music import coverfile, wanted
 
@@ -148,24 +149,52 @@ def force_unlink(path):
         os.chmod(folder, mode)
 
 
+SAMPLE = 20           # les premiers fichiers que la simulation nomme : de quoi voir ce qui partirait avant de confirmer
+
+
+def erase(path, lib, read_only, log):
+    """Efface `path` (de force) ; rend (effacé ?, fichiers vus sur un volume en lecture seule, celui-ci compris). Une erreur est dite pour son fichier ; un volume en lecture seule, une seule fois."""
+    try:
+        force_unlink(path)
+        return True, read_only
+    except OSError as e:
+        if e.errno != errno.EROFS:
+            log(f"  impossible d'effacer {path} : {e}")
+        elif not read_only:         # le volume entier est en lecture seule : une seule ligne par bibliothèque suffit
+            log(f"  impossible d'effacer {path} : volume en lecture seule (retire « :ro » du volume {lib.path} dans docker-compose.yml)")
+        return False, read_only + (e.errno == errno.EROFS)
+
+
+def shown_name(lib, path):
+    """Le nom d'un fichier dans la liste : depuis le dossier de sa bibliothèque (« Musique/Daft Punk/Thumbs.db »), avec des « / »."""
+    return f"{Path(lib.path).name}/{os.path.relpath(path, lib.path).replace(os.sep, '/')}"
+
+
+def list_sample(sample, found, log):
+    """Dans le journal d'une simulation : les premiers fichiers, puis combien d'autres."""
+    for name in sample:
+        log(f"  {name}")
+    if found > len(sample):
+        log(f"  … et {found - len(sample)} autre(s).")
+
+
 def clean_junk(libraries, apply, log):
-    """Les fichiers parasites : ceux que Windows et macOS sèment dans les dossiers, et les images de musique autres que cover.{ext} : comptés, et effacés si `apply` (de force : voir force_unlink)."""
+    """Les fichiers parasites : ceux que Windows et macOS sèment dans les dossiers, et les images de musique autres que cover.{ext} : comptés (les premiers nommés), et effacés si `apply` (de force : voir force_unlink)."""
     found = removed = 0
+    sample = []
     for lib in libraries:
         read_only = 0
         for path in walk_junk(lib.path, lib.kind == "music"):
             found += 1
+            if len(sample) < SAMPLE:
+                sample.append(shown_name(lib, path))
             if apply:
-                try:
-                    force_unlink(path)
-                    removed += 1
-                except OSError as e:
-                    if e.errno != errno.EROFS:
-                        log(f"  impossible d'effacer {path} : {e}")
-                    elif not read_only:         # le volume entier est en lecture seule : une seule ligne par bibliothèque suffit
-                        log(f"  impossible d'effacer {path} : volume en lecture seule (retire « :ro » du volume {lib.path} dans docker-compose.yml)")
-                    read_only += e.errno == errno.EROFS
+                erased, read_only = erase(path, lib, read_only, log)
+                removed += erased
         if read_only > 1:
             log(f"  … et {read_only - 1} autre(s) fichier(s) de {lib.path} sur ce volume en lecture seule.")
+    sample.sort()
+    if not apply:
+        list_sample(sample, found, log)
     log(f"{found} fichier(s) de ce genre" + (f", {removed} effacé(s)." if apply else " (simulation : rien n'a été effacé)."))
-    return {"found": found, "removed": removed}
+    return {"found": found, "removed": removed, "sample": sample}
