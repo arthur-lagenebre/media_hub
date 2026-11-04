@@ -352,6 +352,73 @@ class TestMoreSources(ServiceCase):
         self.assertEqual((data, mime), (photo.read_bytes(), "image/png"))
 
 
+@needs_pillow
+class TestToJpeg(unittest.TestCase):
+    def opened(self, data):
+        return images.Image.open(io.BytesIO(data))
+
+    @unittest.skipUnless(has_webp(), "Pillow sans libwebp")
+    def test_a_webp_becomes_a_jpeg_of_the_same_size(self):
+        data = images.to_jpeg(encoded("WEBP", (30, 20)))
+        self.assertEqual(images.sniff(data), "image/jpeg")
+        with self.opened(data) as out:
+            self.assertEqual((out.format, out.size), ("JPEG", (30, 20)))
+
+    def test_a_transparent_background_becomes_white_not_black(self):
+        with self.opened(images.to_jpeg(encoded("PNG", (10, 10), "RGBA"))) as out:
+            self.assertTrue(all(channel > 240 for channel in out.convert("RGB").getpixel((5, 5))))
+
+    def test_an_unreadable_image_is_a_convert_error(self):
+        with self.assertRaises(images.ConvertError):
+            images.to_jpeg(b"RIFF....WEBPpas une image")
+
+
+class TestToJpegWithoutPillow(unittest.TestCase):
+    def test_ffmpeg_does_it_when_pillow_is_not_there(self):
+        run = mock.Mock(return_value=types.SimpleNamespace(returncode=0, stdout=b"jpeg"))
+        with mock.patch.object(images, "Image", None), mock.patch.object(images.subprocess, "run", run):
+            self.assertEqual(images.to_jpeg(b"octets", "ffmpeg"), b"jpeg")
+        self.assertIn("mjpeg", run.call_args.args[0])
+
+    def test_ffmpeg_takes_over_from_a_pillow_that_cannot_read_the_file(self):
+        run = mock.Mock(return_value=types.SimpleNamespace(returncode=0, stdout=b"jpeg"))
+        with mock.patch.object(images, "_pillow_to_jpeg", side_effect=ValueError("pas de libwebp")), mock.patch.object(images.subprocess, "run", run):
+            self.assertEqual(images.to_jpeg(b"octets", "ffmpeg"), b"jpeg")
+
+    def test_a_failing_ffmpeg_is_a_convert_error(self):
+        run = mock.Mock(return_value=types.SimpleNamespace(returncode=1, stdout=b""))
+        with mock.patch.object(images, "Image", None), mock.patch.object(images.subprocess, "run", run), self.assertRaises(images.ConvertError):
+            images.to_jpeg(b"octets", "ffmpeg")
+
+    def test_without_pillow_or_ffmpeg_there_is_no_converter(self):
+        with mock.patch.object(images, "Image", None), self.assertRaises(images.NoConverter):
+            images.to_jpeg(b"octets", "")
+
+
+class TestCacheFolderGone(ServiceCase):
+    def setUp(self):
+        super().setUp()
+        (self.root / "poster.png").write_bytes(fixtures.PNG)
+        self.fill([item("i1", meta={"image": "poster.png"}), item("i2")])
+
+    def test_an_image_is_still_served_and_the_folder_comes_back(self):
+        shutil.rmtree(self.service.cache)
+        data, mime, _key = self.service.get("item", "i1")
+        self.assertEqual((data, mime), (fixtures.PNG, "image/png"))
+        self.assertEqual(len(list(self.service.cache.glob("*.jpg"))), 1)
+
+    def test_an_item_without_image_is_a_plain_miss_not_an_error(self):
+        shutil.rmtree(self.service.cache)
+        self.assertIsNone(self.service.get("item", "i2"))
+        self.assertEqual(len(list(self.service.cache.glob("*.none"))), 1)
+
+    def test_a_cache_that_cannot_be_written_never_breaks_a_request(self):
+        shutil.rmtree(self.service.cache)
+        with mock.patch.object(images, "write_atomic", side_effect=OSError("disque plein")), mock.patch.object(Path, "mkdir", side_effect=OSError("lecture seule")):
+            self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
+            self.assertIsNone(self.service.get("item", "i2"))
+
+
 class TestCustomPoster(ServiceCase):
     def setUp(self):
         super().setUp()
@@ -364,8 +431,6 @@ class TestCustomPoster(ServiceCase):
     def test_a_poster_chosen_comes_before_every_other_source(self):
         self.service.set_poster("i1", fixtures.PNG, ".png")
         self.assertEqual(self.service.get("item", "i1")[:2], (fixtures.PNG, "image/png"))
-        self.assertTrue(self.service.has_poster("i1"))
-        self.assertFalse(self.service.has_poster("i2"))
 
     def test_changing_the_poster_changes_the_image_served_and_its_stamp(self):
         before = self.service.get("item", "i1")
@@ -388,14 +453,6 @@ class TestCustomPoster(ServiceCase):
         self.service.set_poster("i1", fixtures.PNG, ".png")
         self.assertEqual(sorted(p.name for p in self.folder().iterdir()), names)
         self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
-
-    def test_clearing_gives_back_the_original_and_removes_the_file(self):
-        self.service.set_poster("i1", fixtures.PNG, ".png")
-        self.service.clear_poster("i1")
-        self.service.clear_poster("i1")
-        self.assertEqual(self.service.get("item", "i1")[0], b"dossier")
-        self.assertFalse(self.service.has_poster("i1"))
-        self.assertEqual(list(self.folder().iterdir()), [])
 
     def test_a_poster_file_that_went_missing_falls_back_to_the_original(self):
         self.service.set_poster("i1", fixtures.PNG, ".png")

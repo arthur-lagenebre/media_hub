@@ -12,6 +12,7 @@ from unittest import mock
 from tests.rig import MiniHub, call
 from tests.test_server_views import entry, item
 from hub import accounts, config, missing, urls
+from hub.media import images
 from hub.server import app
 
 ME = accounts.FIRST_ID
@@ -489,29 +490,45 @@ class TestPosterRoutes(RouteCase):
         reply = self.post("/api/item/a1/poster", self.PNG)
         self.assertEqual((reply.status, "affiche" in reply.json()["error"]), (400, True))
         self.assertEqual(self.post("/api/item/inconnu/poster", self.PNG).status, 404)
-        self.assertEqual(self.post("/api/item/a1/poster/delete").status, 400)
         self.hub.images.set_poster.assert_not_called()
 
-    def test_the_original_poster_comes_back(self):
-        reply = self.post("/api/item/m1/poster/delete")
-        self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
-        self.hub.images.clear_poster.assert_called_once_with("m1")
+    WEBP = b"RIFF\x00\x00\x00\x00WEBP" + b"x" * 20
 
-    def test_the_sheet_says_whether_the_poster_is_a_custom_one(self):
-        self.hub.images.has_poster.return_value = True
-        self.assertIs(self.get("/api/item/m1").json()["poster_custom"], True)
-        self.hub.images.has_poster.return_value = False
+    def test_a_webp_poster_is_converted_to_a_jpeg_before_it_is_kept(self):
+        with mock.patch.object(app, "to_jpeg", return_value=JPEG) as convert:
+            reply = self.post("/api/item/m1/poster", self.WEBP)
+        self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
+        convert.assert_called_once_with(self.WEBP, self.hub.cfg.ffmpeg)
+        self.hub.images.set_poster.assert_called_once_with("m1", JPEG, ".jpg")
+
+    def test_a_webp_that_cannot_be_read_or_converted_is_refused(self):
+        with mock.patch.object(app, "to_jpeg", side_effect=images.ConvertError("image illisible")):
+            self.assertEqual(self.post("/api/item/m1/poster", self.WEBP).status, 415)
+        with mock.patch.object(app, "to_jpeg", side_effect=images.NoConverter("ni Pillow ni ffmpeg")):
+            self.assertEqual(self.post("/api/item/m1/poster", self.WEBP).status, 501)
+        self.hub.images.set_poster.assert_not_called()
+
+    @unittest.skipUnless(images.Image is not None and images.can_webp(""), "Pillow sans WebP")
+    def test_a_real_webp_comes_out_as_a_jpeg(self):
+        import io
+        out = io.BytesIO()
+        images.Image.new("RGB", (30, 20), "red").save(out, "WEBP")
+        self.assertEqual(self.post("/api/item/m1/poster", out.getvalue()).status, 200)
+        data, ext = self.hub.images.set_poster.call_args.args[1:]
+        self.assertEqual((ext, images.sniff(data), data[:3]), (".jpg", "image/jpeg", JPEG[:3]))
+
+    def test_there_is_no_way_back_to_the_original_poster(self):
+        self.assertEqual(self.post("/api/item/m1/poster/delete").status, 404)
+
+    def test_the_sheet_does_not_say_whether_the_poster_was_chosen(self):
         self.assertNotIn("poster_custom", self.get("/api/item/m1").json())
-        self.assertNotIn("poster_custom", self.get("/api/item/a1").json())
 
     def test_an_ordinary_account_cannot_change_a_poster(self):
         accounts.create(self.db, "root", "motdepasse1")
         bob = accounts.create(self.db, "bob", "motdepasse1")
         cookie = self.hub.cookie(bob)
-        for target in ("/api/item/m1/poster", "/api/item/m1/poster/delete"):
-            self.assertEqual(self.post(target, self.PNG, headers=cookie).status, 403, target)
+        self.assertEqual(self.post("/api/item/m1/poster", self.PNG, headers=cookie).status, 403)
         self.hub.images.set_poster.assert_not_called()
-        self.hub.images.clear_poster.assert_not_called()
 
 
 class TestTmdbSheetRoutes(RouteCase):

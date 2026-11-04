@@ -17,7 +17,7 @@ Tu travailles sur le serveur de **media_hub** : un seul processus Python, **bibl
 | `hub/media/` | `probe.py` (ffprobe, `plan`, `ffmpeg_command`), `subs.py` (WebVTT), `images.py` (cache, Pillow facultatif), `books.py` |
 | `hub/server/app.py` | `ThreadingHTTPServer`, routage, authentification, toutes les routes `/api`, `/media`, `/img` |
 | `hub/server/jobs.py` | tâches de fond (scan, enrichissement, nettoyage), **une seule à la fois**, dans l'ordre d'arrivée |
-| `hub/enrich.py` | TMDB (séries), MusicBrainz / Wikipédia (fiches artistes, photos, liens) |
+| `hub/enrich.py` | TMDB (séries), MusicBrainz / Wikipédia (fiches artistes, liens ; aucune photo n'est téléchargée) |
 | `hub/playlists.py` | playlists musicales dans la base |
 
 Lis le fichier concerné et ses voisins avant de modifier : le code est dense, commenté en français, et les helpers existent souvent déjà (`safe_json`, `make_id`, `number(...)`, `HttpError`).

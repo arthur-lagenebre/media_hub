@@ -1,4 +1,4 @@
-"""L'enrichissement, sans réseau : le casting d'une série, les photos d'artistes (adresses, fichiers, sauvegarde, téléchargement)."""
+"""L'enrichissement, sans réseau : le casting d'une série, les photos d'artistes (fichiers, sauvegarde)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import types
 import unittest
 from pathlib import Path
 from unittest import mock
-from urllib.error import URLError
 
 from tests import fixtures
 from hub import config
@@ -16,7 +15,6 @@ from hub import config
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
 
-from libraries.music.musicbrainz import MusicBrainzError  # noqa: E402
 from libraries.video.tmdb import TmdbAuthError, TmdbError  # noqa: E402
 
 from hub import enrich  # noqa: E402
@@ -71,50 +69,6 @@ class TestCast(unittest.TestCase):
         with self.assertRaises(TmdbAuthError):
             enrich.cast(FakeTmdb(error=TmdbAuthError("clé refusée")), 1)
         self.assertEqual(enrich.cast(FakeTmdb({}), 1), [])
-
-
-class FakeMusicBrainz:
-    def __init__(self, page=None, error=False):
-        self.page, self.error, self.asked = page, error, []
-
-    def external(self, url):
-        self.asked.append(url)
-        if self.error:
-            raise MusicBrainzError("hors ligne")
-        return self.page
-
-
-WIKI = {"lang": "fr", "title": "Daft Punk (groupe)"}
-THUMB = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Daft.jpg/320px-Daft.jpg"
-ORIGINAL = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Daft.jpg"
-
-
-class TestPhotoUrls(unittest.TestCase):
-    def urls(self, page, **kw):
-        mb = FakeMusicBrainz(page, **kw)
-        return enrich.photo_urls(mb, WIKI), mb
-
-    def test_the_big_version_comes_first_when_the_original_is_larger_than_the_header(self):
-        found, mb = self.urls({"thumbnail": {"source": THUMB}, "originalimage": {"source": ORIGINAL, "width": 3000}})
-        self.assertEqual(found, [THUMB.replace("/320px-", "/960px-"), THUMB, ORIGINAL])
-        self.assertIn("Daft_Punk_%28groupe%29", mb.asked[0])                                    # le titre : espaces en soulignés, le reste encodé
-
-    def test_a_small_original_is_not_asked_for_a_bigger_version(self):
-        found, _ = self.urls({"thumbnail": {"source": THUMB}, "originalimage": {"source": ORIGINAL, "width": 500}})
-        self.assertEqual(found, [THUMB, ORIGINAL])
-
-    def test_a_missing_thumbnail_or_original_is_skipped(self):
-        self.assertEqual(self.urls({"originalimage": {"source": ORIGINAL}})[0], [ORIGINAL])
-        self.assertEqual(self.urls({"thumbnail": {"source": THUMB}})[0], [THUMB])
-        self.assertEqual(self.urls({})[0], [])
-
-    def test_only_https_urls_of_wikimedia_are_kept(self):
-        page = {"thumbnail": {"source": "http://upload.wikimedia.org/a/320px-x.jpg"}, "originalimage": {"source": "https://exemple.org/x.jpg", "width": 9999}}
-        self.assertEqual(self.urls(page)[0], [])
-        self.assertEqual(self.urls({"originalimage": {"source": "https://thumb.wikimedia.org/x.jpg"}})[0], ["https://thumb.wikimedia.org/x.jpg"])
-
-    def test_an_article_musicbrainz_cannot_read_has_no_photo(self):
-        self.assertEqual(self.urls(None, error=True)[0], [])
 
 
 class TestImageExt(unittest.TestCase):
@@ -222,65 +176,6 @@ class TestSavePhoto(TempCase):
         with mock.patch.object(Path, "unlink", locked):
             self.assertEqual(self.save(JPEG).name, "a1.jpg")
         self.assertTrue((self.folder / "custom-a1.jpg").exists())
-
-
-class TestDownloadPhoto(TempCase):
-    def cfg(self):
-        return types.SimpleNamespace(data=self.tmp, ffmpeg="")
-
-    def download(self, answers, urls=("https://upload.wikimedia.org/a.jpg", "https://upload.wikimedia.org/b.jpg")):
-        """`answers` : pour chaque adresse, les octets rendus, ou l'erreur levée."""
-        queue = list(answers)
-
-        class Reply:
-            def __init__(self, data):
-                self.data = data
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def read(self, n):
-                return self.data[:n]
-
-        def opener(request, timeout=30):
-            answer = queue.pop(0)
-            if isinstance(answer, Exception):
-                raise answer
-            return Reply(answer)
-
-        with mock.patch.object(enrich, "urlopen", opener), mock.patch.object(images, "can_webp", return_value=False):
-            return enrich.download_photo(self.cfg(), list(urls), "a1")
-
-    def test_the_first_url_that_gives_an_image_is_kept(self):
-        self.assertEqual(self.download([JPEG]), "a1.jpg")
-        self.assertEqual((self.folder / "a1.jpg").read_bytes(), JPEG)
-
-    def test_the_next_url_is_tried_when_one_fails(self):
-        self.assertEqual(self.download([URLError("hors ligne"), PNG]), "a1.png")
-        self.assertEqual(self.download([b"<html>", PNG]), "a1.png")                      # une page, pas une image
-        self.assertEqual(self.download([JPEG + b"x" * enrich.PHOTO_MAX, WEBP]), "a1.webp")        # trop grosse
-
-    def test_when_none_comes_the_last_error_is_raised_as_an_oserror(self):
-        with self.assertRaisesRegex(OSError, "hors ligne"):
-            self.download([b"<html>", URLError("hors ligne")])
-        with self.assertRaisesRegex(OSError, "pas une image"):
-            self.download([URLError("hors ligne"), b"<html>"])
-        with self.assertRaisesRegex(OSError, "délai"):
-            self.download([OSError("délai"), OSError("délai")])
-        with self.assertRaisesRegex(OSError, "photo introuvable"):
-            self.download([], urls=())
-
-    def test_a_write_failure_stops_at_once_instead_of_trying_the_next_url(self):
-        with mock.patch.object(enrich, "save_photo", side_effect=OSError("lecture seule")) as saved, self.assertRaisesRegex(OSError, "lecture seule"):
-            self.download([JPEG, JPEG])
-        self.assertEqual(saved.call_count, 1)
-
-    def test_an_image_that_cannot_be_converted_is_an_oserror_too(self):
-        with mock.patch.object(enrich, "save_photo", side_effect=images.ConvertError("illisible")), self.assertRaisesRegex(OSError, "illisible"):
-            self.download([JPEG, JPEG])
 
 
 if __name__ == "__main__":

@@ -46,7 +46,6 @@ class MiniHub(app.Hub):
         self.cfg.library = lambda ident: next((lib for lib in self.cfg.libraries if lib.id == ident), None)
         self.images, self.jobs = mock.MagicMock(), mock.MagicMock()
         self.jobs.busy.return_value = False
-        self.images.has_poster.return_value = False
         self.sagas = Sagas(data / "sagas.json")
         self.throttle = accounts.Throttle()
         self.streams = threading.BoundedSemaphore(2)

@@ -46,7 +46,7 @@ from ..db import Database, make_id
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
-from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, write_atomic
+from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, to_jpeg, write_atomic
 from .jobs import Jobs
 
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
@@ -1251,8 +1251,6 @@ def api_item(h, m, q):
         out["links"] = links
     out["entries"] = [entry_json(r, progress.get(r["id"])) for r in rows]
     out["resume"] = resume_target(rows, progress)
-    if item["type"] in POSTER_TYPES and hub.images.has_poster(item["id"]):
-        out["poster_custom"] = True
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
     if item["type"] == "movie":
@@ -1312,7 +1310,7 @@ def artist_home(lib, rows):
 
 
 def artist_photo(hub, artist_id, kept, home=None):
-    """Le fichier de la photo d'un artiste, la seule qu'il ait (elle vient de Wikipédia, via « Fiches artistes », ou de l'utilisateur) ; None s'il n'en a pas."""
+    """Le fichier de la photo d'un artiste, la seule qu'il ait (celle que l'utilisateur a envoyée) ; None s'il n'en a pas."""
     return enrich.photo_file(hub.cfg.data / "artists", artist_id, (kept or {}).get("mbid", ""), home)
 
 
@@ -1353,7 +1351,7 @@ def artist_tracks(hub, rows, name):
 
 @route("GET", r"/api/artist/([\w-]+)/(\w+)")
 def api_artist(h, m, q):
-    """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent, photo comprise (une fois les fiches demandées dans Gestion)."""
+    """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent (une fois les fiches demandées dans Gestion), et sa photo si l'utilisateur en a envoyé une."""
     hub = h.hub
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     seen = seen_counts(hub, h.user["id"], lib.id)
@@ -1406,23 +1404,6 @@ def api_artist_photo_crop(h, m, q):
         raise HttpError(500, f"photo illisible : {e}")
     save_artist_photo(hub, lib, rows, m.group(2), data, box)
     h.send_json({"ok": True})
-
-
-@route("GET", r"/api/artist/([\w-]+)/(\w+)/photo/wikipedia")
-def api_artist_photo_wikipedia(h, m, q):
-    """La photo de l'article Wikipédia d'un artiste (celui que sa fiche garde : il faut donc que « Fiches artistes » soit passé), telle quelle : rien n'est enregistré, l'interface la propose au recadrage et n'envoie que le résultat à `…/photo?crop=`. Administrateur seulement."""
-    require_admin(h)
-    hub = h.hub
-    _, rows = artist_albums(hub, m.group(1), m.group(2))
-    wiki = ((artist_kept(hub, rows) or {}).get("info") or {}).get("wiki")
-    if not wiki:
-        raise HttpError(404, "pas d'article Wikipédia connu pour cet artiste")
-    try:
-        data = enrich.wikipedia_photo(hub.cfg, wiki)
-    except OSError as e:
-        raise HttpError(502, f"photo non récupérée : {e}")
-    mime = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}[enrich.image_ext(data)]
-    h.send_body(data, mime, 200, {"Cache-Control": "no-store"})
 
 
 @route("GET", r"/img/artist/([\w-]+)/(\w+)")
@@ -1864,22 +1845,20 @@ def poster_item(h, ident):
 
 @route("POST", r"/api/item/(\w+)/poster")
 def api_item_poster(h, m, q):
-    """Remplace l'affiche d'un film ou d'une série par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque."""
+    """Remplace l'affiche d'un film ou d'une série par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). Un WebP est converti en JPEG ; 415 s'il ne se lit pas, 501 si rien ne sait le convertir. L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque. Il n'y a pas de retour à l'affiche d'avant : la nouvelle devient l'affiche."""
     item = poster_item(h, m.group(1))
     data = h.body_bytes(PHOTO_UPLOAD_MAX)
     ext = enrich.image_ext(data)
     if not ext:
         raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
+    if ext == ".webp":
+        try:
+            data, ext = to_jpeg(data, h.hub.cfg.ffmpeg), ".jpg"
+        except NoConverter as e:
+            raise HttpError(501, str(e))
+        except ConvertError as e:
+            raise HttpError(415, str(e))
     h.hub.images.set_poster(item["id"], data, ext)
-    h.send_json({"ok": True})
-
-
-@route("POST", r"/api/item/(\w+)/poster/delete")
-def api_item_poster_delete(h, m, q):
-    """Rend à un film ou à une série l'affiche de la médiathèque."""
-    item = poster_item(h, m.group(1))
-    h.discard_body()
-    h.hub.images.clear_poster(item["id"])
     h.send_json({"ok": True})
 
 
