@@ -106,7 +106,7 @@
     });
   };
   // --- Changer l'affiche (administrateur) ---------------------------------------------------
-  // L'image envoyée reste dans HUB_DATA : la médiathèque n'est pas touchée, et « Affiche d'origine » la retire. Le sélecteur de fichiers d'une télé se pilote mal : rien n'y est proposé.
+  // L'image envoyée reste dans HUB_DATA : la médiathèque n'est pas touchée. Elle devient l'affiche, sans retour à l'ancienne. Le sélecteur de fichiers d'une télé se pilote mal : rien n'y est proposé.
   // `d` : la fiche (/api/item) ; `done` est appelé une fois l'affiche changée. Rend les éléments à poser parmi les boutons de la fiche.
   A.posterTools = function (d, done) {
     if ((d.type !== 'movie' && d.type !== 'show') || !H.isAdmin() || H.device === 'tv') return [];
@@ -116,9 +116,6 @@
       if (file) H.api('/api/item/' + d.id + '/poster', file, { raw: true }).then(function () { H.toast('Affiche enregistrée'); done(); }).catch(fail);
     } });
     var tools = [picker, H.button('Changer l’affiche', 'edit', { 'data-key': 'poster', onclick: function () { picker.click(); } })];
-    if (d.poster_custom) tools.push(H.button('Affiche d’origine', 'refresh', { 'data-key': 'poster-reset', onclick: function () {
-      H.api('/api/item/' + d.id + '/poster/delete', {}).then(function () { H.toast('Affiche d’origine rétablie'); done(); }).catch(fail);
-    } }));
     return tools;
   };
   // --- Changer la fiche TMDB (administrateur, séries et animations) ----------------------------

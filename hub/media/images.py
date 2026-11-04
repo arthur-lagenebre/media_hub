@@ -155,6 +155,44 @@ def to_webp(data, ffmpeg="", box=None, side=PHOTO_SIDE):
     raise NoConverter("ni Pillow ni ffmpeg : pas de conversion en WebP possible")
 
 
+def _pillow_to_jpeg(data):
+    from PIL import ImageOps
+    with Image.open(io.BytesIO(data)) as image:
+        image = ImageOps.exif_transpose(image)
+        if "A" in image.getbands() or "transparency" in image.info:
+            rgba = image.convert("RGBA")
+            image = Image.new("RGB", rgba.size, "white")          # le JPEG n'a pas de transparence : le fond transparent devient blanc, pas noir
+            image.paste(rgba, mask=rgba.getchannel("A"))
+        else:
+            image = image.convert("RGB")
+        out = io.BytesIO()
+        image.save(out, "JPEG", quality=92, optimize=True)
+        return out.getvalue()
+
+
+def _ffmpeg_to_jpeg(data, ffmpeg):
+    try:
+        done = subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-i", "pipe:0", "-frames:v", "1", "-q:v", "2", "-f", "mjpeg", "pipe:1"], input=data, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise ConvertError(f"ffmpeg n'a pas répondu ({e})") from e
+    if done.returncode == 0 and done.stdout:
+        return done.stdout
+    raise ConvertError("image illisible")
+
+
+def to_jpeg(data, ffmpeg=""):
+    """Les octets JPEG de `data`, à la taille d'origine (un WebP envoyé comme affiche : le format ne se garde pas tel quel). ConvertError si l'image ne se lit pas, NoConverter si ni Pillow ni ffmpeg ne sont là."""
+    failure = None
+    if Image is not None:
+        try:
+            return _pillow_to_jpeg(data)
+        except Exception as e:
+            failure = ConvertError(f"image illisible ({e})")
+    if ffmpeg:
+        return _ffmpeg_to_jpeg(data, ffmpeg)
+    raise failure or NoConverter("ni Pillow ni ffmpeg : pas de conversion en JPEG possible")
+
+
 class Images:
     def __init__(self, cfg, db):
         self.cfg, self.db = cfg, db
@@ -259,9 +297,6 @@ class Images:
         return None
 
     # --- Affiche choisie à la main ----------------------------------------------
-    def has_poster(self, item_id):
-        return bool(self.db.kv_get(POSTER_KEY + item_id))
-
     def _poster_file(self, name):
         """Le chemin du fichier d'une affiche choisie ; None si `name` pourrait désigner autre chose qu'un fichier de HUB_DATA/posters."""
         return self.cfg.data / POSTERS / name if name and Path(name).name == name else None
@@ -271,7 +306,7 @@ class Images:
         return self._from_image_file(path) if path else None
 
     def set_poster(self, item_id, data, ext):
-        """Garde `data` comme affiche de l'item (`ext` : .jpg, .png ou .webp) à la place de toute autre ; l'affiche d'avant disparaît."""
+        """Garde `data` comme affiche de l'item (`ext` : .jpg ou .png) à la place de toute autre, l'image d'origine comprise ; l'affiche d'avant disparaît. Il n'y a pas de retour en arrière."""
         folder = self.cfg.data / POSTERS
         folder.mkdir(exist_ok=True)           # HUB_DATA existe : le cache d'images y est créé au démarrage
         name = f"{item_id}-{hashlib.sha1(data).hexdigest()[:10]}{ext}"
@@ -280,12 +315,6 @@ class Images:
         self.db.kv_set(POSTER_KEY + item_id, name)
         if before != name:
             self._forget_file(before)
-
-    def clear_poster(self, item_id):
-        """L'item retrouve l'image de la médiathèque."""
-        before = self.db.kv_get(POSTER_KEY + item_id)
-        self.db.kv_delete(POSTER_KEY + item_id)
-        self._forget_file(before)
 
     def _forget_file(self, name):
         path = self._poster_file(name)
@@ -332,6 +361,11 @@ class Images:
             write_atomic(path, data)
         except OSError:
             pass
+
+    def _store(self, hit, source, width, key):
+        """(octets, type MIME, étiquette) de `source` réduite à `width`, gardée dans le cache sous `hit` (sans bruit si le disque refuse)."""
+        data, mime = self.resize(source, width)
+        self._keep(hit, data)
         return data, mime, key
 
     def _row_and_stamp(self, kind, ident):
@@ -361,11 +395,6 @@ class Images:
             data = hit.read_bytes()
             return data, sniff(data), key
         if miss.is_file():
-
-    def _store(self, hit, source, width, key):
-        """(octets, type MIME, étiquette) de `source` réduite à `width`, gardée dans le cache sous `hit` (sans bruit si le disque refuse)."""
-        data, mime = self.resize(source, width)
-        self._keep(hit, data)
             return None
         source = self.item_source(lib, row) if kind == "item" else self.entry_source(lib, row)
         if not source:

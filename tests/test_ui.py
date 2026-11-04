@@ -6,6 +6,7 @@ Sauté si Playwright ou ffmpeg manquent. Ce que ces tests ne peuvent pas garanti
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import shutil
 import tempfile
@@ -16,6 +17,7 @@ from unittest import mock
 
 from tests import fixtures
 from tests.test_server import FakeTmdb, Running
+from hub.media import images
 
 try:
     from playwright.sync_api import sync_playwright
@@ -1020,7 +1022,15 @@ class TestPosters(UiCase):
         return urllib.request.urlopen(self.base + "/img/item/" + item["id"]).read()
 
     def reset_later(self, item):
-        self.addCleanup(lambda: self.api("/api/item/" + item["id"] + "/poster/delete", {}))
+        """L'affiche choisie ne se retire pas depuis l'interface : le test la retire lui-même pour que les suivants retrouvent l'original."""
+        def forget():
+            images, key = self.run_.hub.images, "poster:" + item["id"]
+            name = images.db.kv_get(key)
+            images.db.kv_delete(key)
+            path = images._poster_file(name)
+            if path:
+                path.unlink(missing_ok=True)
+        self.addCleanup(forget)
 
     def send(self, payload):
         with self.page.expect_file_chooser() as chooser:
@@ -1032,21 +1042,31 @@ class TestPosters(UiCase):
     def chosen(self):
         return {"name": "affiche.jpg", "mimeType": "image/jpeg", "buffer": self.CHOSEN}
 
-    def test_the_poster_is_replaced_and_the_original_comes_back(self):
+    def test_the_poster_is_replaced_and_there_is_no_way_back_to_the_original(self):
         item = self.item("films", "Inception")
         self.reset_later(item)
         original = self.served(item)
         self.open("#/i/" + item["id"])
         self.view(".actions .btn", has_text="Changer l’affiche").wait_for()
-        self.assertEqual(self.view(".actions .btn", has_text="Affiche d’origine").count(), 0)
         self.send(self.chosen())
-        self.until(lambda: self.api("/api/item/" + item["id"]).get("poster_custom") is True)
-        self.assertEqual(self.served(item), self.CHOSEN)
+        self.until(lambda: self.served(item) == self.CHOSEN)
         self.assertNotEqual(self.served(item), original)
-        self.view(".actions .btn", has_text="Affiche d’origine").click()
-        self.until(lambda: not self.api("/api/item/" + item["id"]).get("poster_custom"))
-        self.assertEqual(self.served(item), original)
+        self.assertNotIn("poster_custom", self.api("/api/item/" + item["id"]))
+        self.open("#/i/" + item["id"])
+        self.view(".actions .btn", has_text="Changer l’affiche").wait_for()
         self.assertEqual(self.view(".actions .btn", has_text="Affiche d’origine").count(), 0)
+
+    @unittest.skipUnless(images.Image is not None and images.can_webp(""), "Pillow sans WebP")
+    def test_a_webp_poster_is_kept_as_a_jpeg(self):
+        item = self.item("films", "Inception")
+        self.reset_later(item)
+        buffer = io.BytesIO()
+        images.Image.new("RGB", (30, 20), "red").save(buffer, "WEBP")
+        self.open("#/i/" + item["id"])
+        self.view(".actions .btn", has_text="Changer l’affiche").wait_for()
+        self.send({"name": "affiche.webp", "mimeType": "image/webp", "buffer": buffer.getvalue()})
+        self.until(lambda: images.sniff(self.served(item)) == "image/jpeg" and self.served(item)[:2] == bytes([255, 216]))
+        self.assertEqual(images.sniff(self.served(item)), "image/jpeg")
 
     def test_a_show_has_the_same_buttons(self):
         item = self.item("series", "Dark")
@@ -1054,8 +1074,7 @@ class TestPosters(UiCase):
         self.open("#/i/" + item["id"])
         self.view(".actions .btn", has_text="Changer l’affiche").wait_for()
         self.send(self.chosen())
-        self.until(lambda: self.api("/api/item/" + item["id"]).get("poster_custom") is True)
-        self.assertEqual(self.served(item), self.CHOSEN)
+        self.until(lambda: self.served(item) == self.CHOSEN)
 
     def test_a_file_that_is_not_an_image_is_refused_with_a_message(self):
         item = self.item("films", "Inception")
@@ -1064,7 +1083,7 @@ class TestPosters(UiCase):
         self.view(".actions .btn", has_text="Changer l’affiche").wait_for()
         self.send({"name": "notes.txt", "mimeType": "text/plain", "buffer": b"du texte"})
         self.page.locator("#toast.on", has_text="pas une image").wait_for()
-        self.assertNotIn("poster_custom", self.api("/api/item/" + item["id"]))
+        self.assertNotEqual(self.served(item), b"du texte")
         del self.errors[:]                      # le navigateur note la réponse 415, attendue ici
 
     def test_an_album_has_no_poster_button(self):

@@ -46,7 +46,7 @@ from ..db import Database, make_id
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
-from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, write_atomic
+from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, to_jpeg, write_atomic
 from .jobs import Jobs
 
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
@@ -1251,8 +1251,6 @@ def api_item(h, m, q):
         out["links"] = links
     out["entries"] = [entry_json(r, progress.get(r["id"])) for r in rows]
     out["resume"] = resume_target(rows, progress)
-    if item["type"] in POSTER_TYPES and hub.images.has_poster(item["id"]):
-        out["poster_custom"] = True
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
     if item["type"] == "movie":
@@ -1353,7 +1351,7 @@ def artist_tracks(hub, rows, name):
 
 @route("GET", r"/api/artist/([\w-]+)/(\w+)")
 def api_artist(h, m, q):
-    """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent, photo comprise (une fois les fiches demandées dans Gestion)."""
+    """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent (une fois les fiches demandées dans Gestion), et sa photo si l'utilisateur en a envoyé une."""
     hub = h.hub
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     seen = seen_counts(hub, h.user["id"], lib.id)
@@ -1853,16 +1851,14 @@ def api_item_poster(h, m, q):
     ext = enrich.image_ext(data)
     if not ext:
         raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
+    if ext == ".webp":
+        try:
+            data, ext = to_jpeg(data, h.hub.cfg.ffmpeg), ".jpg"
+        except NoConverter as e:
+            raise HttpError(501, str(e))
+        except ConvertError as e:
+            raise HttpError(415, str(e))
     h.hub.images.set_poster(item["id"], data, ext)
-    h.send_json({"ok": True})
-
-
-@route("POST", r"/api/item/(\w+)/poster/delete")
-def api_item_poster_delete(h, m, q):
-    """Rend à un film ou à une série l'affiche de la médiathèque."""
-    item = poster_item(h, m.group(1))
-    h.discard_body()
-    h.hub.images.clear_poster(item["id"])
     h.send_json({"ok": True})
 
 
