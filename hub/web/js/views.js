@@ -670,12 +670,20 @@
       var actions = h('div', { class: 'actions' });
       var target = next || films[0];
       actions.appendChild(H.button(next ? (done ? 'Continuer : ' : 'Commencer : ') + next.title : 'Revoir : ' + films[0].title, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go('#/i/' + target.id); } }));
+      var all = done === films.length;
+      actions.appendChild(H.button(all ? 'Marquer la saga non vue' : 'Marquer la saga vue', all ? 'close' : 'check', { 'data-key': 'seen', onclick: function () { setSeen(!all); } }));
       info.appendChild(actions);
       el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + films[0].id + '?w=300)' }),
         h('div', { class: 'hero-in' }, h('div', { class: 'stack-big' }, H.stack(films.map(function (f) { return f.id; }), name, 500)), info)));
       el.appendChild(h('div', { class: 'body' }, h('section', { class: 'sagaall' }, h('h2', null, 'Les films de la saga'),
         h('div', { class: 'grid' }, sagaCells(films, absent, function (f) { return H.card(f, false, true); }, H.isAdmin() ? hide : null)))));
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
+    }
+    // Marque tous les films de la saga vus (ou non vus) : un appel par film, comme le menu « … » d'une carte de saga.
+    function setSeen(done) {
+      Promise.all(data.items.map(function (f) { return H.api('/api/item/' + f.id + '/seen', { done: done }); }))
+        .then(function () { H.toast(done ? 'Saga marquée comme vue' : 'Saga marquée comme non vue'); return load(); })
+        .catch(function (e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.', 5000); return load(); });
     }
     // Cache un film que la collection TMDB compte et pas nous : il ne sera plus montré comme manquant (Paramètres > Gestion > Sagas le rétablit).
     function hide(m) {

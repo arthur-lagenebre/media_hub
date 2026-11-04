@@ -425,6 +425,23 @@ class TestSagasInLibrary(UiCase):
         self.press("Escape", wait=500)
         self.assertTrue(self.page.url.endswith("#/l/films"))
 
+    def test_the_saga_page_marks_every_film_seen_and_back(self):
+        films = [f for f in self.api("/api/library/films?group=Saga%20DCEU&sort=part&limit=600")["items"]]
+        for film in films:
+            self.addCleanup(lambda film=film: self.api("/api/item/" + film["id"] + "/seen", {"done": False}))
+        self.open("#/saga/films?g=Saga%20DCEU")
+        button = self.view(".actions .btn", has_text="Marquer la saga vue")
+        button.wait_for()
+        button.click()
+        self.view(".actions .btn", has_text="Marquer la saga non vue").wait_for()
+        self.assertIn("Tous vus", self.view(".meta").inner_text())
+        self.assertEqual(self.view(".sagaall .badge.done").count(), len(films))
+        self.assertTrue(all(self.api("/api/item/" + f["id"])["entries"][0]["progress"]["done"] for f in films))
+        self.view(".actions .btn", has_text="Marquer la saga non vue").click()
+        self.view(".actions .btn", has_text="Marquer la saga vue").wait_for()
+        self.assertNotIn("vus", self.view(".meta").inner_text())
+        self.assertEqual(self.view(".sagaall .badge.done").count(), 0)
+
     def choose_films(self, view):
         self.api("/api/me/settings", {"movie_view": view})
         self.addCleanup(lambda: self.api("/api/me/settings", {"movie_view": "sagas"}))
