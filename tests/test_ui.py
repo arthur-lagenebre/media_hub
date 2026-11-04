@@ -534,6 +534,22 @@ class TestMissingFilmsInTheUi(UiCase):
         self.assertIn("3 manquants", self.view(".info .meta").inner_text())
         self.assertEqual(self.view(".card.wanted.f").count(), 0)                           # rien à ouvrir : pas dans la navigation à la télécommande
 
+    def test_a_film_not_out_yet_is_greyed_as_coming_and_is_not_counted_as_missing(self):
+        FakeTmdb.movies = {**FakeTmdb.movies, 3000: {"id": 3000, "title": "À venir", "release_date": "2099-06-01", "poster_path": None}}
+        self.addCleanup(FakeTmdb.movies.pop, 3000, None)
+        self.api("/api/sagas", {"sagas": [{"name": "Ma saga", "films": [209112, 1000, 3000]}]})
+        with mock.patch("hub.enrich.Tmdb", FakeTmdb):
+            self.api("/api/enrich", {"lib": "films"})
+            self.run_.wait_jobs()
+        self.open("#/saga/films?g=Ma%20saga")
+        self.view(".card.wanted").first.wait_for()
+        cards = {c.locator(".t").inner_text(): c for c in self.view(".card.wanted").all()}
+        self.assertEqual(cards["À venir"].locator(".s").inner_text(), "2099 · À venir")
+        self.assertEqual(cards["Film intermédiaire"].locator(".s").inner_text(), "2014 · Manquant")
+        self.assertEqual(cards["À venir"].get_attribute("title"), "À venir (pas encore sorti)")
+        self.assertIn("1 manquant", self.view(".info .meta").inner_text())                          # le film annoncé ne manque à personne
+        self.assertNotIn("2 manquants", self.view(".info .meta").inner_text())
+
     def test_a_missing_film_can_be_hidden_and_shown_again(self):
         self.open("#/saga/films?g=Saga%20DCEU")
         self.view("[data-key=hide-1000]").click()

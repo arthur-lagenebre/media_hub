@@ -18,7 +18,7 @@
 - [ ] **Jeton de session sans expiration**, non révoqué à la déconnexion (c'est documenté dans `docs/api.md`). Le changer déconnecte tous les appareils. Avis : la vraie lacune est l'impossibilité de révoquer. Piste : un compteur par compte, intégré au jeton, qu'on incrémente à la déconnexion ou sur demande (« se déconnecter partout »). À vérifier dans `hub/accounts.py` avant de s'engager ; sans urgence.
 - [ ] **Épingler les images Docker** (`python:3.13-slim`, `tailscale/tailscale:stable`) et la version de Pillow. Avis : inutile pour un NAS à la maison, sauf si chaque redéploiement doit donner exactement la même chose.
 - [x] **« Compter »** : affiche les 20 premiers fichiers qu'il supprimerait (fait : la fenêtre de confirmation les liste sous le décompte, « … et N autre(s) » au-delà, depuis le dossier de la bibliothèque ; le journal de la simulation, dans l'onglet Tâches, les nomme aussi ; le résultat de la tâche porte `sample`). Texte d'origine : afficher les 20 premiers fichiers qu'il supprimerait, pour voir ce qui partira avant de confirmer.
-- [ ] **Sagas de `sagas.json`** : cacher aussi un film listé qui n'est pas encore sorti (aujourd'hui, il s'affiche toujours, puisqu'on l'a écrit exprès). Question : le cacher, ou le griser comme les films manquants ?
+- [x] **Sagas de `sagas.json`** : un film listé qui n'est pas encore sorti reste affiché, grisé à son rang comme les films manquants, avec « À venir » à la place de « Manquant » (`coming: true` dans `missing`), et il n'est pas compté dans « N manquants » : il ne manque à personne. Décidé : le griser, pas le cacher.
 
 ## Évolutions souhaitées
 
@@ -82,7 +82,7 @@
 ## Ordre proposé
 
 1. **Interface** (`hub-ui`, puis `hub-reviewer`) : un seul composant de menu « … » pour les films, sagas, séries, animations et épisodes (les routes `POST /api/item/<id>/seen` et `POST /api/entry/<id>/seen` existent déjà), les nouveaux libellés « toutes les saisons », puis, dans une autre PR, « Admin » → « Paramètres » avec ses onglets. Vérifier que le menu se manie à la télécommande.
-2. **Petites décisions** glissées dans les PR voisines : aperçu de « Compter », film non sorti dans une saga.
+2. **Petites décisions** glissées dans les PR voisines : aperçu de « Compter », film non sorti dans une saga (faits).
 3. **Téléchargement** : route serveur (`hub-server`), puis entrée de menu et enchaînement (`hub-ui`).
 4. **Affiches** : après avoir tranché entre `HUB_DATA` et `folder.jpg` (voir plus haut).
 5. **Jeton révocable**, si l'envie vient.
@@ -99,7 +99,6 @@ Verdict : **pas de nouvelle passe globale** (`crapper`, `dryer`, `mutator` sur t
 
 ## Limites connues, non traitées
 
-- [ ] Avec **deux bibliothèques de films**, les collections TMDB sont repérées par le seul nom de saga : la seconde peut être sautée.
 - [ ] Un **film en double** (deux versions) dans une saga désactive sans bruit ses numéros et ses manquants.
 - [ ] `deploy/fetch-ffmpeg.sh` ne vérifie aucune somme de contrôle.
 - [ ] `pip install pillow` est lancé à chaque démarrage du conteneur, en root, sa sortie jetée.

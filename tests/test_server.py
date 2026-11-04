@@ -1755,6 +1755,16 @@ class TestMissingFilms(ServerCase):
         self.enrich()
         self.assertEqual([(f["tmdb"], f["rank"]) for f in self.group("Ma saga")["missing"]], [(3000, 2)])
 
+    def test_a_film_that_is_not_out_yet_says_so_and_one_that_is_out_does_not(self):
+        FakeTmdb.movies = {**FakeTmdb.movies, 3000: {"id": 3000, "title": "À venir", "release_date": "2099-06-01", "poster_path": None}}
+        self.addCleanup(FakeTmdb.movies.pop, 3000, None)
+        self.api.json("/api/sagas", {"sagas": [{"name": "Ma saga", "films": [209112, 1000, 3000]}]})
+        self.enrich()
+        absent = {f["tmdb"]: f for f in self.group("Ma saga")["missing"]}
+        self.assertEqual(sorted(absent), [1000, 3000])
+        self.assertIs(absent[3000]["coming"], True)
+        self.assertNotIn("coming", absent[1000])                                                                      # sorti : un film qui manque, tout simplement
+
     def test_the_film_page_lists_what_is_missing_from_each_saga(self):
         self.enrich()
         steel = self.detail(self.item_by_title("films", "Batman v Superman")["id"])
