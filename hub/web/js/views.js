@@ -154,18 +154,22 @@
   }
   function resumeCard(c, onRemove) {
     var pic = resumePicture(c), card;
+    function fail(e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.'); }
+    // Garder (rien ne change), Retirer de Reprendre (la progression est gardée : l'élément y revient dès qu'on le relance), Remettre à zéro (la progression de tout l'élément est effacée).
     function remove() {
-      H.menu('Retirer « ' + c.item.title + ' » de Reprendre ?', [{ label: 'Retirer de Reprendre', detail: 'La progression est gardée', value: 'yes' }, { label: 'Garder', value: 'no' }], 'no', function (v) {
-        if (v !== 'yes') return;
-        H.api('/api/item/' + c.item.id + '/dismiss', {}).then(function () { H.toast('Retiré de Reprendre'); onRemove(card); })
-          .catch(function (e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.'); });
+      H.menu('Que faire de « ' + c.item.title + ' » ?', [
+        { label: 'Garder', detail: 'Rien ne change', value: 'keep' },
+        { label: 'Retirer de Reprendre', detail: 'La progression est gardée', value: 'hide' },
+        { label: 'Remettre à zéro', detail: 'La progression est effacée', value: 'reset' }], 'keep', function (v) {
+        if (v === 'hide') H.api('/api/item/' + c.item.id + '/dismiss', {}).then(function () { H.toast('Retiré de Reprendre'); onRemove(card); }).catch(fail);
+        if (v === 'reset') H.api('/api/item/' + c.item.id + '/seen', { done: false }).then(function () { H.toast('Remis à zéro'); onRemove(card); }).catch(fail);
       });
     }
     card = h('a', { class: 'card wide f', href: playHref(c), 'data-key': 'c' + c.id,
       oncontextmenu: function (e) { e.preventDefault(); remove(); },
       onkeydown: function (e) { if (e.key === 'Delete' || e.key === 'ContextMenu' || e.keyCode === 46 || e.keyCode === 93) { e.preventDefault(); remove(); } } },
       pic, h('div', { class: 't' }, c.item.title), h('div', { class: 's' }, [resumeLabel(c), resumeNote(c)].filter(Boolean).join(' · ')));
-    pic.appendChild(h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Retirer de Reprendre', title: 'Retirer de Reprendre',
+    pic.appendChild(h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Retirer ou remettre à zéro', title: 'Retirer ou remettre à zéro',
       onclick: function (e) { e.preventDefault(); e.stopPropagation(); remove(); } }, H.icon('close'))));
     return card;
   }

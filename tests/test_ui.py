@@ -1098,6 +1098,52 @@ class TestPosters(UiCase):
         self.assertEqual(self.view(".actions .btn", has_text="Changer l’affiche").count(), 0)
 
 
+class TestResumeMenu(UiCase):
+    """La carte de « Reprendre » : un clic droit (ou ✕) propose Garder, Retirer de Reprendre et Remettre à zéro."""
+
+    def started(self):
+        entry = self.entries("films", "Direct")[0]
+        item = self.item("films", "Direct")
+        self.api("/api/progress", {"entry": entry["id"], "position": 40, "duration": 60})
+        self.addCleanup(lambda: self.api("/api/item/" + item["id"] + "/seen", {"done": False}))
+        self.addCleanup(lambda: self.run_.hub.db.execute("DELETE FROM kv WHERE key LIKE 'dismiss:%'"))
+        return item, entry
+
+    def menu(self):
+        self.open()
+        card = self.view(".shelf .card.wide", has_text="Direct")
+        card.wait_for()
+        card.click(button="right")
+        self.page.locator(".menu .opt").first.wait_for()
+        return self.page.locator(".menu .opt .lbl").all_inner_texts()
+
+    def progress(self, item):
+        return self.api("/api/item/" + item["id"])["entries"][0].get("progress")
+
+    def test_the_menu_offers_three_choices_and_keeps_by_default(self):
+        item, _ = self.started()
+        self.assertEqual(self.menu(), ["Garder", "Retirer de Reprendre", "Remettre à zéro"])
+        self.assertEqual(self.focused(), "GarderRien ne change")          # Entrée ne détruit rien
+        self.press("Enter", wait=400)
+        self.assertEqual(self.view(".shelf .card.wide", has_text="Direct").count(), 1)
+        self.assertEqual(self.progress(item)["position"], 40)
+
+    def test_hiding_keeps_the_progress(self):
+        item, _ = self.started()
+        self.menu()
+        self.page.locator(".menu .opt", has_text="Retirer de Reprendre").click()
+        self.until(lambda: self.view(".shelf .card.wide", has_text="Direct").count() == 0)
+        self.assertEqual(self.progress(item)["position"], 40)
+
+    def test_resetting_erases_the_progress(self):
+        item, _ = self.started()
+        self.menu()
+        self.page.locator(".menu .opt", has_text="Remettre à zéro").click()
+        self.until(lambda: self.view(".shelf .card.wide", has_text="Direct").count() == 0)
+        self.assertIsNone(self.progress(item))
+        self.assertEqual([c["item"]["id"] for c in self.api("/api/home")["continue"] if c["item"]["id"] == item["id"]], [])
+
+
 class FakeShowTmdb:
     """TMDB pour les séries : deux séries portent le titre « Dark », la plus connue en premier."""
     found = [{"id": 70523, "name": "Dark", "first_air_date": "2017-12-01", "overview": "Série allemande", "vote_count": 5000, "popularity": 80},
