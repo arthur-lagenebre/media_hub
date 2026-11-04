@@ -352,6 +352,30 @@ class TestMoreSources(ServiceCase):
         self.assertEqual((data, mime), (photo.read_bytes(), "image/png"))
 
 
+class TestCacheFolderGone(ServiceCase):
+    def setUp(self):
+        super().setUp()
+        (self.root / "poster.png").write_bytes(fixtures.PNG)
+        self.fill([item("i1", meta={"image": "poster.png"}), item("i2")])
+
+    def test_an_image_is_still_served_and_the_folder_comes_back(self):
+        shutil.rmtree(self.service.cache)
+        data, mime, _key = self.service.get("item", "i1")
+        self.assertEqual((data, mime), (fixtures.PNG, "image/png"))
+        self.assertEqual(len(list(self.service.cache.glob("*.jpg"))), 1)
+
+    def test_an_item_without_image_is_a_plain_miss_not_an_error(self):
+        shutil.rmtree(self.service.cache)
+        self.assertIsNone(self.service.get("item", "i2"))
+        self.assertEqual(len(list(self.service.cache.glob("*.none"))), 1)
+
+    def test_a_cache_that_cannot_be_written_never_breaks_a_request(self):
+        shutil.rmtree(self.service.cache)
+        with mock.patch.object(images, "write_atomic", side_effect=OSError("disque plein")), mock.patch.object(Path, "mkdir", side_effect=OSError("lecture seule")):
+            self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
+            self.assertIsNone(self.service.get("item", "i2"))
+
+
 class TestCustomPoster(ServiceCase):
     def setUp(self):
         super().setUp()

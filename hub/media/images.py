@@ -325,11 +325,11 @@ class Images:
         source = self._from_image_file(Path(path))
         return self._store(hit, source, width, key) if source else None
 
-    def _store(self, hit, source, width, key):
-        """(octets, type MIME, étiquette) de `source` réduite à `width`, gardée dans le cache sous `hit` (sans bruit si le disque refuse)."""
-        data, mime = self.resize(source, width)
+    def _keep(self, path, data):
+        """Écrit `data` sous `path` dans le cache, qu'on recrée s'il a disparu en cours de route (le dossier img supprimé serveur allumé) ; sans bruit si le disque refuse."""
         try:
-            write_atomic(hit, data)
+            self.cache.mkdir(parents=True, exist_ok=True)
+            write_atomic(path, data)
         except OSError:
             pass
         return data, mime, key
@@ -361,10 +361,15 @@ class Images:
             data = hit.read_bytes()
             return data, sniff(data), key
         if miss.is_file():
+
+    def _store(self, hit, source, width, key):
+        """(octets, type MIME, étiquette) de `source` réduite à `width`, gardée dans le cache sous `hit` (sans bruit si le disque refuse)."""
+        data, mime = self.resize(source, width)
+        self._keep(hit, data)
             return None
         source = self.item_source(lib, row) if kind == "item" else self.entry_source(lib, row)
         if not source:
             if kind == "item":
-                miss.touch()          # un item sans image : on ne la cherche plus tant que son étiquette ne change pas (pas pour une entrée)
+                self._keep(miss, b"")          # un item sans image : on ne la cherche plus tant que son étiquette ne change pas (pas pour une entrée)
             return None
         return self._store(hit, source, width, key)
