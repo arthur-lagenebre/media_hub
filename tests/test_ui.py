@@ -1253,8 +1253,8 @@ class TestHome(UiCase):
         return {it["id"]: it["added"] for lib in libs for it in lib["recent"]}
 
     def expected_latest(self):
-        """Les ids que l'accueil doit montrer : les 8 premiers de chaque bibliothèque, mêlés du plus récent au plus ancien, 24 au plus."""
-        mixed = [(-it["added"], i, k, it["id"]) for i, lib in enumerate(self.api("/api/home")["libraries"]) for k, it in enumerate(lib["recent"][:8])]
+        """Les ids que l'accueil doit montrer : ce que chaque bibliothèque rend, mêlé du plus récent au plus ancien, 24 au plus."""
+        mixed = [(-it["added"], i, k, it["id"]) for i, lib in enumerate(self.api("/api/home")["libraries"]) for k, it in enumerate(lib["recent"])]
         return [row[3] for row in sorted(mixed)][:24]
 
     def test_the_home_says_hello_and_mixes_the_latest_additions_of_every_library(self):
@@ -1282,19 +1282,16 @@ class TestHome(UiCase):
             self.assertEqual(card.locator(".s .dot").evaluate("el => getComputedStyle(el).backgroundColor"), colour, lib)
             self.assertNotRegex(card.locator(".s").inner_text(), r"^(Film|Série|Animation|Album|Livre)\b", lib)               # le point dit la bibliothèque : pas de mot en plus
 
-    def test_the_mix_keeps_eight_per_library_and_twenty_four_in_all_newest_first(self):
+    def test_the_mix_keeps_the_newest_first_and_stops_at_the_number_asked(self):
         self.open()
         out = self.page.evaluate("""() => {
           var mk = (id, added) => ({ id: id, added: added });
           var libs = [{ id: 'a', recent: [mk('a1', 50), mk('a2', 10)] }, { id: 'b', recent: [mk('b1', 60), mk('b2', 50)] }];
           var many = { id: 'c', recent: Array.from({ length: 24 }, (_, i) => mk('c' + i, 1000 - i)) };
-          var flood = [{ id: 'm', recent: Array.from({ length: 24 }, (_, i) => mk('m' + i, 900 - i)) }, { id: 'f', recent: [mk('f1', 10), mk('f2', 5)] }];
-          return { few: Hub.latest(libs, 24, 8).map(x => x.item.id + '@' + x.lib.id), many: Hub.latest([many], 24, 8).length, firstMany: Hub.latest([many], 24, 8)[0].item.id,
-                   capped: Hub.latest(flood, 24, 8).map(x => x.item.id) };
+          return { few: Hub.latest(libs, 24).map(x => x.item.id + '@' + x.lib.id), many: Hub.latest([many], 20).length, firstMany: Hub.latest([many], 20)[0].item.id };
         }""")
         self.assertEqual(out["few"], ["b1@b", "a1@a", "b2@b", "a2@a"])           # à date égale, l'ordre des bibliothèques puis celui de leur liste
-        self.assertEqual((out["many"], out["firstMany"]), (8, "c0"))                                  # au plus 8 par bibliothèque
-        self.assertEqual(out["capped"], ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "f1", "f2"])      # un gros ajout de musique ne prend pas toute la place
+        self.assertEqual((out["many"], out["firstMany"]), (20, "c0"))
 
     def test_a_row_that_scrolls_is_cut_at_the_margin_on_the_right_as_on_the_left(self):
         for lib, title in (("films", "Inception"), ("series", "Dark"), ("livres", "Naruto")):
@@ -1313,6 +1310,27 @@ class TestHome(UiCase):
         self.page.wait_for_timeout(200)
         last = row.locator(".card").last.evaluate("el => el.getBoundingClientRect().right")
         self.assertLessEqual(last, self.page.evaluate("innerWidth") - edges[1] + 1)      # au bout, la dernière carte reste dans la marge
+
+
+class TestHomeNewArtist(UiCase):
+    def test_the_arrival_of_an_artist_is_one_card_that_opens_his_page(self):
+        db = self.run_.hub.db
+        items = [dict(r) for r in db.query("SELECT * FROM items WHERE lib='musique'")]
+        entries = [dict(r) for r in db.query("SELECT * FROM entries WHERE lib='musique'")]
+        now = max([i["added"] for i in items] + [0]) + 1000
+        new = [{**items[0], "id": f"nv{n}", "title": f"Album {n}", "sort": f"album {n}", "grp": "Nouvel Artiste", "added": now - n,
+                "meta": json.dumps({"artist_id": "nouvelartiste"})} for n in range(3)]
+        db.replace_library("musique", items + new, entries)
+        self.addCleanup(db.replace_library, "musique", items, entries)
+        self.open()
+        card = self.view(".shelf.latest .card[data-type=artist]")
+        card.first.wait_for()
+        self.assertEqual(card.count(), 1)
+        self.assertEqual(card.first.get_attribute("href"), "#/artist/musique/nouvelartiste")
+        self.assertEqual(card.first.locator(".t").inner_text(), "Nouvel Artiste")
+        self.assertIn("3 albums", card.first.locator(".s").inner_text())
+        self.assertEqual(self.view(".shelf.latest .card[data-key^=nv]").count(), 0)             # ses trois albums ne sont plus là un par un
+        self.assertEqual(card.first.get_attribute("data-lib"), "musique")
 
 
 class TestHomeGreeting(unittest.TestCase):

@@ -169,11 +169,11 @@
 
   // --- Accueil -------------------------------------------------------------------
   // Les derniers ajouts de toutes les bibliothèques, mêlés, du plus récent au plus ancien (à date égale, l'ordre des bibliothèques puis celui de leur liste) ; chacun garde sa bibliothèque.
-  // `cap` : au plus ce nombre par bibliothèque, pour qu'un gros ajout de musique ne prenne pas toute la place. `n` : au plus ce nombre en tout.
-  var LATEST = 24, PER_LIBRARY = 8;          // 24 : quatre lignes pleines de six, trois de huit
-  H.latest = function (libraries, n, cap) {
+  // `n` : au plus ce nombre en tout. Le serveur a déjà fait ce qui est propre à une bibliothèque : en musique, l'arrivée d'un artiste n'est qu'une carte (voir recent_music).
+  var LATEST = 24;          // quatre lignes pleines de six, trois de huit
+  H.latest = function (libraries, n) {
     var all = [];
-    libraries.forEach(function (lib, i) { lib.recent.slice(0, cap || lib.recent.length).forEach(function (it, k) { all.push({ item: it, lib: lib, at: it.added || 0, order: i * 1000 + k }); }); });
+    libraries.forEach(function (lib, i) { lib.recent.forEach(function (it, k) { all.push({ item: it, lib: lib, at: it.added || 0, order: i * 1000 + k }); }); });
     all.sort(function (a, b) { return b.at - a.at || a.order - b.order; });
     return all.slice(0, n).map(function (x) { return { item: x.item, lib: x.lib }; });
   };
@@ -210,7 +210,7 @@
         var me = H.session.auth && H.session.user && H.session.user.name;
         el.appendChild(h('h1', { class: 'greeting' }, me ? 'Bonjour ' + me : 'Bonjour'));
         if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
-        var latest = H.latest(data.libraries, LATEST, PER_LIBRARY);
+        var latest = H.latest(data.libraries, LATEST);
         if (latest.length) el.appendChild(latestSection(latest));
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;

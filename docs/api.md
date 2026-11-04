@@ -95,7 +95,7 @@ Trois façons de se présenter :
 {"continue": [<carte>], "libraries": [{"id": "…", "label": "…", "kind": "…", "count": 12, "recent": [<élément>]}]}
 ```
 
-- `recent` : au plus 24 éléments, du plus récemment ajouté au plus ancien.
+- `recent` : au plus 24 éléments, du plus récemment ajouté au plus ancien. **Musique** : un album ajouté à un artiste qu'on avait déjà reste un album ; l'**arrivée d'un artiste** (au moins deux albums, tous arrivés à une semaine d'écart au plus, hors compilations et artistes inconnus) n'est qu'une vignette `type: "artist"` : `id` (celui de sa fiche), `lib`, `title`, `n` (nombre d'albums), `album` (son plus ancien album, pour la pochette), `added` (celui de son dernier album).
 - `continue` : au plus 24 cartes « à reprendre ». Une **carte** est un objet *fichier* (voir plus bas) avec en plus : `item` (l'objet *élément* auquel il appartient), `position` (secondes ou page), `total`, `resume` (`true` : reprendre ici ; `false` : le fichier **suivant** d'un épisode ou d'un tome fini, à lancer depuis le début), `updated`.
 
 ### `GET /api/search?q=<texte>`
