@@ -128,7 +128,7 @@ class TestNavigation(UiCase):
     def test_home_shelves_and_remote_navigation(self):
         self.open()
         self.view(".shelf").first.wait_for()
-        self.assertEqual(self.view(".shelf h2 a").count(), 5)
+        self.assertIn("Nouveautés", self.view(".shelf h2").all_inner_texts())
         first = self.focused()
         self.assertNotIn("Médiathèque", first)                      # le focus est dans le contenu, pas sur la barre du haut
         self.press("ArrowRight")
@@ -1243,6 +1243,92 @@ class TestArtistsView(UiCase):
         self.page.locator("#nav .link", has_text="Musique").click()
         self.artists().first.wait_for()
         self.assertEqual(self.view(".grid .card[data-type=album]").count(), 0)
+
+
+class TestHome(UiCase):
+    """L'accueil : un bonjour, ce qu'on reprend, puis les derniers ajouts de toutes les bibliothèques, mêlés."""
+
+    def latest_from_api(self):
+        libs = self.api("/api/home")["libraries"]
+        return {it["id"]: it["added"] for lib in libs for it in lib["recent"]}
+
+    def test_the_home_says_hello_and_mixes_the_latest_additions_of_every_library(self):
+        self.open()
+        self.view(".shelf.latest .card").first.wait_for()
+        self.assertEqual(self.view(".greeting").inner_text(), "Bonjour")                       # serveur ouvert : pas de nom à dire
+        cards = self.view(".shelf.latest .card")
+        known = self.latest_from_api()
+        self.assertEqual(cards.count(), min(20, len(known)))
+        libs = set(cards.evaluate_all("els => els.map(e => e.getAttribute('data-lib'))"))
+        self.assertGreaterEqual(len(libs), 3)
+        added = [known[key] for key in cards.evaluate_all("els => els.map(e => e.getAttribute('data-key'))")]
+        self.assertEqual(added, sorted(added, reverse=True))                                    # du plus récent au plus ancien
+        self.assertEqual(self.view(".shelf[data-lib]").count(), 0)                              # plus d'étagère par bibliothèque
+        self.assertEqual(self.view(".card.more").count(), 0)
+
+    def test_each_card_names_its_kind_with_a_dot_in_the_colour_of_its_library(self):
+        self.open()
+        self.view(".shelf.latest .card").first.wait_for()
+        for lib, word, colour in (("films", "Film", "rgb(242, 180, 65)"), ("series", "Série", "rgb(76, 195, 176)"), ("animations", "Animation", "rgb(255, 122, 168)"),
+                                  ("musique", "Album", "rgb(255, 138, 92)"), ("livres", "Livre", "rgb(155, 209, 107)")):
+            card = self.view(f".shelf.latest .card[data-lib={lib}]").first
+            card.wait_for()
+            self.assertTrue(card.locator(".s").inner_text().startswith(word + " ·") or card.locator(".s").inner_text() == word, (lib, card.locator(".s").inner_text()))
+            self.assertEqual(card.locator(".s .dot").evaluate("el => getComputedStyle(el).backgroundColor"), colour, lib)
+
+    def test_the_mix_keeps_twenty_at_most_newest_first_and_each_with_its_library(self):
+        self.open()
+        out = self.page.evaluate("""() => {
+          var mk = (id, added) => ({ id: id, added: added });
+          var libs = [{ id: 'a', recent: [mk('a1', 50), mk('a2', 10)] }, { id: 'b', recent: [mk('b1', 60), mk('b2', 50)] }];
+          var many = { id: 'c', recent: Array.from({ length: 24 }, (_, i) => mk('c' + i, 1000 - i)) };
+          return { few: Hub.latest(libs, 20).map(x => x.item.id + '@' + x.lib.id), many: Hub.latest([many], 20).length, firstMany: Hub.latest([many], 20)[0].item.id };
+        }""")
+        self.assertEqual(out["few"], ["b1@b", "a1@a", "b2@b", "a2@a"])           # à date égale, l'ordre des bibliothèques puis celui de leur liste
+        self.assertEqual((out["many"], out["firstMany"]), (20, "c0"))
+
+    def test_a_row_that_scrolls_is_cut_at_the_margin_on_the_right_as_on_the_left(self):
+        for lib, title in (("films", "Inception"), ("series", "Dark"), ("livres", "Naruto")):
+            entry = self.entries(lib, title)[0]
+            self.api("/api/progress", {"entry": entry["id"], "position": 2 if lib == "livres" else 100, "duration": 4 if lib == "livres" else 3000, "done": False})
+            self.addCleanup(lambda lib=lib, title=title: self.api("/api/item/" + self.item(lib, title)["id"] + "/seen", {"done": False}))
+        self.page.set_viewport_size({"width": 560, "height": 800})
+        self.open()
+        row = self.view(".shelf .row").first
+        row.wait_for()
+        self.assertGreaterEqual(row.locator(".card").count(), 3)
+        edges = row.evaluate("el => { var r = el.getBoundingClientRect(); return [el.querySelector('.card').getBoundingClientRect().left, innerWidth - r.right]; }")
+        self.assertGreater(edges[0], 8)                                       # la première carte part de la marge
+        self.assertAlmostEqual(edges[0], edges[1], delta=1)                   # la rangée est coupée à la même marge à droite : la carte qui dépasse n'est pas coupée par le bord de l'écran
+        row.evaluate("el => { el.style.scrollBehavior = 'auto'; el.scrollLeft = el.scrollWidth; }")
+        self.page.wait_for_timeout(200)
+        last = row.locator(".card").last.evaluate("el => el.getBoundingClientRect().right")
+        self.assertLessEqual(last, self.page.evaluate("innerWidth") - edges[1] + 1)      # au bout, la dernière carte reste dans la marge
+
+
+class TestHomeGreeting(unittest.TestCase):
+    @unittest.skipUnless(sync_playwright, "Playwright absent")
+    def test_the_greeting_uses_the_name_of_the_account(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            run = Running(tmp, password="secret")
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch()
+                context = browser.new_context()
+                base = f"http://127.0.0.1:{run.port}"
+                form = {"Content-Type": "application/x-www-form-urlencoded"}
+                context.request.post(base + "/api/login", data="password=secret", headers=form)
+                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse1", "role": "user"}), headers={"Content-Type": "application/json"})
+                context.clear_cookies()
+                context.request.post(base + "/api/login", data="user=lea&password=motdepasse1", headers=form)
+                page = context.new_page()
+                page.goto(base + "/")
+                page.wait_for_selector(".greeting")
+                self.assertEqual(page.locator(".greeting").inner_text(), "Bonjour lea")
+                browser.close()
+            run.stop()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestSettings(UiCase):
