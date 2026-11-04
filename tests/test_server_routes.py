@@ -605,18 +605,18 @@ class TestSettingsRoutes(RouteCase):
         return self.hub.cookie(who)
 
     def test_the_settings_of_an_account_start_at_the_defaults(self):
-        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas"}})
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show"}})
 
     def test_a_choice_is_kept_for_the_account_that_made_it(self):
         reply = self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas"}}))
+        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show"}}))
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "artists")
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.alice)).json()["settings"]["music_view"], "albums")
 
     def test_the_state_carries_the_settings_so_the_page_needs_no_second_call(self):
         self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas"})
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show"})
 
     def test_a_wrong_setting_is_a_400_with_the_reason(self):
         for body, reason in (({"couleur": "rouge"}, "réglage inconnu"), ({"music_view": "mosaique"}, "valeur inconnue"), ({}, "aucun réglage")):
@@ -685,6 +685,55 @@ class TestArtistsView(RouteCase):
     def test_without_the_view_the_albums_stay_and_another_kind_of_library_ignores_it(self):
         self.assertEqual(len(self.get("/api/library/lib").json()["items"]), 6)
         self.assertEqual(self.get("/api/library/lib?view=albums").json()["items"][0]["type"], "album")
+
+
+class TestHomeUnseen(RouteCase):
+    """« Pas encore vu » à l'accueil : des films et des séries que le compte n'a pas touchés, dans un ordre qui change chaque jour."""
+
+    def setUp(self):
+        super().setUp()
+        self.fill([item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n) for n in range(30)], [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(30)])
+
+    def unseen(self, day="2026-11-04"):
+        with mock.patch("hub.server.app.today", return_value=day):
+            return [r["id"] for r in self.get("/api/home").json()["unseen"]]
+
+    def test_each_film_offered_names_its_library_since_it_is_not_in_a_list_of_its_own(self):
+        offered = self.get("/api/home").json()["unseen"]
+        self.assertEqual({r["lib"] for r in offered}, {"lib"})
+
+    def test_it_offers_at_most_twenty_four_films_the_account_has_not_started(self):
+        ids = self.unseen()
+        self.assertEqual((len(ids), len(set(ids))), (24, 24))
+        self.assertTrue(all(i.startswith("mv") for i in ids))
+
+    def test_a_film_that_was_started_or_seen_is_not_offered_any_more(self):
+        before = self.unseen()
+        started, seen = before[0], before[1]
+        self.assertEqual(self.post("/api/progress", {"entry": "v" + started[2:], "position": 10, "duration": 100}).status, 200)
+        self.assertEqual(self.post("/api/progress", {"entry": "v" + seen[2:], "position": 99, "duration": 100}).status, 200)
+        after = self.unseen()
+        self.assertNotIn(started, after)
+        self.assertNotIn(seen, after)
+        self.assertEqual(len(after), 24)                                                              # la place laissée est reprise par un autre film
+        self.assertEqual(after[:22], [i for i in before[2:] if i in after][:22])                      # le reste garde son ordre
+
+    def test_the_order_is_the_same_all_day_and_changes_from_one_day_to_the_next(self):
+        self.assertEqual(self.unseen("2026-11-04"), self.unseen("2026-11-04"))
+        self.assertNotEqual(self.unseen("2026-11-04"), self.unseen("2026-11-05"))
+
+    def test_a_library_that_is_all_started_offers_nothing(self):
+        for n in range(30):
+            self.post("/api/progress", {"entry": f"v{n:02d}", "position": 5, "duration": 100})
+        self.assertEqual(self.unseen(), [])
+
+
+class TestHomeUnseenOtherKinds(RouteCase):
+    kind = "music"
+
+    def test_music_is_not_something_one_has_not_seen_yet(self):
+        self.fill([item("al1", "album", title="Un album"), item("al2", "album", title="Un autre")], [entry("a1", "al1", kind="audio", duration=100.0), entry("a2", "al2", kind="audio", duration=100.0)])
+        self.assertEqual(self.get("/api/home").json()["unseen"], [])
 
 
 class TestHomeMusic(RouteCase):

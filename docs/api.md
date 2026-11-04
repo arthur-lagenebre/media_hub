@@ -79,7 +79,7 @@ Trois façons de se présenter :
 
 ```json
 {"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true}],
- "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin"}, "settings": {"music_view": "albums", "movie_view": "sagas"}, "busy": false, "streams": 0, "max_streams": 2}
+ "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin"}, "settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show"}, "busy": false, "streams": 0, "max_streams": 2}
 ```
 
 - `libraries[].kind` : `movies` | `shows` | `music` | `books`. `scanned` : horodatage du dernier scan, ou `null`. `exists` : le dossier est présent.
@@ -92,10 +92,11 @@ Trois façons de se présenter :
 ### `GET /api/home`
 
 ```json
-{"continue": [<carte>], "libraries": [{"id": "…", "label": "…", "kind": "…", "count": 12, "recent": [<élément>]}]}
+{"continue": [<carte>], "libraries": [{"id": "…", "label": "…", "kind": "…", "count": 12, "recent": [<élément>]}], "unseen": [<élément>]}
 ```
 
 - `recent` : au plus 24 éléments, du plus récemment ajouté au plus ancien. **Musique** : un album ajouté à un artiste qu'on avait déjà reste un album ; l'**arrivée d'un artiste** (au moins deux albums, tous arrivés à une semaine d'écart au plus, hors compilations et artistes inconnus) n'est qu'une vignette `type: "artist"` : `id` (celui de sa fiche), `lib`, `title`, `n` (nombre d'albums), `album` (son plus ancien album, pour la pochette), `added` (celui de son dernier album).
+- `unseen` : au plus 24 films, séries et animations (jamais la musique ni les livres) que le compte n'a **pas touchés** : aucune progression sur aucun de leurs fichiers. Dans un ordre qui ne dépend que du compte et du jour (le même toute la journée, un autre demain). Chaque élément porte en plus `lib`, puisqu'il n'est pas rangé par bibliothèque comme `recent`. L'interface en montre 12 au plus, sans ceux que « Nouveautés » affiche déjà.
 - `continue` : au plus 24 cartes « à reprendre ». Une **carte** est un objet *fichier* (voir plus bas) avec en plus : `item` (l'objet *élément* auquel il appartient), `position` (secondes ou page), `total`, `resume` (`true` : reprendre ici ; `false` : le fichier **suivant** d'un épisode ou d'un tome fini, à lancer depuis le début), `updated`.
 
 ### `GET /api/search?q=<texte>`
@@ -241,7 +242,7 @@ Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la cass
 | `POST /api/users` | `{"name": "…", "password": "…", "role": "user"}` (`role` facultatif, `user` par défaut) | **201**, `<compte>`. 400 (nom, mot de passe ou rôle invalide), 409 `ce nom est déjà pris`. Administrateur seulement. |
 | `POST /api/user/<id>/password` | `{"password": "…"}` ; pour **son propre** compte : `{"password": "…", "current": "…"}` | `{"ok": true}`. L'administrateur donne un nouveau mot de passe à un autre compte, sans connaître l'ancien ; les sessions de ce compte sont fermées. Pour son propre compte (`<id>` = celui de l'appelant), `current` (le mot de passe actuel) est **obligatoire** comme pour `POST /api/me/password` : 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) s'il manque ou s'il est faux, et rien n'est changé ; la réponse porte alors le nouveau jeton (`{"ok": true, "token": "…"}`, plus un `Set-Cookie`). 404 `compte inconnu`. Administrateur seulement. |
 | `POST /api/user/<id>/delete` | `{}` | `{"ok": true}`. Supprime le compte, sa progression, ses playlists et ses entrées « retirer de Reprendre ». 400 `impossible de supprimer le dernier administrateur` ; 404 `compte inconnu`. Administrateur seulement. Un administrateur peut supprimer son propre compte tant qu'il en reste un autre. **Le jeton de média est global** : le compte supprimé perd son jeton de session, mais s'il a gardé des URLs `?token=<media_token>`, elles continuent de donner la lecture des fichiers (`/media/`, `/img/`, `/book/`, `/api/subs/`) tant que le secret du serveur n'a pas changé. |
-| `GET /api/me/settings` | | `{"settings": {"music_view": "albums", "movie_view": "sagas"}}` : les réglages d'affichage du compte de la requête, gardés sur le serveur (ils le suivent d'un appareil à l'autre). `music_view` : `albums` (par défaut) ou `artists`, la façon dont s'ouvre la bibliothèque de musique ; `movie_view` : `sagas` (par défaut : les films d'une saga sur une seule carte, c'est `sagas=1` de `GET /api/library/<id>`) ou `films` (chaque film sur sa carte) |
+| `GET /api/me/settings` | | `{"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show"}}` : les réglages d'affichage du compte de la requête, gardés sur le serveur (ils le suivent d'un appareil à l'autre). `music_view` : `albums` (par défaut) ou `artists`, la façon dont s'ouvre la bibliothèque de musique ; `movie_view` : `sagas` (par défaut : les films d'une saga sur une seule carte, c'est `sagas=1` de `GET /api/library/<id>`) ou `films` (chaque film sur sa carte) ; `home_latest` et `home_unseen` : `show` (par défaut) ou `hide`, le rayon « Nouveautés » et le rayon « Pas encore vu » de la page d'accueil (l'API de l'accueil rend toujours les deux listes : c'est l'interface qui masque) |
 | `POST /api/me/settings` | `{"music_view": "artists"}` (un ou plusieurs réglages) | `{"settings": {…}}` : tous les réglages. 400 pour un réglage ou une valeur inconnus, sans rien changer. Supprimer un compte supprime ses réglages |
 | `POST /api/me/password` | `{"current": "…", "new": "…"}` | `{"ok": true, "token": "<nouveau jeton de session>"}`, avec un `Set-Cookie` qui renouvelle le cookie du navigateur. Tout compte. 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) ou mot de passe neuf invalide. |
 
