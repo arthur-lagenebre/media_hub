@@ -51,17 +51,18 @@ def entry(ident, rank, info):
 def tagged(name, members, info, ignored):
     """(rangs, manquants) d'une saga de l'étiquette : `members` sont ses films présents (lignes de la table items).
 
-    Les rangs ({id de l'élément: place dans la collection TMDB}) numérotent et ordonnent les films qu'on a ; les manquants sont les autres films de la collection **déjà sortis**, sauf ceux qu'on a demandé de ne pas voir (`ignored`). Un film annoncé garde sa place dans la collection (il est décrit : il apparaît le jour de sa sortie, sans rien relancer) mais ne s'affiche pas. Rien de tout cela quand TMDB n'a pas été interrogé pour cette saga, ou quand elle ne concorde pas avec nos films (un film sans identifiant ou hors de la collection : le nom de la saga est alors peut-être celui de deux sagas) : (None, []), et la saga garde son ordre par date de sortie.
+    Les rangs ({id de l'élément: place dans la collection TMDB}) numérotent et ordonnent les films qu'on a (deux versions du même film ont le même rang) ; les manquants sont les autres films de la collection **déjà sortis**, sauf ceux qu'on a demandé de ne pas voir (`ignored`). Un film annoncé garde sa place dans la collection (il est décrit : il apparaît le jour de sa sortie, sans rien relancer) mais ne s'affiche pas. Rien de tout cela quand TMDB n'a pas été interrogé pour cette saga, ou quand elle ne concorde pas avec nos films (un film sans identifiant ou hors de la collection : le nom de la saga est alors peut-être celui de deux sagas) : (None, []), et la saga garde son ordre par date de sortie.
     """
     collection = info["collections"].get(name)
     if not collection:
         return None, []
-    owned = sagafile.by_tmdb(members)
+    versions = {}
+    for row in members:
+        versions.setdefault(sagafile.tmdb_of(row), []).append(row)                  # deux versions d'un même film ont le même identifiant : elles partagent sa place
     ranks, absent = {}, []
     for rank, ident in enumerate(collection["films"], 1):
-        row = owned.get(ident)
-        if row is not None:
-            ranks[row["id"]] = rank
+        if ident in versions:
+            ranks.update({row["id"]: rank for row in versions[ident]})
         elif ident not in ignored and str(ident) in info["films"] and released(info["films"][str(ident)]):
             absent.append({**entry(ident, rank, info), "ignorable": True})         # la collection TMDB le compte, pas nous : on peut le cacher
     if len(ranks) != len(members):
