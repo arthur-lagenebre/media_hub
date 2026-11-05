@@ -100,16 +100,17 @@ Seul l'administrateur lance les mises à jour (scan, enrichissement, nettoyage),
 
 ### Droits par bibliothèque
 
-Pour chaque compte (sauf l'administrateur, qui a tout) et chaque bibliothèque (Films, Séries, Animations, Musique, Livres…), l'administrateur dit si la personne peut **voir** et si elle peut **télécharger**, dans *Paramètres* > *Comptes* > *Droits*, ou en ligne de commande :
+Pour chaque compte (sauf l'administrateur, qui a tout) et chaque bibliothèque (Films, Séries, Animations, Musique, Livres…), l'administrateur dit si la personne peut **voir**, la **lire** en ligne et la **télécharger**, dans *Paramètres* > *Comptes* > *Droits*, ou en ligne de commande :
 
 ```bash
 python -m hub user rights <nom>                                       # ce que le compte voit et télécharge
-python -m hub user rights <nom> --set Livres=none --set Films=view    # all : voir et télécharger, view : voir seulement, none : rien
+python -m hub user rights <nom> --set Livres=none --set Films=view    # all : voir, lire et télécharger ; play : voir et lire ; view : voir seulement ; none : rien
 ```
 
 - Par défaut tout est permis : un compte d'avant les droits n'a rien perdu, et une bibliothèque ajoutée plus tard s'ouvre à tous.
 - Une bibliothèque qu'on ne voit pas **disparaît** pour ce compte : onglet, accueil, recherche, « Reprendre », fiches, images, lecture. Ses pistes restent dans les playlists du compte mais n'y apparaissent plus ; elles reviennent si le droit est rendu. Télécharger suppose voir.
-- Sans le droit de télécharger, les boutons *Télécharger* disparaissent et `?download=1` répond 403. **Voir permet de lire**, donc le fichier d'un film qu'on lit arrive bien au navigateur : le droit de télécharger retire le bouton et la pièce jointe, pas la possibilité technique d'enregistrer ce qu'un lecteur reçoit.
+- **Voir** : la liste, les fiches, les images ; **lire** : la lecture en ligne (vidéo, musique, livres, sous-titres) ; **télécharger** : les fichiers. Lire et télécharger supposent voir, mais ne dépendent pas l'un de l'autre. Sans le droit de lire, la fiche reste visible mais les boutons de lecture disparaissent, la lecture répond 403 et « Reprendre » ne propose plus rien de cette bibliothèque.
+- Sans le droit de télécharger, les boutons *Télécharger* disparaissent et `?download=1` répond 403. **Lire envoie le fichier au navigateur** : le droit de télécharger retire le bouton et la pièce jointe, pas la possibilité technique d'enregistrer ce qu'un lecteur reçoit. Pour qu'on ne puisse que voir la fiche, retire aussi « lire ».
 - Les droits valent à la requête suivante, sans que la personne se reconnecte. Le jeton de média (`?token=`) d'un client natif est celui de son compte : il porte les mêmes droits.
 
 ## Interface HTTP
