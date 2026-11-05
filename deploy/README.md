@@ -18,7 +18,7 @@ Sur un dataset d'applications (ici `/mnt/tank/apps/media`, adapte) :
 /mnt/tank/apps/media/
   media_hub/          le dossier media_hub de cette archive
   media_library/      le dossier media_library de cette archive
-  media_hub-data/     vide : base SQLite, cache d'images, Pillow
+  media_hub-data/     vide : base SQLite, cache d'images, Pillow (pylib/, installé au premier démarrage ; le supprimer pour le réinstaller)
   ffmpeg/             ffmpeg et ffprobe (étape 2)
   tailscale/          l'état Tailscale (vide au premier lancement)
   tailscale-config/   y copier deploy/serve.json
