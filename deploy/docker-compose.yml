@@ -46,8 +46,10 @@ services:
       - DAC_OVERRIDE
       - FOWNER
     working_dir: /app/media_hub
-    # Pillow est facultatif (pochettes plus légères) : installé une fois dans le dossier de données, puis réutilisé.
-    command: ["sh", "-c", "pip install -q --disable-pip-version-check --target /data/pylib pillow >/dev/null 2>&1; exec python -m hub"]
+    # Pillow est facultatif (pochettes plus légères) : installé une seule fois dans le dossier de données (/data/pylib, déjà dans PYTHONPATH), puis réutilisé
+    # sans réseau aux démarrages suivants. Si pip échoue, son message reste dans `docker logs media-hub` et le serveur démarre quand même, sans Pillow.
+    # Pour réinstaller ou mettre Pillow à jour : supprimer le dossier media_hub-data/pylib et redémarrer.
+    command: ["sh", "-c", "python -c 'import PIL' 2>/dev/null || pip install -q --disable-pip-version-check --target /data/pylib pillow || echo 'media_hub : Pillow non installé (facultatif)'; exec python -m hub"]
     environment:
       PYTHONPATH: /data/pylib
       PYTHONUNBUFFERED: "1"
