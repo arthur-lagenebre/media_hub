@@ -141,6 +141,16 @@
   };
   H.applyDevice();
 
+  // --- Taille du texte : celle de l'appareil (par défaut) ou un cran plus petit, au choix, sur n'importe quel appareil ---
+  H.textSizes = [['normal', 'Normale', 'La taille prévue pour l’appareil'], ['small', 'Petite', 'Un peu plus petite, sur tous les appareils']];
+  H.applyTextSize = function () {
+    var chosen = H.pref('textSize');
+    H.textSize = H.textSizes.some(function (s) { return s[0] === chosen; }) ? chosen : 'normal';
+    if (H.textSize === 'normal') document.documentElement.removeAttribute('data-text'); else document.documentElement.setAttribute('data-text', H.textSize);
+    return H.textSize;
+  };
+  H.applyTextSize();
+
   // --- Formats ----------------------------------------------------------------
   function pad(n) { return n < 10 ? '0' + n : '' + n; }
   H.time = function (s) {
