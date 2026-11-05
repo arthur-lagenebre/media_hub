@@ -201,6 +201,8 @@ def entry_json(row, progress=None):
         out["date"] = info["date"]
     if row["kind"] == "audio":
         out["artist"] = info.get("artist", "")
+        if info.get("artists"):                # ARTISTS du fichier ; absent d'une piste que media_library n'a pas encore repassée
+            out["artists"] = info["artists"]
     if row["kind"] == "book" and info.get("PageCount"):
         out["pages"] = info["PageCount"]
     if progress is not None:
@@ -1191,7 +1193,7 @@ def album_links(meta):
     return [{"label": "MusicBrainz", "url": musicbrainz.release_url(mbid)}] if MBID_RE.fullmatch(mbid) else []
 
 
-ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
+ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "artist_mbids", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
                   "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "season_summaries", "doubts")
 
 

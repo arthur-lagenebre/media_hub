@@ -55,6 +55,10 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne fait perdre aucune progression de lecture, et un `.mkv` illisible n'arrête pas le scan | `0` |
 | `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting) et décrit les films qui manquent aux sagas ; lue aussi dans le `.env` de `media_library` | aucune |
 
+## Invités d'une piste
+
+Sous le titre d'une piste, dans la fiche d'un album, le hub montre les **invités** : les artistes de la piste qui ne sont pas l'artiste de l'album, séparés par une virgule et sans liaison (« Poppy », « Poppy, Bloodywood »). Il les tire du tag **`ARTISTS`** (un nom par artiste) que `media_library` écrit dans chaque `.flac` et `.mp3`, et compare les artistes par leur identifiant MusicBrainz (`MUSICBRAINZ_ARTISTID` contre `MUSICBRAINZ_ALBUMARTISTID`), à défaut par leur nom. Un fichier sans `ARTISTS` (album pas encore repassé par `media_library`) garde l'ancienne règle sur le tag `ARTIST` (« feat. Poppy »). **Après un déploiement de cette version, lance un scan** (bouton *Mettre à jour* de la bibliothèque *Musique*, ou `POST /api/scan`) : les pistes déjà indexées sont relues une fois pour remplir ces champs. La file d'attente et les playlists montrent toujours le tag `ARTIST` en entier.
+
 ## Photos d'artistes
 
 La photo d'un artiste est le fichier `artist.webp` de **son dossier, à la racine de la bibliothèque** (`Musique/Daft Punk/artist.webp`) : elle suit la musique si on la déplace ou la sauvegarde, et le nettoyage la laisse. Le dossier de l'artiste est celui, à la racine, où il a la majorité des albums ; un album posé directement à la racine, ou un dossier de genre qui range plusieurs artistes, n'en donne pas : la photo reste alors sous `HUB_DATA/artists/`. Le dossier est connu après un scan.

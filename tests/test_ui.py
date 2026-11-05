@@ -261,8 +261,45 @@ class TestDetailPages(UiCase):
         self.assertEqual(credit("Titre (feat. Invité)", "Mouss", "Various Artists"), {"title": "Titre", "line": "Mouss feat. Invité"})
         self.assertEqual(credit("Titre", "", "Various Artists"), {"title": "Titre", "line": ""})
 
-    def set_track_artists(self, album, album_artist, artists):
-        """Donne aux pistes de l'album les artistes `artists` (dans l'ordre) et à l'album l'artiste `album_artist` ; tout est remis après."""
+    def test_the_line_under_a_track_title_lists_the_guests_of_artists_without_any_link(self):
+        self.open("")
+        ids = {"BABYMETAL": "id-baby", "Poppy": "id-poppy", "Electric Callboy": "id-callboy", "Polyphia": "id-poly", "Bloodywood": "id-blood", "A": "id-a", "B": "id-b", "Guest": "id-guest"}
+        named = lambda *names: [{"name": n, "id": ids.get(n, "")} for n in names]
+        credit = lambda artist, artists, album_ids, album="BABYMETAL", title="Titre": self.page.evaluate("([t, a, b, l, i]) => Hub.music.credit(t, a, b, l, i)", [title, artist, album, artists, album_ids])
+        baby = ["id-baby"]
+        for artist in ("BABYMETAL feat. Poppy", "BABYMETAL x Poppy", "BABYMETAL & Poppy", "BABYMETAL / Poppy"):        # seule la liste compte, pas la liaison
+            self.assertEqual(credit(artist, named("BABYMETAL", "Poppy"), baby), {"title": "Titre", "line": "Poppy"}, artist)
+        self.assertEqual(credit("BABYMETAL feat. Polyphia", named("BABYMETAL", "Polyphia"), baby)["line"], "Polyphia")
+        self.assertEqual(credit("BABYMETAL x Electric Callboy", named("BABYMETAL", "Electric Callboy"), baby)["line"], "Electric Callboy")
+        self.assertEqual(credit("BABYMETAL feat. Poppy, Bloodywood", named("BABYMETAL", "Poppy", "Bloodywood"), baby)["line"], "Poppy, Bloodywood")
+        self.assertEqual(credit("A, B", named("A", "B"), [])["line"], "A, B")                                # ni l'un ni l'autre n'est l'artiste de l'album (une compilation) : comme avant
+        self.assertEqual(credit("BABYMETAL", named("BABYMETAL"), baby), {"title": "Titre", "line": ""})        # la piste de l'artiste seul : rien
+        self.assertEqual(credit("A & B feat. Guest", named("A", "B", "Guest"), ["id-a", "id-b"], album="A & B")["line"], "Guest")     # un artiste d'album à deux identifiants : seul l'invité reste
+        self.assertEqual(credit("A & B", named("A", "B"), ["id-a", "id-b"], album="A & B")["line"], "")
+        self.assertEqual(credit("BABYMETAL feat. Poppy", named("BABYMETAL", "Poppy"), ["id-autre"], album="Autre")["line"], "BABYMETAL feat. Poppy")        # l'artiste de l'album n'est pas de la piste : comme avant
+
+    def test_without_identifiers_the_guests_are_found_by_name(self):
+        self.open("")
+        credit = lambda artist, artists, album_ids, album: self.page.evaluate("([a, b, l, i]) => Hub.music.credit('Titre', a, b, l, i)", [artist, album, artists, album_ids])
+        unpaired = [{"name": "BABYMETAL", "id": ""}, {"name": "Poppy", "id": ""}]          # ARTISTS et MUSICBRAINZ_ARTISTID de longueurs différentes : le hub n'en associe aucun
+        self.assertEqual(credit("BABYMETAL feat. Poppy", unpaired, ["id-baby"], "babymetal ")["line"], "Poppy")
+        self.assertEqual(credit("BABYMETAL feat. Poppy", unpaired, [], "BABYMETAL")["line"], "Poppy")
+        self.assertEqual(credit("BABYMETAL feat. Poppy", [{"name": "BABYMETAL", "id": "id-baby"}, {"name": "Poppy", "id": ""}], ["id-baby"], "BABYMETAL")["line"], "Poppy")      # un seul identifiant manque : toute la piste se compare par les noms
+        self.assertEqual(credit("Various x Poppy", unpaired, ["id-va"], "Various Artists")["line"], "Various x Poppy")      # compilation : comme avant
+
+    def test_a_file_without_artists_keeps_the_rule_on_the_artist_tag(self):
+        self.open("")
+        credit = lambda title, artist, album, artists=None: self.page.evaluate("([t, a, b, l]) => Hub.music.credit(t, a, b, l, ['id-kav'])", [title, artist, album, artists])
+        for artists in (None, []):
+            self.assertEqual(credit("Protovision", "Kavinsky feat. Havoc", "Kavinsky", artists), {"title": "Protovision", "line": "feat. Havoc"})
+            self.assertEqual(credit("New Tristram", "Russell Brower & Matt Uelmen", "Various Artists", artists), {"title": "New Tristram", "line": "Russell Brower & Matt Uelmen"})
+            self.assertEqual(credit("Titre (feat. X)", "Kavinsky", "Kavinsky", artists), {"title": "Titre", "line": "feat. X"})
+        solo = [{"name": "Kavinsky", "id": "id-kav"}]          # ARTISTS n'y donne aucun invité : celui du titre reste
+        self.assertEqual(credit("Titre (feat. X)", "Kavinsky", "Kavinsky", solo), {"title": "Titre", "line": "feat. X"})
+
+    def set_track_artists(self, album, album_artist, artists, credits=None, album_ids=None):
+        """Donne aux pistes de l'album les artistes `artists` (dans l'ordre) et à l'album l'artiste `album_artist` ; tout est remis après.
+        `credits` : la liste ARTISTS de chaque piste ([{name, id}]), `album_ids` : les identifiants de l'artiste de l'album."""
         db = self.run_.hub.db
         rows = db.query("SELECT id, meta FROM entries WHERE item_id=? ORDER BY number", (album["id"],))
         row = db.one("SELECT grp, meta FROM items WHERE id=?", (album["id"],))
@@ -273,8 +310,14 @@ class TestDetailPages(UiCase):
             meta = json.loads(r["meta"])
             meta.setdefault("info", {})["artist"] = artist
             db.execute("UPDATE entries SET meta=? WHERE id=?", (json.dumps(meta), r["id"]))
+        for r, listed in zip(rows, credits or []):
+            meta = json.loads(db.one("SELECT meta FROM entries WHERE id=?", (r["id"],))["meta"])
+            meta["info"]["artists"] = listed
+            db.execute("UPDATE entries SET meta=? WHERE id=?", (json.dumps(meta), r["id"]))
         meta = json.loads(row["meta"])
         meta["artist"] = album_artist
+        if album_ids:
+            meta["artist_mbids"] = album_ids
         db.execute("UPDATE items SET grp=?, meta=? WHERE id=?", (album_artist, json.dumps(meta), album["id"]))
 
     def test_a_compilation_shows_the_artist_of_each_track_under_its_title(self):
@@ -290,6 +333,15 @@ class TestDetailPages(UiCase):
         self.open("#/i/" + album["id"])
         self.view(".trk").first.wait_for()
         self.assertEqual(self.view(".trk .ti small").all_inner_texts(), ["feat. Quelqu'un"])
+
+    def test_the_guests_of_the_artists_list_show_under_the_titles_as_names_only(self):
+        album = self.item("musique", "Discovery")
+        named = lambda *names: [{"name": n, "id": "id-" + n.lower().replace(" ", "")} for n in names]
+        self.set_track_artists(album, "BABYMETAL", ["BABYMETAL feat. Poppy", "BABYMETAL x Electric Callboy", "BABYMETAL"],
+                               credits=[named("BABYMETAL", "Poppy"), named("BABYMETAL", "Electric Callboy"), named("BABYMETAL")], album_ids=["id-babymetal"])
+        self.open("#/i/" + album["id"])
+        self.view(".trk").first.wait_for()
+        self.assertEqual(self.view(".trk .ti small").all_inner_texts(), ["Poppy", "Electric Callboy"])
 
     def test_admin_runs_an_update(self):
         self.open("#/admin")

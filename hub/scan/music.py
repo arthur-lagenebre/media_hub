@@ -8,10 +8,35 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from libraries.music import library, wanted
+from libraries.music import audio, library, wanted
+from libraries.music.tags import AudioError
 
 from .common import entry_row, is_album_cover, item_row, unchanged
 from .video import _Counts
+
+
+def credits(meta):
+    """Les artistes crédités d'une piste, lus dans ses tags : {"artists": [{"name", "id"}], "albumartist_ids": [id]}.
+
+    ARTISTS porte un nom par artiste, sans liaison ; MUSICBRAINZ_ARTISTID un identifiant par artiste, dans le même ordre. Les deux listes peuvent différer
+    (l'une est dédoublonnée par nom, l'autre par identifiant) : on n'associe un nom à son identifiant que si elles ont la même longueur, sinon `id` reste vide.
+    Un fichier qui n'a pas ARTISTS (pas encore repassé par media_library) rend une liste vide : le hub s'en tient alors au tag ARTIST.
+    """
+    names = [n.strip() for n in meta.values("ARTISTS") if n.strip()]
+    ids = [i.strip().lower() for i in meta.values("MUSICBRAINZ_ARTISTID") if i.strip()]
+    paired = len(names) == len(ids)
+    return {"artists": [{"name": name, "id": ids[n] if paired else ""} for n, name in enumerate(names)],
+            "albumartist_ids": [i.strip().lower() for i in meta.values("MUSICBRAINZ_ALBUMARTISTID") if i.strip()]}
+
+
+def read_info(track):
+    """Comme `library.read_info` de media_library (une seule lecture du fichier), plus les artistes crédités de la piste."""
+    track.info, track.error = {}, None
+    try:
+        meta = audio.read(track.path)
+        track.info = {**library.track_info(track.path, meta, track.disc_folder), **credits(meta)}
+    except AudioError as e:
+        track.error = str(e)
 
 
 def _read_tracks(release, known):
@@ -20,20 +45,27 @@ def _read_tracks(release, known):
     for track in release.tracks:
         row = known.get(track.rel)
         cached = json.loads(row["meta"]).get("info") if unchanged(row, track.size, track.mtime) else None
-        if cached:
+        if cached and "artists" in cached:          # une piste gardée d'avant la lecture des artistes est relue, une fois
             track.info = cached
             reused += 1
         else:
-            library.read_info(track)
+            read_info(track)
             read += 1
     return reused, read
+
+
+def _album_artist_ids(release):
+    """Les identifiants MusicBrainz de l'artiste de l'album (un par artiste crédité : « A & B » en a deux), tels que la plupart des pistes les portent."""
+    found = Counter(tuple(t.info.get("albumartist_ids") or ()) for t in release.tracks)
+    found.pop((), None)
+    return list(found.most_common(1)[0][0]) if found else []
 
 
 def _album_item(lib, release, homes):
     progress = release.progress()
     cover = release.cover_file if release.cover_file and is_album_cover(release.cover_file.name) else None     # cover.{ext} seul : folder.jpg et les pochettes embarquées ne comptent pas
     meta = {
-        "artist": release.artist, "artist_id": release.artist_id, "artist_mbid": release.artist_mbid, "mbid": release.mbid, "label": release.label,
+        "artist": release.artist, "artist_id": release.artist_id, "artist_mbid": release.artist_mbid, "artist_mbids": _album_artist_ids(release), "mbid": release.mbid, "label": release.label,
         "catalog": release.catalog, "formats": release.formats, "tagged": release.tagged, "folder": release.rel,
         "artist_dir": homes.get(release.artist_id, ""),
         "cover_file": cover.name if cover else "", "has_cover": bool(cover),

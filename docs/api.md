@@ -142,7 +142,8 @@ Un film, un épisode, une piste, un tome.
 | `file` | chaîne | URL du fichier (`/media/<id>/file`) |
 | `image` | chaîne, optionnel | URL de l'image propre au fichier (vignette d'épisode, couverture de tome) ; absent pour une piste audio. **Peut répondre 404** : retomber sur `cover` de l'élément. |
 | `date` | chaîne, optionnel | date de sortie (vidéo, quand l'étiquette la donne) |
-| `artist` | chaîne, optionnel | artiste de la piste (audio ; peut être `""`) |
+| `artist` | chaîne, optionnel | artiste de la piste (audio ; peut être `""`), tel que le tag `ARTIST` l'écrit, liaisons comprises (« BABYMETAL x Poppy ») |
+| `artists` | liste, optionnel | artistes de la piste, sans liaison, lus dans le tag `ARTISTS` (audio) : `[{"name": "BABYMETAL", "id": "<MusicBrainz>"}, …]`. `id` est l'identifiant MusicBrainz de l'artiste, ou `""` quand le fichier n'en donne pas autant que de noms (le hub n'associe un nom à son identifiant que si les deux listes ont la même longueur). **Absent** tant que le fichier n'a pas `ARTISTS` ou que le scan ne l'a pas relu : retomber sur `artist`. |
 | `pages` | entier, optionnel | nombre de pages (livre, quand l'étiquette la donne) |
 | `progress` | objet, optionnel | `{"position", "duration", "done", "updated"}` ; présent dans les `entries` d'un élément quand il y a une progression. `position` : secondes, ou page / chapitre pour un livre. |
 
@@ -199,7 +200,7 @@ Un `<élément>` (champs ci-dessus) plus :
 | `missing` | liste, optionnel | séries de livres : `[{"label": "Naruto", "numbers": [3], "total": 3}]` : par série (ou arc), les numéros de tomes manquants et le total attendu. Absent s'il ne manque rien. **Remplace le compte** que portent les listes. |
 | `tracks_total` | entier, optionnel | albums : nombre de pistes |
 | `doubts` | liste de textes, optionnel | séries et animations enrichies : ce que la recherche TMDB sur le nom du dossier n'a pas pu trancher (« titre partagé avec Hercule (1995) », « titre trouvé éloigné de la recherche »). Absent si la recherche est sûre, ou si la fiche est épinglée dans le nom du dossier ou choisie à la main |
-| autres | | selon ce que l'étiquetage ou l'enrichissement a fourni, quand ils sont non vides : `directors`, `writers`, `actors`, `artist`, `artist_id`, `label`, `catalog`, `formats`, `authors`, `publisher`, `section`, `collection`, `status`, `episodes_total`, `seasons_total`, `tmdb`, `unit`, `units`, `years`, `discs`, `season_summaries`. **Ambigu** : leurs types ne sont pas contrôlés par le serveur (listes de chaînes pour les personnes, structures libres pour `discs`, `season_summaries`). |
+| autres | | selon ce que l'étiquetage ou l'enrichissement a fourni, quand ils sont non vides : `directors`, `writers`, `actors`, `artist`, `artist_id`, `artist_mbids`, `label`, `catalog`, `formats`, `authors`, `publisher`, `section`, `collection`, `status`, `episodes_total`, `seasons_total`, `tmdb`, `unit`, `units`, `years`, `discs`, `season_summaries`. `artist_mbids` (albums) : liste d'identifiants MusicBrainz, un par artiste crédité de l'album (« A & B » en a deux), à comparer à ceux de `entries[].artists` ; vide ou absente tant que les fichiers n'ont pas été relus. **Ambigu** : leurs types ne sont pas contrôlés par le serveur (listes de chaînes pour les personnes, structures libres pour `discs`, `season_summaries`). |
 
 404 : élément inconnu.
 

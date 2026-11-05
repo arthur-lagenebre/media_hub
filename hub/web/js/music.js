@@ -20,9 +20,25 @@
     return { title: bare || title, guests: inArtist ? inArtist[1] : inTitle ? inTitle[1] : '' };
   };
   // La ligne sous le titre d'une piste, dans la liste des pistes d'un album : ses artistes quand ils diffèrent de ceux de l'album (une compilation, une bande originale),
-  // et seulement ce qui s'y ajoute (« feat. X ») quand la piste est de l'artiste de l'album.
+  // et seulement ce qui s'y ajoute quand la piste est de l'artiste de l'album.
+  // Ce qui s'y ajoute vient de la liste des artistes de la piste (`artists`, le tag ARTISTS : un nom par artiste, sans liaison) : « Poppy », « Poppy, Bloodywood ».
+  // Un fichier qui n'a pas cette liste (album pas encore repassé par media_library) garde la règle sur le tag ARTIST : « feat. Poppy ».
+  M.GUEST_SEPARATOR = ', ';        // ce qui sépare les invités dans la ligne : un seul endroit à changer
   function same(a, b) { return String(a || '').replace(/\s+/g, ' ').trim().toLowerCase() === String(b || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
-  M.credit = function (title, artist, albumArtist) {
+  // Les invités de la liste, ou null quand la liste ne s'applique pas (absente, ou l'artiste de l'album n'est pas de la piste : une compilation).
+  // Un artiste de la piste est de l'album si son identifiant est parmi ceux de l'album ; faute d'identifiants pour tous, si son nom est celui de l'album.
+  function listedGuests(artists, albumArtist, albumIds) {
+    if (!artists || !artists.length) return null;
+    var ids = (albumIds || []).filter(Boolean), byId = ids.length > 0 && artists.every(function (a) { return a.id; });
+    function own(a) { return byId ? ids.indexOf(a.id) >= 0 : same(a.name, albumArtist); }
+    return artists.some(own) ? artists.filter(function (a) { return !own(a); }).map(function (a) { return a.name; }) : null;
+  }
+  M.credit = function (title, artist, albumArtist, artists, albumIds) {
+    var listed = listedGuests(artists, albumArtist, albumIds);
+    if (listed) {
+      var inTitle = M.guests(title, '');          // « Titre (feat. X) » : géré comme avant quand la liste n'a pas d'invité
+      return { title: inTitle.title, line: listed.length ? listed.join(M.GUEST_SEPARATOR) : inTitle.guests ? 'feat. ' + inTitle.guests : '' };
+    }
     var shown = M.guests(title, artist), found = GUEST_ARTIST.exec(artist || ''), own = (found ? artist.slice(0, found.index) : artist || '').trim();
     if (!own || same(own, albumArtist)) return { title: shown.title, line: shown.guests ? 'feat. ' + shown.guests : '' };
     return { title: shown.title, line: own + (shown.guests ? ' feat. ' + shown.guests : '') };
