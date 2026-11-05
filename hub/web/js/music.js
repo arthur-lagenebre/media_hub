@@ -74,12 +74,12 @@
   };
 
   // --- Menus d'actions ---------------------------------------------------------------
+  function canHear(libId) { return libId ? H.actions.canPlay(libId) : H.actions.canPlayKind('music'); }
   function canGet(libId) { return libId ? H.actions.canDownload(libId) : H.actions.canDownloadKind('music'); }          // une file ou une playlist mêle les bibliothèques : sans la sienne, une bibliothèque de musique au moins
   M.albumMenu = function (itemId, title, libId) {
-    H.menu(title, [
+    H.menu(title, (canHear(libId) ? [
       { label: 'Lire l’album', value: 'play' }, { label: 'Lecture aléatoire', value: 'shuffle' },
-      { label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }, { label: 'Ajouter à une playlist…', value: 'list' }
-    ].concat(canGet(libId) ? [{ label: 'Télécharger l’album', value: 'download' }] : []), null, function (v) {
+      { label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }] : []).concat([{ label: 'Ajouter à une playlist…', value: 'list' }]).concat(canGet(libId) ? [{ label: 'Télécharger l’album', value: 'download' }] : []), null, function (v) {
       if (v === 'download') M.tracksOf(itemId).then(function (list) { H.actions.download(list.map(function (t) { return t.id; })); }).catch(fail);
       else if (v === 'play') M.playItem(itemId);
       else if (v === 'shuffle') M.playItem(itemId, true);
@@ -89,7 +89,7 @@
   };
   // `extra` : actions propres à l'endroit où l'on est (dans une playlist : monter, descendre, retirer) : [{label, value, run}]
   M.trackMenu = function (track, extra, libId) {
-    var options = [{ label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }, { label: 'Ajouter à une playlist…', value: 'list' }].concat(canGet(libId) ? [{ label: 'Télécharger', value: 'download' }] : [], extra || []);
+    var options = (canHear(libId) ? [{ label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }] : []).concat([{ label: 'Ajouter à une playlist…', value: 'list' }]).concat(canGet(libId) ? [{ label: 'Télécharger', value: 'download' }] : [], extra || []);
     H.menu(track.title, options, null, function (v) {
       if (v === 'download') H.actions.download([track.id]);
       else if (v === 'next' || v === 'end') queueTracks([track], v, track.title);
@@ -102,14 +102,14 @@
   M.cardTools = function (it) {
     function stop(e) { e.preventDefault(); e.stopPropagation(); }
     return h('div', { class: 'qa' },
-      h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Lire ' + it.title, title: 'Lire', onclick: function (e) { stop(e); M.playItem(it.id); } }, H.icon('play')),
+      canHear() ? h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Lire ' + it.title, title: 'Lire', onclick: function (e) { stop(e); M.playItem(it.id); } }, H.icon('play')) : null,
       h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Plus d’actions', title: 'Plus d’actions', onclick: function (e) { stop(e); M.albumMenu(it.id, it.title); } }, H.icon('more')));
   };
   // Touche « lecture / pause » de la télécommande sur une pochette : lance l'album
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'MediaPlayPause' && e.key !== 'MediaPlay' && e.keyCode !== 179) return;
     var a = document.activeElement;
-    if (!a || !a.classList || !a.classList.contains('card') || a.getAttribute('data-type') !== 'album' || H.overlay.isOpen()) return;
+    if (!a || !a.classList || !a.classList.contains('card') || a.getAttribute('data-type') !== 'album' || H.overlay.isOpen() || !canHear()) return;
     e.preventDefault();
     M.playItem(a.getAttribute('data-key'));
   });
@@ -316,11 +316,12 @@
     }
     // Les boutons de la fiche d'un artiste : lire, mettre en file, et pour l'administrateur la photo.
     function artistActions(d, list) {
+      var hear = canHear(d.library && d.library.id);
       return h('div', { class: 'actions' },
-        H.button('Tout lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }),
-        H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
-        H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
-        H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }),
+        hear ? H.button('Tout lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }) : null,
+        hear ? H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }) : null,
+        hear ? H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }) : null,
+        hear ? H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }) : null,
         H.device === 'tv' || !H.isAdmin() ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
         H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button('Recadrer', 'full', { 'data-key': 'crop', onclick: recrop }));
     }
@@ -404,10 +405,11 @@
       var meta = [H.plural(d.count, 'piste'), d.duration ? H.dur(d.duration) : ''].filter(Boolean).join(' · ');
       var info = h('div', { class: 'info' }, h('h1', null, d.name), h('p', { class: 'meta' }, meta));
       if (d.missing) info.appendChild(h('p', { class: 'muted' }, H.plural(d.missing, 'piste') + ' introuvable' + (d.missing > 1 ? 's' : '') + ' (fichier déplacé ou supprimé).'));
+      var hear = canHear();
       var actions = h('div', { class: 'actions' },
-        H.button('Lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }),
-        H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }),
-        H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }),
+        hear ? H.button('Lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }) : null,
+        hear ? H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }) : null,
+        hear ? H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }) : null,
         H.button('Renommer', 'edit', { onclick: function () { H.prompt('Renommer la playlist', d.name, 'Renommer', function (name) { edit('rename', { name: name }); }); } }),
         H.button('Supprimer', 'trash', { onclick: function () {
           H.menu('Supprimer « ' + d.name + ' » ?', [{ label: 'Supprimer la playlist', value: 'yes' }, { label: 'Garder', value: 'no' }], 'no', function (v) {

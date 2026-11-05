@@ -2360,7 +2360,7 @@ class TestAccountManagement(AccountsCase):
         self.assertRegex(made["id"], r"^[0-9a-f]{16}$")
         self.assertIsInstance(made["created"], int)
         self.assertEqual(set(made), {"id", "name", "role", "created", "rights"})
-        self.assertTrue(all(r == {"view": True, "download": True} for r in made["rights"].values()))       # un compte neuf voit et télécharge tout
+        self.assertTrue(all(r == {"view": True, "play": True, "download": True} for r in made["rights"].values()))       # un compte neuf voit et télécharge tout
         boss = self.admin.json("/api/users", {"name": "Chef", "password": self.PASSWORD, "role": "admin"})[1]
         self.assertEqual(boss["role"], "admin")
         users = self.admin.json("/api/users")[1]["users"]
@@ -2747,6 +2747,17 @@ class TestSchemaMigrations(unittest.TestCase):
         self.assertIn(f"version {later}", str(caught.exception))
         db = database.Database(self.path)
         self.assertEqual((db.kv_get("schema"), "extra" in self.columns(db)), (database.SCHEMA_VERSION, False))      # la colonne ajoutée avant l'échec a été défaite
+
+    def test_a_base_with_the_rights_of_version_3_gains_the_play_column_and_keeps_its_rows(self):
+        from hub import db as database
+        db = database.Database(self.path)
+        db.execute("DROP TABLE rights")
+        db.execute("CREATE TABLE rights(user_id TEXT NOT NULL, lib TEXT NOT NULL, view INTEGER NOT NULL DEFAULT 1, download INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(user_id, lib))")
+        db.execute("INSERT INTO rights(user_id, lib, view, download) VALUES('u', 'films', 1, 0)")
+        db.kv_set("schema", 3)
+        db = database.Database(self.path)
+        self.assertEqual(db.kv_get("schema"), database.SCHEMA_VERSION)
+        self.assertEqual([tuple(r) for r in db.query("SELECT user_id, lib, view, play, download FROM rights")], [("u", "films", 1, 1, 0)])     # il pouvait lire : il lit encore
 
     def test_a_base_from_before_the_current_version_is_brought_up(self):
         from hub import db as database
@@ -3323,20 +3334,46 @@ class TestRights(AccountsCase):
 
     def restrict_alice(self):
         """films : voir sans télécharger ; livres : rien ; le reste : tout."""
-        return self.grant(self.alice, {"films": {"view": True, "download": False}, "livres": {"view": False}})
+        return self.grant(self.alice, {"films": {"view": True, "play": True, "download": False}, "livres": {"view": False}})
 
     def test_a_new_account_can_see_and_download_everything(self):
         libs = self.alice.json("/api/state")[1]["libraries"]
         self.assertEqual([(lib["id"], lib["download"]) for lib in libs], [(lib, True) for lib in self.LIBS])
         listed = {u["name"]: u["rights"] for u in self.admin.json("/api/users")[1]["users"]}
-        self.assertEqual(listed["alice"], {lib: {"view": True, "download": True} for lib in self.LIBS})
+        self.assertEqual(listed["alice"], {lib: {"view": True, "play": True, "download": True} for lib in self.LIBS})
         self.assertEqual(self.alice.get(f"/media/{self.volumes[0]['id']}/file?download=1")[0], 200)
+
+    def test_play_is_its_own_right_and_leaves_the_catalogue_open(self):
+        self.watch(self.alice, self.volumes[0]["id"], 1)
+        self.watch(self.alice, self.episodes[0]["id"], 600)
+        self.grant(self.alice, {"films": {"play": False}, "livres": {"play": False}, "series": {"play": False}})
+        libs = {lib["id"]: (lib["play"], lib["download"]) for lib in self.alice.json("/api/state")[1]["libraries"]}
+        self.assertEqual(libs, {"films": (False, True), "series": (False, True), "animations": (True, True), "musique": (True, True), "livres": (False, True)})
+        film, volume, episode, mine = self.film_files[0]["id"], self.volumes[0]["id"], self.episodes[0]["id"], self.alice.session["media_token"]
+        for path in (f"/api/item/{self.inception}", f"/api/item/{self.naruto}", "/api/library/livres", f"/img/item/{self.naruto}"):
+            self.assertEqual(self.alice.get(path)[0], 200, path)                                    # voir : le catalogue reste ouvert
+        for path in (f"/media/{film}/file", f"/media/{episode}/stream", f"/api/subs/{episode}/e0.vtt", f"/api/book/{volume}", f"/book/{volume}/page/0", f"/media/{volume}/file"):
+            self.assertEqual(self.alice.json(path), (403, {"error": "lecture non autorisée"}), path)
+        self.assertEqual(self.alice.json(f"/api/play/{episode}", {}), (403, {"error": "lecture non autorisée"}))
+        self.assertEqual(self.anon.get(f"/media/{film}/file?token={mine}")[0], 403)                 # le jeton de média du compte porte la même limite
+        self.assertEqual(self.alice.get(f"/media/{film}/file?download=1")[0], 200)                  # télécharger reste permis
+        self.assertEqual(self.alice.get(f"/media/{volume}/file?download=1")[0], 200)
+        self.assertEqual(self.alice.get(f"/media/{self.tracks[0]['id']}/file")[0], 200)             # la musique, elle, se lit
+        self.assertEqual(self.continue_ids(self.alice), [])                                         # rien à reprendre de ce qu'on ne peut pas lire
+        self.assertEqual(self.bob.json(f"/api/play/{episode}", {})[0], 200)
+
+    def test_without_view_there_is_nothing_to_play_and_giving_view_back_does_not_give_play(self):
+        answer = self.grant(self.alice, {"films": {"view": False}})
+        self.assertEqual(answer["rights"]["films"], {"view": False, "play": False, "download": False})
+        self.assertEqual(self.grant(self.alice, {"films": {"view": True}})["rights"]["films"], {"view": True, "play": False, "download": False})
+        self.assertEqual(self.grant(self.alice, {"films": {"play": True, "download": True}})["rights"]["films"], {"view": True, "play": True, "download": True})
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM rights WHERE user_id=?", self.alice.account["id"]), 0)
 
     def test_the_rights_are_listed_and_applied_without_signing_in_again(self):
         answer = self.restrict_alice()
-        self.assertEqual(answer["rights"]["films"], {"view": True, "download": False})
-        self.assertEqual(answer["rights"]["livres"], {"view": False, "download": False})        # sans « voir », pas de « télécharger »
-        self.assertEqual(answer["rights"]["musique"], {"view": True, "download": True})
+        self.assertEqual(answer["rights"]["films"], {"view": True, "play": True, "download": False})
+        self.assertEqual(answer["rights"]["livres"], {"view": False, "play": False, "download": False})        # sans « voir », pas de « télécharger »
+        self.assertEqual(answer["rights"]["musique"], {"view": True, "play": True, "download": True})
         libs = {lib["id"]: lib["download"] for lib in self.alice.json("/api/state")[1]["libraries"]}
         self.assertEqual(libs, {"films": False, "series": True, "animations": True, "musique": True})             # livres a disparu, avec le même jeton
         self.assertEqual([lib["id"] for lib in self.bob.json("/api/state")[1]["libraries"]], list(self.LIBS))     # les autres comptes ne bougent pas
@@ -3364,7 +3401,7 @@ class TestRights(AccountsCase):
         self.assertNotIn(self.naruto, self.continue_ids(self.alice))
         self.assertEqual(self.alice.json("/api/search?q=naruto")[1]["results"], [])
         self.assertEqual([r["id"] for r in self.bob.json("/api/search?q=naruto")[1]["results"]], ["livres"])
-        self.grant(self.alice, {"livres": {"view": True}})
+        self.grant(self.alice, {"livres": {"view": True, "play": True}})
         self.assertIn(self.naruto, self.continue_ids(self.alice))                        # rendue, la bibliothèque revient avec sa progression
 
     def test_download_needs_its_own_right_and_reading_does_not(self):
@@ -3435,8 +3472,8 @@ class TestRights(AccountsCase):
 
     def test_removing_view_removes_download_and_giving_view_back_does_not_give_download(self):
         self.grant(self.alice, {"films": {"view": False}})
-        self.assertEqual(self.grant(self.alice, {"films": {"view": True}})["rights"]["films"], {"view": True, "download": False})
-        self.assertEqual(self.grant(self.alice, {"films": {"download": True}})["rights"]["films"], {"view": True, "download": True})
+        self.assertEqual(self.grant(self.alice, {"films": {"view": True}})["rights"]["films"], {"view": True, "play": False, "download": False})
+        self.assertEqual(self.grant(self.alice, {"films": {"download": True, "play": True}})["rights"]["films"], {"view": True, "play": True, "download": True})
         self.assertEqual(self.count("SELECT COUNT(*) AS n FROM rights WHERE user_id=?", self.alice.account["id"]), 0)         # tout autorisé : plus de ligne
 
     def test_the_rights_leave_with_the_account(self):
@@ -3449,7 +3486,7 @@ class TestRights(AccountsCase):
         self.assertEqual([lib["download"] for lib in self.admin.json("/api/state")[1]["libraries"]], [True] * 5)
         self.assertEqual(self.admin.get(f"/media/{self.volumes[0]['id']}/file?download=1")[0], 200)
         mine = next(u for u in self.admin.json("/api/users")[1]["users"] if u["id"] == "default")
-        self.assertTrue(all(r == {"view": True, "download": True} for r in mine["rights"].values()))
+        self.assertTrue(all(r == {"view": True, "play": True, "download": True} for r in mine["rights"].values()))
 
 
 if __name__ == "__main__":

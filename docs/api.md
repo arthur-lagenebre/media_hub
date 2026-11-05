@@ -20,7 +20,7 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 | Réponses | JSON compact avec `Cache-Control: no-store`, sauf images, fichiers, sous-titres. Pas d'en-têtes CORS : un client web d'une autre origine ne peut pas lire l'API ; les balises `<img>` / `<video>` fonctionnent. |
 | Erreurs | `{"error": "message lisible"}` avec le code HTTP. Voir « Codes d'erreur ». |
 | Profil | Un par compte : la progression, les playlists et « Reprendre » (`continue`) sont ceux du compte qui s'est connecté. Les bibliothèques, les fiches enrichies et les albums manquants sont communs. Serveur ouvert (`"auth": false`) : un profil unique, `default`, administrateur. |
-| Droits | Un compte `user` a, pour chaque bibliothèque, le droit de **voir** (liste, fiches, lecture, images) et celui de **télécharger** (`?download=1`). Par défaut tout est permis ; l'administrateur règle les droits (voir « Comptes »). Une bibliothèque qu'on ne voit pas n'apparaît ni dans `/api/state`, ni dans l'accueil, la recherche ou « Reprendre ». Un administrateur a tous les droits. |
+| Droits | Un compte `user` a, pour chaque bibliothèque, le droit de **voir** (liste, fiches, images), celui de **lire** en ligne (`/api/play`, `/media/<id>/file` et `/stream`, sous-titres, livres) et celui de **télécharger** (`?download=1`). Lire et télécharger supposent voir, sans dépendre l'un de l'autre. Par défaut tout est permis ; l'administrateur règle les droits (voir « Comptes »). Une bibliothèque qu'on ne voit pas n'apparaît ni dans `/api/state`, ni dans l'accueil, la recherche ou « Reprendre ». Un administrateur a tous les droits. |
 
 ### Codes d'erreur
 
@@ -28,7 +28,7 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 | --- | --- |
 | 400 | requête invalide (paramètre, corps, fichier d'un autre genre que celui demandé) |
 | 401 | `connexion requise` (routes `/api/*`) ; `mot de passe incorrect` ou `nom d'utilisateur requis` pour `/api/token` |
-| 403 | `réservé à l'administrateur` : scan, enrichissement, nettoyage, relecture des covers, photos d'artistes et gestion des comptes demandés par un compte `user`. `accès à cette bibliothèque non autorisé` : le compte ne voit pas la bibliothèque de l'élément, du fichier ou de l'image demandés. `téléchargement non autorisé` : `?download=1` sans le droit de télécharger. |
+| 403 | `réservé à l'administrateur` : scan, enrichissement, nettoyage, relecture des covers, photos d'artistes et gestion des comptes demandés par un compte `user`. `accès à cette bibliothèque non autorisé` : le compte ne voit pas la bibliothèque de l'élément, du fichier ou de l'image demandés. `lecture non autorisée` : la lecture (plan, flux, fichier sans `download`, sous-titres, livre) sans le droit de lire. `téléchargement non autorisé` : `?download=1` sans le droit de télécharger. |
 | 302 | **hors `/api/`**, une requête non authentifiée n'a pas de 401 : elle est redirigée vers `/login`. Un client natif qui lit `/media/…`, `/img/…` ou `/book/…` sans jeton reçoit donc `302`, pas `401`. |
 | 404 | identifiant inconnu, image absente, route inconnue (`introuvable`). Une route existante appelée avec la mauvaise méthode donne aussi 404. |
 | 409 | ce nom de compte est déjà pris |
@@ -78,13 +78,13 @@ Trois façons de se présenter :
 ### `GET /api/state`
 
 ```json
-{"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true, "download": true}],
+{"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true, "play": true, "download": true}],
  "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin"}, "settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show"}, "busy": false, "streams": 0, "max_streams": 2}
 ```
 
 - `libraries[].kind` : `movies` | `shows` | `music` | `books`. `scanned` : horodatage du dernier scan, ou `null`. `exists` : le dossier est présent.
 - `ffmpeg` / `ffprobe` : disponibles sur le serveur (sans eux : lecture directe seulement).
-- `libraries` ne contient que les bibliothèques que **le compte de la requête voit** ; `libraries[].download` dit s'il peut y télécharger (`true` pour un administrateur et sur un serveur ouvert). Un client masque ses boutons de téléchargement quand il vaut `false`.
+- `libraries` ne contient que les bibliothèques que **le compte de la requête voit** ; `libraries[].play` et `libraries[].download` disent s'il peut y lire en ligne et y télécharger (`true` pour un administrateur et sur un serveur ouvert). Un client masque ses boutons de lecture ou de téléchargement quand ils valent `false`. `continue` (accueil) ne propose rien des bibliothèques où le compte ne peut pas lire.
 - `auth` : le serveur a des comptes. `user` : **le compte de la requête** (`role` : `admin` ou `user`) ; serveur ouvert : `{"id": "default", "name": <HUB_ADMIN>, "role": "admin"}`. Un client masque les actions d'administration quand `role` n'est pas `admin`.
 - `settings` : les réglages d'affichage **du compte de la requête** (voir `GET /api/me/settings`), pour qu'un client n'ait pas d'appel de plus au démarrage.
 - `busy` : une tâche de fond tourne. `streams` / `max_streams` : conversions en cours / maximum.
@@ -241,9 +241,9 @@ Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la cass
 
 | Route | Corps | Réponse |
 | --- | --- | --- |
-| `GET /api/users` | | `{"users": [<compte>]}` (du plus ancien au plus récent). Chaque `<compte>` porte `rights` : `{"<bibliothèque>": {"view": bool, "download": bool}}` pour chaque bibliothèque configurée (tout à `true` tant que rien n'est réglé, et pour un administrateur). Administrateur seulement. |
+| `GET /api/users` | | `{"users": [<compte>]}` (du plus ancien au plus récent). Chaque `<compte>` porte `rights` : `{"<bibliothèque>": {"view": bool, "play": bool, "download": bool}}` pour chaque bibliothèque configurée (tout à `true` tant que rien n'est réglé, et pour un administrateur). Administrateur seulement. |
 | `POST /api/users` | `{"name": "…", "password": "…", "role": "user"}` (`role` facultatif, `user` par défaut) | **201**, `<compte>`. 400 (nom, mot de passe ou rôle invalide), 409 `ce nom est déjà pris`. Administrateur seulement. |
-| `POST /api/user/<id>/rights` | `{"rights": {"films": {"view": true, "download": false}, "livres": {"view": false}}}` | `<compte>` avec ses droits. Seules les bibliothèques citées changent, et un droit omis ne change pas ; ce sont des booléens. Retirer `view` retire aussi `download` ; rendre `view` ne rend pas `download`. 400 (bibliothèque ou droit inconnu, pas un booléen, **compte administrateur** : `un administrateur a tous les droits`), 404 `compte inconnu`. Valable tout de suite, sans reconnexion. Administrateur seulement. |
+| `POST /api/user/<id>/rights` | `{"rights": {"films": {"play": true, "download": false}, "livres": {"view": false}}}` | `<compte>` avec ses droits. Seules les bibliothèques citées changent, et un droit omis ne change pas ; ce sont des booléens. Retirer `view` retire aussi `play` et `download` ; rendre `view` ne les rend pas. 400 (bibliothèque ou droit inconnu, pas un booléen, **compte administrateur** : `un administrateur a tous les droits`), 404 `compte inconnu`. Valable tout de suite, sans reconnexion. Administrateur seulement. |
 | `POST /api/user/<id>/password` | `{"password": "…"}` ; pour **son propre** compte : `{"password": "…", "current": "…"}` | `{"ok": true}`. L'administrateur donne un nouveau mot de passe à un autre compte, sans connaître l'ancien ; les sessions de ce compte sont fermées. Pour son propre compte (`<id>` = celui de l'appelant), `current` (le mot de passe actuel) est **obligatoire** comme pour `POST /api/me/password` : 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) s'il manque ou s'il est faux, et rien n'est changé ; la réponse porte alors le nouveau jeton (`{"ok": true, "token": "…"}`, plus un `Set-Cookie`). 404 `compte inconnu`. Administrateur seulement. |
 | `POST /api/user/<id>/delete` | `{}` | `{"ok": true}`. Supprime le compte, sa progression, ses playlists et ses entrées « retirer de Reprendre ». 400 `impossible de supprimer le dernier administrateur` ; 404 `compte inconnu`. Administrateur seulement. Un administrateur peut supprimer son propre compte tant qu'il en reste un autre. **Le jeton de média est global** : le compte supprimé perd son jeton de session, mais s'il a gardé des URLs `?token=<media_token>`, elles continuent de donner la lecture des fichiers (`/media/`, `/img/`, `/book/`, `/api/subs/`) tant que le secret du serveur n'a pas changé. |
 | `GET /api/me/settings` | | `{"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show"}}` : les réglages d'affichage du compte de la requête, gardés sur le serveur (ils le suivent d'un appareil à l'autre). `music_view` : `albums` (par défaut) ou `artists`, la façon dont s'ouvre la bibliothèque de musique ; `movie_view` : `sagas` (par défaut : les films d'une saga sur une seule carte, c'est `sagas=1` de `GET /api/library/<id>`) ou `films` (chaque film sur sa carte) ; `home_latest` et `home_unseen` : `show` (par défaut) ou `hide`, le rayon « Nouveautés » et le rayon « Pas encore vu » de la page d'accueil (l'API de l'accueil rend toujours les deux listes : c'est l'interface qui masque) |
@@ -368,7 +368,7 @@ Paramètres de `…/stream` (déjà dans `url`, ne pas les recalculer) : `m` (`r
 
 ### `GET /media/<entry>/file`
 
-Le fichier d'origine : `Range` (206, `Accept-Ranges: bytes`, 416 hors limites), `Content-Length`, `Content-Type` d'après l'extension (`.mkv` → `video/x-matroska`…). `?download=1` ajoute `Content-Disposition: attachment` et demande le droit de **télécharger** la bibliothèque (403 `téléchargement non autorisé` sinon) ; lire le fichier sans `download` (lecture directe, `Range`) demande seulement celui de la **voir** (403 `accès à cette bibliothèque non autorisé`) : le droit de télécharger ne peut pas empêcher un lecteur qui reçoit le fichier de le garder. 404 si le fichier est introuvable. Sert aussi la musique et les livres.
+Le fichier d'origine : `Range` (206, `Accept-Ranges: bytes`, 416 hors limites), `Content-Length`, `Content-Type` d'après l'extension (`.mkv` → `video/x-matroska`…). `?download=1` ajoute `Content-Disposition: attachment` et demande le droit de **télécharger** la bibliothèque (403 `téléchargement non autorisé` sinon) ; lire le fichier sans `download` (lecture directe, `Range`) demande celui de la **lire** (403 `lecture non autorisée`) : le droit de télécharger ne peut pas empêcher un lecteur qui reçoit le fichier de le garder. 404 si le fichier est introuvable. Sert aussi la musique et les livres.
 
 ### `GET /media/<entry>/stream` — le flux converti
 
