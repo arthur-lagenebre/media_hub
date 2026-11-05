@@ -74,11 +74,12 @@
   };
 
   // --- Menus d'actions ---------------------------------------------------------------
-  M.albumMenu = function (itemId, title) {
+  function canGet(libId) { return libId ? H.actions.canDownload(libId) : H.actions.canDownloadKind('music'); }          // une file ou une playlist mêle les bibliothèques : sans la sienne, une bibliothèque de musique au moins
+  M.albumMenu = function (itemId, title, libId) {
     H.menu(title, [
       { label: 'Lire l’album', value: 'play' }, { label: 'Lecture aléatoire', value: 'shuffle' },
       { label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }, { label: 'Ajouter à une playlist…', value: 'list' }
-    ].concat(H.actions.canDownload() ? [{ label: 'Télécharger l’album', value: 'download' }] : []), null, function (v) {
+    ].concat(canGet(libId) ? [{ label: 'Télécharger l’album', value: 'download' }] : []), null, function (v) {
       if (v === 'download') M.tracksOf(itemId).then(function (list) { H.actions.download(list.map(function (t) { return t.id; })); }).catch(fail);
       else if (v === 'play') M.playItem(itemId);
       else if (v === 'shuffle') M.playItem(itemId, true);
@@ -87,8 +88,8 @@
     });
   };
   // `extra` : actions propres à l'endroit où l'on est (dans une playlist : monter, descendre, retirer) : [{label, value, run}]
-  M.trackMenu = function (track, extra) {
-    var options = [{ label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }, { label: 'Ajouter à une playlist…', value: 'list' }].concat(H.actions.canDownload() ? [{ label: 'Télécharger', value: 'download' }] : [], extra || []);
+  M.trackMenu = function (track, extra, libId) {
+    var options = [{ label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }, { label: 'Ajouter à une playlist…', value: 'list' }].concat(canGet(libId) ? [{ label: 'Télécharger', value: 'download' }] : [], extra || []);
     H.menu(track.title, options, null, function (v) {
       if (v === 'download') H.actions.download([track.id]);
       else if (v === 'next' || v === 'end') queueTracks([track], v, track.title);

@@ -47,7 +47,7 @@
     var options = [{ label: done ? 'Revoir' : (it.seen || it.started ? 'Reprendre' : 'Voir'), value: 'play' }, { label: A.seenLabel(it.type, done), value: 'seen' }];
     if (it.type === 'movie' && d && d.tmdb && H.isAdmin() && H.sagas) options.push({ label: 'Ajouter à une saga', value: 'saga' });      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
     if (tmdb) options.push({ label: 'TMDB', detail: 'Ouvre la fiche dans un nouvel onglet', value: 'tmdb' });
-    if (d && d.entries && d.entries.length && A.canDownload()) options.push({ label: 'Télécharger', detail: d.entries.length > 1 ? d.entries.length + ' fichiers, l’un après l’autre' : '', value: 'download' });
+    if (d && d.entries && d.entries.length && A.canDownload(d.library && d.library.id)) options.push({ label: 'Télécharger', detail: d.entries.length > 1 ? d.entries.length + ' fichiers, l’un après l’autre' : '', value: 'download' });
     H.menu(it.title, options, null, function (v) {
       if (v === 'play') (it.type === 'saga' ? playSaga : play)(it, done).catch(fail);
       else if (v === 'saga') H.sagas.addTo(d, refresh);
@@ -78,7 +78,18 @@
   // Toujours un fichier à la fois, jamais de zip : une coupure ne fait perdre qu'un fichier, et la reprise passe par `Range`.
   // Plusieurs fichiers (une saison, une série, un album) : on les demande l'un après l'autre ; le navigateur peut demander d'autoriser les téléchargements multiples la première fois.
   var GAP = 1200;
-  A.canDownload = function () { return H.device !== 'tv'; };        // les navigateurs de télé téléchargent mal
+  // Pas de téléchargement sur la télé (ses navigateurs téléchargent mal) ni dans une bibliothèque dont le compte n'a pas le droit (`download` de /api/state ; le serveur refuse de toute façon, 403).
+  // Sans bibliothèque connue : permis si l'une au moins le permet.
+  A.canDownload = function (libId) {
+    if (H.device === 'tv') return false;
+    var lib = libId ? H.lib(libId) : null;
+    return lib ? lib.download !== false : H.libs.some(function (l) { return l.download !== false; });
+  };
+  A.canDownloadKind = function (kind) {          // musique, livres : la bibliothèque n'est pas toujours connue de l'endroit d'où l'on télécharge
+    if (H.device === 'tv') return false;
+    var libs = H.libs.filter(function (l) { return l.kind === kind; });
+    return !libs.length || libs.some(function (l) { return l.download !== false; });
+  };
   A.download = function (ids) {
     ids.forEach(function (id, i) {
       setTimeout(function () {
@@ -140,16 +151,16 @@
     } })];
   };
   // Le bouton « … » d'une couverture de tome : le même menu que celui d'un épisode.
-  A.entryTools = function (e, done) {
+  A.entryTools = function (e, done, libId) {
     return h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Plus d’actions', title: 'Plus d’actions',
-      onclick: function (ev) { ev.preventDefault(); ev.stopPropagation(); A.episodeMenu(e, done); } }, H.icon('more')));
+      onclick: function (ev) { ev.preventDefault(); ev.stopPropagation(); A.episodeMenu(e, done, libId); } }, H.icon('more')));
   };
 
-  // Le menu d'un épisode : `done` est appelé une fois l'épisode marqué.
-  A.episodeMenu = function (e, done) {
+  // Le menu d'un épisode : `done` est appelé une fois l'épisode marqué ; `libId` : sa bibliothèque (pour le droit de télécharger).
+  A.episodeMenu = function (e, done, libId) {
     var seen = !!(e.progress && e.progress.done);
     var options = [{ label: seen ? 'Revoir' : 'Lire', value: 'play' }, { label: A.seenLabel('episode', seen), value: 'seen' }];
-    if (A.canDownload()) options.push({ label: 'Télécharger', value: 'download' });
+    if (A.canDownload(libId)) options.push({ label: 'Télécharger', value: 'download' });
     H.menu(e.title || 'Épisode', options, null, function (v) {
       if (v === 'play') H.go(H.playHref(e, seen ? 0 : undefined));
       else if (v === 'download') A.download([e.id]);
