@@ -748,7 +748,7 @@
   // Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
   function dialog(o) {
     var inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
-    var box = h('div', { class: 'menu prompt form', role: 'dialog', 'aria-label': o.title }, h('h3', null, o.title));
+    var box = h('div', { class: 'menu prompt form' + (o.cls ? ' ' + o.cls : ''), role: 'dialog', 'aria-label': o.title }, h('h3', null, o.title));
     box.addEventListener('focusin', function (e) { try { e.target.scrollIntoView({ block: 'nearest' }); } catch (x) { /* tant pis */ } });   // petit écran ou télé : la fenêtre défile jusqu'au bouton atteint
     (o.lead || []).forEach(function (t) { box.appendChild(h('p', { class: 'lead' }, t)); });
     function show(text) { err.textContent = text || ''; }
@@ -1004,7 +1004,7 @@
         var mine = H.session.user && u.id === H.session.user.id;
         panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' (toi)' : '')),
           h('span', null, (ROLES[u.role] || u.role) + ' · créé le ' + new Date(u.created * 1000).toLocaleDateString('fr-FR')), u.role === 'admin' ? null : h('span', { 'data-rights': u.id }, rightsSummary(u))),
-          u.role === 'admin' ? null : H.button('Droits', 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': 'Droits de ' + u.name + ' : ce qu’il voit et télécharge', onclick: function () { rightsOf(u); } }),
+          u.role === 'admin' ? null : H.button('Droits', 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': 'Droits de ' + u.name + ' : consulter, lecture, télécharger', onclick: function () { rightsOf(u); } }),
           H.button('Mot de passe', 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': 'Changer le mot de passe de ' + u.name, onclick: function () { passwordOf(u, mine); } }),
           H.button('Supprimer', 'trash', { 'data-key': 'del-' + u.id, 'aria-label': 'Supprimer le compte de ' + u.name, onclick: function () { deleteUser(u, mine); } })));
       });
@@ -1027,21 +1027,17 @@
         },
         done: function (u) { H.toast('Compte créé : ' + u.name); refreshUsers('user-add'); } });
     }
-    // Ce qu'un compte voit et télécharge, en une phrase pour la liste des comptes.
+    // Ce qu'un compte peut consulter, lire et télécharger, en une phrase pour la liste des comptes.
     function rightsSummary(u) {
       var libs = (state && state.libraries) || [], rights = u.rights || {};
-      function can(l, p) { return !rights[l.id] || rights[l.id][p]; }
-      var seen = libs.filter(function (l) { return can(l, 'view'); }), played = seen.filter(function (l) { return can(l, 'play'); }), saved = seen.filter(function (l) { return can(l, 'download'); });
       if (!libs.length) return '';
-      if (seen.length === libs.length && played.length === libs.length && saved.length === libs.length) return 'Voit, lit et télécharge tout';
-      if (!seen.length) return 'Ne voit rien';
-      function part(verb, list) {
-        if (list.length === seen.length) return verb + ' tout';
-        return list.length ? verb + ' : ' + list.map(function (l) { return l.label; }).join(', ') : 'ne ' + verb.toLowerCase() + ' rien';
+      function who(perm) {
+        var list = libs.filter(function (l) { return !rights[l.id] || rights[l.id][perm]; });
+        return list.length === libs.length ? 'tout' : list.length ? list.map(function (l) { return l.label; }).join(', ') : 'rien';
       }
-      return (seen.length === libs.length ? 'Voit tout' : 'Voit : ' + seen.map(function (l) { return l.label; }).join(', ')) + ' · ' + part('lit', played) + ' · ' + part('télécharge', saved);
+      return 'Consulter : ' + who('view') + ' · Lecture : ' + who('play') + ' · Télécharger : ' + who('download');
     }
-    // Pour chaque bibliothèque : voir, télécharger. Retirer « voir » retire aussi « télécharger ». Les droits valent tout de suite, sans que la personne se reconnecte.
+    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Les droits valent tout de suite, sans que la personne se reconnecte.
     function rightsOf(u) {
       var draft = {}, rows = h('div', { class: 'rights' });
       (state.libraries || []).forEach(function (l) {
@@ -1066,18 +1062,18 @@
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
           b.view.classList.toggle('on', d.view); b.view.setAttribute('aria-pressed', d.view ? 'true' : 'false');
-          b.view.querySelector('.lbl').textContent = d.view ? 'Voit' : 'Ne voit pas';
+          b.view.querySelector('.lbl').textContent = (d.view ? '✓ ' : '') + 'Consulter';
           b.play.classList.toggle('on', d.play); b.play.setAttribute('aria-pressed', d.play ? 'true' : 'false');
-          b.play.querySelector('.lbl').textContent = d.play ? 'Lit' : 'Ne lit pas';
+          b.play.querySelector('.lbl').textContent = (d.play ? '✓ ' : '') + 'Lecture';
           b.play.disabled = !d.view;
           b.download.classList.toggle('on', d.download); b.download.setAttribute('aria-pressed', d.download ? 'true' : 'false');
-          b.download.querySelector('.lbl').textContent = d.download ? 'Télécharge' : 'Ne télécharge pas';
+          b.download.querySelector('.lbl').textContent = (d.download ? '✓ ' : '') + 'Télécharger';
           b.download.disabled = !d.view;
         });
       }
       paint();
-      dialog({ title: 'Droits de ' + u.name, ok: 'Enregistrer', fields: [],
-        lead: ['Pour chaque bibliothèque : voir (la liste, les fiches, les images), lire en ligne (vidéo, musique, livres) et télécharger. Une bibliothèque qu’on ne voit pas disparaît pour ce compte ; sans droit de lire ou de télécharger, les boutons correspondants disparaissent. L’administrateur a tous les droits.'],
+      dialog({ title: 'Droits de ' + u.name, ok: 'Enregistrer', cls: 'rightsbox', fields: [],
+        lead: ['Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.'],
         extra: [rows],
         submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/rights', { rights: draft }); },
         done: function () { H.toast('Droits enregistrés : ' + u.name); refreshUsers('rights-' + u.id); } });

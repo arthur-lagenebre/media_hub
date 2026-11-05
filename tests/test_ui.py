@@ -947,15 +947,17 @@ class TestRightsInTheUi(unittest.TestCase):
                 self.sign_in(admin, base, "admin", "secret")
                 admin.goto(base + "/#/settings?tab=comptes")
                 admin.locator(f'[data-key="rights-{alice["id"]}"]').click()
+                admin.locator(".rights").wait_for()
+                self.assertFalse(admin.evaluate("(() => { var m = document.querySelector('.menu.rightsbox'); return m.scrollHeight > m.clientHeight; })()"))       # la fenêtre tient sans défiler
                 admin.locator('[data-key="r-download-films"]').click()                    # films : voir sans télécharger
                 admin.locator('[data-key="r-view-livres"]').click()                       # livres : fermés
                 self.assertTrue(admin.locator('[data-key="r-download-livres"]').is_disabled())
                 self.assertTrue(admin.locator('[data-key="r-play-livres"]').is_disabled())
                 admin.locator('[data-key="r-play-series"]').click()                       # séries : se voient et se téléchargent, ne se lisent pas
                 admin.locator(".menu .btn", has_text="Enregistrer").click()
-                admin.locator(f'[data-user="{alice["id"]}"] [data-rights]', has_text="Voit : Films").wait_for()
-                self.assertIn("télécharge : Séries", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
-                self.assertIn("lit : Films, Animations, Musique", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
+                admin.locator(f'[data-user="{alice["id"]}"] [data-rights]', has_text="Consulter : Films").wait_for()
+                self.assertIn("Télécharger : Séries", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
+                self.assertIn("Lecture : Films, Animations, Musique", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
                 self.assertEqual(admin.locator('[data-user="default"] [data-key^="rights-"]').count(), 0)       # un administrateur n'a pas de droits à régler
                 saved = {u["name"]: u["rights"] for u in self.api(base, "/api/users", token=token)["users"]}["alice"]
                 self.assertEqual((saved["films"], saved["series"], saved["livres"]), ({"view": True, "play": True, "download": False}, {"view": True, "play": False, "download": True},

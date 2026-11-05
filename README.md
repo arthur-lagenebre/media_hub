@@ -100,7 +100,7 @@ Seul l'administrateur lance les mises à jour (scan, enrichissement, nettoyage),
 
 ### Droits par bibliothèque
 
-Pour chaque compte (sauf l'administrateur, qui a tout) et chaque bibliothèque (Films, Séries, Animations, Musique, Livres…), l'administrateur dit si la personne peut **voir**, la **lire** en ligne et la **télécharger**, dans *Paramètres* > *Comptes* > *Droits*, ou en ligne de commande :
+Pour chaque compte (sauf l'administrateur, qui a tout) et chaque bibliothèque (Films, Séries, Animations, Musique, Livres…), l'administrateur dit si la personne peut **consulter** (`view`), la **lire** en ligne (« Lecture », `play`) et la **télécharger** (`download`), dans *Paramètres* > *Comptes* > *Droits*, ou en ligne de commande :
 
 ```bash
 python -m hub user rights <nom>                                       # ce que le compte voit et télécharge

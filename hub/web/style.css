@@ -375,9 +375,13 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .menu.form .btns { padding: 0 0.6rem; flex-direction: column; align-items: stretch; }   /* en colonne : à la télécommande, Bas va de champ en champ puis de bouton en bouton, sans sauter */
 .menu.form .btns .btn { margin: 0 0 0.4rem; }
 .menu.form .rights { padding: 0 0.6rem 0.4rem; }
-.rights .rrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.5rem; padding: 0.35rem 0; border-top: 1px solid var(--line); }
-.rights .rrow b { flex: 1 1 100%; }
-.rights .rrow .chip { margin: 0 0.4rem 0 0; }
+.rights .rrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.4rem; padding: 0.3rem 0; border-top: 1px solid var(--line); }
+.rights .rrow b { flex: 0 0 6.2rem; }
+.rights .rrow .chip { margin: 0; padding: 0.35rem 0.85rem; }
+.menu.rightsbox .lead { margin: 0; padding-bottom: 0.4rem; }
+.menu.rightsbox .btns { flex-direction: row; }              /* pas de défilement : Enregistrer et Annuler côte à côte */
+.menu.rightsbox .btns .btn { flex: 1; margin: 0 0.4rem 0.4rem 0; justify-content: center; }
+.menu.rightsbox .formerr:empty { display: none; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
