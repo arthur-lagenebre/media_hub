@@ -950,12 +950,16 @@ class TestRightsInTheUi(unittest.TestCase):
                 admin.locator('[data-key="r-download-films"]').click()                    # films : voir sans télécharger
                 admin.locator('[data-key="r-view-livres"]').click()                       # livres : fermés
                 self.assertTrue(admin.locator('[data-key="r-download-livres"]').is_disabled())
+                self.assertTrue(admin.locator('[data-key="r-play-livres"]').is_disabled())
+                admin.locator('[data-key="r-play-series"]').click()                       # séries : se voient et se téléchargent, ne se lisent pas
                 admin.locator(".menu .btn", has_text="Enregistrer").click()
                 admin.locator(f'[data-user="{alice["id"]}"] [data-rights]', has_text="Voit : Films").wait_for()
                 self.assertIn("télécharge : Séries", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
+                self.assertIn("lit : Films, Animations, Musique", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
                 self.assertEqual(admin.locator('[data-user="default"] [data-key^="rights-"]').count(), 0)       # un administrateur n'a pas de droits à régler
                 saved = {u["name"]: u["rights"] for u in self.api(base, "/api/users", token=token)["users"]}["alice"]
-                self.assertEqual((saved["films"], saved["livres"]), ({"view": True, "download": False}, {"view": False, "download": False}))
+                self.assertEqual((saved["films"], saved["series"], saved["livres"]), ({"view": True, "play": True, "download": False}, {"view": True, "play": False, "download": True},
+                                                                                  {"view": False, "play": False, "download": False}))
                 page = browser.new_page()
                 self.sign_in(page, base, "alice", "motdepasse1")
                 self.assertEqual(page.locator("#nav .link").count(), 4)                   # les livres ont disparu
@@ -963,10 +967,15 @@ class TestRightsInTheUi(unittest.TestCase):
                 film = next(i for i in self.api(base, "/api/library/films", token=state)["items"] if i["title"] == "Inception")["id"]
                 dark = next(i for i in self.api(base, "/api/library/series", token=state)["items"] if i["title"] == "Dark")["id"]
                 page.goto(f"{base}/#/i/{film}")
-                page.locator(".actions .btn", has_text="Marquer comme vu").wait_for()
-                self.assertEqual(page.locator(".actions .btn", has_text="Télécharger").count(), 0)
+                page.locator("#views > .view:visible .actions .btn", has_text="Marquer comme vu").wait_for()
+                self.assertEqual(page.locator("#views > .view:visible .actions .btn", has_text="Télécharger").count(), 0)
+                self.assertEqual(page.locator("#views > .view:visible .actions .btn.primary").count(), 1)        # films : le bouton « Lire » est là
                 page.goto(f"{base}/#/i/{dark}")
-                page.locator(".actions .btn", has_text="Télécharger").wait_for()          # séries : toujours permis
+                page.locator("#views > .view:visible .actions .btn", has_text="Télécharger").wait_for()          # séries : télécharger est permis...
+                self.assertEqual(page.locator("#views > .view:visible .actions .btn.primary").count(), 0)        # ...lire non : pas de bouton « Lire »
+                page.locator(".ep").first.click()
+                page.locator("#toast", has_text="Ta lecture est fermée").wait_for()
+                self.assertTrue(page.url.endswith(f"/#/i/{dark}"))                        # le lecteur ne s'est pas ouvert
                 browser.close()
             run.stop()
         finally:

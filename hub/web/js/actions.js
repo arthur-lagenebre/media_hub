@@ -44,7 +44,7 @@
   // `d` : la fiche de l'élément (/api/item), qui sait si TMDB le connaît ; null pour une saga, ou quand la fiche ne vient pas.
   function showMenu(it, d) {
     var done = finished(it), tmdb = d && d.links ? d.links.filter(function (l) { return l.label === 'TMDB'; })[0] : null;
-    var options = [{ label: done ? 'Revoir' : (it.seen || it.started ? 'Reprendre' : 'Voir'), value: 'play' }, { label: A.seenLabel(it.type, done), value: 'seen' }];
+    var options = (A.canPlay(d && d.library && d.library.id) ? [{ label: done ? 'Revoir' : (it.seen || it.started ? 'Reprendre' : 'Voir'), value: 'play' }] : []).concat([{ label: A.seenLabel(it.type, done), value: 'seen' }]);
     if (it.type === 'movie' && d && d.tmdb && H.isAdmin() && H.sagas) options.push({ label: 'Ajouter à une saga', value: 'saga' });      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
     if (tmdb) options.push({ label: 'TMDB', detail: 'Ouvre la fiche dans un nouvel onglet', value: 'tmdb' });
     if (d && d.entries && d.entries.length && A.canDownload(d.library && d.library.id)) options.push({ label: 'Télécharger', detail: d.entries.length > 1 ? d.entries.length + ' fichiers, l’un après l’autre' : '', value: 'download' });
@@ -73,6 +73,19 @@
     card.addEventListener('contextmenu', function (e) { e.preventDefault(); A.menu(it); });
     card.addEventListener('keydown', function (e) { if (e.key === 'ContextMenu' || e.keyCode === 93) { e.preventDefault(); A.menu(it); } });
   };
+
+  // --- Lire ---------------------------------------------------------------------------------
+  // Le droit de lire en ligne (`play` de /api/state) : sans lui, la fiche reste visible mais ni bouton ni ligne ne lance la lecture (le serveur refuse de toute façon, 403).
+  // Sans bibliothèque connue : permis si l'une au moins le permet.
+  A.canPlay = function (libId) {
+    var lib = libId ? H.lib(libId) : null;
+    return lib ? lib.play !== false : H.libs.some(function (l) { return l.play !== false; });
+  };
+  A.canPlayKind = function (kind) {
+    var libs = H.libs.filter(function (l) { return l.kind === kind; });
+    return !libs.length || libs.some(function (l) { return l.play !== false; });
+  };
+  A.denyPlay = function () { H.toast('Ta lecture est fermée dans cette bibliothèque : demande à l’administrateur.', 4000); };
 
   // --- Télécharger ----------------------------------------------------------------------
   // Toujours un fichier à la fois, jamais de zip : une coupure ne fait perdre qu'un fichier, et la reprise passe par `Range`.
@@ -159,7 +172,7 @@
   // Le menu d'un épisode : `done` est appelé une fois l'épisode marqué ; `libId` : sa bibliothèque (pour le droit de télécharger).
   A.episodeMenu = function (e, done, libId) {
     var seen = !!(e.progress && e.progress.done);
-    var options = [{ label: seen ? 'Revoir' : 'Lire', value: 'play' }, { label: A.seenLabel('episode', seen), value: 'seen' }];
+    var options = (A.canPlay(libId) ? [{ label: seen ? 'Revoir' : 'Lire', value: 'play' }] : []).concat([{ label: A.seenLabel('episode', seen), value: 'seen' }]);
     if (A.canDownload(libId)) options.push({ label: 'Télécharger', value: 'download' });
     H.menu(e.title || 'Épisode', options, null, function (v) {
       if (v === 'play') H.go(H.playHref(e, seen ? 0 : undefined));

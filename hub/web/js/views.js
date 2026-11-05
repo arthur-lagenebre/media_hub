@@ -461,6 +461,7 @@
 
     // Les boutons de lecture d'un album.
     function albumButtons(d) {
+      if (!H.actions.canPlay(d.library && d.library.id)) return [H.button('Playlist', 'plus', { 'data-autofocus': '1', onclick: function () { H.music.addToPlaylist(trackList().map(function (t) { return t.id; }), d.title); } })];
       return [
         H.button('Lire l’album', 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.audio.play(trackList(), 0); } }),
         H.button('Aléatoire', 'shuffle', { onclick: function () { H.audio.play(trackList(), 0, true); } }),
@@ -472,7 +473,7 @@
     // Les boutons de lecture d'un film, d'une série ou de tomes : lire ou reprendre là où on s'est arrêté, et repartir du début.
     function playButtons(d, view) {
       var resume = view.resume, prog = view.prog;
-      if (!resume) return [];
+      if (!resume || !H.actions.canPlay(d.library && d.library.id)) return [];
       var what = d.type === 'show' ? epLabel(resume) : (d.type === 'series' ? 'tome ' + (resume.label || resume.number || '') : '');
       var main = prog ? 'Reprendre' + (what ? ' ' + what : '') + (resume.kind === 'book' ? ' (page ' + (Math.floor(prog.position) + 1) + ')' : ' à ' + H.time(prog.position)) : (d.type === 'movie' && view.allDone ? 'Revoir' : 'Lire' + (what ? ' ' + what : ''));
       var out = [H.button(main, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go(playHref(resume)); } })];
@@ -565,7 +566,7 @@
         var done = e.progress && e.progress.done;
         var track = trackList()[i], shown = H.music.credit(e.title, e.artist, d.artist || d.grp, e.artists, d.artist_mbids);
         list.appendChild(h('div', { class: 'trkwrap' },
-          h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { H.audio.play(trackList(), i); } },
+          h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.audio.play(trackList(), i); else H.actions.denyPlay(); } },
             h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, shown.title, shown.line ? h('small', null, shown.line) : null), done ? h('span', { class: 'seen' }, H.icon('check')) : null, h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')),
           H.button('', 'more', { class: 'trkmore', 'aria-label': 'Actions de la piste', 'data-key': 'm' + e.id, onclick: function () { H.music.trackMenu(track, null, d.library && d.library.id); } })));
       });
@@ -585,7 +586,7 @@
     // Une ligne de la liste : la vignette, le titre, le résumé, la durée, « vu », et le bouton « … » de l'épisode.
     function episodeRow(d, e) {
       var done = e.progress && e.progress.done, no = episodeNumber(e);
-      return h('div', { class: 'epwrap' }, h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { H.go(playHref(e)); } }, h('div', { class: 'thumb' }, episodeThumb(d, e)),
+      return h('div', { class: 'epwrap' }, h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.go(playHref(e)); else H.actions.denyPlay(); } }, h('div', { class: 'thumb' }, episodeThumb(d, e)),
         h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, no === '' ? '' : no + '.'), ' ', e.title || 'Épisode'),
           e.summary ? h('div', { class: 'su' }, e.summary) : null,
           h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
@@ -637,7 +638,7 @@
         if (H.actions.canDownload(d.library && d.library.id)) pic.appendChild(H.actions.entryTools(e, load, d.library.id));
         if (done) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
         else if (p) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(Math.min(1, p.position / Math.max(1, p.duration || 1)) * 100) + '%' })));
-        grid.appendChild(h('a', { class: 'card f', href: playHref(e), 'data-key': e.id }, pic, h('div', { class: 't' }, e.label ? 'N° ' + e.label : (e.title || '')), h('div', { class: 's' }, [(e.format || '').toUpperCase(), e.pages ? e.pages + ' p.' : ''].filter(Boolean).join(' · '))));
+        grid.appendChild(h('a', { class: 'card f', href: H.actions.canPlay(d.library && d.library.id) ? playHref(e) : '#/i/' + d.id, onclick: H.actions.canPlay(d.library && d.library.id) ? null : function (ev) { ev.preventDefault(); H.actions.denyPlay(); }, 'data-key': e.id }, pic, h('div', { class: 't' }, e.label ? 'N° ' + e.label : (e.title || '')), h('div', { class: 's' }, [(e.format || '').toUpperCase(), e.pages ? e.pages + ' p.' : ''].filter(Boolean).join(' · '))));
       });
       sec.appendChild(grid);
       if (d.missing && d.missing.length) {
@@ -648,7 +649,7 @@
     function parts(d) {
       var sec = h('section', { class: 'eps' }, h('h2', null, 'Parties'));
       d.entries.forEach(function (e) {
-        sec.appendChild(h('button', { class: 'ep f', onclick: function () { H.go(playHref(e)); } }, h('div', { class: 'txt' }, h('div', { class: 'ti' }, e.title), h('div', { class: 'du' }, H.dur(e.duration)))));
+        sec.appendChild(h('button', { class: 'ep f', onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.go(playHref(e)); else H.actions.denyPlay(); } }, h('div', { class: 'txt' }, h('div', { class: 'ti' }, e.title), h('div', { class: 'du' }, H.dur(e.duration)))));
       });
       return sec;
     }
@@ -1029,38 +1030,46 @@
     // Ce qu'un compte voit et télécharge, en une phrase pour la liste des comptes.
     function rightsSummary(u) {
       var libs = (state && state.libraries) || [], rights = u.rights || {};
-      var seen = libs.filter(function (l) { return !rights[l.id] || rights[l.id].view; }), saved = seen.filter(function (l) { return !rights[l.id] || rights[l.id].download; });
+      function can(l, p) { return !rights[l.id] || rights[l.id][p]; }
+      var seen = libs.filter(function (l) { return can(l, 'view'); }), played = seen.filter(function (l) { return can(l, 'play'); }), saved = seen.filter(function (l) { return can(l, 'download'); });
       if (!libs.length) return '';
-      if (seen.length === libs.length && saved.length === libs.length) return 'Voit et télécharge tout';
-      var text = seen.length === libs.length ? 'Voit tout' : seen.length ? 'Voit : ' + seen.map(function (l) { return l.label; }).join(', ') : 'Ne voit rien';
-      return text + (seen.length && saved.length === seen.length ? '' : saved.length ? ' · télécharge : ' + saved.map(function (l) { return l.label; }).join(', ') : ' · ne télécharge rien');
+      if (seen.length === libs.length && played.length === libs.length && saved.length === libs.length) return 'Voit, lit et télécharge tout';
+      if (!seen.length) return 'Ne voit rien';
+      function part(verb, list) {
+        if (list.length === seen.length) return verb + ' tout';
+        return list.length ? verb + ' : ' + list.map(function (l) { return l.label; }).join(', ') : 'ne ' + verb.toLowerCase() + ' rien';
+      }
+      return (seen.length === libs.length ? 'Voit tout' : 'Voit : ' + seen.map(function (l) { return l.label; }).join(', ')) + ' · ' + part('lit', played) + ' · ' + part('télécharge', saved);
     }
     // Pour chaque bibliothèque : voir, télécharger. Retirer « voir » retire aussi « télécharger ». Les droits valent tout de suite, sans que la personne se reconnecte.
     function rightsOf(u) {
       var draft = {}, rows = h('div', { class: 'rights' });
       (state.libraries || []).forEach(function (l) {
-        var r = (u.rights || {})[l.id] || { view: true, download: true };
-        draft[l.id] = { view: !!r.view, download: !!(r.view && r.download) };
+        var r = (u.rights || {})[l.id] || { view: true, play: true, download: true };
+        draft[l.id] = { view: !!r.view, play: !!(r.view && r.play), download: !!(r.view && r.download) };
       });
       function toggle(l, which) {
         var button = h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + l.id, onclick: function () {
           var d = draft[l.id];
-          if (which === 'view') { d.view = !d.view; if (!d.view) d.download = false; }
-          else if (d.view) d.download = !d.download;
+          if (which === 'view') { d.view = !d.view; if (!d.view) { d.play = false; d.download = false; } }
+          else if (d.view) d[which] = !d[which];
           paint();
         } }, h('span', { class: 'lbl' }));
         return button;
       }
       var buttons = {};
       (state.libraries || []).forEach(function (l) {
-        buttons[l.id] = { view: toggle(l, 'view'), download: toggle(l, 'download') };
-        rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, l.label), buttons[l.id].view, buttons[l.id].download));
+        buttons[l.id] = { view: toggle(l, 'view'), play: toggle(l, 'play'), download: toggle(l, 'download') };
+        rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, l.label), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
       });
       function paint() {
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
           b.view.classList.toggle('on', d.view); b.view.setAttribute('aria-pressed', d.view ? 'true' : 'false');
           b.view.querySelector('.lbl').textContent = d.view ? 'Voit' : 'Ne voit pas';
+          b.play.classList.toggle('on', d.play); b.play.setAttribute('aria-pressed', d.play ? 'true' : 'false');
+          b.play.querySelector('.lbl').textContent = d.play ? 'Lit' : 'Ne lit pas';
+          b.play.disabled = !d.view;
           b.download.classList.toggle('on', d.download); b.download.setAttribute('aria-pressed', d.download ? 'true' : 'false');
           b.download.querySelector('.lbl').textContent = d.download ? 'Télécharge' : 'Ne télécharge pas';
           b.download.disabled = !d.view;
@@ -1068,7 +1077,7 @@
       }
       paint();
       dialog({ title: 'Droits de ' + u.name, ok: 'Enregistrer', fields: [],
-        lead: ['Pour chaque bibliothèque : voir (la liste, les fiches, la lecture) et télécharger. Une bibliothèque qu’on ne voit pas disparaît pour ce compte ; sans droit de télécharger, les boutons de téléchargement disparaissent. L’administrateur a tous les droits.'],
+        lead: ['Pour chaque bibliothèque : voir (la liste, les fiches, les images), lire en ligne (vidéo, musique, livres) et télécharger. Une bibliothèque qu’on ne voit pas disparaît pour ce compte ; sans droit de lire ou de télécharger, les boutons correspondants disparaissent. L’administrateur a tous les droits.'],
         extra: [rows],
         submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/rights', { rights: draft }); },
         done: function () { H.toast('Droits enregistrés : ' + u.name); refreshUsers('rights-' + u.id); } });
