@@ -343,6 +343,75 @@ class TestDetailPages(UiCase):
         self.view(".trk").first.wait_for()
         self.assertEqual(self.view(".trk .ti small").all_inner_texts(), ["Poppy", "Electric Callboy"])
 
+    def set_discs(self, album, discs, titles=None):
+        """Range les pistes de l'album sur les disques `discs` (un numéro par piste, dans l'ordre) et donne à l'album `titles` ({"2": "Bonus"}) comme titres de disques ; tout est remis après."""
+        db = self.run_.hub.db
+        rows = db.query("SELECT id, disc FROM entries WHERE item_id=? ORDER BY number", (album["id"],))
+        row = db.one("SELECT meta FROM items WHERE id=?", (album["id"],))
+        self.addCleanup(db.execute, "UPDATE items SET meta=? WHERE id=?", (row["meta"], album["id"]))
+        for r in rows:
+            self.addCleanup(db.execute, "UPDATE entries SET disc=? WHERE id=?", (r["disc"], r["id"]))
+        for r, disc in zip(rows, discs):
+            db.execute("UPDATE entries SET disc=? WHERE id=?", (disc, r["id"]))
+        meta = json.loads(row["meta"])
+        meta["discs"] = len(set(discs))
+        if titles is not None:
+            meta["disc_titles"] = titles
+        db.execute("UPDATE items SET meta=? WHERE id=?", (json.dumps(meta), album["id"]))
+
+    def disc_headings(self, album):
+        self.open("#/i/" + album["id"])
+        self.view(".trk").first.wait_for()
+        return self.view("h3.grp").all_inner_texts()
+
+    def test_the_title_of_a_disc_shows_after_its_number(self):
+        album = self.item("musique", "Discovery")
+        self.set_discs(album, [1, 1, 2], {"2": "Bonus"})
+        self.assertEqual(self.disc_headings(album), ["Disque 1", "Disque 2 · Bonus"])
+
+    def test_discs_without_a_title_keep_their_number_alone(self):
+        album = self.item("musique", "Discovery")
+        self.set_discs(album, [1, 1, 2])
+        self.assertEqual(self.disc_headings(album), ["Disque 1", "Disque 2"])
+
+    def test_an_album_of_one_disc_shows_no_disc_heading_even_with_a_title(self):
+        album = self.item("musique", "Discovery")
+        self.set_discs(album, [1, 1, 1], {"1": "Live à Paris"})
+        self.assertEqual(self.disc_headings(album), [])
+
+    def test_the_title_of_a_disc_that_is_not_in_the_album_is_ignored(self):
+        album = self.item("musique", "Discovery")
+        self.set_discs(album, [1, 1, 2], {"2": 7, "3": "Fantôme", "1": ""})
+        self.assertEqual(self.disc_headings(album), ["Disque 1", "Disque 2"])
+
+    def album_facts(self, album, types):
+        """La ligne de faits de la fiche de l'album, quand l'album porte les types `types` (RELEASETYPE) ; l'album est remis après."""
+        db = self.run_.hub.db
+        row = db.one("SELECT meta FROM items WHERE id=?", (album["id"],))
+        self.addCleanup(db.execute, "UPDATE items SET meta=? WHERE id=?", (row["meta"], album["id"]))
+        if types is not None:
+            db.execute("UPDATE items SET meta=? WHERE id=?", (json.dumps({**json.loads(row["meta"]), "release_types": types}), album["id"]))
+        self.page.goto("about:blank")                                       # une même adresse à « # » près ne recharge pas la page : la fiche garderait l'ancien type
+        self.open("#/i/" + album["id"])
+        self.view(".trk").first.wait_for()
+        return self.view(".info .meta").inner_text()
+
+    def test_the_facts_line_of_an_album_ends_with_its_type(self):
+        album = self.item("musique", "Discovery")
+        self.assertEqual(self.album_facts(album, ["album"]), "2001 · 3 pistes · FLAC · Album")
+
+    def test_the_facts_line_names_each_type_in_french(self):
+        album = self.item("musique", "Discovery")
+        for types, shown in ((["single"], "Single"), (["ep"], "EP"), (["album", "live"], "Album, Live"), (["soundtrack"], "Bande originale"),
+                             (["compilation", "remix"], "Compilation, Remix"), (["dj-mix"], "Dj-mix")):
+            with self.subTest(types):
+                self.assertTrue(self.album_facts(album, types).endswith(" · FLAC · " + shown))
+
+    def test_the_facts_line_of_an_album_without_type_is_unchanged(self):
+        album = self.item("musique", "Discovery")
+        self.assertEqual(self.album_facts(album, None), "2001 · 3 pistes · FLAC")
+        self.assertEqual(self.album_facts(album, [7, ""]), "2001 · 3 pistes · FLAC")
+
     def test_admin_runs_an_update(self):
         self.open("#/admin")
         self.view(".panel").first.wait_for()
