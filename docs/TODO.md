@@ -14,9 +14,9 @@
 
 ## À décider
 
-- [ ] **Cookie de connexion sans `Secure`.** Le marquer `Secure` casserait l'accès en `http://` sur le réseau local (la télé), il faudrait donc distinguer HTTPS de HTTP derrière Tailscale. Avis : ne pas le faire. Le cookie a déjà `HttpOnly; SameSite=Lax` et un `Max-Age` (`app.py`, `session_cookie`), le gain est faible sur un réseau de maison et le risque est de casser la télé.
+- [x] **Cookie de connexion sans `Secure`** (décidé : non, on ne le fait pas). Le marquer `Secure` casserait l'accès en `http://` sur le réseau local (la télé), il faudrait donc distinguer HTTPS de HTTP derrière Tailscale. Avis : ne pas le faire. Le cookie a déjà `HttpOnly; SameSite=Lax` et un `Max-Age` (`app.py`, `session_cookie`), le gain est faible sur un réseau de maison et le risque est de casser la télé.
 - [x] **Jeton de session révocable** (fait : le compteur par compte `token_version` existait déjà, changé avec le mot de passe ; Paramètres > Comptes > Mon compte > *Déconnecter les autres appareils* l'incrémente aussi, sur demande et avec le mot de passe actuel, `POST /api/me/signout-others`, et l'appareil qui demande reste connecté). Le jeton ne se périme toujours pas, et *Se déconnecter* n'efface que le cookie de l'appareil : il ne révoque rien.
-- [ ] **Épingler les images Docker** (`python:3.13-slim`, `tailscale/tailscale:stable`) et la version de Pillow. Avis : inutile pour un NAS à la maison, sauf si chaque redéploiement doit donner exactement la même chose.
+- [x] **Épingler les images Docker** (décidé : non, on ne le fait pas) (`python:3.13-slim`, `tailscale/tailscale:stable`) et la version de Pillow. Avis : inutile pour un NAS à la maison, sauf si chaque redéploiement doit donner exactement la même chose.
 - [x] **« Compter »** : affiche les 20 premiers fichiers qu'il supprimerait (fait : la fenêtre de confirmation les liste sous le décompte, « … et N autre(s) » au-delà, depuis le dossier de la bibliothèque ; le journal de la simulation, dans l'onglet Tâches, les nomme aussi ; le résultat de la tâche porte `sample`). Texte d'origine : afficher les 20 premiers fichiers qu'il supprimerait, pour voir ce qui partira avant de confirmer.
 - [x] **Sagas de `sagas.json`** : un film listé qui n'est pas encore sorti reste affiché, grisé à son rang comme les films manquants, avec « À venir » à la place de « Manquant » (`coming: true` dans `missing`), et il n'est pas compté dans « N manquants » : il ne manque à personne. Décidé : le griser, pas le cacher.
 
@@ -108,9 +108,9 @@ Verdict : **pas de nouvelle passe globale** (`crapper`, `dryer`, `mutator` sur t
 
 ## Limites connues, non traitées
 
-- [ ] Un **film en double** (deux versions) dans une saga désactive sans bruit ses numéros et ses manquants.
-- [ ] `deploy/fetch-ffmpeg.sh` ne vérifie aucune somme de contrôle.
-- [ ] `pip install pillow` est lancé à chaque démarrage du conteneur, en root, sa sortie jetée.
+- [x] Un **film en double** (deux versions) dans une saga désactivait sans bruit ses numéros et ses manquants (fait pour les sagas de l'étiquette, `missing.tagged` : les deux versions ont le même rang, la saga reste numérotée). Pas fait : une saga de `sagas.json` ne garde que la première version d'un film listé (`by_tmdb`, le premier gagne).
+- [x] `deploy/fetch-ffmpeg.sh` ne vérifiait aucune somme de contrôle (fait : version 7.0.2 fixée, archive refusée si son SHA-256 diffère, avant toute extraction). Limite : la somme vient d'un téléchargement du même site, le jour où elle a été notée ; elle protège d'un fichier altéré ou tronqué ensuite, pas d'une altération déjà présente à ce moment-là. ffmpeg ne se met plus à jour seul.
+- [x] `pip install pillow` était lancé à chaque démarrage du conteneur, en root, sa sortie jetée (fait : lancé seulement si Pillow manque dans `/data/pylib`, et l'échec va dans `docker logs`). Reste : le conteneur tourne toujours en root, et Pillow n'est plus mis à jour tout seul (supprimer `media_hub-data/pylib`).
 - [ ] Les photos d'artistes, la liseuse et le lecteur n'ont pas été essayés sur la télé.
 
 ## Pas relu
