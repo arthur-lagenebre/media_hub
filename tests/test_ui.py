@@ -1464,6 +1464,37 @@ class TestArtistsView(UiCase):
         self.assertEqual(self.view(".grid .card[data-type=album]").count(), 0)
 
 
+class TestTextSize(UiCase):
+    def root_size(self):
+        return self.page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
+
+    def test_the_text_is_the_size_of_the_device_until_a_smaller_one_is_chosen(self):
+        self.open("#/settings?tab=lecture")
+        self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-text')"), None)
+        normal = self.root_size()
+        self.view('button[data-key="textSize"]').click()
+        self.page.locator(".menu .opt .lbl", has_text="Petite").click()
+        self.until(lambda: self.root_size() < normal)
+        self.assertAlmostEqual(self.root_size() / normal, 0.88, places=2)
+
+    def test_the_choice_is_kept_and_does_not_depend_on_the_device(self):
+        for device in ("pc", "tv"):
+            with self.subTest(device=device):
+                page = self.context.new_page()
+                page.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+                page.goto(self.base + "/")
+                page.evaluate("localStorage.removeItem('hub.textSize')")          # le contexte garde le choix du tour précédent
+                page.reload()
+                page.wait_for_selector("#nav .link", state="attached")
+                size = lambda: page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
+                normal = size()
+                page.evaluate("localStorage.setItem('hub.textSize', JSON.stringify('small'))")
+                page.reload()
+                page.wait_for_selector("#nav .link", state="attached")
+                self.assertAlmostEqual(size() / normal, 0.88, places=2)
+                page.close()
+
+
 class TestHome(UiCase):
     """L'accueil : un bonjour, ce qu'on reprend, puis les derniers ajouts de toutes les bibliothèques, mêlés."""
 

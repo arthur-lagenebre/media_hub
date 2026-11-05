@@ -872,6 +872,14 @@
             H.pref('device', v === 'auto' ? null : v); H.applyDevice(); render(); H.focus.key(el, 'device');
           });
         } })));
+      var sizeNames = {};
+      H.textSizes.forEach(function (s) { sizeNames[s[0]] = s[1]; });
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Taille du texte'), h('span', null, sizeNames[H.textSize] + ' — s’ajoute à la taille propre à l’appareil')),
+        H.button('Changer', 'quality', { 'data-key': 'textSize', onclick: function () {
+          H.menu('Taille du texte', H.textSizes.map(function (s) { return { label: s[1], detail: s[2], value: s[0] }; }), H.textSize, function (v) {
+            H.pref('textSize', v === 'normal' ? null : v); H.applyTextSize(); render(); H.focus.key(el, 'textSize');
+          });
+        } })));
       play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Son surround 5.1'), h('span', null, surround ? 'Activé : le 5.1 est envoyé tel quel si l’appareil le lit.' : 'Désactivé : le son est ramené en stéréo (le plus sûr).')),
         H.button(surround ? 'Désactiver' : 'Activer', 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
       body.appendChild(play);
