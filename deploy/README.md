@@ -61,7 +61,11 @@ docker exec -it media-hub python -m hub user add alice            # mot de passe
 docker exec -it media-hub python -m hub user add bob --admin      # un deuxième administrateur
 docker exec -it media-hub python -m hub user passwd alice
 docker exec -it media-hub python -m hub user rm alice             # supprime aussi sa progression et ses playlists
+docker exec -it media-hub python -m hub user rights alice                                  # ce qu'alice voit et télécharge, par bibliothèque
+docker exec -it media-hub python -m hub user rights alice --set Livres=none --set Films=view   # all : voir et télécharger, view : voir seulement, none : rien
 ```
+
+**Droits.** Par défaut un compte voit et télécharge toutes les bibliothèques ; l'administrateur peut en fermer une à un compte, ou en retirer seulement le téléchargement (*Comptes* > *Droits*, ou `user rights`). Les droits valent tout de suite, sans reconnexion. Un client natif (Android TV, Chromecast) qui gardait un jeton de média d'avant les droits doit le redemander par `POST /api/token` : ce jeton est maintenant celui du compte.
 
 Depuis le shell web de TrueNAS (Apps > media-hub > Shell), lance seulement `python -m hub user …`. Le serveur peut tourner pendant ce temps. Il n'y a pas d'inscription publique.
 
