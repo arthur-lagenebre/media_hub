@@ -132,7 +132,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 
 ## Développer avec Claude Code
 
-Six agents spécialisés (architecture, serveur, interface, tests, relecture, déploiement) sont dans `.claude/agents/` : voir [docs/agents.md](docs/agents.md). Ce qu'il reste à faire ou à décider : [docs/TODO.md](docs/TODO.md).
+Six agents spécialisés (architecture, serveur, interface, tests, relecture, déploiement) sont dans `.claude/agents/` : voir [docs/agents.md](docs/agents.md). Ce qu'il reste à faire : [docs/TODO.md](docs/TODO.md) ; ce qui a été décidé, dont les refus : [docs/decisions.md](docs/decisions.md).
 
 ## Tests
 

@@ -87,9 +87,16 @@ docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt')
 | --- | --- |
 | Nouveaux fichiers visibles | *Paramètres* > *Gestion* > Mettre à jour (ou `HUB_AUTOSCAN_HOURS`) |
 | Affiches / synopsis des séries | *Paramètres* > *Gestion* > Enrichir (TMDB) (avec `TMDB_KEY`) |
-| Supprimer les `Thumbs.db` | *Paramètres* > *Gestion* > Fichiers parasites > Supprimer ; retirer `:ro` des volumes concernés |
+| Supprimer les `Thumbs.db` | *Paramètres* > *Gestion* > Fichiers parasites > Supprimer ; retirer `:ro` des volumes concernés. Commence par *Compter* : la fenêtre liste les 20 premiers fichiers. **En musique, toute image autre que `cover.{ext}` est effacée, `folder.jpg` compris** : compte-les d'abord (`find /mnt/tank/media/Musique -iname 'folder.*' \| wc -l`) |
 | Étiqueter / renommer / convertir | scripts de `media_library`, depuis VS Code, ou dans le conteneur (volumes sans `:ro`) : `docker exec -it media-hub python /app/media_library/scripts/Video/Movies/Metadata.py --dir /srv/Films` |
 | Les fiches HTML | retirées de `media_library` ; à régénérer ponctuellement avec un prompt dans VS Code si besoin |
+
+## Après une mise à jour du hub
+
+Lance un scan (*Paramètres* > *Gestion* > Mettre à jour) quand une version ajoute une information lue dans les fichiers : les éléments déjà indexés sont relus une fois, sans migration de base. Tant qu'il n'est pas fait, les fiches se comportent comme avant.
+
+- **Musique** : les artistes de chaque piste (tag `ARTISTS`, pour les invités), le titre des disques (`DISCSUBTITLE`) et le type d'album (`RELEASETYPE`). Ces tags sont écrits par `Metadata.py --apply` de `media_library` : s'il n'est pas passé sur la musique, les intertitres restent « Disque N » et le type d'album n'apparaît pas.
+- **Photos d'artistes** (après le tout premier déploiement) : le dossier de chaque artiste n'est connu qu'après un scan.
 
 ## Sécurité
 
