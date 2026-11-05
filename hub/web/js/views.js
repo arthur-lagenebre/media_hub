@@ -546,10 +546,15 @@
     function trackList() {
       return data.entries.map(function (e) { return { id: e.id, title: e.title, artist: e.artist || data.artist || '', album: data.title, item: data.id, duration: e.duration }; });
     }
+    // « Disque 2 » ou, quand MusicBrainz titre le disque, « Disque 2 · Bonus » (le titre vient du scan, `disc_titles`).
+    function discHeading(d, disc) {
+      var title = d.disc_titles && d.disc_titles[disc || 1];
+      return 'Disque ' + (disc || 1) + (typeof title === 'string' && title ? ' · ' + title : '');
+    }
     function tracks(d) {
       var list = h('div', { class: 'tracks' }), disc = null, multi = (d.discs || 1) > 1;
       d.entries.forEach(function (e, i) {
-        if (multi && e.disc !== disc) { disc = e.disc; list.appendChild(h('h3', { class: 'grp' }, 'Disque ' + (disc || 1))); }
+        if (multi && e.disc !== disc) { disc = e.disc; list.appendChild(h('h3', { class: 'grp' }, discHeading(d, disc))); }
         var done = e.progress && e.progress.done;
         var track = trackList()[i], shown = H.music.credit(e.title, e.artist, d.artist || d.grp, e.artists, d.artist_mbids);
         list.appendChild(h('div', { class: 'trkwrap' },

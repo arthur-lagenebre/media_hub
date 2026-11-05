@@ -6,6 +6,7 @@ Un album est un dossier qui contient de l'audio (lui ou ses CD1, CD2...) ; les d
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 
 from libraries.music import audio, library, wanted
@@ -30,11 +31,11 @@ def credits(meta):
 
 
 def read_info(track):
-    """Comme `library.read_info` de media_library (une seule lecture du fichier), plus les artistes crédités de la piste."""
+    """Comme `library.read_info` de media_library (une seule lecture du fichier), plus les artistes crédités et le titre du disque de la piste."""
     track.info, track.error = {}, None
     try:
         meta = audio.read(track.path)
-        track.info = {**library.track_info(track.path, meta, track.disc_folder), **credits(meta)}
+        track.info = {**library.track_info(track.path, meta, track.disc_folder), **credits(meta), "disc_title": meta.first("DISCSUBTITLE").strip()}
     except AudioError as e:
         track.error = str(e)
 
@@ -45,7 +46,7 @@ def _read_tracks(release, known):
     for track in release.tracks:
         row = known.get(track.rel)
         cached = json.loads(row["meta"]).get("info") if unchanged(row, track.size, track.mtime) else None
-        if cached and "artists" in cached:          # une piste gardée d'avant la lecture des artistes est relue, une fois
+        if cached and "artists" in cached and "disc_title" in cached:          # une piste gardée d'avant la lecture des artistes, ou des titres de disque, est relue, une fois
             track.info = cached
             reused += 1
         else:
@@ -61,6 +62,26 @@ def _album_artist_ids(release):
     return list(found.most_common(1)[0][0]) if found else []
 
 
+REPEATED_NUMBER = r"(?:disc|disk|disque|cd)\s*0*{}"
+
+
+def disc_titles(release):
+    """{"2": "Bonus"} : le titre de chaque disque qui en a un, pour un album de plusieurs disques ; vide sinon.
+
+    Les pistes d'un disque portent toutes le même DISCSUBTITLE ; si elles ne s'accordent pas, on prend le plus répandu (à égalité, celui de la première piste), les pistes sans titre ne comptant pas.
+    Un titre qui ne fait que répéter le numéro (« CD 2 », « Disc 02 ») n'apprend rien : il est écarté. La clé est une chaîne : c'est du JSON.
+    """
+    if len(release.discs) < 2:
+        return {}
+    found = {}
+    for number, tracks in release.discs:
+        counts = Counter(t.info.get("disc_title") for t in tracks if t.info.get("disc_title"))
+        title = counts.most_common(1)[0][0] if counts else ""
+        if title and not re.fullmatch(REPEATED_NUMBER.format(number), title, re.IGNORECASE):
+            found[str(number)] = title
+    return found
+
+
 def _album_item(lib, release, homes):
     progress = release.progress()
     cover = release.cover_file if release.cover_file and is_album_cover(release.cover_file.name) else None     # cover.{ext} seul : folder.jpg et les pochettes embarquées ne comptent pas
@@ -71,6 +92,8 @@ def _album_item(lib, release, homes):
         "cover_file": cover.name if cover else "", "has_cover": bool(cover),
         "progress": list(progress) if progress else None, "discs": len(release.discs), "duration": release.duration,
     }
+    if titles := disc_titles(release):            # absent plutôt que vide : la fiche ne rend que les champs non vides
+        meta["disc_titles"] = titles
     return item_row(lib.id, release.rel or ".", "album", release.title, year=release.year, genres=release.genres, grp=release.artist, meta=meta,
                     added=max(t.mtime for t in release.tracks), count=len(release.tracks))
 

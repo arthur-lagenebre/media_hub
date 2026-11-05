@@ -3106,6 +3106,15 @@ class TestApiContract(ContractBase):
         self.served(sheet["tracks"][0]["cover"], "artist.tracks.cover")
         self.served(sheet["tracks"][0]["file"], "artist.tracks.file")
 
+    def test_item_album_gives_the_titles_of_its_discs_when_the_scan_found_some(self):
+        album = self.item("musique", "Discovery")
+        self.assertNotIn("disc_titles", self.get(f"/api/item/{album['id']}"))          # aucun disque titré : le champ est absent, pas vide
+        row = self.hub.db.one("SELECT meta FROM items WHERE id=?", (album["id"],))
+        self.addCleanup(self.hub.db.execute, "UPDATE items SET meta=? WHERE id=?", (row["meta"], album["id"]))
+        self.hub.db.execute("UPDATE items SET meta=? WHERE id=?", (json.dumps({**json.loads(row["meta"]), "discs": 2, "disc_titles": {"2": "Bonus"}}), album["id"]))
+        self.has(self.get(f"/api/item/{album['id']}"), {"disc_titles": dict}, "item[album].disc_titles")
+        self.assertEqual(self.get(f"/api/item/{album['id']}")["disc_titles"], {"2": "Bonus"})
+
     def test_item_book(self):
         data = self.detail("livres", "Naruto")
         self.has(data, {**ITEM_FIELDS, "library": dict, "summary": str, "entries": list, "resume": (str, NULL)}, "item[livre]", {**DETAIL_OPTIONAL, "authors": list, "section": str})

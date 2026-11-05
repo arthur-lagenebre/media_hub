@@ -187,6 +187,55 @@ class TestScanMusic(TempCase):
         counts = self.scan(known)[2]
         self.assertEqual((counts.read, counts.reused), (1, 2))
 
+    def boxed(self, name, *discs):
+        """Un album « Box/<name> » : `discs` donne, pour chaque piste, `(numéro de disque, DISCSUBTITLE)` (le titre `None` n'écrit pas le tag) ; rend items et entrées du scan."""
+        for n, (disc, title) in enumerate(discs, 1):
+            path = fixtures.write_flac(self.root / "Box" / name / f"{n:02d} - T.flac", f"T{n}", name, "Daft", n, len(discs))
+            fixtures.add_tags(path, ("DISCNUMBER", str(disc)), *([("DISCSUBTITLE", title)] if title is not None else []))
+        return self.scan()
+
+    def disc_titles(self, name, *discs):
+        items, _, _ = self.boxed(name, *discs)
+        return json.loads(items[name]["meta"]).get("disc_titles", {})
+
+    def test_the_title_of_a_disc_is_kept_with_the_album_and_with_each_track(self):
+        items, entries, _ = self.boxed("Deluxe", (1, None), (1, None), (2, "Bonus"))
+        self.assertEqual(json.loads(items["Deluxe"]["meta"])["disc_titles"], {"2": "Bonus"})
+        self.assertEqual([json.loads(entries[f"Box/Deluxe/{n:02d} - T.flac"]["meta"])["info"]["disc_title"] for n in (1, 2, 3)], ["", "", "Bonus"])
+
+    def test_a_title_that_only_repeats_the_number_of_the_disc_is_not_kept(self):
+        for repeat in ("CD 2", "cd2", "Disc 2", "Disque 02", "Disk 2"):
+            with self.subTest(repeat):
+                self.assertEqual(self.disc_titles("Repete", (1, None), (2, repeat)), {})
+        self.assertEqual(self.disc_titles("Autre", (1, None), (2, "Disc 3")), {"2": "Disc 3"})           # un autre numéro n'est pas une répétition : on ne devine pas
+        self.assertEqual(self.disc_titles("Live", (1, None), (2, "Disc 2: Live à Paris")), {"2": "Disc 2: Live à Paris"})
+
+    def test_an_album_of_one_disc_keeps_no_disc_title(self):
+        self.assertEqual(self.disc_titles("Seul", (1, "Live à Paris"), (1, "Live à Paris")), {})
+
+    def test_an_album_without_disc_titles_has_none(self):
+        items, entries, _ = self.boxed("Nu", (1, None), (2, None))
+        self.assertNotIn("disc_titles", json.loads(items["Nu"]["meta"]))
+        self.assertEqual(json.loads(entries["Box/Nu/01 - T.flac"]["meta"])["info"]["disc_title"], "")
+
+    def test_a_disc_whose_tracks_disagree_takes_the_most_common_title(self):
+        self.assertEqual(self.disc_titles("Melange", (1, None), (2, "Bonus"), (2, "Bonus"), (2, "Inédits")), {"2": "Bonus"})
+        self.assertEqual(self.disc_titles("Trous", (1, None), (2, None), (2, "Bonus"), (2, None)), {"2": "Bonus"})         # une piste sans titre ne compte pas contre les autres
+        self.assertEqual(self.disc_titles("Egalite", (1, None), (2, "Inédits"), (2, "Bonus")), {"2": "Inédits"})            # à égalité, la première piste du disque
+
+    def test_a_title_is_cleaned_of_its_spaces(self):
+        self.assertEqual(self.disc_titles("Blancs", (1, None), (2, "  Bonus ")), {"2": "Bonus"})
+
+    def test_a_track_kept_from_before_the_disc_titles_were_read_is_read_again(self):
+        _, entries, _ = self.boxed("Ancien", (1, None), (2, "Bonus"))
+        known = known_of(entries.values())
+        meta = json.loads(known["Box/Ancien/02 - T.flac"]["meta"])
+        del meta["info"]["disc_title"]
+        known["Box/Ancien/02 - T.flac"] = {**known["Box/Ancien/02 - T.flac"], "meta": json.dumps(meta)}
+        items, entries, counts = self.scan(known)
+        self.assertEqual(counts.read, 1)
+        self.assertEqual(json.loads(items["Ancien"]["meta"])["disc_titles"], {"2": "Bonus"})
+
 
 class TestArtistDirs(unittest.TestCase):
     @staticmethod
