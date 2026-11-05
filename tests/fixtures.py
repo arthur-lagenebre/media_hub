@@ -118,6 +118,14 @@ def write_flac(path, title, album, artist, number, total, year="2001", genre="El
     return path
 
 
+def add_tags(path, *tags):
+    """Ajoute des tags `(clé, valeur)` à un .flac (une clé se répète pour une liste), avec l'écrivain de media_library : ffmpeg ne répète pas une clé."""
+    from libraries.music import audio
+    meta = audio.read(path)
+    audio.write(path, meta, list(meta.comments) + list(tags), meta.pictures)
+    return path
+
+
 # --- Livres ----------------------------------------------------------------
 def comicinfo_xml(**fields):
     body = "".join(f"<{k}>{v}</{k}>" for k, v in fields.items())

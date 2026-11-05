@@ -97,6 +97,15 @@ class TestEntryJson(unittest.TestCase):
         self.assertEqual(out["artist"], "Daft")
         self.assertEqual(app.entry_json(entry("e2", "i1", kind="audio"))["artist"], "")
 
+    def test_a_track_gives_its_artists_when_the_file_names_them(self):
+        artists = [{"name": "BABYMETAL", "id": "a"}, {"name": "Poppy", "id": "b"}]
+        out = app.entry_json(entry("e1", "i1", kind="audio", meta={"info": {"artist": "BABYMETAL feat. Poppy", "artists": artists}}))
+        self.assertEqual((out["artist"], out["artists"]), ("BABYMETAL feat. Poppy", artists))
+
+    def test_a_track_without_artists_in_its_file_gives_no_list(self):
+        self.assertNotIn("artists", app.entry_json(entry("e1", "i1", kind="audio", meta={"info": {"artist": "Daft", "artists": []}})))
+        self.assertNotIn("artists", app.entry_json(entry("e2", "i1", kind="audio", meta={"info": {"artist": "Daft"}})))
+
     def test_a_book_gives_its_pages_when_known(self):
         self.assertEqual(app.entry_json(entry("e1", "i1", kind="book", meta={"info": {"PageCount": 180}}))["pages"], 180)
         self.assertNotIn("pages", app.entry_json(entry("e1", "i1", kind="book")))

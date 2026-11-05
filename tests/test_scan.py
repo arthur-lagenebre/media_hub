@@ -155,6 +155,38 @@ class TestScanMusic(TempCase):
         counts = self.scan(known)[2]
         self.assertEqual((counts.read, counts.reused), (1, 2))
 
+    def credited(self, name, artists, ids, album_ids, artist="Daft"):
+        """Un album « Credits/<name> » dont l'unique piste porte ARTISTS, MUSICBRAINZ_ARTISTID et MUSICBRAINZ_ALBUMARTISTID."""
+        path = fixtures.write_flac(self.root / "Credits" / name / "01 - T.flac", "T", name, artist, 1, 1)
+        fixtures.add_tags(path, *[("ARTISTS", a) for a in artists], *[("MUSICBRAINZ_ARTISTID", i) for i in ids], *[("MUSICBRAINZ_ALBUMARTISTID", i) for i in album_ids])
+        return self.scan()
+
+    def test_a_track_keeps_its_artists_with_their_identifiers(self):
+        items, entries, _ = self.credited("Feat", ["Daft", "Poppy"], ["id-daft", "id-poppy"], ["id-daft"], artist="Daft feat. Poppy")
+        info = json.loads(entries["Credits/Feat/01 - T.flac"]["meta"])["info"]
+        self.assertEqual(info["artists"], [{"name": "Daft", "id": "id-daft"}, {"name": "Poppy", "id": "id-poppy"}])
+        self.assertEqual(info["albumartist_ids"], ["id-daft"])
+        self.assertEqual(info["artist"], "Daft feat. Poppy")                                   # le tag ARTIST reste tel quel : la file et les playlists le montrent en entier
+        self.assertEqual(json.loads(items["Feat"]["meta"])["artist_mbids"], ["id-daft"])      # l'album garde les identifiants de son artiste
+
+    def test_names_and_identifiers_of_different_lengths_are_not_paired(self):
+        _, entries, _ = self.credited("Court", ["Daft", "Poppy"], ["id-daft"], ["id-daft"])
+        self.assertEqual(json.loads(entries["Credits/Court/01 - T.flac"]["meta"])["info"]["artists"], [{"name": "Daft", "id": ""}, {"name": "Poppy", "id": ""}])
+
+    def test_a_track_without_artists_has_an_empty_list(self):
+        _, entries, _ = self.scan()
+        info = json.loads(entries["01 - Solo.flac"]["meta"])["info"]
+        self.assertEqual((info["artists"], info["albumartist_ids"]), ([], []))
+
+    def test_a_track_kept_from_before_the_artists_were_read_is_read_again(self):
+        _, entries, _ = self.scan()
+        known = known_of(entries.values())
+        meta = json.loads(known["01 - Solo.flac"]["meta"])
+        del meta["info"]["artists"]
+        known["01 - Solo.flac"] = {**known["01 - Solo.flac"], "meta": json.dumps(meta)}
+        counts = self.scan(known)[2]
+        self.assertEqual((counts.read, counts.reused), (1, 2))
+
 
 class TestArtistDirs(unittest.TestCase):
     @staticmethod

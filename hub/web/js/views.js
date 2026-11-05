@@ -551,7 +551,7 @@
       d.entries.forEach(function (e, i) {
         if (multi && e.disc !== disc) { disc = e.disc; list.appendChild(h('h3', { class: 'grp' }, 'Disque ' + (disc || 1))); }
         var done = e.progress && e.progress.done;
-        var track = trackList()[i], shown = H.music.credit(e.title, e.artist, d.artist || d.grp);
+        var track = trackList()[i], shown = H.music.credit(e.title, e.artist, d.artist || d.grp, e.artists, d.artist_mbids);
         list.appendChild(h('div', { class: 'trkwrap' },
           h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { H.audio.play(trackList(), i); } },
             h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, shown.title, shown.line ? h('small', null, shown.line) : null), done ? h('span', { class: 'seen' }, H.icon('check')) : null, h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')),
