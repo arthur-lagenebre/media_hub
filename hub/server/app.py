@@ -116,10 +116,10 @@ class Hub:
         """Qui est « connecté » quand le serveur est ouvert : le profil `default`, administrateur (c'est lui que le premier compte reprendra)."""
         return {"id": accounts.FIRST_ID, "name": self.cfg.admin, "role": "admin"}
 
-    def media_token(self):
-        """Le jeton qui voyage dans les URLs (`?token=`) : il ne vaut que sur /media, /img, /book et /api/subs (sous-titres, lecture seule), nulle part ailleurs sur /api/ ;
-        une URL de pochette qui fuit ne donne donc ni le nettoyage ni le scan."""
-        return hmac.new(self.secret.encode(), b"hub-media", hashlib.sha256).hexdigest()
+    def media_token(self, row):
+        """Le jeton de média du compte `row`, celui qui voyage dans les URLs (`?token=`) : il ne vaut que sur /media, /img, /book et /api/subs (sous-titres, lecture seule), nulle part ailleurs sur /api/ ;
+        une URL de pochette qui fuit ne donne donc ni le nettoyage ni le scan. Il désigne le compte : ses droits (voir, télécharger) s'appliquent à la requête."""
+        return accounts.media_token(self.secret, row)
 
     def path_of(self, entry):
         lib = self.cfg.library(entry["lib"])
@@ -242,6 +242,7 @@ class Handler(BaseHTTPRequestHandler):
     timeout = 120
     hub: Hub = None
     user: dict = None                          # le compte de la requête en cours (voir authorized)
+    granted: dict = None                       # ses droits par bibliothèque, lus à la première question (voir can)
     routes: list = []
 
     def log_message(self, fmt, *args):         # le journal ne garde que les erreurs (voir _fail)
@@ -327,9 +328,9 @@ class Handler(BaseHTTPRequestHandler):
         """Trois façons de se présenter : le jeton de session (`<identifiant>.<mac>`) en cookie (navigateur) ou en `Authorization: Bearer` (clients natifs),
         le jeton de média en `?token=` (balises <img> / <video>, Cast), celui-ci seulement sur les fichiers et les sous-titres (/api/subs/), nulle part ailleurs sur /api/.
 
-        Le compte reconnu est posé sur `self.user` (`{"id", "name", "role"}`) : c'est lui, et lui seul, qui désigne le profil de la progression et des playlists.
-        Avec le jeton de média, `self.user` reste None : les routes de fichiers n'en ont pas besoin."""
-        self.user = None
+        Le compte reconnu est posé sur `self.user` (`{"id", "name", "role"}`) : c'est lui, et lui seul, qui désigne le profil de la progression et des playlists, et dont les droits s'appliquent.
+        Le jeton de média est celui d'un compte : il le désigne aussi, mais ne sert que sur les routes de fichiers."""
+        self.user = self.granted = None
         if not self.hub.auth():
             self.user = self.hub.open_user()
             return True
@@ -339,8 +340,30 @@ class Handler(BaseHTTPRequestHandler):
         if self.user is not None:
             return True
         if path.startswith(("/media/", "/img/", "/book/", "/api/subs/")) and "token" in query:
-            return hmac.compare_digest(query["token"].encode("utf-8", "replace"), self.hub.media_token().encode())
-        return False
+            row = accounts.user_for_token(self.hub.db, self.hub.secret, query["token"], "media")
+            self.user = accounts.public(row) if row is not None else None
+        return self.user is not None
+
+    def can(self, lib_id, perm="view"):
+        """Le compte de la requête peut-il `view` (voir) ou `download` (télécharger) cette bibliothèque ? Un administrateur le peut toujours ; sans rien dans `rights`, tout est permis."""
+        if self.user is None:
+            return False
+        if self.user["role"] != "admin" and self.granted is None:
+            self.granted = accounts.grants(self.hub.db, self.user["id"])
+        return accounts.allows(self.user["role"], self.granted or {}, lib_id, perm)
+
+    def require(self, lib_id, perm="view"):
+        """403 quand le compte n'a pas ce droit sur la bibliothèque."""
+        if not self.can(lib_id, perm):
+            raise HttpError(403, "téléchargement non autorisé" if perm == "download" else "accès à cette bibliothèque non autorisé")
+
+    def visible_libs(self):
+        """Les bibliothèques que le compte peut voir, dans l'ordre de la configuration."""
+        return [lib for lib in self.hub.cfg.libraries if self.can(lib.id)]
+
+    def visible_ids(self):
+        """Leurs identifiants, ou None pour un administrateur (tout, y compris ce qu'une bibliothèque retirée de la configuration a laissé dans la base)."""
+        return None if self.user is not None and self.user["role"] == "admin" else {lib.id for lib in self.visible_libs()}
 
     def find_route(self, path):
         """(fonction, correspondance) de la première route qui répond à la méthode et au chemin ; HEAD répond aux routes GET. None s'il n'y en a pas."""
@@ -563,7 +586,7 @@ def api_token(h, m, q):
         h.hub.throttle.failed(who)
         raise HttpError(e.status, e.message)
     h.hub.throttle.passed(who)
-    h.send_json({"token": h.hub.session_token(row), "media_token": h.hub.media_token(), "user": accounts.public(row)})
+    h.send_json({"token": h.hub.session_token(row), "media_token": h.hub.media_token(row), "user": accounts.public(row)})
 
 
 # ---------------------------------------------------------------------------
@@ -606,7 +629,7 @@ def renewed_session(h, row):
 @route("GET", r"/api/users")
 def api_users(h, m, q):
     require_admin(h)
-    h.send_json({"users": [accounts.listing(r) for r in accounts.rows(h.hub.db)]})
+    h.send_json({"users": [user_listing(h.hub, r) for r in accounts.rows(h.hub.db)]})
 
 
 @route("POST", r"/api/users")
@@ -615,7 +638,23 @@ def api_user_create(h, m, q):
     need_accounts(h)
     body = body_dict(h)
     row = account_call(accounts.create, h.hub.db, body.get("name"), body.get("password"), body.get("role", "user"))
-    h.send_json(accounts.listing(row), 201)
+    h.send_json(user_listing(h.hub, row), 201)
+
+
+def user_listing(hub, row):
+    """Un compte pour l'administrateur : ce que `accounts.listing` dit, et ses droits sur chaque bibliothèque configurée."""
+    return {**accounts.listing(row), "rights": accounts.rights_json(row["role"], accounts.grants(hub.db, row["id"]), [lib.id for lib in hub.cfg.libraries])}
+
+
+@route("POST", r"/api/user/(\w+)/rights")
+def api_user_rights(h, m, q):
+    """L'administrateur change ce qu'un compte peut voir et télécharger : `{"rights": {"<bibliothèque>": {"view": bool, "download": bool}}}`, seules les bibliothèques citées changent
+    (et un droit omis ne change pas). Retirer « voir » retire « télécharger ». Pas pour un administrateur (400). Rend le compte avec ses droits."""
+    require_admin(h)
+    need_accounts(h)
+    body = body_dict(h)
+    account_call(accounts.set_rights, h.hub.db, m.group(1), {lib.id for lib in h.hub.cfg.libraries}, body.get("rights"))
+    h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
 
 
 @route("POST", r"/api/user/(\w+)/password")
@@ -697,6 +736,20 @@ def library_or_404(hub, lib_id):
     return lib
 
 
+def entry_of(h, ident, perm="view"):
+    """Le fichier `ident` (404 s'il n'existe pas), à condition que le compte ait ce droit sur sa bibliothèque (403 sinon)."""
+    entry = h.hub.entry(ident)
+    h.require(entry["lib"], perm)
+    return entry
+
+
+def item_of(h, ident):
+    """L'élément `ident` (404 s'il n'existe pas), à condition que le compte voie sa bibliothèque (403 sinon)."""
+    item = h.hub.item(ident)
+    h.require(item["lib"])
+    return item
+
+
 def seen_counts(hub, profile, lib_id=None):
     """{item_id: (fichiers vus, fichiers entamés)} : de quoi afficher « vu » ou « 3/12 » sur une vignette."""
     sql = ("SELECT e.item_id AS item, SUM(p.done) AS seen, COUNT(*) AS touched FROM progress p JOIN entries e ON e.id=p.entry_id "
@@ -718,9 +771,9 @@ def with_seen(row, seen):
 def api_state(h, m, q):
     hub = h.hub
     libs = []
-    for lib in hub.cfg.libraries:
+    for lib in h.visible_libs():                  # une bibliothèque qu'on ne voit pas n'existe pas pour ce compte
         count = hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]
-        libs.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir()})
+        libs.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir(), "download": h.can(lib.id, "download")})
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
                  "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
 
@@ -767,14 +820,14 @@ def resume_card(hub, profile, row, item):
     return progress_card(row, item, row["position"], row["pduration"], True, row["updated"])
 
 
-def continue_row(hub, profile):
-    """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant."""
+def continue_row(hub, profile, libs=None):
+    """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant. `libs` : les bibliothèques que le compte voit (None : toutes)."""
     rows = hub.db.query(
         "SELECT p.entry_id, p.position, p.duration AS pduration, p.done, p.updated, e.* FROM progress p JOIN entries e ON e.id=p.entry_id "
         "WHERE p.profile=? AND e.kind IN ('video','book') ORDER BY p.updated DESC LIMIT 200", (profile,))
     seen_items, out = set(), []
     for row in rows:
-        if row["item_id"] in seen_items:
+        if row["item_id"] in seen_items or (libs is not None and row["lib"] not in libs):
             continue
         seen_items.add(row["item_id"])
         if row["updated"] <= hub.db.kv_get(dismiss_key(profile, row["item_id"]), -1):
@@ -805,7 +858,7 @@ def api_home(h, m, q):
     hub = h.hub
     seen = seen_counts(hub, h.user["id"])
     rows, video = [], []
-    for lib in hub.cfg.libraries:
+    for lib in h.visible_libs():
         if lib.kind == "music":
             recent = recent_music(hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,)), seen, 24)
         else:
@@ -814,7 +867,7 @@ def api_home(h, m, q):
             video += hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
         rows.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": recent,
                      "count": hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]})
-    h.send_json({"continue": continue_row(hub, h.user["id"]), "libraries": rows, "unseen": unseen_row(video, seen, h.user["id"], today())})
+    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids()), "libraries": rows, "unseen": unseen_row(video, seen, h.user["id"], today())})
 
 
 @route("GET", r"/api/search")
@@ -826,7 +879,7 @@ def api_search(h, m, q):
     hub = h.hub
     seen = seen_counts(hub, h.user["id"])
     results = []
-    for lib in hub.cfg.libraries:
+    for lib in h.visible_libs():
         found = []
         for row in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY sort", (lib.id,)):
             if needle in fold(row["title"]) or needle in fold(row["grp"]):
@@ -1126,6 +1179,7 @@ def library_extras(out, kind, sections, absent, sagas, chosen):
 def api_library(h, m, q):
     hub = h.hub
     lib = library_or_404(hub, m.group(1))
+    h.require(lib.id)
     rows = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
     seen = seen_counts(hub, h.user["id"], lib.id)
     movies = lib.kind == "movies"
@@ -1240,7 +1294,7 @@ def visible_sagas(sagas):
 @route("GET", r"/api/item/(\w+)")
 def api_item(h, m, q):
     hub = h.hub
-    item = hub.item(m.group(1))
+    item = item_of(h, m.group(1))
     lib = library_or_404(hub, item["lib"])
     rows = sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (item["id"],)), key=order_key)
     progress = hub.db.progress_for(h.user["id"], [r["id"] for r in rows])
@@ -1355,6 +1409,7 @@ def artist_tracks(hub, rows, name):
 def api_artist(h, m, q):
     """La fiche d'un artiste ou d'un groupe : ses albums de la médiathèque, de quoi tout lire, ses genres, et ce que MusicBrainz et Wikipédia en disent (une fois les fiches demandées dans Gestion), et sa photo si l'utilisateur en a envoyé une."""
     hub = h.hub
+    h.require(m.group(1))
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     seen = seen_counts(hub, h.user["id"], lib.id)
     name = rows[0]["grp"] or "Artiste inconnu"
@@ -1412,6 +1467,7 @@ def api_artist_photo_crop(h, m, q):
 def artist_image(h, m, q):
     """La photo d'un artiste, réduite comme les pochettes ; 404 s'il n'en a pas (la page garde alors la pochette de son premier album)."""
     hub = h.hub
+    h.require(m.group(1))
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     path = artist_photo(hub, m.group(2), artist_kept(hub, rows), artist_home(lib, rows))
     try:
@@ -1433,6 +1489,7 @@ def artist_image(h, m, q):
 def wanted_image(h, m, q):
     """La pochette d'un album manquant, posée dans le dossier de l'artiste ; 404 s'il n'en a pas (la fiche montre alors une case grisée)."""
     hub = h.hub
+    h.require(m.group(1))
     lib, _ = artist_albums(hub, m.group(1), m.group(2))
     found = next((w for w in wanted_albums(hub, lib.id, m.group(2)) if w["key"] == m.group(3) and w["cover"]), None)
     path = (lib.path / found["cover"]).resolve() if found else None
@@ -1457,7 +1514,7 @@ def wanted_image(h, m, q):
 def api_item_seen(h, m, q):
     """Marque tout un élément vu (ou non vu) : un film, une saison, une série entière."""
     hub = h.hub
-    item = hub.item(m.group(1))
+    item = item_of(h, m.group(1))
     body = h.body_json()
     done = bool(body.get("done", True))
     season = body.get("season")
@@ -1489,38 +1546,38 @@ playlist_call = partial(module_call, playlists.PlaylistError)
 
 @route("GET", r"/api/playlists")
 def api_playlists(h, m, q):
-    h.send_json({"playlists": playlists.listing(h.hub.db, h.user["id"])})
+    h.send_json({"playlists": playlists.listing(h.hub.db, h.user["id"], h.visible_ids())})
 
 
 @route("POST", r"/api/playlists")
 def api_playlist_create(h, m, q):
     body = h.body_json()
     entries = body.get("entries") if isinstance(body.get("entries"), list) else []
-    pid = playlist_call(playlists.create, h.hub.db, h.user["id"], body.get("name"), entries)
-    h.send_json(playlist_call(playlists.detail, h.hub.db, h.user["id"], pid), 201)
+    pid = playlist_call(playlists.create, h.hub.db, h.user["id"], body.get("name"), entries, h.visible_ids())
+    h.send_json(playlist_call(playlists.detail, h.hub.db, h.user["id"], pid, h.visible_ids()), 201)
 
 
 @route("GET", r"/api/playlist/(\w+)")
 def api_playlist(h, m, q):
-    h.send_json(playlist_call(playlists.detail, h.hub.db, h.user["id"], m.group(1)))
+    h.send_json(playlist_call(playlists.detail, h.hub.db, h.user["id"], m.group(1), h.visible_ids()))
 
 
 @route("POST", r"/api/playlist/(\w+)/(add|remove|move|rename|delete)")
 def api_playlist_edit(h, m, q):
-    db, pid, action, body, profile = h.hub.db, m.group(1), m.group(2), h.body_json(), h.user["id"]
+    db, pid, action, body, profile, libs = h.hub.db, m.group(1), m.group(2), h.body_json(), h.user["id"], h.visible_ids()
     if action == "add":
-        playlist_call(playlists.add, db, profile, pid, body.get("entries") if isinstance(body.get("entries"), list) else [])
+        playlist_call(playlists.add, db, profile, pid, body.get("entries") if isinstance(body.get("entries"), list) else [], libs)
     elif action == "remove":
-        playlist_call(playlists.remove, db, profile, pid, body.get("index"))
+        playlist_call(playlists.remove, db, profile, pid, body.get("index"), libs)
     elif action == "move":
-        playlist_call(playlists.move, db, profile, pid, body.get("from"), body.get("to"))
+        playlist_call(playlists.move, db, profile, pid, body.get("from"), body.get("to"), libs)
     elif action == "rename":
         playlist_call(playlists.rename, db, profile, pid, body.get("name"))
     else:
         playlist_call(playlists.delete, db, profile, pid)
         h.send_json({"ok": True})
         return
-    h.send_json(playlist_call(playlists.detail, db, profile, pid))
+    h.send_json(playlist_call(playlists.detail, db, profile, pid, libs))
 
 
 # ---------------------------------------------------------------------------
@@ -1548,7 +1605,7 @@ def progress_numbers(body):
 @route("POST", r"/api/progress")
 def api_progress(h, m, q):
     body = h.body_json()
-    entry = h.hub.entry(str(body.get("entry", "")))
+    entry = entry_of(h, str(body.get("entry", "")))
     position, duration = progress_numbers(body)
     duration = duration or entry["duration"]
     done = bool(body.get("done")) or is_finished(entry["kind"], position, duration)
@@ -1563,7 +1620,7 @@ def api_item_dismiss(h, m, q):
     """Retire un élément de « Reprendre » sans toucher à la progression : il y revient dès qu'on le relance."""
     hub = h.hub
     h.body_json()                 # le corps doit être lu, même vide de sens : sinon il reste sur la connexion et colle à la requête suivante (501)
-    item = hub.item(m.group(1))
+    item = item_of(h, m.group(1))
     latest = hub.db.one("SELECT MAX(p.updated) AS t FROM progress p JOIN entries e ON e.id=p.entry_id WHERE p.profile=? AND e.item_id=?", (h.user["id"], item["id"]))
     hub.db.kv_set(dismiss_key(h.user["id"], item["id"]), latest["t"] or 0)
     h.send_json({"ok": True})
@@ -1572,7 +1629,7 @@ def api_item_dismiss(h, m, q):
 @route("POST", r"/api/entry/(\w+)/seen")
 def api_entry_seen(h, m, q):
     hub = h.hub
-    entry = hub.entry(m.group(1))
+    entry = entry_of(h, m.group(1))
     if h.body_json().get("done", True):
         hub.db.save_progress(h.user["id"], entry["id"], entry["duration"], entry["duration"], True)
     else:
@@ -1679,7 +1736,7 @@ def next_summary(following):
 def api_play(h, m, q):
     """Le plan de lecture d'un fichier vidéo pour CE lecteur. Le client l'appelle à l'ouverture, puis à chaque changement de piste audio."""
     hub = h.hub
-    entry = hub.entry(m.group(1))
+    entry = entry_of(h, m.group(1))
     if entry["kind"] != "video":
         raise HttpError(400, "ce fichier n'est pas une vidéo")
     body = h.body_json()
@@ -1703,7 +1760,7 @@ def api_play(h, m, q):
 
 @route("GET", r"/media/(\w+)/file")
 def media_file(h, m, q):
-    entry = h.hub.entry(m.group(1))
+    entry = entry_of(h, m.group(1), "download" if q.get("download") else "view")         # `?download=1` demande le droit de télécharger ; lire (Range) demande seulement celui de voir
     lib, path = h.hub.path_of(entry)
     extra = {"Cache-Control": "private, max-age=3600"}
     if q.get("download"):
@@ -1775,7 +1832,7 @@ def stop_stream(proc):
 def media_stream(h, m, q):
     """Un MP4 fragmenté produit à la volée. Pas de Content-Length, pas de Range : pour avancer, le client redemande avec ?start=."""
     hub = h.hub
-    entry = hub.entry(m.group(1))
+    entry = entry_of(h, m.group(1))
     lib, path = hub.path_of(entry)
     if not hub.cfg.ffmpeg:
         raise HttpError(501, "ffmpeg est introuvable sur le serveur : seule la lecture directe est possible.")
@@ -1799,7 +1856,7 @@ def media_stream(h, m, q):
 @route("GET", r"/api/subs/(\w+)/([es])(\d+)\.vtt")
 def api_subs(h, m, q):
     hub = h.hub
-    entry = hub.entry(m.group(1))
+    entry = entry_of(h, m.group(1))
     lib, path = hub.path_of(entry)
     kind, index = m.group(2), int(m.group(3))
     cache = hub.cfg.data / "subs"
@@ -1924,6 +1981,9 @@ def api_item_tmdb(h, m, q):
 
 @route("GET", r"/img/(item|entry)/(\w+)")
 def image(h, m, q):
+    owner = h.hub.db.one("SELECT lib FROM " + ("items" if m.group(1) == "item" else "entries") + " WHERE id=?", (m.group(2),))
+    if owner is not None:
+        h.require(owner["lib"])
     try:
         width = int(q.get("w", 0))
     except ValueError:
@@ -1945,7 +2005,7 @@ def image(h, m, q):
 @route("GET", r"/api/book/(\w+)")
 def api_book(h, m, q):
     hub = h.hub
-    entry = hub.entry(m.group(1))
+    entry = entry_of(h, m.group(1))
     if entry["kind"] != "book":
         raise HttpError(400, "ce fichier n'est pas un livre")
     lib, path = hub.path_of(entry)
@@ -1973,7 +2033,7 @@ def api_book(h, m, q):
 @route("GET", r"/book/(\w+)/page/(\d+)")
 def book_page(h, m, q):
     hub = h.hub
-    entry = hub.entry(m.group(1))
+    entry = entry_of(h, m.group(1))
     lib, path = hub.path_of(entry)
     try:
         data = bookmedia.cbz_page(path, int(m.group(2)))
@@ -1994,7 +2054,7 @@ def epub_mime(data, mime):
 @route("GET", r"/book/(\w+)/epub/(.+)")
 def book_epub(h, m, q):
     hub = h.hub
-    entry = hub.entry(m.group(1))
+    entry = entry_of(h, m.group(1))
     lib, path = hub.path_of(entry)
     try:
         data, mime = bookmedia.epub_member(path, m.group(2))

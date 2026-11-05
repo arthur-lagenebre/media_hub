@@ -205,7 +205,7 @@ class TestAccess(RootCase):
 
     def test_the_media_token_only_opens_the_files(self):
         self.hub.images.get.return_value = None
-        token = self.hub.media_token()
+        token = self.hub.media_token(self.alice)
         for path in ("/img/item/x", "/media/x/file", "/book/x/page/0"):
             self.assertEqual(call(self.hub, "GET", f"{path}?token={token}")[1].status, 404, path)
             self.assertEqual(call(self.hub, "GET", f"{path}?token=faux")[1].status, 302, path)
@@ -438,7 +438,7 @@ class TestToken(RootCase):
     def test_the_right_password_gives_the_two_tokens(self):
         _, reply = self.ask({"user": "alice", "password": PASSWORD})
         out = reply.json()
-        self.assertEqual((reply.status, out["token"], out["media_token"], out["user"]), (200, self.hub.session_token(self.alice), self.hub.media_token(), accounts.public(self.alice)))
+        self.assertEqual((reply.status, out["token"], out["media_token"], out["user"]), (200, self.hub.session_token(self.alice), self.hub.media_token(self.alice), accounts.public(self.alice)))
 
     def test_a_password_that_is_not_a_text_or_a_name_that_is_not_a_text_counts_as_a_failure(self):
         for body in ({"user": "alice", "password": 1234}, {"user": 5, "password": PASSWORD}, {"user": ["alice"], "password": PASSWORD}, {"user": "alice"}, [1], {}):

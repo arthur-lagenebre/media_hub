@@ -46,15 +46,16 @@ def _write(db: Database, pid, entry_ids):
             raise
 
 
-def audio_entries(db: Database, entry_ids):
-    """{id: ligne} des pistes audio qui existent parmi `entry_ids`."""
+def audio_entries(db: Database, entry_ids, libs=None):
+    """{id: ligne} des pistes audio qui existent parmi `entry_ids`. `libs` : les bibliothèques que le compte peut voir (None : toutes) ; une piste d'une autre bibliothèque est traitée comme un fichier disparu."""
     ids = list(dict.fromkeys(entry_ids))
     found = {}
     for start in range(0, len(ids), 400):
         chunk = ids[start:start + 400]
         marks = ",".join("?" * len(chunk))
         for row in db.query(f"SELECT e.*, i.title AS album, i.id AS album_id FROM entries e JOIN items i ON i.id = e.item_id WHERE e.kind='audio' AND e.id IN ({marks})", tuple(chunk)):
-            found[row["id"]] = row
+            if libs is None or row["lib"] in libs:
+                found[row["id"]] = row
     return found
 
 
@@ -71,33 +72,33 @@ def exists(db: Database, profile, pid):
     return row
 
 
-def summary(db: Database, row):
-    entries = audio_entries(db, _order(db, row["id"]))
+def summary(db: Database, row, libs=None):
+    entries = audio_entries(db, _order(db, row["id"]), libs)
     ordered = [entries[e] for e in _order(db, row["id"]) if e in entries]
     covers = list(dict.fromkeys(r["album_id"] for r in ordered))[:4]
     return {"id": row["id"], "name": row["name"], "count": len(ordered), "duration": sum(r["duration"] for r in ordered), "covers": covers, "cover_urls": [urls.item_cover(c) for c in covers], "updated": row["updated"]}
 
 
-def listing(db: Database, profile):
+def listing(db: Database, profile, libs=None):
     rows = db.query("SELECT * FROM playlists WHERE profile=? ORDER BY name COLLATE NOCASE", (profile,))
-    return [summary(db, r) for r in rows]
+    return [summary(db, r, libs) for r in rows]
 
 
-def detail(db: Database, profile, pid):
+def detail(db: Database, profile, pid, libs=None):
     row = exists(db, profile, pid)
     order = _order(db, pid)
-    entries = audio_entries(db, order)
+    entries = audio_entries(db, order, libs)
     tracks = [track_json(entries[e]) for e in order if e in entries]
-    out = summary(db, row)
+    out = summary(db, row, libs)
     out["tracks"] = tracks
     out["missing"] = len(order) - len(tracks)
     return out
 
 
-def create(db: Database, profile, name, entry_ids=()):
+def create(db: Database, profile, name, entry_ids=(), libs=None):
     """Crée une playlist ; si une playlist de ce nom existe déjà, on la reprend (taper deux fois le même nom ne fait pas de doublon)."""
     name = clean_name(name)
-    if entry_ids and not audio_entries(db, [e for e in entry_ids if isinstance(e, str)]):
+    if entry_ids and not audio_entries(db, [e for e in entry_ids if isinstance(e, str)], libs):
         raise PlaylistError(400, "aucune piste valide à ajouter")           # avant de créer quoi que ce soit : pas de playlist vide laissée derrière une erreur
     same = next((r for r in db.query("SELECT * FROM playlists WHERE profile=?", (profile,)) if r["name"].casefold() == name.casefold()), None)
     if same is None:
@@ -107,14 +108,14 @@ def create(db: Database, profile, name, entry_ids=()):
     else:
         pid = same["id"]
     if entry_ids:
-        add(db, profile, pid, entry_ids)
+        add(db, profile, pid, entry_ids, libs)
     return pid
 
 
-def add(db: Database, profile, pid, entry_ids):
+def add(db: Database, profile, pid, entry_ids, libs=None):
     exists(db, profile, pid)
     wanted = [e for e in entry_ids if isinstance(e, str)]
-    known = audio_entries(db, wanted)
+    known = audio_entries(db, wanted, libs)
     fresh = [e for e in wanted if e in known]
     if not fresh:
         raise PlaylistError(400, "aucune piste valide à ajouter")
@@ -125,10 +126,10 @@ def add(db: Database, profile, pid, entry_ids):
     return len(fresh)
 
 
-def remove(db: Database, profile, pid, index):
+def remove(db: Database, profile, pid, index, libs=None):
     exists(db, profile, pid)
     order = _order(db, pid)
-    known = audio_entries(db, order)
+    known = audio_entries(db, order, libs)
     present = [n for n, e in enumerate(order) if e in known]     # l'index vient de la liste affichée, sans les pistes disparues
     if not isinstance(index, int) or not 0 <= index < len(present):
         raise PlaylistError(400, "position invalide")
@@ -136,10 +137,10 @@ def remove(db: Database, profile, pid, index):
     _write(db, pid, order)
 
 
-def move(db: Database, profile, pid, src, dst):
+def move(db: Database, profile, pid, src, dst, libs=None):
     exists(db, profile, pid)
     order = _order(db, pid)
-    known = audio_entries(db, order)
+    known = audio_entries(db, order, libs)
     present = [n for n, e in enumerate(order) if e in known]
     if not all(isinstance(x, int) and 0 <= x < len(present) for x in (src, dst)):
         raise PlaylistError(400, "position invalide")

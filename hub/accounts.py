@@ -4,7 +4,9 @@ Un compte a un identifiant, un nom (unique, sans tenir compte de la casse), un m
 le premier compte créé reçoit l'identifiant `default` : c'est celui d'avant les comptes, il garde donc ce que le profil unique avait accumulé.
 
 Le jeton de session n'est pas gardé : c'est `HMAC(secret, "session:<identifiant>:<token_version>")`, présenté sous la forme `<identifiant>.<mac>`. Changer un mot de passe, ou demander de déconnecter les autres appareils, incrémente `token_version`, ce qui invalide d'un coup tous les jetons du compte.
-Le jeton de média (`?token=`) reste unique pour tout le serveur : voir `Hub.media_token`.
+Le jeton de média (`?token=`) est propre au compte, sous la même forme `<identifiant>.<mac>` : il désigne donc qui demande un fichier, et les droits s'appliquent à lui comme à la session. Il est révoqué avec les sessions (même `token_version`).
+
+Les droits : pour chaque bibliothèque, un compte peut *voir* (liste, fiches, lecture) et *télécharger*. Une bibliothèque sans ligne dans `rights` est ouverte (voir/télécharger) : un compte d'avant les droits n'a rien perdu. Télécharger suppose voir. Un administrateur a tous les droits, sans ligne.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from . import prefs
 
 FIRST_ID = "default"
 ROLES = ("admin", "user")
+RIGHTS = ("view", "download")
 MIN_PASSWORD = 8
 MAX_PASSWORD = 200                  # scrypt coûte du temps et de la mémoire : pas de mot de passe de plusieurs Mo
 MAX_NAME = 40
@@ -183,23 +186,84 @@ def authenticate(db, name, password):
 # ---------------------------------------------------------------------------
 # Jeton de session
 # ---------------------------------------------------------------------------
-def _mac(secret, uid, version):
-    return hmac.new(secret.encode(), f"session:{uid}:{version}".encode(), hashlib.sha256).hexdigest()
+def _mac(secret, uid, version, purpose="session"):
+    return hmac.new(secret.encode(), f"{purpose}:{uid}:{version}".encode(), hashlib.sha256).hexdigest()
 
 
 def session_token(secret, row):
     return f"{row['id']}.{_mac(secret, row['id'], row['token_version'])}"
 
 
-def user_for_token(db, secret, token):
-    """Le compte qui porte ce jeton (`<identifiant>.<mac>`), ou None : jeton mal formé, compte supprimé, mot de passe changé depuis."""
+def media_token(secret, row):
+    """Le jeton de média du compte (`?token=` sur /media, /img, /book et /api/subs) : un autre domaine du même HMAC, donc un jeton de session n'y vaut rien, ni l'inverse."""
+    return f"{row['id']}.{_mac(secret, row['id'], row['token_version'], 'media')}"
+
+
+def user_for_token(db, secret, token, purpose="session"):
+    """Le compte qui porte ce jeton (`<identifiant>.<mac>`), ou None : jeton mal formé, compte supprimé, mot de passe changé depuis. `purpose` : `session` ou `media`."""
     if not TOKEN_FORM.fullmatch(token):
         return None
     uid, _, mac = token.partition(".")
     row = by_id(db, uid)
-    if row is None or not hmac.compare_digest(mac.encode("utf-8", "replace"), _mac(secret, uid, row["token_version"]).encode()):
+    if row is None or not hmac.compare_digest(mac.encode("utf-8", "replace"), _mac(secret, uid, row["token_version"], purpose).encode()):
         return None
     return row
+
+
+# ---------------------------------------------------------------------------
+# Droits
+# ---------------------------------------------------------------------------
+def grants(db, uid):
+    """{bibliothèque: (voir, télécharger)} des lignes de ce compte ; une bibliothèque absente est ouverte (voir `allows`)."""
+    return {r["lib"]: (bool(r["view"]), bool(r["view"] and r["download"])) for r in db.query("SELECT lib, view, download FROM rights WHERE user_id=?", (uid,))}
+
+
+def allows(role, granted, lib_id, perm="view"):
+    """Ce compte peut-il `view` ou `download` cette bibliothèque ? `granted` vient de `grants`. Un administrateur peut tout."""
+    if role == "admin":
+        return True
+    view, download = granted.get(lib_id, (True, True))
+    return download if perm == "download" else view
+
+
+def rights_json(role, granted, lib_ids):
+    """Ce que l'API dit des droits d'un compte : `{bibliothèque: {"view": bool, "download": bool}}`, pour chacune des bibliothèques données."""
+    return {lib: {"view": allows(role, granted, lib), "download": allows(role, granted, lib, "download")} for lib in lib_ids}
+
+
+def set_rights(db, uid, lib_ids, changes):
+    """Change les droits d'un compte pour les bibliothèques citées dans `changes` (`{bibliothèque: {"view": bool, "download": bool}}`, chaque droit facultatif : celui qui manque ne change pas).
+    Refuse 400 une bibliothèque inconnue, un droit inconnu ou autre chose qu'un booléen, et un administrateur (il a tout). Retirer « voir » retire aussi « télécharger ». Tout ou rien."""
+    row = by_id(db, uid)
+    if row is None:
+        raise AccountError(404, "compte inconnu")
+    if row["role"] == "admin":
+        raise AccountError(400, "un administrateur a tous les droits")
+    if not isinstance(changes, dict) or not changes:
+        raise AccountError(400, "droits attendus : {bibliothèque: {view, download}}")
+    current, new = grants(db, uid), {}
+    for lib, perms in changes.items():
+        if lib not in lib_ids:
+            raise AccountError(400, f"bibliothèque inconnue : {lib}")
+        if not isinstance(perms, dict) or not perms or set(perms) - set(RIGHTS) or not all(isinstance(v, bool) for v in perms.values()):
+            raise AccountError(400, "chaque bibliothèque attend {view, download}, des booléens")
+        view, download = current.get(lib, (True, True))
+        view, download = perms.get("view", view), perms.get("download", download)
+        new[lib] = (view, view and download)
+    with db.write_lock:
+        conn = db.connection()
+        try:
+            for lib, (view, download) in new.items():
+                if view and download:
+                    conn.execute("DELETE FROM rights WHERE user_id=? AND lib=?", (uid, lib))        # tout autorisé : pas de ligne
+                else:
+                    conn.execute("INSERT INTO rights(user_id, lib, view, download) VALUES(?,?,?,?) ON CONFLICT(user_id, lib) DO UPDATE SET view=excluded.view, download=excluded.download",
+                                 (uid, lib, int(view), int(download)))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return grants(db, uid)
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +322,7 @@ def revoke_sessions(db, uid):
 
 
 def delete(db, uid):
-    """Supprime le compte, sa progression, ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction."""
+    """Supprime le compte, ses droits, sa progression, ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction."""
     with db.write_lock:
         conn = db.connection()
         try:
@@ -268,6 +332,7 @@ def delete(db, uid):
             if row["role"] == "admin" and conn.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0] <= 1:
                 raise AccountError(400, "impossible de supprimer le dernier administrateur")
             conn.execute("DELETE FROM progress WHERE profile=?", (uid,))
+            conn.execute("DELETE FROM rights WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE profile=?)", (uid,))
             conn.execute("DELETE FROM playlists WHERE profile=?", (uid,))
             prefix = f"dismiss:{uid}:"

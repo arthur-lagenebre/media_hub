@@ -19,7 +19,7 @@ ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "
 ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
 
 MIGRATIONS = {}      # {version: fonction(connexion)} : ce qui fait passer la base à `version` depuis la précédente. CREATE TABLE IF NOT EXISTS (SCHEMA) ajoute des tables, pas une colonne : toute autre évolution s'écrit ici, ex. `3: lambda conn: conn.execute("ALTER TABLE items ADD COLUMN x TEXT")`
-SCHEMA_VERSION = 2          # 2 : table `users` (comptes) ; une base en version 1 la gagne au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+SCHEMA_VERSION = 3          # 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque). Une base plus ancienne les gagne au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS users(
     token_version INTEGER NOT NULL DEFAULT 1,     -- change à chaque nouveau mot de passe : les jetons de session de ce compte cessent de valoir
     created       INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS rights(
+    user_id  TEXT NOT NULL,                 -- users.id
+    lib      TEXT NOT NULL,                 -- identifiant de bibliothèque (config), pas une clé étrangère : une bibliothèque peut être retirée puis remise
+    view     INTEGER NOT NULL DEFAULT 1,    -- voir la bibliothèque (liste, fiches, lecture)
+    download INTEGER NOT NULL DEFAULT 1,    -- télécharger ses fichiers ; jamais à 1 quand view est à 0
+    PRIMARY KEY(user_id, lib)
+);                                          -- pas de ligne = tout autorisé : les comptes d'avant les droits n'ont rien perdu, et une bibliothèque ajoutée s'ouvre à tous
 """
 
 
