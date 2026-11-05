@@ -86,7 +86,7 @@ docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt')
 | Nouveaux fichiers visibles | *Paramètres* > *Gestion* > Mettre à jour (ou `HUB_AUTOSCAN_HOURS`) |
 | Affiches / synopsis des séries | *Paramètres* > *Gestion* > Enrichir (TMDB) (avec `TMDB_KEY`) |
 | Supprimer les `Thumbs.db` | *Paramètres* > *Gestion* > Fichiers parasites > Supprimer ; retirer `:ro` des volumes concernés |
-| Étiqueter / renommer / convertir | scripts de `media_library`, depuis VS Code, ou dans le conteneur (volumes sans `:ro`) : `docker exec -it media-hub python /app/media_library/scripts/Movies/Metadata.py --dir /srv/Films` |
+| Étiqueter / renommer / convertir | scripts de `media_library`, depuis VS Code, ou dans le conteneur (volumes sans `:ro`) : `docker exec -it media-hub python /app/media_library/scripts/Video/Movies/Metadata.py --dir /srv/Films` |
 | Les fiches HTML | retirées de `media_library` ; à régénérer ponctuellement avec un prompt dans VS Code si besoin |
 
 ## Sécurité
