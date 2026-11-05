@@ -405,6 +405,12 @@
     }
     function totalDuration(entries) { return entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); }
 
+    // Les types de sortie MusicBrainz (RELEASETYPE), dits en français ; un type inconnu s'affiche tel quel, avec une majuscule.
+    var RELEASE_TYPES = { album: 'Album', single: 'Single', ep: 'EP', compilation: 'Compilation', live: 'Live', soundtrack: 'Bande originale', remix: 'Remix' };
+    function releaseTypes(d) {
+      return (d.release_types || []).filter(function (t) { return typeof t === 'string' && t; }).map(function (t) { return RELEASE_TYPES[t] || t.charAt(0).toUpperCase() + t.slice(1); }).join(', ');
+    }
+
     // La ligne grise sous le titre, selon ce qu'est la fiche : l'année, la durée, les saisons, les pistes, les volumes.
     var META = {
       movie: function (d) {
@@ -430,6 +436,7 @@
         var t = totalDuration(d.entries);
         if (t) meta.push(H.dur(t));
         if (d.formats && d.formats.length) meta.push(d.formats.join(' / '));
+        meta.push(releaseTypes(d));
         return meta;
       },
       books: function (d) {

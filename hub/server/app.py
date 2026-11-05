@@ -1194,7 +1194,7 @@ def album_links(meta):
 
 
 ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "artist_mbids", "label", "catalog", "formats", "authors", "publisher", "section", "collection", "status", "episodes_total",
-                  "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "disc_titles", "season_summaries", "doubts")
+                  "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "disc_titles", "release_types", "season_summaries", "doubts")
 
 
 def tagged_saga(hub, item, movies, seen, info):

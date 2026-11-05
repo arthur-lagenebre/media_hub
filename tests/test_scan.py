@@ -236,6 +236,42 @@ class TestScanMusic(TempCase):
         self.assertEqual(counts.read, 1)
         self.assertEqual(json.loads(items["Ancien"]["meta"])["disc_titles"], {"2": "Bonus"})
 
+    def typed(self, name, *tracks):
+        """Un album « Types/<name> » : `tracks` donne, pour chaque piste, ses valeurs de RELEASETYPE (une clé répétée par type) ; rend items et entrées du scan."""
+        for n, types in enumerate(tracks, 1):
+            path = fixtures.write_flac(self.root / "Types" / name / f"{n:02d} - T.flac", f"T{n}", name, "Daft", n, len(tracks))
+            fixtures.add_tags(path, *[("RELEASETYPE", t) for t in types])
+        return self.scan()
+
+    def release_types(self, name, *tracks):
+        return json.loads(self.typed(name, *tracks)[0][name]["meta"]).get("release_types")
+
+    def test_the_release_types_of_a_track_are_kept_with_the_album_and_with_each_track(self):
+        items, entries, _ = self.typed("Concert", ("album", "live"), ("album", "live"))
+        self.assertEqual(json.loads(items["Concert"]["meta"])["release_types"], ["album", "live"])
+        self.assertEqual(json.loads(entries["Types/Concert/01 - T.flac"]["meta"])["info"]["release_types"], ["album", "live"])
+
+    def test_the_release_types_are_lowercase_and_without_spaces_or_blanks(self):
+        self.assertEqual(self.release_types("Casse", (" Album ", "", "LIVE")), ["album", "live"])
+
+    def test_an_album_without_release_type_has_none(self):
+        items, entries, _ = self.typed("Sans", (), ())
+        self.assertNotIn("release_types", json.loads(items["Sans"]["meta"]))
+        self.assertEqual(json.loads(entries["Types/Sans/01 - T.flac"]["meta"])["info"]["release_types"], [])
+
+    def test_tracks_that_disagree_give_the_most_common_release_types_and_ignore_the_untagged(self):
+        self.assertEqual(self.release_types("Divers", ("single",), ("ep",), ("ep",), ()), ["ep"])
+
+    def test_a_track_kept_from_before_the_release_types_were_read_is_read_again(self):
+        _, entries, _ = self.typed("Vieux", ("album",), ("album",))
+        known = known_of(entries.values())
+        meta = json.loads(known["Types/Vieux/02 - T.flac"]["meta"])
+        del meta["info"]["release_types"]
+        known["Types/Vieux/02 - T.flac"] = {**known["Types/Vieux/02 - T.flac"], "meta": json.dumps(meta)}
+        items, _, counts = self.scan(known)
+        self.assertEqual(counts.read, 1)
+        self.assertEqual(json.loads(items["Vieux"]["meta"])["release_types"], ["album"])
+
 
 class TestArtistDirs(unittest.TestCase):
     @staticmethod

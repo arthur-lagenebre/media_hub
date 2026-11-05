@@ -30,12 +30,17 @@ def credits(meta):
             "albumartist_ids": [i.strip().lower() for i in meta.values("MUSICBRAINZ_ALBUMARTISTID") if i.strip()]}
 
 
+def release_types(meta):
+    """Les types de sortie d'une piste (RELEASETYPE : « album », « live »...), en minuscules, dans l'ordre du fichier (type principal d'abord) ; vide quand le fichier n'en donne pas."""
+    return [t.strip().lower() for t in meta.values("RELEASETYPE") if t.strip()]
+
+
 def read_info(track):
-    """Comme `library.read_info` de media_library (une seule lecture du fichier), plus les artistes crédités et le titre du disque de la piste."""
+    """Comme `library.read_info` de media_library (une seule lecture du fichier), plus les artistes crédités, les types de sortie et le titre du disque de la piste."""
     track.info, track.error = {}, None
     try:
         meta = audio.read(track.path)
-        track.info = {**library.track_info(track.path, meta, track.disc_folder), **credits(meta), "disc_title": meta.first("DISCSUBTITLE").strip()}
+        track.info = {**library.track_info(track.path, meta, track.disc_folder), **credits(meta), "release_types": release_types(meta), "disc_title": meta.first("DISCSUBTITLE").strip()}
     except AudioError as e:
         track.error = str(e)
 
@@ -46,13 +51,20 @@ def _read_tracks(release, known):
     for track in release.tracks:
         row = known.get(track.rel)
         cached = json.loads(row["meta"]).get("info") if unchanged(row, track.size, track.mtime) else None
-        if cached and "artists" in cached and "disc_title" in cached:          # une piste gardée d'avant la lecture des artistes, ou des titres de disque, est relue, une fois
+        if cached and all(key in cached for key in ("artists", "disc_title", "release_types")):          # une piste gardée d'avant la lecture d'un de ces champs est relue, une fois
             track.info = cached
             reused += 1
         else:
             read_info(track)
             read += 1
     return reused, read
+
+
+def _album_release_types(release):
+    """Les types de sortie de l'album : ceux que la plupart des pistes portent (une piste sans type ne compte pas) ; vide quand aucune n'en porte."""
+    found = Counter(tuple(t.info.get("release_types") or ()) for t in release.tracks)
+    found.pop((), None)
+    return list(found.most_common(1)[0][0]) if found else []
 
 
 def _album_artist_ids(release):
@@ -92,6 +104,8 @@ def _album_item(lib, release, homes):
         "cover_file": cover.name if cover else "", "has_cover": bool(cover),
         "progress": list(progress) if progress else None, "discs": len(release.discs), "duration": release.duration,
     }
+    if types := _album_release_types(release):
+        meta["release_types"] = types
     if titles := disc_titles(release):            # absent plutôt que vide : la fiche ne rend que les champs non vides
         meta["disc_titles"] = titles
     return item_row(lib.id, release.rel or ".", "album", release.title, year=release.year, genres=release.genres, grp=release.artist, meta=meta,

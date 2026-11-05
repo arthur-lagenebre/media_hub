@@ -63,6 +63,10 @@ Sous le titre d'une piste, dans la fiche d'un album, le hub montre les **invité
 
 Dans la fiche d'un album de **plusieurs disques**, l'intertitre d'un disque porte son titre MusicBrainz quand il en a un : « Disque 2 · Bonus ». Le hub le tire du tag **`DISCSUBTITLE`** que `media_library` écrit dans chaque `.flac` et `.mp3`. Sans titre, ou si le titre ne fait que répéter le numéro (« CD 2 »), l'intertitre reste « Disque 2 » ; un album d'un seul disque n'en affiche pas. Si les pistes d'un disque ne portent pas toutes le même titre, le plus répandu l'emporte. **Après un déploiement, lance un scan** (bouton *Mettre à jour* de la bibliothèque *Musique*, ou `POST /api/scan`) : les pistes déjà indexées sont relues une fois.
 
+## Type d'album
+
+La ligne grise sous le titre d'un album se termine par son type de sortie : « 2025 · 10 pistes · 36 min · MP3 · Album ». Le hub le tire du tag **`RELEASETYPE`** (`album`, `single`, `ep`, `compilation`, `live`, `soundtrack`, `remix`...) que `media_library` écrit dans chaque fichier ; plusieurs types se suivent, le principal d'abord (« Album, Live »). Sans ce tag, la ligne reste comme avant. Comme pour les titres de disque, **lance un scan** après un déploiement.
+
 ## Photos d'artistes
 
 La photo d'un artiste est le fichier `artist.webp` de **son dossier, à la racine de la bibliothèque** (`Musique/Daft Punk/artist.webp`) : elle suit la musique si on la déplace ou la sauvegarde, et le nettoyage la laisse. Le dossier de l'artiste est celui, à la racine, où il a la majorité des albums ; un album posé directement à la racine, ou un dossier de genre qui range plusieurs artistes, n'en donne pas : la photo reste alors sous `HUB_DATA/artists/`. Le dossier est connu après un scan.
