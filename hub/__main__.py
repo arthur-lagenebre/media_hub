@@ -4,6 +4,7 @@
     python -m hub user add <nom> [--admin]     (le premier compte est toujours administrateur)
     python -m hub user passwd <nom>
     python -m hub user rm <nom>
+    python -m hub user rights <nom> [--set <bibliothèque>=all|view|none ...]   (ce que le compte voit et télécharge)
 
 Les comptes se gèrent sans le serveur (il peut tourner pendant ce temps) : seule la base de HUB_DATA est lue. Pas d'inscription publique.
 """
@@ -40,6 +41,9 @@ def user_parser():
     add.add_argument("--admin", action="store_true", help="en fait un administrateur (le premier compte l'est toujours)")
     sub.add_parser("passwd", help="change le mot de passe d'un compte").add_argument("name")
     sub.add_parser("rm", help="supprime un compte, sa progression et ses playlists").add_argument("name")
+    rights = sub.add_parser("rights", help="montre, ou change avec --set, ce qu'un compte voit et télécharge par bibliothèque")
+    rights.add_argument("name")
+    rights.add_argument("--set", action="append", default=[], metavar="BIBLIOTHEQUE=DROITS", help="all (voir et télécharger), view (voir seulement) ou none (rien) ; peut se répéter")
     return parser
 
 
@@ -73,7 +77,25 @@ def user_rm(db, args):
     print(f"compte « {row['name']} » supprimé, avec sa progression et ses playlists.")
 
 
-USER_ACTIONS = {"list": user_list, "add": user_add, "passwd": user_passwd, "rm": user_rm}
+LEVELS = {"all": {"view": True, "download": True}, "view": {"view": True, "download": False}, "none": {"view": False, "download": False}}
+
+
+def user_rights(db, args):
+    row = known_account(db, args.name)
+    lib_ids = [lib.id for lib in config.load().libraries]
+    changes = {}
+    for text in args.set:
+        lib, _, level = text.partition("=")
+        if level not in LEVELS:
+            raise SystemExit(f"« {text} » : attendu <bibliothèque>=all|view|none")
+        changes[lib] = LEVELS[level]
+    granted = accounts.set_rights(db, row["id"], set(lib_ids), changes) if changes else accounts.grants(db, row["id"])
+    print(f"{row['name']} ({row['role']})" + (" : un administrateur a tous les droits" if row["role"] == "admin" else ""))
+    for lib, rights in accounts.rights_json(row["role"], granted, lib_ids).items():
+        print(f"  {lib:<16} {'voir' if rights['view'] else '----'}  {'télécharger' if rights['download'] else '-----------'}")
+
+
+USER_ACTIONS = {"list": user_list, "add": user_add, "passwd": user_passwd, "rm": user_rm, "rights": user_rights}
 
 
 def user_command(argv):

@@ -87,7 +87,7 @@ L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste es
 
 ## Comptes
 
-Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques sont communes. Au premier démarrage, `HUB_PASSWORD` crée l'administrateur (`HUB_ADMIN`, « admin » par défaut) et reprend la progression d'avant les comptes ; ensuite on gère les comptes depuis l'interface (administrateur) ou en ligne de commande, serveur arrêté ou non : Les essais de connexion ratés d'une même adresse sont ralentis (jusqu'à 5 s), puis plus rien n'est vérifié pendant 5 minutes après 10 échecs (réponse 429) ; un essai réussi remet le compteur à zéro.
+Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques sont communes, sauf celles que l'administrateur ferme à un compte (voir [Droits par bibliothèque](#droits-par-bibliothèque)). Au premier démarrage, `HUB_PASSWORD` crée l'administrateur (`HUB_ADMIN`, « admin » par défaut) et reprend la progression d'avant les comptes ; ensuite on gère les comptes depuis l'interface (administrateur) ou en ligne de commande, serveur arrêté ou non : Les essais de connexion ratés d'une même adresse sont ralentis (jusqu'à 5 s), puis plus rien n'est vérifié pendant 5 minutes après 10 échecs (réponse 429) ; un essai réussi remet le compteur à zéro.
 
 ```bash
 python -m hub user list
@@ -97,6 +97,20 @@ python -m hub user rm <nom>                # supprime aussi sa progression et se
 ```
 
 Seul l'administrateur lance les mises à jour (scan, enrichissement, nettoyage), change les photos d'artistes et gère les comptes. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert à tous. Pas d'inscription publique.
+
+### Droits par bibliothèque
+
+Pour chaque compte (sauf l'administrateur, qui a tout) et chaque bibliothèque (Films, Séries, Animations, Musique, Livres…), l'administrateur dit si la personne peut **voir** et si elle peut **télécharger**, dans *Paramètres* > *Comptes* > *Droits*, ou en ligne de commande :
+
+```bash
+python -m hub user rights <nom>                                       # ce que le compte voit et télécharge
+python -m hub user rights <nom> --set Livres=none --set Films=view    # all : voir et télécharger, view : voir seulement, none : rien
+```
+
+- Par défaut tout est permis : un compte d'avant les droits n'a rien perdu, et une bibliothèque ajoutée plus tard s'ouvre à tous.
+- Une bibliothèque qu'on ne voit pas **disparaît** pour ce compte : onglet, accueil, recherche, « Reprendre », fiches, images, lecture. Ses pistes restent dans les playlists du compte mais n'y apparaissent plus ; elles reviennent si le droit est rendu. Télécharger suppose voir.
+- Sans le droit de télécharger, les boutons *Télécharger* disparaissent et `?download=1` répond 403. **Voir permet de lire**, donc le fichier d'un film qu'on lit arrive bien au navigateur : le droit de télécharger retire le bouton et la pièce jointe, pas la possibilité technique d'enregistrer ce qu'un lecteur reçoit.
+- Les droits valent à la requête suivante, sans que la personne se reconnecte. Le jeton de média (`?token=`) d'un client natif est celui de son compte : il porte les mêmes droits.
 
 ## Interface HTTP
 
@@ -114,12 +128,12 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `POST /api/progress`, `/api/item/<id>/seen`, `/api/entry/<id>/seen` | progression, vu / pas vu |
 | `GET /api/book/<id>`, `/book/<id>/page/<n>`, `/book/<id>/epub/<chemin>` | pages d'un `.cbz`, fichiers d'un `.epub` (CSP sans script) |
 | `GET /img/item/<id>?w=`, `/img/entry/<id>?w=` | affiches, pochettes, couvertures (réduites et gardées en cache) |
-| `POST /api/token` | pour un client natif (Android TV, iOS, Chromecast) : corps `{"user": "…", "password": "…"}` (`user` facultatif s'il n'y a qu'un compte), réponse `{"token": "…", "media_token": "…", "user": {…}}` (401 `{"error": "mot de passe incorrect"}` sinon ; jetons vides si le serveur est ouvert, sans compte). Le jeton est celui du compte ; le jeton de média est commun à tout le serveur |
+| `POST /api/token` | pour un client natif (Android TV, iOS, Chromecast) : corps `{"user": "…", "password": "…"}` (`user` facultatif s'il n'y a qu'un compte), réponse `{"token": "…", "media_token": "…", "user": {…}}` (401 `{"error": "mot de passe incorrect"}` sinon ; jetons vides si le serveur est ouvert, sans compte). Le jeton est celui du compte, et le jeton de média aussi (il porte ses droits) |
 | `GET /api/sagas`, `POST /api/sagas`, `POST /api/sagas/add`, `GET /api/sagas/films` | sagas composées à la main (`sagas.json`, administrateur seulement) : lire, tout remplacer (avec la `version` lue, pour ne pas écraser un autre), ajouter des films, cacher un film des manquants (`POST /api/sagas/ignore`), chercher des films à y mettre ; `GET /img/film/<tmdb>` : l'affiche d'un film manquant |
-| `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete` | comptes (administrateur seulement) : lister, créer, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
+| `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete\|rights` | comptes (administrateur seulement) : lister (avec leurs droits par bibliothèque), créer, régler ce qu'un compte voit et télécharge, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
 | `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
 | `POST /api/me/signout-others` | chacun déconnecte ses autres appareils, sans changer de mot de passe (`{"current": "…"}`) ; la session de l'appelant est renouvelée |
-| Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte ; le jeton de média, lui, ne change pas |
+| Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session et propre au compte : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage, et ne donne que ce que ce compte peut voir. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte et révoque aussi son jeton de média |
 | `POST /api/scan`, `/api/enrich`, `/api/cleanup`, `GET /api/jobs` | (les trois `POST`, comme les photos d'artistes et `GET /api/jobs?log=1` (le journal des tâches), sont réservés à l'administrateur : 403 sinon ; `GET /api/jobs` sans `log` reste ouvert à tout compte) mise à jour de l'index, enrichissement TMDB, nettoyage des fichiers parasites (`Thumbs.db`, `AlbumArt_{…}_Large.jpg` / `_Small.jpg`…, et en musique toute image autre que `cover.{ext}`, que les pochettes d'albums manquants et que `artist.webp`) |
 
 ## Limites connues

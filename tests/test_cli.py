@@ -96,6 +96,32 @@ class TestUserCommand(unittest.TestCase):
         self.assertIn("compte « bob » supprimé", said)
         self.assertEqual(self.names(), [("alice", "admin")])
 
+    def test_rights_shows_and_changes_what_an_account_sees_and_downloads(self):
+        libraries = Path(self.tmp) / "libraries.json"
+        libraries.write_text('[{"id": "films", "label": "Films", "kind": "movies", "path": "/x/films"}, {"id": "livres", "label": "Livres", "kind": "books", "path": "/x/livres"}]', encoding="utf-8")
+        with mock.patch.dict(os.environ, {"HUB_LIBRARIES": str(libraries)}):
+            self.run_cli("add", "chef")
+            self.run_cli("add", "alice")
+            said = self.run_cli("rights", "alice")
+            self.assertEqual(said.splitlines()[1:], ["  films            voir  télécharger", "  livres           voir  télécharger"])         # sans réglage, tout est permis
+            said = self.run_cli("rights", "alice", "--set", "films=view", "--set", "livres=none")
+            self.assertEqual(said.splitlines()[1:], ["  films            voir  -----------", "  livres           ----  -----------"])
+            self.assertIn("alice (user)", said)
+            self.assertIn("un administrateur a tous les droits", self.run_cli("rights", "chef"))
+            for bad in (("--set", "films"), ("--set", "films=tout")):
+                with self.assertRaises(SystemExit) as stop:
+                    self.run_cli("rights", "alice", *bad)
+                self.assertIn("attendu <bibliothèque>=all|view|none", str(stop.exception))
+            with self.assertRaises(SystemExit) as stop:
+                self.run_cli("rights", "alice", "--set", "musique=none")
+            self.assertIn("bibliothèque inconnue : musique", str(stop.exception))
+            with self.assertRaises(SystemExit) as stop:
+                self.run_cli("rights", "chef", "--set", "films=none")
+            self.assertIn("un administrateur a tous les droits", str(stop.exception))
+            self.run_cli("rights", "alice", "--set", "livres=all")
+            db = Database(Path(self.tmp) / "hub.db")
+            self.assertEqual(accounts.grants(db, accounts.by_name(db, "alice")["id"]), {"films": (True, False)})
+
     def test_an_unknown_account_is_refused_for_passwd_and_rm(self):
         for action in ("passwd", "rm"):
             with self.assertRaises(SystemExit) as stop:

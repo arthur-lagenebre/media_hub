@@ -918,6 +918,61 @@ class TestLogin(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestRightsInTheUi(unittest.TestCase):
+    """L'administrateur règle les droits d'un compte dans Paramètres > Comptes ; le compte ne voit plus la bibliothèque fermée et n'a plus le bouton de téléchargement là où il est retiré."""
+
+    def api(self, base, path, body=None, token=""):
+        headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})}
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None, headers=headers)
+        return json.load(urllib.request.urlopen(req))
+
+    def sign_in(self, page, base, name, password):
+        page.goto(base + "/login")
+        page.fill("input[name=user]", name)
+        page.fill("input[type=password]", password)
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#nav .link", state="attached")
+
+    @unittest.skipUnless(sync_playwright, "Playwright absent")
+    def test_the_administrator_sets_the_rights_and_the_account_sees_them(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            run = Running(tmp, password="secret")
+            base = f"http://127.0.0.1:{run.port}"
+            token = self.api(base, "/api/token", {"password": "secret"})["token"]
+            alice = self.api(base, "/api/users", {"name": "alice", "password": "motdepasse1"}, token)
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch()
+                admin = browser.new_page()
+                self.sign_in(admin, base, "admin", "secret")
+                admin.goto(base + "/#/settings?tab=comptes")
+                admin.locator(f'[data-key="rights-{alice["id"]}"]').click()
+                admin.locator('[data-key="r-download-films"]').click()                    # films : voir sans télécharger
+                admin.locator('[data-key="r-view-livres"]').click()                       # livres : fermés
+                self.assertTrue(admin.locator('[data-key="r-download-livres"]').is_disabled())
+                admin.locator(".menu .btn", has_text="Enregistrer").click()
+                admin.locator(f'[data-user="{alice["id"]}"] [data-rights]', has_text="Voit : Films").wait_for()
+                self.assertIn("télécharge : Séries", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
+                self.assertEqual(admin.locator('[data-user="default"] [data-key^="rights-"]').count(), 0)       # un administrateur n'a pas de droits à régler
+                saved = {u["name"]: u["rights"] for u in self.api(base, "/api/users", token=token)["users"]}["alice"]
+                self.assertEqual((saved["films"], saved["livres"]), ({"view": True, "download": False}, {"view": False, "download": False}))
+                page = browser.new_page()
+                self.sign_in(page, base, "alice", "motdepasse1")
+                self.assertEqual(page.locator("#nav .link").count(), 4)                   # les livres ont disparu
+                state = self.api(base, "/api/token", {"user": "alice", "password": "motdepasse1"})["token"]
+                film = next(i for i in self.api(base, "/api/library/films", token=state)["items"] if i["title"] == "Inception")["id"]
+                dark = next(i for i in self.api(base, "/api/library/series", token=state)["items"] if i["title"] == "Dark")["id"]
+                page.goto(f"{base}/#/i/{film}")
+                page.locator(".actions .btn", has_text="Marquer comme vu").wait_for()
+                self.assertEqual(page.locator(".actions .btn", has_text="Télécharger").count(), 0)
+                page.goto(f"{base}/#/i/{dark}")
+                page.locator(".actions .btn", has_text="Télécharger").wait_for()          # séries : toujours permis
+                browser.close()
+            run.stop()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class TestActionsMenu(UiCase):
     """Le bouton « … » : voir / revoir et vu / non vu sur les films, les sagas, les séries et chaque épisode."""
 

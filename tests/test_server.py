@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 from tests import fixtures
 from hub import accounts, config
+from hub.db import SCHEMA_VERSION
 
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
@@ -961,7 +962,7 @@ class TestNativeToken(unittest.TestCase):
         self.assertEqual(status, 200)
         token, media = json.loads(body)["token"], json.loads(body)["media_token"]
         self.assertRegex(token, r"^default\.[0-9a-f]{64}$")        # <identifiant du compte>.<mac> ; le premier compte s'appelle « default »
-        self.assertRegex(media, r"^[0-9a-f]{64}$")
+        self.assertRegex(media, r"^default\.[0-9a-f]{64}$")           # celui du compte aussi, sous une autre signature
         self.assertNotEqual(token, media)
         status, _, body = api.request("POST", "/api/token", body={"password": "wrong"})
         self.assertEqual((status, json.loads(body)), (401, {"error": "mot de passe incorrect"}))
@@ -2012,7 +2013,7 @@ class AccountsCase(unittest.TestCase):
         """Comme `sign_in`, sans passer par /api/token (qui se fait attendre 0,4 s) : les tests qui ne portent pas sur la connexion vont plus vite. La connexion a ses propres tests."""
         row = accounts.by_name(self.hub.db, name)
         client = BearerClient(self.run_.port, self.hub.session_token(row))
-        client.session = {"token": client.token, "media_token": self.hub.media_token(), "user": accounts.public(row)}
+        client.session = {"token": client.token, "media_token": self.hub.media_token(row), "user": accounts.public(row)}
         return client
 
     def new_user(self, name, role="user", password=PASSWORD):
@@ -2089,7 +2090,8 @@ class TestAccountSeed(AccountsCase):
         conn.commit()
         conn.close()
         self.start("secret", reuse=True)
-        self.assertEqual(self.hub.db.kv_get("schema"), 2)
+        self.assertEqual(self.hub.db.kv_get("schema"), SCHEMA_VERSION)
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM rights"), 0)                         # la table des droits est là aussi : rien n'est restreint
         first = self.sign_in("admin", "secret")
         self.assertEqual(first.session["user"]["id"], "default")
         self.assertEqual(self.continue_ids(first), [film])           # le film entamé est repris, la série écartée le reste
@@ -2127,7 +2129,10 @@ class TestAccountLogin(AccountsCase):
             self.assertRegex(client.session["token"], rf"^{uid}\.[0-9a-f]{{64}}$")
             self.assertEqual(client.json("/api/state")[1]["user"]["name"], name)
         self.assertEqual(len({c.session["token"] for c in (self.alice, self.bob, self.admin)}), 3)
-        self.assertEqual(len({c.session["media_token"] for c in (self.alice, self.bob, self.admin)}), 1)          # le jeton de média est celui du serveur
+        self.assertEqual(len({c.session["media_token"] for c in (self.alice, self.bob, self.admin)}), 3)          # le jeton de média est celui du compte
+        for client in (self.alice, self.bob, self.admin):
+            self.assertRegex(client.session["media_token"], rf"^{client.session['user']['id']}\.[0-9a-f]{{64}}$")
+            self.assertNotEqual(client.session["media_token"], client.session["token"])
         again = json.loads(self.anon.request("POST", "/api/token", body={"user": "ALICE", "password": self.PASSWORD})[2])
         self.assertEqual(again["token"], self.alice.session["token"])                                                # la casse du nom ne compte pas, le jeton est stable
         self.assertEqual((again["user"], again["media_token"]), (self.alice.session["user"], self.alice.session["media_token"]))
@@ -2189,8 +2194,8 @@ class TestAccountLogin(AccountsCase):
         self.admin.json(f"/api/user/{self.bob.account['id']}/delete", {})
         self.assertNotIn(b'name="user"', self.anon.get("/login")[2])
 
-    def test_the_media_token_does_not_open_the_api_and_names_nobody(self):
-        media = self.alice.session["media_token"]
+    def test_the_media_token_does_not_open_the_api_and_names_its_account(self):
+        media, bob_media = self.alice.session["media_token"], self.bob.session["media_token"]
         self.assertEqual(BearerClient(self.run_.port, media).get("/api/state")[0], 401)
         self.assertEqual(Client(self.run_.port, f"hub={media}").get("/api/state")[0], 401)
         self.assertEqual(self.anon.get(f"/api/state?token={media}")[0], 401)
@@ -2207,13 +2212,14 @@ class TestAccountLogin(AccountsCase):
         with mock.patch.object(Handler, "authorized", spy):
             conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)           # une seule connexion : le même gestionnaire sert les trois requêtes
             self.addCleanup(conn.close)
-            for headers in ({"Authorization": f"Bearer {self.alice.token}"}, {"__media": True}, {"Authorization": f"Bearer {self.bob.token}"}):
-                url = f"/img/item/{item}" + (f"?token={media}" if headers.pop("__media", False) else "")
+            for headers in ({"Authorization": f"Bearer {self.alice.token}"}, {"__media": True}, {"Authorization": f"Bearer {self.alice.token}"}):
+                url = f"/img/item/{item}" + (f"?token={bob_media}" if headers.pop("__media", False) else "")
                 conn.request("GET", url, headers=headers)
                 response = conn.getresponse()
                 response.read()
                 self.assertEqual(response.status, 200, url)
-        self.assertEqual(seen, [(True, "alice"), (True, None), (True, "Bob")])        # avec le jeton de média personne n'est connu, et le compte d'avant ne reste pas collé
+        self.assertEqual(seen, [(True, "alice"), (True, "Bob"), (True, "alice")])        # le jeton de média désigne son compte, et celui de la requête d'avant ne reste pas collé
+        self.assertEqual(self.anon.get(f"/img/item/{item}?token={media}")[0], 200)
 
 
 class TestAccountIsolation(AccountsCase):
@@ -2353,12 +2359,13 @@ class TestAccountManagement(AccountsCase):
         self.assertEqual((made["name"], made["role"]), ("Barbara Martin", "user"))
         self.assertRegex(made["id"], r"^[0-9a-f]{16}$")
         self.assertIsInstance(made["created"], int)
-        self.assertEqual(set(made), {"id", "name", "role", "created"})
+        self.assertEqual(set(made), {"id", "name", "role", "created", "rights"})
+        self.assertTrue(all(r == {"view": True, "download": True} for r in made["rights"].values()))       # un compte neuf voit et télécharge tout
         boss = self.admin.json("/api/users", {"name": "Chef", "password": self.PASSWORD, "role": "admin"})[1]
         self.assertEqual(boss["role"], "admin")
         users = self.admin.json("/api/users")[1]["users"]
         self.assertEqual([u["name"] for u in users], ["admin", "Barbara Martin", "Chef"])           # du plus ancien au plus récent
-        self.assertEqual({k for u in users for k in u}, {"id", "name", "role", "created"})
+        self.assertEqual({k for u in users for k in u}, {"id", "name", "role", "created", "rights"})
         self.assertNotIn("scrypt", json.dumps(users))
         self.assertEqual(self.sign_in("barbara martin", self.PASSWORD).session["user"]["id"], made["id"])
 
@@ -2463,7 +2470,8 @@ class TestAccountManagement(AccountsCase):
         self.assertEqual(Client(self.run_.port, cookie.split(";")[0]).get("/api/state")[0], 200)
         renewed = self.sign_in("bob", "nouveau-mdp-1")
         self.assertEqual(renewed.session["token"], answer["token"])
-        self.assertEqual(renewed.session["media_token"], bob.session["media_token"])              # le jeton de média ne change pas
+        self.assertNotEqual(renewed.session["media_token"], bob.session["media_token"])           # le jeton de média suit la version du compte, comme celui de session
+        self.assertEqual(self.anon.get(f"/img/item/x?token={bob.session['media_token']}")[0], 302)          # l'ancien ne vaut plus
         self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "bob", "password": self.PASSWORD})[0], 401)
 
     def connection(self):
@@ -2718,11 +2726,12 @@ class TestSchemaMigrations(unittest.TestCase):
         from hub import db as database
         database.Database(self.path)
         add = lambda conn: conn.execute("ALTER TABLE items ADD COLUMN extra TEXT")           # noqa: E731
-        with mock.patch.object(database, "SCHEMA_VERSION", 3), mock.patch.dict(database.MIGRATIONS, {3: add}):
+        later = database.SCHEMA_VERSION + 1                                                  # la version qui suivrait celle d'aujourd'hui
+        with mock.patch.object(database, "SCHEMA_VERSION", later), mock.patch.dict(database.MIGRATIONS, {later: add}):
             db = database.Database(self.path)
             self.assertIn("extra", self.columns(db))
-            self.assertEqual(db.kv_get("schema"), 3)
-            self.assertEqual(database.Database(self.path).kv_get("schema"), 3)               # rouverte : rien n'est rejoué (l'ALTER lèverait « duplicate column »)
+            self.assertEqual(db.kv_get("schema"), later)
+            self.assertEqual(database.Database(self.path).kv_get("schema"), later)               # rouverte : rien n'est rejoué (l'ALTER lèverait « duplicate column »)
 
     def test_a_failed_migration_leaves_the_base_as_it_was(self):
         from hub import db as database
@@ -2731,10 +2740,11 @@ class TestSchemaMigrations(unittest.TestCase):
         def bad(conn):
             conn.execute("ALTER TABLE items ADD COLUMN extra TEXT")
             raise ValueError("boum")
-        with mock.patch.object(database, "SCHEMA_VERSION", 3), mock.patch.dict(database.MIGRATIONS, {3: bad}):
+        later = database.SCHEMA_VERSION + 1
+        with mock.patch.object(database, "SCHEMA_VERSION", later), mock.patch.dict(database.MIGRATIONS, {later: bad}):
             with self.assertRaises(RuntimeError) as caught:
                 database.Database(self.path)
-        self.assertIn("version 3", str(caught.exception))
+        self.assertIn(f"version {later}", str(caught.exception))
         db = database.Database(self.path)
         self.assertEqual((db.kv_get("schema"), "extra" in self.columns(db)), (database.SCHEMA_VERSION, False))      # la colonne ajoutée avant l'échec a été défaite
 
@@ -3291,6 +3301,155 @@ class TestDocumentedRoutes(unittest.TestCase):
                          ("GET", "/api/subs/<entry>/<e|s><n>.vtt"), ("GET", "/media/<entry>/stream"), ("POST", "/api/entry/<id>/seen"), ("GET", "/book/<id>/epub/<chemin>"),
                          ("GET", "/img/entry/<id>"), ("POST", "/api/token"), ("GET", "/api/jobs"), ("POST", "/api/cleanup")):
             self.assertIn(expected, routes)
+
+
+class TestRights(AccountsCase):
+    """Les droits par compte : pour chaque bibliothèque, voir et télécharger. Sans réglage tout est permis ; l'administrateur a tout."""
+
+    LIBS = ("films", "series", "animations", "musique", "livres")
+
+    def setUp(self):
+        super().setUp()
+        self.alice, self.bob = self.new_user("alice"), self.new_user("bob")
+        self.inception, self.film_files = entry_of(self.admin, "films", "Inception")
+        self.naruto, self.volumes = entry_of(self.admin, "livres", "Naruto")
+        self.discovery, self.tracks = entry_of(self.admin, "musique", "Discovery")
+        self.dark, self.episodes = entry_of(self.admin, "series", "Dark")
+
+    def grant(self, user, rights, expect=200):
+        status, body = self.admin.json(f"/api/user/{user.account['id']}/rights", {"rights": rights})
+        self.assertEqual(status, expect, body)
+        return body
+
+    def restrict_alice(self):
+        """films : voir sans télécharger ; livres : rien ; le reste : tout."""
+        return self.grant(self.alice, {"films": {"view": True, "download": False}, "livres": {"view": False}})
+
+    def test_a_new_account_can_see_and_download_everything(self):
+        libs = self.alice.json("/api/state")[1]["libraries"]
+        self.assertEqual([(lib["id"], lib["download"]) for lib in libs], [(lib, True) for lib in self.LIBS])
+        listed = {u["name"]: u["rights"] for u in self.admin.json("/api/users")[1]["users"]}
+        self.assertEqual(listed["alice"], {lib: {"view": True, "download": True} for lib in self.LIBS})
+        self.assertEqual(self.alice.get(f"/media/{self.volumes[0]['id']}/file?download=1")[0], 200)
+
+    def test_the_rights_are_listed_and_applied_without_signing_in_again(self):
+        answer = self.restrict_alice()
+        self.assertEqual(answer["rights"]["films"], {"view": True, "download": False})
+        self.assertEqual(answer["rights"]["livres"], {"view": False, "download": False})        # sans « voir », pas de « télécharger »
+        self.assertEqual(answer["rights"]["musique"], {"view": True, "download": True})
+        libs = {lib["id"]: lib["download"] for lib in self.alice.json("/api/state")[1]["libraries"]}
+        self.assertEqual(libs, {"films": False, "series": True, "animations": True, "musique": True})             # livres a disparu, avec le même jeton
+        self.assertEqual([lib["id"] for lib in self.bob.json("/api/state")[1]["libraries"]], list(self.LIBS))     # les autres comptes ne bougent pas
+
+    def test_without_view_a_library_is_closed_everywhere(self):
+        self.watch(self.alice, self.volumes[0]["id"], 1)
+        self.assertIn(self.naruto, self.continue_ids(self.alice))
+        self.restrict_alice()
+        volume = self.volumes[0]["id"]
+        for path in ("/api/library/livres", f"/api/item/{self.naruto}", f"/api/book/{volume}", f"/book/{volume}/page/0", f"/media/{volume}/file", f"/img/item/{self.naruto}", f"/img/entry/{volume}"):
+            self.assertEqual(self.alice.get(path)[0], 403, path)
+            self.assertIn(self.bob.get(path)[0], (200, 404), path)                              # un autre compte y accède encore (404 : cette image n'existe pas)
+        self.assertEqual(self.alice.json("/api/progress", {"entry": volume, "position": 2, "duration": 9})[0], 403)
+        self.assertEqual(self.alice.json(f"/api/entry/{volume}/seen", {"done": True})[0], 403)
+        self.assertEqual(self.alice.json(f"/api/item/{self.naruto}/seen", {"done": True})[0], 403)
+        self.assertEqual(self.alice.json(f"/api/item/{self.naruto}/dismiss", {})[0], 403)
+        self.assertEqual(self.alice.json("/api/library/inconnue"), (404, {"error": "bibliothèque inconnue"}))       # une bibliothèque qui n'existe pas reste un 404
+        self.assertEqual(self.alice.json("/api/library/livres"), (403, {"error": "accès à cette bibliothèque non autorisé"}))
+
+    def test_a_closed_library_leaves_the_home_the_search_and_the_resume_row(self):
+        self.watch(self.alice, self.volumes[0]["id"], 1)
+        self.restrict_alice()
+        home = self.alice.json("/api/home")[1]
+        self.assertNotIn("livres", [lib["id"] for lib in home["libraries"]])
+        self.assertNotIn(self.naruto, self.continue_ids(self.alice))
+        self.assertEqual(self.alice.json("/api/search?q=naruto")[1]["results"], [])
+        self.assertEqual([r["id"] for r in self.bob.json("/api/search?q=naruto")[1]["results"]], ["livres"])
+        self.grant(self.alice, {"livres": {"view": True}})
+        self.assertIn(self.naruto, self.continue_ids(self.alice))                        # rendue, la bibliothèque revient avec sa progression
+
+    def test_download_needs_its_own_right_and_reading_does_not(self):
+        self.restrict_alice()
+        film = self.film_files[0]["id"]
+        self.assertEqual(self.alice.get(f"/media/{film}/file")[0], 200)                                   # lire (Range, lecteur) : voir suffit
+        self.assertEqual(self.alice.get(f"/media/{film}/file", headers={"Range": "bytes=0-9"})[0], 206)
+        self.assertEqual(self.alice.get(f"/media/{film}/file?download=1")[0], 403)
+        self.assertEqual(self.alice.json(f"/media/{film}/file?download=1"), (403, {"error": "téléchargement non autorisé"}))
+        status, headers, _ = self.alice.get(f"/media/{self.tracks[0]['id']}/file?download=1")
+        self.assertEqual(status, 200)                                                                   # musique : télécharger reste permis
+        self.assertIn("attachment", headers["Content-Disposition"])
+        self.assertEqual(self.bob.get(f"/media/{film}/file?download=1")[0], 200)
+
+    def test_the_media_token_carries_the_rights_of_its_account(self):
+        self.restrict_alice()
+        film, volume = self.film_files[0]["id"], self.volumes[0]["id"]
+        mine, theirs = self.alice.session["media_token"], self.bob.session["media_token"]
+        self.assertEqual(self.anon.get(f"/media/{film}/file?token={mine}")[0], 200)
+        self.assertEqual(self.anon.get(f"/media/{film}/file?token={mine}&download=1")[0], 403)           # le jeton d'un client natif n'échappe pas à la limite
+        self.assertEqual(self.anon.get(f"/book/{volume}/page/0?token={mine}")[0], 403)
+        self.assertEqual(self.anon.get(f"/img/item/{self.naruto}?token={mine}")[0], 403)
+        self.assertEqual(self.anon.get(f"/media/{film}/file?token={theirs}&download=1")[0], 200)
+        self.assertEqual(self.anon.get(f"/book/{volume}/page/0?token={theirs}")[0], 200)
+        self.assertEqual(self.anon.get(f"/media/{film}/file?token={self.admin.session['media_token']}&download=1")[0], 200)
+
+    def test_play_stream_and_subtitles_follow_view(self):
+        self.grant(self.alice, {"series": {"view": False}})
+        episode = self.episodes[0]["id"]
+        self.assertEqual(self.alice.json(f"/api/play/{episode}", {})[0], 403)
+        self.assertEqual(self.alice.get(f"/media/{episode}/stream")[0], 403)
+        self.assertEqual(self.alice.get(f"/api/subs/{episode}/e0.vtt")[0], 403)
+        self.assertEqual(self.anon.get(f"/api/subs/{episode}/e0.vtt?token={self.alice.session['media_token']}")[0], 403)
+        self.assertEqual(self.bob.json(f"/api/play/{episode}", {})[0], 200)
+
+    def test_the_artist_pages_follow_view(self):
+        artist = self.admin.json(f"/api/item/{self.discovery}")[1]["artist_id"]
+        self.assertEqual(self.alice.json(f"/api/artist/musique/{artist}")[0], 200)
+        self.grant(self.alice, {"musique": {"view": False}})
+        self.assertEqual(self.alice.get(f"/api/artist/musique/{artist}")[0], 403)
+        self.assertEqual(self.alice.get(f"/img/artist/musique/{artist}")[0], 403)
+        self.assertEqual(self.alice.get(f"/img/wanted/musique/{artist}/x")[0], 403)
+
+    def test_a_playlist_hides_the_tracks_of_a_closed_library_and_gets_them_back(self):
+        ids = [t["id"] for t in self.tracks]
+        made = self.alice.json("/api/playlists", {"name": "Soirée", "entries": ids})[1]
+        self.assertEqual(made["count"], 3)
+        self.grant(self.alice, {"musique": {"view": False}})
+        listed = self.alice.json("/api/playlists")[1]["playlists"]
+        self.assertEqual([(p["name"], p["count"], p["covers"]) for p in listed], [("Soirée", 0, [])])
+        detail = self.alice.json(f"/api/playlist/{made['id']}")[1]
+        self.assertEqual((detail["tracks"], detail["missing"]), ([], 3))
+        self.assertEqual(self.alice.json(f"/api/playlist/{made['id']}/add", {"entries": ids[:1]})[0], 400)       # on n'y ajoute pas ce qu'on ne voit pas
+        self.assertEqual(self.alice.json("/api/playlists", {"name": "Autre", "entries": ids})[0], 400)
+        self.grant(self.alice, {"musique": {"view": True}})
+        self.assertEqual([t["id"] for t in self.alice.json(f"/api/playlist/{made['id']}")[1]["tracks"]], ids)      # rien n'a été perdu
+
+    def test_only_the_administrator_changes_rights_and_never_those_of_an_administrator(self):
+        path = f"/api/user/{self.bob.account['id']}/rights"
+        self.assertEqual(self.alice.json(path, {"rights": {"films": {"view": False}}})[0], 403)
+        self.assertEqual(self.anon.json(path, {"rights": {"films": {"view": False}}})[0], 401)
+        self.assertEqual(self.admin.json("/api/user/default/rights", {"rights": {"films": {"view": False}}}), (400, {"error": "un administrateur a tous les droits"}))
+        self.assertEqual(self.admin.json("/api/user/inconnu/rights", {"rights": {"films": {"view": False}}})[0], 404)
+        for bad in ({}, {"rights": []}, {"rights": {}}, {"rights": {"nope": {"view": False}}}, {"rights": {"films": {}}}, {"rights": {"films": {"edit": True}}},
+                    {"rights": {"films": {"view": "non"}}}, {"rights": {"films": {"view": 0}}}, {"rights": {"films": True}}, {"rights": {"films": {"view": False}, "nope": {"view": False}}}):
+            self.assertEqual(self.admin.json(path, bad)[0], 400, bad)
+        self.assertEqual([lib["id"] for lib in self.bob.json("/api/state")[1]["libraries"]], list(self.LIBS))     # un refus ne change rien, même quand une partie de la demande était bonne
+
+    def test_removing_view_removes_download_and_giving_view_back_does_not_give_download(self):
+        self.grant(self.alice, {"films": {"view": False}})
+        self.assertEqual(self.grant(self.alice, {"films": {"view": True}})["rights"]["films"], {"view": True, "download": False})
+        self.assertEqual(self.grant(self.alice, {"films": {"download": True}})["rights"]["films"], {"view": True, "download": True})
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM rights WHERE user_id=?", self.alice.account["id"]), 0)         # tout autorisé : plus de ligne
+
+    def test_the_rights_leave_with_the_account(self):
+        self.restrict_alice()
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM rights WHERE user_id=?", self.alice.account["id"]), 2)
+        self.admin.json(f"/api/user/{self.alice.account['id']}/delete", {})
+        self.assertEqual(self.count("SELECT COUNT(*) AS n FROM rights WHERE user_id=?", self.alice.account["id"]), 0)
+
+    def test_the_administrator_sees_and_downloads_everything(self):
+        self.assertEqual([lib["download"] for lib in self.admin.json("/api/state")[1]["libraries"]], [True] * 5)
+        self.assertEqual(self.admin.get(f"/media/{self.volumes[0]['id']}/file?download=1")[0], 200)
+        mine = next(u for u in self.admin.json("/api/users")[1]["users"] if u["id"] == "default")
+        self.assertTrue(all(r == {"view": True, "download": True} for r in mine["rights"].values()))
 
 
 if __name__ == "__main__":

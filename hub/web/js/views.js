@@ -484,7 +484,7 @@
       var out = [], entries = d.entries;
       if (d.type !== 'album' && entries.length) out.push(H.button(H.actions.seenLabel(d.type, view.allDone), 'check', { onclick: function () { setSeen(!view.allDone); } }));
       if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) out.push(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
-      if (entries.length && H.actions.canDownload()) out.push(H.button(d.type === 'album' ? 'Télécharger l’album' : 'Télécharger', 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
+      if (entries.length && H.actions.canDownload(d.library && d.library.id)) out.push(H.button(d.type === 'album' ? 'Télécharger l’album' : 'Télécharger', 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
       return out.concat(H.actions.posterTools(d, load), H.actions.tmdbTools(d, load),
         (d.links || []).map(function (l) { return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label); }));
     }
@@ -567,7 +567,7 @@
         list.appendChild(h('div', { class: 'trkwrap' },
           h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { H.audio.play(trackList(), i); } },
             h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, shown.title, shown.line ? h('small', null, shown.line) : null), done ? h('span', { class: 'seen' }, H.icon('check')) : null, h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')),
-          H.button('', 'more', { class: 'trkmore', 'aria-label': 'Actions de la piste', 'data-key': 'm' + e.id, onclick: function () { H.music.trackMenu(track); } })));
+          H.button('', 'more', { class: 'trkmore', 'aria-label': 'Actions de la piste', 'data-key': 'm' + e.id, onclick: function () { H.music.trackMenu(track, null, d.library && d.library.id); } })));
       });
       var sec = h('section', null, list);
       H.audio.mark(list);
@@ -590,7 +590,7 @@
           e.summary ? h('div', { class: 'su' }, e.summary) : null,
           h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
         done ? h('span', { class: 'seen' }, H.icon('check')) : null),
-        H.button('', 'more', { class: 'epmore', 'aria-label': 'Actions de l’épisode', 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load); } }));
+        H.button('', 'more', { class: 'epmore', 'aria-label': 'Actions de l’épisode', 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load, d.library && d.library.id); } }));
     }
     // La saison ouverte au début : celle de l'épisode où reprendre, sinon la première.
     function firstSeason(d, seasons) {
@@ -634,7 +634,7 @@
       d.entries.forEach(function (e) {
         var p = entryProgress(e), done = e.progress && e.progress.done;
         var pic = H.picture('/img/entry/' + e.id + '?w=300', e.title || d.title);
-        if (H.actions.canDownload()) pic.appendChild(H.actions.entryTools(e, load));
+        if (H.actions.canDownload(d.library && d.library.id)) pic.appendChild(H.actions.entryTools(e, load, d.library.id));
         if (done) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
         else if (p) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(Math.min(1, p.position / Math.max(1, p.duration || 1)) * 100) + '%' })));
         grid.appendChild(h('a', { class: 'card f', href: playHref(e), 'data-key': e.id }, pic, h('div', { class: 't' }, e.label ? 'N° ' + e.label : (e.title || '')), h('div', { class: 's' }, [(e.format || '').toUpperCase(), e.pages ? e.pages + ' p.' : ''].filter(Boolean).join(' · '))));
@@ -1001,7 +1001,9 @@
       else if (!users) panel.appendChild(h('p', { class: 'muted' }, 'Chargement…'));
       (users || []).forEach(function (u) {
         var mine = H.session.user && u.id === H.session.user.id;
-        panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' (toi)' : '')), h('span', null, (ROLES[u.role] || u.role) + ' · créé le ' + new Date(u.created * 1000).toLocaleDateString('fr-FR'))),
+        panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' (toi)' : '')),
+          h('span', null, (ROLES[u.role] || u.role) + ' · créé le ' + new Date(u.created * 1000).toLocaleDateString('fr-FR')), u.role === 'admin' ? null : h('span', { 'data-rights': u.id }, rightsSummary(u))),
+          u.role === 'admin' ? null : H.button('Droits', 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': 'Droits de ' + u.name + ' : ce qu’il voit et télécharge', onclick: function () { rightsOf(u); } }),
           H.button('Mot de passe', 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': 'Changer le mot de passe de ' + u.name, onclick: function () { passwordOf(u, mine); } }),
           H.button('Supprimer', 'trash', { 'data-key': 'del-' + u.id, 'aria-label': 'Supprimer le compte de ' + u.name, onclick: function () { deleteUser(u, mine); } })));
       });
@@ -1023,6 +1025,53 @@
           return H.api('/api/users', { name: v.name, password: v.pw, role: role });
         },
         done: function (u) { H.toast('Compte créé : ' + u.name); refreshUsers('user-add'); } });
+    }
+    // Ce qu'un compte voit et télécharge, en une phrase pour la liste des comptes.
+    function rightsSummary(u) {
+      var libs = (state && state.libraries) || [], rights = u.rights || {};
+      var seen = libs.filter(function (l) { return !rights[l.id] || rights[l.id].view; }), saved = seen.filter(function (l) { return !rights[l.id] || rights[l.id].download; });
+      if (!libs.length) return '';
+      if (seen.length === libs.length && saved.length === libs.length) return 'Voit et télécharge tout';
+      var text = seen.length === libs.length ? 'Voit tout' : seen.length ? 'Voit : ' + seen.map(function (l) { return l.label; }).join(', ') : 'Ne voit rien';
+      return text + (seen.length && saved.length === seen.length ? '' : saved.length ? ' · télécharge : ' + saved.map(function (l) { return l.label; }).join(', ') : ' · ne télécharge rien');
+    }
+    // Pour chaque bibliothèque : voir, télécharger. Retirer « voir » retire aussi « télécharger ». Les droits valent tout de suite, sans que la personne se reconnecte.
+    function rightsOf(u) {
+      var draft = {}, rows = h('div', { class: 'rights' });
+      (state.libraries || []).forEach(function (l) {
+        var r = (u.rights || {})[l.id] || { view: true, download: true };
+        draft[l.id] = { view: !!r.view, download: !!(r.view && r.download) };
+      });
+      function toggle(l, which) {
+        var button = h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + l.id, onclick: function () {
+          var d = draft[l.id];
+          if (which === 'view') { d.view = !d.view; if (!d.view) d.download = false; }
+          else if (d.view) d.download = !d.download;
+          paint();
+        } }, h('span', { class: 'lbl' }));
+        return button;
+      }
+      var buttons = {};
+      (state.libraries || []).forEach(function (l) {
+        buttons[l.id] = { view: toggle(l, 'view'), download: toggle(l, 'download') };
+        rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, l.label), buttons[l.id].view, buttons[l.id].download));
+      });
+      function paint() {
+        (state.libraries || []).forEach(function (l) {
+          var d = draft[l.id], b = buttons[l.id];
+          b.view.classList.toggle('on', d.view); b.view.setAttribute('aria-pressed', d.view ? 'true' : 'false');
+          b.view.querySelector('.lbl').textContent = d.view ? 'Voit' : 'Ne voit pas';
+          b.download.classList.toggle('on', d.download); b.download.setAttribute('aria-pressed', d.download ? 'true' : 'false');
+          b.download.querySelector('.lbl').textContent = d.download ? 'Télécharge' : 'Ne télécharge pas';
+          b.download.disabled = !d.view;
+        });
+      }
+      paint();
+      dialog({ title: 'Droits de ' + u.name, ok: 'Enregistrer', fields: [],
+        lead: ['Pour chaque bibliothèque : voir (la liste, les fiches, la lecture) et télécharger. Une bibliothèque qu’on ne voit pas disparaît pour ce compte ; sans droit de télécharger, les boutons de téléchargement disparaissent. L’administrateur a tous les droits.'],
+        extra: [rows],
+        submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/rights', { rights: draft }); },
+        done: function () { H.toast('Droits enregistrés : ' + u.name); refreshUsers('rights-' + u.id); } });
     }
     function passwordOf(u, mine) {
       if (mine) { changeMine(); return; }                              // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)
