@@ -34,6 +34,8 @@ Dans le shell du NAS :
 sh /mnt/tank/apps/media/media_hub/deploy/fetch-ffmpeg.sh /mnt/tank/apps/media/ffmpeg
 ```
 
+Le script télécharge une version fixe (7.0.2) et refuse l'archive si sa somme SHA-256 n'est pas celle qu'il attend. Pour une autre version, changer `VERSION` et `SHA256` ensemble dans `fetch-ffmpeg.sh`.
+
 Sans ffmpeg, le serveur ne sait que lire directement (fichiers compatibles) ; il l'écrit au démarrage. Le remux du son (E-AC-3, DTS), le transcodage et les sous-titres du `.mkv` en ont besoin.
 
 ## 3. Installer l'application
