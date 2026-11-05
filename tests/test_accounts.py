@@ -95,29 +95,37 @@ class TestRights(unittest.TestCase):
         granted = accounts.grants(self.db, self.alice["id"])
         self.assertEqual(granted, {})
         self.assertTrue(all(accounts.allows("user", granted, lib, perm) for lib in self.LIBS for perm in ("view", "download")))
-        self.assertTrue(accounts.allows("admin", {"films": (False, False)}, "films", "download"))           # même avec une ligne égarée, l'administrateur peut tout
+        self.assertTrue(accounts.allows("admin", {"films": (False, False, False)}, "films", "download"))           # même avec une ligne égarée, l'administrateur peut tout
 
     def test_the_rights_are_stored_per_library_and_read_back(self):
         accounts.set_rights(self.db, self.alice["id"], self.LIBS, {"films": {"download": False}, "livres": {"view": False}})
         granted = accounts.grants(self.db, self.alice["id"])
-        self.assertEqual(granted, {"films": (True, False), "livres": (False, False)})
+        self.assertEqual(granted, {"films": (True, True, False), "livres": (False, False, False)})
         self.assertEqual(accounts.rights_json("user", granted, ["films", "livres", "musique"]),
-                         {"films": {"view": True, "download": False}, "livres": {"view": False, "download": False}, "musique": {"view": True, "download": True}})
+                         {"films": {"view": True, "play": True, "download": False}, "livres": {"view": False, "play": False, "download": False}, "musique": {"view": True, "play": True, "download": True}})
         self.assertEqual(accounts.grants(self.db, self.admin["id"]), {})              # l'autre compte n'a rien reçu
 
-    def test_a_stored_download_never_outlives_view(self):
-        self.db.execute("INSERT INTO rights(user_id, lib, view, download) VALUES(?,?,0,1)", (self.alice["id"], "films"))      # une ligne incohérente (édition à la main)
+    def test_a_stored_play_or_download_never_outlives_view(self):
+        self.db.execute("INSERT INTO rights(user_id, lib, view, play, download) VALUES(?,?,0,1,1)", (self.alice["id"], "films"))      # une ligne incohérente (édition à la main)
         granted = accounts.grants(self.db, self.alice["id"])
-        self.assertEqual(granted["films"], (False, False))
+        self.assertEqual(granted["films"], (False, False, False))
+        self.assertFalse(accounts.allows("user", granted, "films", "play"))
         self.assertFalse(accounts.allows("user", granted, "films", "download"))
+
+    def test_play_and_download_are_independent_of_each_other(self):
+        accounts.set_rights(self.db, self.alice["id"], self.LIBS, {"films": {"play": False}, "livres": {"download": False}})
+        granted = accounts.grants(self.db, self.alice["id"])
+        self.assertEqual(granted, {"films": (True, False, True), "livres": (True, True, False)})
+        self.assertEqual([accounts.allows("user", granted, "films", p) for p in accounts.RIGHTS], [True, False, True])
+        self.assertEqual([accounts.allows("user", granted, "livres", p) for p in accounts.RIGHTS], [True, True, False])
 
     def test_giving_everything_back_deletes_the_row(self):
         accounts.set_rights(self.db, self.alice["id"], self.LIBS, {"films": {"view": False}})
-        accounts.set_rights(self.db, self.alice["id"], self.LIBS, {"films": {"view": True, "download": True}})
+        accounts.set_rights(self.db, self.alice["id"], self.LIBS, {"films": {"view": True, "play": True, "download": True}})
         self.assertEqual(self.db.query("SELECT * FROM rights"), [])
 
     def test_a_bad_request_changes_nothing(self):
-        for bad in (None, [], {}, {"inconnue": {"view": False}}, {"films": None}, {"films": {}}, {"films": {"edit": True}}, {"films": {"view": 1}}, {"films": {"view": "oui"}},
+        for bad in (None, [], {}, {"inconnue": {"view": False}}, {"films": None}, {"films": {}}, {"films": {"edit": True}}, {"films": {"play": "oui"}}, {"films": {"view": 1}}, {"films": {"view": "oui"}},
                     {"films": {"view": False}, "inconnue": {"view": False}}):
             self.refused(lambda: accounts.set_rights(self.db, self.alice["id"], self.LIBS, bad))
         self.assertEqual(self.db.query("SELECT * FROM rights"), [])

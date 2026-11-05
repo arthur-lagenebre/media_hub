@@ -345,7 +345,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.user is not None
 
     def can(self, lib_id, perm="view"):
-        """Le compte de la requête peut-il `view` (voir) ou `download` (télécharger) cette bibliothèque ? Un administrateur le peut toujours ; sans rien dans `rights`, tout est permis."""
+        """Le compte de la requête peut-il `view` (voir), `play` (lire en ligne) ou `download` (télécharger) cette bibliothèque ? Un administrateur le peut toujours ; sans rien dans `rights`, tout est permis."""
         if self.user is None:
             return False
         if self.user["role"] != "admin" and self.granted is None:
@@ -355,15 +355,15 @@ class Handler(BaseHTTPRequestHandler):
     def require(self, lib_id, perm="view"):
         """403 quand le compte n'a pas ce droit sur la bibliothèque."""
         if not self.can(lib_id, perm):
-            raise HttpError(403, "téléchargement non autorisé" if perm == "download" else "accès à cette bibliothèque non autorisé")
+            raise HttpError(403, {"download": "téléchargement non autorisé", "play": "lecture non autorisée"}.get(perm, "accès à cette bibliothèque non autorisé"))
 
     def visible_libs(self):
         """Les bibliothèques que le compte peut voir, dans l'ordre de la configuration."""
         return [lib for lib in self.hub.cfg.libraries if self.can(lib.id)]
 
-    def visible_ids(self):
-        """Leurs identifiants, ou None pour un administrateur (tout, y compris ce qu'une bibliothèque retirée de la configuration a laissé dans la base)."""
-        return None if self.user is not None and self.user["role"] == "admin" else {lib.id for lib in self.visible_libs()}
+    def visible_ids(self, perm="view"):
+        """Les identifiants des bibliothèques où le compte a ce droit (`view` par défaut), ou None pour un administrateur (tout, y compris ce qu'une bibliothèque retirée de la configuration a laissé dans la base)."""
+        return None if self.user is not None and self.user["role"] == "admin" else {lib.id for lib in self.hub.cfg.libraries if self.can(lib.id, perm)}
 
     def find_route(self, path):
         """(fonction, correspondance) de la première route qui répond à la méthode et au chemin ; HEAD répond aux routes GET. None s'il n'y en a pas."""
@@ -648,8 +648,8 @@ def user_listing(hub, row):
 
 @route("POST", r"/api/user/(\w+)/rights")
 def api_user_rights(h, m, q):
-    """L'administrateur change ce qu'un compte peut voir et télécharger : `{"rights": {"<bibliothèque>": {"view": bool, "download": bool}}}`, seules les bibliothèques citées changent
-    (et un droit omis ne change pas). Retirer « voir » retire « télécharger ». Pas pour un administrateur (400). Rend le compte avec ses droits."""
+    """L'administrateur change ce qu'un compte peut voir, lire et télécharger : `{"rights": {"<bibliothèque>": {"view": bool, "play": bool, "download": bool}}}`, seules les bibliothèques citées changent
+    (et un droit omis ne change pas). Retirer « voir » retire « lire » et « télécharger ». Pas pour un administrateur (400). Rend le compte avec ses droits."""
     require_admin(h)
     need_accounts(h)
     body = body_dict(h)
@@ -773,7 +773,7 @@ def api_state(h, m, q):
     libs = []
     for lib in h.visible_libs():                  # une bibliothèque qu'on ne voit pas n'existe pas pour ce compte
         count = hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]
-        libs.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir(), "download": h.can(lib.id, "download")})
+        libs.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir(), "play": h.can(lib.id, "play"), "download": h.can(lib.id, "download")})
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
                  "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
 
@@ -821,7 +821,7 @@ def resume_card(hub, profile, row, item):
 
 
 def continue_row(hub, profile, libs=None):
-    """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant. `libs` : les bibliothèques que le compte voit (None : toutes)."""
+    """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant. `libs` : les bibliothèques où le compte peut lire (None : toutes) ; on ne propose pas de reprendre ce qu'il ne peut pas lire."""
     rows = hub.db.query(
         "SELECT p.entry_id, p.position, p.duration AS pduration, p.done, p.updated, e.* FROM progress p JOIN entries e ON e.id=p.entry_id "
         "WHERE p.profile=? AND e.kind IN ('video','book') ORDER BY p.updated DESC LIMIT 200", (profile,))
@@ -867,7 +867,7 @@ def api_home(h, m, q):
             video += hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
         rows.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": recent,
                      "count": hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]})
-    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids()), "libraries": rows, "unseen": unseen_row(video, seen, h.user["id"], today())})
+    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play")), "libraries": rows, "unseen": unseen_row(video, seen, h.user["id"], today())})
 
 
 @route("GET", r"/api/search")
@@ -1736,7 +1736,7 @@ def next_summary(following):
 def api_play(h, m, q):
     """Le plan de lecture d'un fichier vidéo pour CE lecteur. Le client l'appelle à l'ouverture, puis à chaque changement de piste audio."""
     hub = h.hub
-    entry = entry_of(h, m.group(1))
+    entry = entry_of(h, m.group(1), "play")
     if entry["kind"] != "video":
         raise HttpError(400, "ce fichier n'est pas une vidéo")
     body = h.body_json()
@@ -1760,7 +1760,7 @@ def api_play(h, m, q):
 
 @route("GET", r"/media/(\w+)/file")
 def media_file(h, m, q):
-    entry = entry_of(h, m.group(1), "download" if q.get("download") else "view")         # `?download=1` demande le droit de télécharger ; lire (Range) demande seulement celui de voir
+    entry = entry_of(h, m.group(1), "download" if q.get("download") else "play")         # `?download=1` demande le droit de télécharger ; sans lui, c'est la lecture directe (Range) : le droit de lire
     lib, path = h.hub.path_of(entry)
     extra = {"Cache-Control": "private, max-age=3600"}
     if q.get("download"):
@@ -1832,7 +1832,7 @@ def stop_stream(proc):
 def media_stream(h, m, q):
     """Un MP4 fragmenté produit à la volée. Pas de Content-Length, pas de Range : pour avancer, le client redemande avec ?start=."""
     hub = h.hub
-    entry = entry_of(h, m.group(1))
+    entry = entry_of(h, m.group(1), "play")
     lib, path = hub.path_of(entry)
     if not hub.cfg.ffmpeg:
         raise HttpError(501, "ffmpeg est introuvable sur le serveur : seule la lecture directe est possible.")
@@ -1856,7 +1856,7 @@ def media_stream(h, m, q):
 @route("GET", r"/api/subs/(\w+)/([es])(\d+)\.vtt")
 def api_subs(h, m, q):
     hub = h.hub
-    entry = entry_of(h, m.group(1))
+    entry = entry_of(h, m.group(1), "play")
     lib, path = hub.path_of(entry)
     kind, index = m.group(2), int(m.group(3))
     cache = hub.cfg.data / "subs"
@@ -2005,7 +2005,7 @@ def image(h, m, q):
 @route("GET", r"/api/book/(\w+)")
 def api_book(h, m, q):
     hub = h.hub
-    entry = entry_of(h, m.group(1))
+    entry = entry_of(h, m.group(1), "play")
     if entry["kind"] != "book":
         raise HttpError(400, "ce fichier n'est pas un livre")
     lib, path = hub.path_of(entry)
@@ -2033,7 +2033,7 @@ def api_book(h, m, q):
 @route("GET", r"/book/(\w+)/page/(\d+)")
 def book_page(h, m, q):
     hub = h.hub
-    entry = entry_of(h, m.group(1))
+    entry = entry_of(h, m.group(1), "play")
     lib, path = hub.path_of(entry)
     try:
         data = bookmedia.cbz_page(path, int(m.group(2)))
@@ -2054,7 +2054,7 @@ def epub_mime(data, mime):
 @route("GET", r"/book/(\w+)/epub/(.+)")
 def book_epub(h, m, q):
     hub = h.hub
-    entry = entry_of(h, m.group(1))
+    entry = entry_of(h, m.group(1), "play")
     lib, path = hub.path_of(entry)
     try:
         data, mime = bookmedia.epub_member(path, m.group(2))

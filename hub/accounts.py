@@ -6,7 +6,7 @@ le premier compte créé reçoit l'identifiant `default` : c'est celui d'avant l
 Le jeton de session n'est pas gardé : c'est `HMAC(secret, "session:<identifiant>:<token_version>")`, présenté sous la forme `<identifiant>.<mac>`. Changer un mot de passe, ou demander de déconnecter les autres appareils, incrémente `token_version`, ce qui invalide d'un coup tous les jetons du compte.
 Le jeton de média (`?token=`) est propre au compte, sous la même forme `<identifiant>.<mac>` : il désigne donc qui demande un fichier, et les droits s'appliquent à lui comme à la session. Il est révoqué avec les sessions (même `token_version`).
 
-Les droits : pour chaque bibliothèque, un compte peut *voir* (liste, fiches, lecture) et *télécharger*. Une bibliothèque sans ligne dans `rights` est ouverte (voir/télécharger) : un compte d'avant les droits n'a rien perdu. Télécharger suppose voir. Un administrateur a tous les droits, sans ligne.
+Les droits : pour chaque bibliothèque, un compte peut *voir* (liste, fiches, images), *lire* (la lecture en ligne : vidéo, musique, livres, sous-titres) et *télécharger*. Une bibliothèque sans ligne dans `rights` est ouverte (tout permis) : un compte d'avant les droits n'a rien perdu. Lire et télécharger supposent voir ; ils sont indépendants l'un de l'autre. Un administrateur a tous les droits, sans ligne.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from . import prefs
 
 FIRST_ID = "default"
 ROLES = ("admin", "user")
-RIGHTS = ("view", "download")
+RIGHTS = ("view", "play", "download")         # l'ordre des valeurs de `grants`
 MIN_PASSWORD = 8
 MAX_PASSWORD = 200                  # scrypt coûte du temps et de la mémoire : pas de mot de passe de plusieurs Mo
 MAX_NAME = 40
@@ -214,51 +214,50 @@ def user_for_token(db, secret, token, purpose="session"):
 # Droits
 # ---------------------------------------------------------------------------
 def grants(db, uid):
-    """{bibliothèque: (voir, télécharger)} des lignes de ce compte ; une bibliothèque absente est ouverte (voir `allows`)."""
-    return {r["lib"]: (bool(r["view"]), bool(r["view"] and r["download"])) for r in db.query("SELECT lib, view, download FROM rights WHERE user_id=?", (uid,))}
+    """{bibliothèque: (voir, lire, télécharger)} des lignes de ce compte ; une bibliothèque absente est ouverte (voir `allows`). Sans « voir », ni lire ni télécharger, quoi que la ligne dise."""
+    return {r["lib"]: (bool(r["view"]), bool(r["view"] and r["play"]), bool(r["view"] and r["download"])) for r in db.query("SELECT lib, view, play, download FROM rights WHERE user_id=?", (uid,))}
 
 
 def allows(role, granted, lib_id, perm="view"):
-    """Ce compte peut-il `view` ou `download` cette bibliothèque ? `granted` vient de `grants`. Un administrateur peut tout."""
+    """Ce compte peut-il `view`, `play` ou `download` cette bibliothèque ? `granted` vient de `grants`. Un administrateur peut tout."""
     if role == "admin":
         return True
-    view, download = granted.get(lib_id, (True, True))
-    return download if perm == "download" else view
+    return granted.get(lib_id, (True, True, True))[RIGHTS.index(perm)]
 
 
 def rights_json(role, granted, lib_ids):
-    """Ce que l'API dit des droits d'un compte : `{bibliothèque: {"view": bool, "download": bool}}`, pour chacune des bibliothèques données."""
-    return {lib: {"view": allows(role, granted, lib), "download": allows(role, granted, lib, "download")} for lib in lib_ids}
+    """Ce que l'API dit des droits d'un compte : `{bibliothèque: {"view": bool, "play": bool, "download": bool}}`, pour chacune des bibliothèques données."""
+    return {lib: {perm: allows(role, granted, lib, perm) for perm in RIGHTS} for lib in lib_ids}
 
 
 def set_rights(db, uid, lib_ids, changes):
-    """Change les droits d'un compte pour les bibliothèques citées dans `changes` (`{bibliothèque: {"view": bool, "download": bool}}`, chaque droit facultatif : celui qui manque ne change pas).
-    Refuse 400 une bibliothèque inconnue, un droit inconnu ou autre chose qu'un booléen, et un administrateur (il a tout). Retirer « voir » retire aussi « télécharger ». Tout ou rien."""
+    """Change les droits d'un compte pour les bibliothèques citées dans `changes` (`{bibliothèque: {"view": bool, "play": bool, "download": bool}}`, chaque droit facultatif : celui qui manque ne change pas).
+    Refuse 400 une bibliothèque inconnue, un droit inconnu ou autre chose qu'un booléen, et un administrateur (il a tout). Retirer « voir » retire aussi « lire » et « télécharger ». Tout ou rien."""
     row = by_id(db, uid)
     if row is None:
         raise AccountError(404, "compte inconnu")
     if row["role"] == "admin":
         raise AccountError(400, "un administrateur a tous les droits")
     if not isinstance(changes, dict) or not changes:
-        raise AccountError(400, "droits attendus : {bibliothèque: {view, download}}")
+        raise AccountError(400, "droits attendus : {bibliothèque: {view, play, download}}")
     current, new = grants(db, uid), {}
     for lib, perms in changes.items():
         if lib not in lib_ids:
             raise AccountError(400, f"bibliothèque inconnue : {lib}")
         if not isinstance(perms, dict) or not perms or set(perms) - set(RIGHTS) or not all(isinstance(v, bool) for v in perms.values()):
-            raise AccountError(400, "chaque bibliothèque attend {view, download}, des booléens")
-        view, download = current.get(lib, (True, True))
-        view, download = perms.get("view", view), perms.get("download", download)
-        new[lib] = (view, view and download)
+            raise AccountError(400, "chaque bibliothèque attend {view, play, download}, des booléens")
+        view, play, download = current.get(lib, (True, True, True))
+        view, play, download = perms.get("view", view), perms.get("play", play), perms.get("download", download)
+        new[lib] = (view, view and play, view and download)
     with db.write_lock:
         conn = db.connection()
         try:
-            for lib, (view, download) in new.items():
-                if view and download:
+            for lib, (view, play, download) in new.items():
+                if view and play and download:
                     conn.execute("DELETE FROM rights WHERE user_id=? AND lib=?", (uid, lib))        # tout autorisé : pas de ligne
                 else:
-                    conn.execute("INSERT INTO rights(user_id, lib, view, download) VALUES(?,?,?,?) ON CONFLICT(user_id, lib) DO UPDATE SET view=excluded.view, download=excluded.download",
-                                 (uid, lib, int(view), int(download)))
+                    conn.execute("INSERT INTO rights(user_id, lib, view, play, download) VALUES(?,?,?,?,?) ON CONFLICT(user_id, lib) DO UPDATE SET view=excluded.view, play=excluded.play, download=excluded.download",
+                                 (uid, lib, int(view), int(play), int(download)))
             conn.commit()
         except Exception:
             conn.rollback()

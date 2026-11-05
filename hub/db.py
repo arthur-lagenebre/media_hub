@@ -18,8 +18,14 @@ from pathlib import Path
 ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "meta", "added", "count"}      # ce que update_item_meta peut changer
 ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
 
-MIGRATIONS = {}      # {version: fonction(connexion)} : ce qui fait passer la base à `version` depuis la précédente. CREATE TABLE IF NOT EXISTS (SCHEMA) ajoute des tables, pas une colonne : toute autre évolution s'écrit ici, ex. `3: lambda conn: conn.execute("ALTER TABLE items ADD COLUMN x TEXT")`
-SCHEMA_VERSION = 3          # 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque). Une base plus ancienne les gagne au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+def _add_play(conn):
+    """Version 4 : `rights.play`. Une table `rights` neuve (base de la version 1 ou 2) l'a déjà, celle de la version 3 non ; « lire » vaut 1 pour les lignes d'avant, qui n'avaient pas ce droit à retirer."""
+    if "play" not in [r["name"] for r in conn.execute("PRAGMA table_info(rights)")]:
+        conn.execute("ALTER TABLE rights ADD COLUMN play INTEGER NOT NULL DEFAULT 1")
+
+
+MIGRATIONS = {4: _add_play}      # {version: fonction(connexion)} : ce qui fait passer la base à `version` depuis la précédente. CREATE TABLE IF NOT EXISTS (SCHEMA) ajoute des tables, pas une colonne : toute autre évolution s'écrit ici, ex. `3: lambda conn: conn.execute("ALTER TABLE items ADD COLUMN x TEXT")`
+SCHEMA_VERSION = 4          # 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
@@ -91,8 +97,9 @@ CREATE TABLE IF NOT EXISTS users(
 CREATE TABLE IF NOT EXISTS rights(
     user_id  TEXT NOT NULL,                 -- users.id
     lib      TEXT NOT NULL,                 -- identifiant de bibliothèque (config), pas une clé étrangère : une bibliothèque peut être retirée puis remise
-    view     INTEGER NOT NULL DEFAULT 1,    -- voir la bibliothèque (liste, fiches, lecture)
-    download INTEGER NOT NULL DEFAULT 1,    -- télécharger ses fichiers ; jamais à 1 quand view est à 0
+    view     INTEGER NOT NULL DEFAULT 1,    -- voir la bibliothèque (liste, fiches, images)
+    play     INTEGER NOT NULL DEFAULT 1,    -- la lire en ligne (vidéo, musique, livres) ; sans effet quand view est à 0
+    download INTEGER NOT NULL DEFAULT 1,    -- télécharger ses fichiers ; sans effet quand view est à 0
     PRIMARY KEY(user_id, lib)
 );                                          -- pas de ligne = tout autorisé : les comptes d'avant les droits n'ont rien perdu, et une bibliothèque ajoutée s'ouvre à tous
 """
