@@ -77,7 +77,7 @@ body.full #nav { display: none; }
 .card .t { margin-top: 0.5rem; font-weight: 650; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .s { color: var(--mute); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .badge { position: absolute; right: 0.4rem; top: 0.4rem; background: rgba(0, 0, 0, 0.78); padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 700; }
-.badge.done { background: var(--accent); color: var(--on-accent); padding: 0.1rem 0.25rem; }
+.badge.done { background: var(--accent); color: var(--on-accent); padding: 0.1rem 0.25rem; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.78), 0 2px 6px rgba(0, 0, 0, 0.5); }
 .badge .ic svg { width: 1em; height: 1em; }
 .pbar { position: absolute; left: 0; right: 0; bottom: 0; height: 0.28rem; background: rgba(255, 255, 255, 0.28); }
 .pbar i { display: block; height: 100%; background: var(--accent); }
