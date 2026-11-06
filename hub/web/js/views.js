@@ -192,13 +192,14 @@
     return card;
   }
   // « Pas encore vu » : un rayon par bibliothèque que le serveur dit avoir un `unseen` (films, séries, animations… et toute bibliothèque vidéo ajoutée plus tard), dans l'ordre des bibliothèques.
-  // Chaque rayon : ce que le serveur propose, sans ce que `taken` (les nouveautés montrées) affiche déjà, 12 au plus ; une bibliothèque sans rien à proposer n'a pas de rayon.
+  // Chaque rayon : ce que le serveur propose, sans ce que `taken` (les nouveautés montrées) affiche déjà, `shown` au plus (le réglage du compte, 12 par défaut) ; une bibliothèque sans rien à proposer n'a pas de rayon.
   var UNSEEN_SHOWN = 12;
-  H.unseen = function (libraries, taken) {
+  H.unseen = function (libraries, taken, shown) {
+    shown = shown > 0 ? shown : UNSEEN_SHOWN;
     var skip = {};
     taken.forEach(function (e) { skip[e.item.id] = true; });
     return libraries.map(function (lib) {
-      return { lib: lib, items: (lib.unseen || []).filter(function (it) { return !skip[it.id]; }).slice(0, UNSEEN_SHOWN) };
+      return { lib: lib, items: (lib.unseen || []).filter(function (it) { return !skip[it.id]; }).slice(0, shown) };
     }).filter(function (shelf) { return shelf.items.length; });
   };
   function cardsSection(cls, title, entries) {
@@ -235,7 +236,7 @@
         if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
         if (latest.length) el.appendChild(cardsSection('latest', 'Nouveautés', latest));
-        (H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest)).forEach(function (shelf) {
+        (H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10))).forEach(function (shelf) {
           el.appendChild(libraryShelf('unseen', 'Pas encore vu', shelf.lib, shelf.items));
         });
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
@@ -900,7 +901,9 @@
       { key: 'movie_view', title: 'Bibliothèque de films', note: 'Comment elle s’ouvre',
         choices: [{ label: 'Sagas', detail: 'Les films d’une même saga sur une seule carte', value: 'sagas' }, { label: 'Films', detail: 'Tous les films, chacun sur sa carte', value: 'films' }] },
       { key: 'home_latest', title: 'Nouveautés', note: 'Sur la page d’accueil', choices: ON_OFF },
-      { key: 'home_unseen', title: 'Pas encore vu', note: 'Sur la page d’accueil', choices: ON_OFF }];
+      { key: 'home_unseen', title: 'Pas encore vu', note: 'Sur la page d’accueil', choices: ON_OFF },
+      { key: 'home_unseen_count', title: 'Pas encore vu : cartes par rayon', note: 'Sur la page d’accueil',
+        choices: [['6', 'Peu'], ['12', 'Habituel'], ['18', 'Beaucoup'], ['24', 'Le maximum']].map(function (c) { return { label: c[0] + ' cartes', detail: c[1], value: c[0] }; }) }];
     function displayPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, 'Affichage'));
       DISPLAY.forEach(function (setting) {

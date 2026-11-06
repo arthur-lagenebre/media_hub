@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -1767,7 +1768,7 @@ class TestHomeUnseen(UiCase):
         day = mock.patch("hub.server.app.today", return_value="2026-11-04")          # le serveur tourne dans ce processus : l'ordre du jour ne change pas pendant le test
         day.start()
         self.addCleanup(day.stop)
-        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show"}))
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"}))
 
     def libraries(self):
         return self.api("/api/home")["libraries"]
@@ -1823,12 +1824,37 @@ class TestHomeUnseen(UiCase):
         self.open("#/settings?tab=comptes")
         panel = self.view(".panel", has_text="Affichage")
         for title, key, name in (("Nouveautés", "home_latest", "Nouveautés"), ("Pas encore vu", "home_unseen", "Pas encore vu")):
-            line = panel.locator(".line", has_text=title)
+            line = panel.locator(".line").filter(has=self.page.locator("b", has_text=re.compile(f"^{title}$")))
             self.assertIn("Affiché", line.inner_text())
             line.locator("button", has_text="Changer").click()
             self.page.locator(".menu .opt .lbl", has_text="Masqué").click()
             self.until(lambda key=key: self.api("/api/me/settings")["settings"][key] == "hide")
             self.until(lambda line=line: "Masqué" in line.inner_text())
+
+    def shown(self, lib="films"):
+        return self.view(f".shelf.unseen[data-lib={lib}] .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+
+    def test_the_account_chooses_how_many_cards_each_shelf_shows(self):
+        self.open()
+        self.view(".shelf.unseen .card").first.wait_for()
+        latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        wanted = [i for i in self.offered() if i not in latest]
+        self.assertEqual(self.shown(), wanted[:12])                                                        # sans réglage, 12 comme avant
+        for count in (6, 24):
+            self.api("/api/me/settings", {"home_unseen_count": str(count)})
+            self.open()
+            self.view(".shelf.unseen .card").first.wait_for()
+            self.assertEqual(self.shown(), wanted[:count])
+            self.assertGreater(len(self.shown("series")), count - 3)                                       # le même nombre dans chaque rayon, moins ce que les nouveautés montrent déjà
+
+    def test_the_number_of_cards_is_chosen_in_the_settings_of_the_account(self):
+        self.open("#/settings?tab=comptes")
+        line = self.view(".panel", has_text="Affichage").locator(".line").filter(has=self.page.locator("b", has_text="Pas encore vu : cartes par rayon"))
+        self.assertIn("12 cartes", line.inner_text())
+        line.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text="6 cartes").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["home_unseen_count"] == "6")
+        self.until(lambda: "6 cartes" in line.inner_text())
 
 
 class TestHomeNewArtist(UiCase):
