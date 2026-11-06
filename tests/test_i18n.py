@@ -287,7 +287,7 @@ class TestEnglishInTheBrowser(UiCase):
 
     def test_the_main_pages_have_every_text(self):
         for path in ("#/", "#/l/films", "#/l/series", "#/l/animations", "#/l/musique", "#/l/livres", "#/search", "#/playlists", "#/sagas",
-                     "#/settings?tab=gestion", "#/settings?tab=lecture", "#/settings?tab=comptes", "#/settings?tab=taches", "#/settings?tab=serveur"):
+                     "#/settings?tab=gestion", "#/settings?tab=lecture", "#/settings?tab=interface", "#/settings?tab=comptes", "#/settings?tab=taches", "#/settings?tab=serveur"):
             with self.subTest(path=path):
                 self.open(path)
                 self.page.wait_for_timeout(250)
@@ -304,14 +304,14 @@ class TestEnglishInTheBrowser(UiCase):
     def test_the_settings_page_is_in_english(self):
         self.open("#/settings")
         self.assertEqual(self.view("h1").inner_text(), "Settings")
-        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Management", "Playback", "Accounts", "Tasks", "Server"])
+        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Management", "Playback", "Interface", "Accounts", "Tasks", "Server"])
         self.assertIn("Libraries", self.view(".panel h2").all_inner_texts())
 
     def test_the_language_is_chosen_in_the_settings_and_kept(self):
         context = self.browser.new_context(viewport={"width": 1920, "height": 1080})
         page = context.new_page()
         try:
-            page.goto(self.base + "/#/settings?tab=lecture")
+            page.goto(self.base + "/#/settings?tab=interface")
             page.wait_for_selector("#nav .link", state="attached")
             self.assertEqual(page.evaluate("document.documentElement.lang"), "fr")
             self.assertEqual(page.locator("#views > .view:visible h1").inner_text(), "Paramètres")

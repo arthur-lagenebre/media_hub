@@ -810,7 +810,7 @@
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
     }
-    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'lecture', label: H.t('Lecture') }, { id: 'comptes', label: H.t('Comptes') }, { id: 'taches', label: H.t('Tâches'), admin: true }, { id: 'serveur', label: H.t('Serveur'), admin: true }];
+    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'lecture', label: H.t('Lecture') }, { id: 'interface', label: H.t('Interface') }, { id: 'comptes', label: H.t('Comptes') }, { id: 'taches', label: H.t('Tâches'), admin: true }, { id: 'serveur', label: H.t('Serveur'), admin: true }];
     function visibleTabs() { return TABS.filter(function (t) { return !t.admin || H.isAdmin(); }); }
     function activeTab() {          // un onglet réservé à l'administrateur ne s'ouvre pas pour un autre compte : on retombe sur le premier
         var ids = visibleTabs().map(function (t) { return t.id; });
@@ -834,6 +834,7 @@
       var body = h('div', { class: 'tabbody' }), active = activeTab();
       if (active === 'gestion') gestion(body);
       else if (active === 'lecture') reading(body);
+      else if (active === 'interface') interfaceTab(body);
       else if (active === 'comptes') accounts(body);
       else if (active === 'taches') tasks(body);
       else serverFacts(body);
@@ -878,9 +879,16 @@
         H.button(H.t('Changer'), 'quality', { 'data-key': 'quality', onclick: function () {
           H.menu(H.t('Qualité de lecture'), ['auto', '1080', '720', '480'].map(function (v) { return { label: qualityLabel(v), value: v }; }), q, function (v) { H.pref('quality', v); render(); H.focus.key(el, 'quality'); });
         } })));
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Son surround 5.1')), h('span', null, surround ? H.t('Activé : le 5.1 est envoyé tel quel si l’appareil le lit.') : H.t('Désactivé : le son est ramené en stéréo (le plus sûr).'))),
+        H.button(surround ? H.t('Désactiver') : H.t('Activer'), 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
+      body.appendChild(play);
+    }
+    // L'apparence de l'interface sur ce navigateur : l'appareil, la taille du texte, la langue.
+    function interfaceTab(body) {
+      var ui = h('section', { class: 'panel' }, h('h2', null, H.t('Interface')));
       var chosen = H.pref('device') || 'auto', names = {};
       H.devices.forEach(function (d) { names[d[0]] = d[1]; });
-      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Appareil')),
+      ui.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Appareil')),
         h('span', null, chosen === 'auto' ? H.t('Détecté : {name} — taille du texte, effets de survol, envoi de photo', { name: names[H.device] }) : H.t('Choisi : {name} — taille du texte, effets de survol, envoi de photo', { name: names[H.device] })), h('span', { class: 'ua' }, navigator.userAgent)),
         H.button(H.t('Changer'), 'quality', { 'data-key': 'device', onclick: function () {
           H.menu(H.t('Type d’appareil'), H.devices.map(function (d) { return { label: d[1], detail: d[0] === 'auto' ? H.t('Deviné d’après le navigateur ({name})', { name: names[H.detectDevice()] }) : '', value: d[0] }; }), chosen, function (v) {
@@ -889,7 +897,7 @@
         } })));
       var sizeNames = {};
       H.textSizes.forEach(function (s) { sizeNames[s[0]] = s[1]; });
-      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Taille du texte')), h('span', null, H.t('{size} — s’ajoute à la taille propre à l’appareil', { size: sizeNames[H.textSize] }))),
+      ui.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Taille du texte')), h('span', null, H.t('{size} — s’ajoute à la taille propre à l’appareil', { size: sizeNames[H.textSize] }))),
         H.button(H.t('Changer'), 'quality', { 'data-key': 'textSize', onclick: function () {
           H.menu(H.t('Taille du texte'), H.textSizes.map(function (s) { return { label: s[1], detail: s[2], value: s[0] }; }), H.textSize, function (v) {
             H.pref('textSize', v === 'normal' ? null : v); H.applyTextSize(); render(); H.focus.key(el, 'textSize');
@@ -897,13 +905,11 @@
         } })));
       var langNames = {};
       H.langs.forEach(function (l) { langNames[l[0]] = l[1]; });
-      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Langue')), h('span', null, H.t('{lang} — la langue de l’interface, pour ce navigateur', { lang: langNames[H.lang] }))),
+      ui.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Langue')), h('span', null, H.t('{lang} — la langue de l’interface, pour ce navigateur', { lang: langNames[H.lang] }))),
         H.button(H.t('Changer'), 'quality', { 'data-key': 'lang', onclick: function () {
           H.menu(H.t('Langue'), H.langs.map(function (l) { return { label: l[1], value: l[0] }; }), H.lang, function (v) { if (v !== H.lang) H.setLang(v); });
         } })));
-      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Son surround 5.1')), h('span', null, surround ? H.t('Activé : le 5.1 est envoyé tel quel si l’appareil le lit.') : H.t('Désactivé : le son est ramené en stéréo (le plus sûr).'))),
-        H.button(surround ? H.t('Désactiver') : H.t('Activer'), 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
-      body.appendChild(play);
+      body.appendChild(ui);
     }
     // Les réglages d'affichage du compte : chacun se choisit dans une liste.
     var ON_OFF = [{ label: H.t('Affiché'), detail: H.t('Le rayon est sur la page d’accueil'), value: 'show' }, { label: H.t('Masqué'), detail: H.t('Le rayon n’est pas sur la page d’accueil'), value: 'hide' }];
