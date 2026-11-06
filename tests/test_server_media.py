@@ -243,6 +243,51 @@ class TestSubtitles(MediaCase):
         self.assertEqual(self.get("/api/subs/f1/e4.vtt").status, 200)
 
 
+class TestPgsRoute(MediaCase):
+    PGS = {"subs": [{"index": 0, "lang": "fre", "title": "", "forced": False, "default": False, "text": False, "codec": "hdmv_pgs_subtitle"},
+                    {"index": 1, "lang": "eng", "title": "", "forced": False, "default": False, "text": True, "codec": "subrip"}]}
+
+    def setUp(self):
+        super().setUp()
+        (self.lib.path / "f.mkv").write_bytes(b"x")
+        self.fill([item("mv")], [dict(entry("f1", "mv"), rel="f.mkv", mtime=77)])
+        self.side = self.lib.path / "f.fr.srt"
+        self.side.write_text("1", encoding="utf-8")
+        self.sides = [{"index": 0, "label": "Français", "lang": "fre", "forced": False, "path": self.side}]
+        patchers = (mock.patch.object(app, "probe_of", lambda hub, e: self.PGS), mock.patch.object(app.subtitles, "side_files", lambda path: self.sides),
+                    mock.patch.object(app.subtitles, "ffmpeg_sup", return_value=b"PGS"))
+        self.extract = [patcher.start() for patcher in patchers][2]
+        for patcher in patchers:
+            self.addCleanup(patcher.stop)
+
+    def test_a_pgs_track_is_extracted_once_and_kept(self):
+        reply = self.get("/api/subs/f1/e0.sup")
+        self.assertEqual((reply.status, reply.body, reply.headers["content-type"], reply.headers["etag"], reply.headers["cache-control"]),
+                         (200, b"PGS", "application/octet-stream", '"f1-77-e0"', "private, no-cache"))
+        self.extract.assert_called_once_with("", self.lib.path / "f.mkv", 0)
+        self.assertEqual((self.root / "data" / "subs" / "f1-77-e0.sup").read_bytes(), b"PGS")
+        self.get("/api/subs/f1/e0.sup")
+        self.assertEqual(self.extract.call_count, 1)
+
+    def test_the_stamp_lets_the_browser_keep_its_copy(self):
+        again = self.get("/api/subs/f1/e0.sup", headers={"If-None-Match": '"f1-77-e0"'})
+        self.assertEqual((again.status, again.body), (304, b""))
+        self.assertEqual(self.get("/api/subs/f1/e0.sup", headers={"If-None-Match": '"autre"'}).status, 200)
+        self.assertEqual(call(self.hub, "HEAD", "/api/subs/f1/e0.sup")[1].body, b"")
+
+    def test_only_a_pgs_track_of_the_file_has_one(self):
+        for target in ("/api/subs/f1/e1.sup", "/api/subs/f1/e7.sup", "/api/subs/f1/s0.sup"):       # texte, absente, fichier voisin
+            self.assertEqual(self.get(target).json(), {"error": "sous-titres introuvables"}, target)
+        self.extract.assert_not_called()
+
+    def test_an_extraction_that_fails_is_a_500_with_its_message(self):
+        for error in (RuntimeError("ffmpeg a échoué"), OSError("illisible")):
+            self.extract.side_effect = error
+            reply = self.get("/api/subs/f1/e0.sup")
+            self.assertEqual((reply.status, reply.json()), (500, {"error": str(error)}))
+        self.assertFalse((self.root / "data" / "subs" / "f1-77-e0.sup").exists())
+
+
 class TestBookRoute(MediaCase):
     kind = "books"
 
@@ -308,7 +353,16 @@ class TestSubtitleList(unittest.TestCase):
         side = {"index": 0, "label": "Français", "lang": "fre", "forced": True, "path": Path("x.srt")}
         with mock.patch.object(app.subtitles, "side_files", return_value=[side]):
             out = app.subtitle_list(None, {"id": "e1"}, {"subs": []}, Path("x.mkv"))
-        self.assertEqual(out, [{"id": "s0", "label": "Français", "lang": "fre", "forced": True, "default": False, "text": True, "where": "fichier", "url": "/api/subs/e1/s0.vtt"}])
+        self.assertEqual(out, [{"id": "s0", "label": "Français", "lang": "fre", "forced": True, "default": False, "text": True, "image": "", "where": "fichier", "url": "/api/subs/e1/s0.vtt"}])
+
+    def test_a_blu_ray_track_has_an_address_but_a_dvd_one_has_none(self):
+        probe = {"subs": [{"index": 0, "lang": "fre", "title": "", "forced": False, "default": False, "text": False, "codec": "hdmv_pgs_subtitle"},
+                          {"index": 1, "lang": "eng", "title": "", "forced": False, "default": False, "text": False, "codec": "dvd_subtitle"},
+                          {"index": 2, "lang": "eng", "title": "", "forced": False, "default": False, "text": True, "codec": "subrip"}]}
+        with mock.patch.object(app.subtitles, "side_files", return_value=[]):
+            out = app.subtitle_list(None, {"id": "e1"}, probe, Path("x.mkv"))
+        self.assertEqual([(s["id"], s["text"], s["image"], s["url"]) for s in out],
+                         [("e0", False, "pgs", "/api/subs/e1/e0.sup"), ("e1", False, "", ""), ("e2", True, "", "/api/subs/e1/e2.vtt")])
 
 
 class TestSagaFilms(MediaCase):

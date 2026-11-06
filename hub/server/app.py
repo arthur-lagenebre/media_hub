@@ -1671,11 +1671,13 @@ def sub_label(track):
 def subtitle_list(hub, entry, probe, path):
     out = []
     for sub in probe["subs"]:
-        out.append({"id": f"e{sub['index']}", "label": sub_label(sub), "lang": sub["lang"], "forced": sub["forced"], "default": sub["default"], "text": sub["text"], "where": "mkv"})
+        image = "pgs" if subtitles.is_pgs(sub.get("codec")) else ""
+        out.append({"id": f"e{sub['index']}", "label": sub_label(sub), "lang": sub["lang"], "forced": sub["forced"], "default": sub["default"], "text": sub["text"], "image": image, "where": "mkv"})
     for side in subtitles.side_files(path):
-        out.append({"id": f"s{side['index']}", "label": side["label"], "lang": side["lang"], "forced": side["forced"], "default": False, "text": True, "where": "fichier"})
+        out.append({"id": f"s{side['index']}", "label": side["label"], "lang": side["lang"], "forced": side["forced"], "default": False, "text": True, "image": "", "where": "fichier"})
     for sub in out:
-        sub["url"] = f"/api/subs/{entry['id']}/{sub['id']}.vtt" if sub["text"] else ""
+        extension = "vtt" if sub["text"] else "sup" if sub["image"] else ""
+        sub["url"] = f"/api/subs/{entry['id']}/{sub['id']}.{extension}" if extension else ""
     return out
 
 
@@ -1853,14 +1855,17 @@ def media_stream(h, m, q):
         hub.streams.release()
 
 
-@route("GET", r"/api/subs/(\w+)/([es])(\d+)\.vtt")
+@route("GET", r"/api/subs/(\w+)/([es])(\d+)\.(vtt|sup)")
 def api_subs(h, m, q):
     hub = h.hub
     entry = entry_of(h, m.group(1), "play")
     lib, path = hub.path_of(entry)
-    kind, index = m.group(2), int(m.group(3))
+    kind, index, extension = m.group(2), int(m.group(3)), m.group(4)
     cache = hub.cfg.data / "subs"
     cache.mkdir(parents=True, exist_ok=True)
+    if extension == "sup":
+        send_sup(h, hub, entry, path, kind, index, cache)
+        return
     side = None
     if kind == "s":                                  # le fichier posé à côté : sa taille et sa date entrent dans la clé, sinon corriger un .srt resterait sans effet
         sides = subtitles.side_files(path)
@@ -1884,6 +1889,26 @@ def api_subs(h, m, q):
         h.send_body(b"", "text/vtt; charset=utf-8", 304, {"ETag": tag, "Cache-Control": "private, no-cache"})
         return
     h.send_body(target.read_bytes(), "text/vtt; charset=utf-8", 200, {"ETag": tag, "Cache-Control": "private, no-cache"}, h.command == "HEAD")
+
+
+def send_sup(h, hub, entry, path, kind, index, cache):
+    """Une piste PGS du fichier, en .sup, pour que le navigateur la dessine : le fichier voisin et les pistes qui ne sont pas des PGS n'en ont pas (404)."""
+    tracks = probe_of(hub, entry)["subs"]
+    if kind != "e" or not any(t["index"] == index and subtitles.is_pgs(t.get("codec")) for t in tracks):
+        raise HttpError(404, "sous-titres introuvables")
+    stamp = f"{entry['id']}-{entry['mtime']}-e{index}"
+    target = cache / f"{stamp}.sup"
+    if not target.is_file():
+        try:
+            data = subtitles.ffmpeg_sup(hub.cfg.ffmpeg, path, index)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            raise HttpError(500, str(e))
+        write_atomic(target, data)
+    tag = f'"{stamp}"'
+    if h.headers.get("If-None-Match") == tag:
+        h.send_body(b"", "application/octet-stream", 304, {"ETag": tag, "Cache-Control": "private, no-cache"})
+        return
+    h.send_body(target.read_bytes(), "application/octet-stream", 200, {"ETag": tag, "Cache-Control": "private, no-cache"}, h.command == "HEAD")
 
 
 # ---------------------------------------------------------------------------

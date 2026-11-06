@@ -3309,7 +3309,7 @@ class TestDocumentedRoutes(unittest.TestCase):
     def test_the_readme_reader_understands_the_table(self):
         routes = self.readme_routes()
         for expected in (("GET", "/api/state"), ("GET", "/api/search"), ("POST", "/api/playlists"), ("GET", "/api/playlists"), ("POST", "/api/playlist/<id>/rename"),
-                         ("GET", "/api/subs/<entry>/<e|s><n>.vtt"), ("GET", "/media/<entry>/stream"), ("POST", "/api/entry/<id>/seen"), ("GET", "/book/<id>/epub/<chemin>"),
+                         ("GET", "/api/subs/<entry>/<e|s><n>.<vtt|sup>"), ("GET", "/media/<entry>/stream"), ("POST", "/api/entry/<id>/seen"), ("GET", "/book/<id>/epub/<chemin>"),
                          ("GET", "/img/entry/<id>"), ("POST", "/api/token"), ("GET", "/api/jobs"), ("POST", "/api/cleanup")):
             self.assertIn(expected, routes)
 

@@ -120,5 +120,37 @@ class TestFfmpegVtt(unittest.TestCase):
         self.assertEqual(len(str(caught.exception)), 200)
 
 
+class TestFfmpegSup(unittest.TestCase):
+    def run_with(self, returncode=0, stdout=b"PG", stderr=b"", **kwargs):
+        done = SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+        with mock.patch.object(subs.subprocess, "run", return_value=done) as run:
+            result = subs.ffmpeg_sup("ffmpeg", "film.mkv", 2, **kwargs)
+        return result, run
+
+    def test_only_the_blu_ray_codec_is_a_pgs_track(self):
+        self.assertTrue(subs.is_pgs("hdmv_pgs_subtitle"))
+        for codec in ("dvd_subtitle", "subrip", "ass", "", None):
+            self.assertFalse(subs.is_pgs(codec), codec)
+
+    def test_the_track_is_copied_as_it_is_without_decoding_anything(self):
+        result, run = self.run_with()
+        self.assertEqual(result, b"PG")
+        self.assertEqual(run.call_args.args[0], ["ffmpeg", "-v", "error", "-nostdin", "-i", "film.mkv", "-map", "0:s:2", "-c", "copy", "-f", "sup", "pipe:1"])
+        self.assertEqual(run.call_args.kwargs, {"capture_output": True, "timeout": 900})        # un remux de 30 Go se lit en plusieurs minutes
+        self.assertEqual(self.run_with(timeout=5)[1].call_args.kwargs["timeout"], 5)
+
+    def test_without_ffmpeg_nothing_is_extracted(self):
+        with self.assertRaisesRegex(RuntimeError, "ffmpeg est introuvable"):
+            subs.ffmpeg_sup("", "film.mkv", 0)
+
+    def test_a_failure_says_what_ffmpeg_said(self):
+        with self.assertRaisesRegex(RuntimeError, "^oups$"):
+            self.run_with(returncode=1, stderr=b" oups\n")
+        with self.assertRaisesRegex(RuntimeError, "^extraction impossible$"):
+            self.run_with(returncode=1, stderr=b"")
+        with self.assertRaisesRegex(RuntimeError, "^extraction impossible$"):
+            self.run_with(returncode=0, stdout=b"")
+
+
 if __name__ == "__main__":
     unittest.main()
