@@ -23,7 +23,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
   2. *remux* : l'image est recopiée, seul le son (E-AC-3, DTS…) passe en AAC : presque gratuit ;
   3. *transcodage* : l'image est ré-encodée en H.264 (1080p max par défaut) quand le codec n'est pas lisible.
   Si une lecture échoue côté navigateur, le lecteur retombe tout seul sur le mode suivant.
-- **Sous-titres** : fichiers `.srt` / `.vtt` / `.ass` à côté de la vidéo et pistes texte du `.mkv`, affichés par le lecteur (PGS / VobSub : listés, grisés).
+- **Sous-titres** : fichiers `.srt` / `.vtt` / `.ass` à côté de la vidéo et pistes texte du `.mkv`, affichés par le lecteur ; les sous-titres en image des Blu-ray (PGS) sont extraits tels quels et dessinés par le navigateur (VobSub : listés, grisés).
 - **Progression** propre à chaque compte : vu / pas vu, reprise au point exact, livre rouvert à la bonne page.
 - **Télécommande** : toute l'interface se pilote aux flèches (navigation spatiale), OK / Entrée, Retour. Dans le lecteur : ← → pour avancer ou reculer, OK pour pause, lecture / pause du clavier média. Souris et tactile marchent aussi (téléphone compris).
 
@@ -125,7 +125,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, sagas, casting, progression |
 | `POST /api/play/<entry>` | plan de lecture (url, pistes audio, sous-titres, reprise, suivant) |
 | `GET /media/<entry>/file`, `/media/<entry>/stream` | fichier (Range, `?download=1`) ; flux MP4 fragmenté (remux / transcodage, `?start=`) |
-| `GET /api/subs/<entry>/<e\|s><n>.vtt` | sous-titres en WebVTT |
+| `GET /api/subs/<entry>/<e\|s><n>.<vtt\|sup>` | sous-titres en WebVTT, ou piste PGS brute (`.sup`) |
 | `POST /api/progress`, `/api/item/<id>/seen`, `/api/entry/<id>/seen` | progression, vu / pas vu |
 | `GET /api/book/<id>`, `/book/<id>/page/<n>`, `/book/<id>/epub/<chemin>` | pages d'un `.cbz`, fichiers d'un `.epub` (CSP sans script) |
 | `GET /img/item/<id>?w=`, `/img/entry/<id>?w=` | affiches, pochettes, couvertures (réduites et gardées en cache) |
@@ -143,7 +143,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 - Les films ne sont indexés qu'en **`.mkv`** (c'est ce que `media_library` produit : `Mp4_To_Mkv.py`, `Avi_To_Mkv.py`).
 - **Pas de carte vidéo capable d'encoder** (GT 730) : le transcodage est logiciel. Un 1080p H.264 passe sans peine sur un i3-13100F ; un 4K HEVC en transcodage est à éviter (le plan de lecture le signale). Le mieux reste la lecture directe : un Chromecast / Fire TV 4K lit H.264, HEVC et AV1 selon le modèle.
 - Google TV n'a pas Chrome : installer un navigateur compatible télécommande (TV Bro, Puffin TV, Silk sur Fire TV). Une appli Android TV native (WebView plein écran) est la suite logique si la télécommande dans un navigateur ne convient pas.
-- Les formats d'image des sous-titres (PGS, VobSub) ne sont pas affichés.
+- Les sous-titres VobSub (DVD) ne sont pas affichés. Les PGS (Blu-ray) le sont, mais ne se choisissent jamais d'office, et leur première extraction lit tout le fichier vidéo (plusieurs minutes pour un remux de 30 Go) ; elle est ensuite gardée.
 
 ## Développer avec Claude Code
 

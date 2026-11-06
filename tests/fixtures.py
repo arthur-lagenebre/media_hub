@@ -159,23 +159,76 @@ def write_epub(path, title="Un roman", author="Quelqu'un", chapters=2):
 
 
 # --- Vidéo lisible ---------------------------------------------------------
-def write_video(path, seconds=3, vcodec="libx264", acodec="aac", container=None, channels=2, subtitle=None, size="320x180"):
-    """Un vrai film de quelques secondes : mire et sinus."""
+def pgs_segment(kind, pts, body):
+    return b"PG" + struct.pack(">II", round(pts * 90000), 0) + bytes([kind]) + struct.pack(">H", len(body)) + body
+
+
+def pgs_rle(rows):
+    """Les lignes [(couleur, longueur), ...] d'une image PGS, codées comme dans un .sup : les quatre formes de répétition, plus l'octet seul."""
+    out = b""
+    for row in rows:
+        for color, n in row:
+            if color == 0:
+                out += bytes([0, n]) if n < 64 else bytes([0, 0x40 | n >> 8, n & 255])
+            elif n == 1:
+                out += bytes([color])
+            else:
+                out += bytes([0, 0x80 | n, color]) if n < 64 else bytes([0, 0xC0 | n >> 8, n & 255, color])
+        out += bytes(2)
+    return out
+
+
+def pgs_show(pts, rows, palette, x=100, y=900, screen=(1920, 1080), fragments=1, state=0x80, crop=None):
+    """Un ensemble d'affichage PGS (PCS, WDS, PDS, ODS, END) qui pose l'image `rows` à (x, y) ; `palette` = {indice: (Y, Cr, Cb, alpha)}."""
+    width, height = len(rows[0]) and sum(n for _, n in rows[0]), len(rows)
+    flag = 0x80 | (0x40 if crop else 0)
+    comp = struct.pack(">HBBHH", 0, 0, flag, x, y) + (struct.pack(">HHHH", *crop) if crop else b"")
+    body = pgs_rle(rows)
+    cut = max(1, len(body) // 2) if fragments > 1 else len(body)
+    ods = struct.pack(">HBB", 0, 0, 0x80 | (0x40 if fragments == 1 else 0)) + len(body).__add__(4).to_bytes(3, "big") + struct.pack(">HH", width, height) + body[:cut]
+    segments = [pgs_segment(0x16, pts, struct.pack(">HHBHBBBB", *screen, 0x10, 1, state, 0, 0, 1) + comp),
+                pgs_segment(0x17, pts, struct.pack(">BBHHHH", 1, 0, x, y, width, height)),
+                pgs_segment(0x14, pts, bytes([0, 0]) + b"".join(bytes([i, *entry]) for i, entry in palette.items())),
+                pgs_segment(0x15, pts, ods)]
+    if fragments > 1:
+        segments.append(pgs_segment(0x15, pts, struct.pack(">HBB", 0, 0, 0x40) + body[cut:]))
+    return b"".join(segments) + pgs_segment(0x80, pts, b"")
+
+
+def pgs_clear(pts, screen=(1920, 1080)):
+    """L'ensemble d'affichage qui efface l'écran : un PCS sans objet."""
+    return pgs_segment(0x16, pts, struct.pack(">HHBHBBBB", *screen, 0x10, 2, 0, 0, 0, 0)) + pgs_segment(0x17, pts, bytes([0])) + pgs_segment(0x80, pts, b"")
+
+
+# Un rouge et un vert d'après la norme des Blu-ray, tels que les entrées d'un PDS les portent (Y, Cr, Cb, alpha)
+RED, GREEN, HALF_BLUE = (81, 240, 90, 255), (145, 34, 54, 255), (41, 110, 240, 128)
+
+
+def write_video(path, seconds=3, vcodec="libx264", acodec="aac", container=None, channels=2, subtitle=None, size="320x180", sup=None):
+    """Un vrai film de quelques secondes : mire et sinus ; `sup` (octets d'un .sup) y ajoute une piste de sous-titres PGS."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=size={size}:rate=24:duration={seconds}",
+    cmd = [FFMPEG, "-v", "error", "-y"] + (["-copyts"] if sup else []) + ["-f", "lavfi", "-i", f"testsrc=size={size}:rate=24:duration={seconds}",
            "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}"]
     if subtitle:
         srt = path.with_suffix(".tmp.srt")
         srt.write_text(subtitle, encoding="utf-8")
         cmd += ["-i", str(srt)]
-    cmd += ["-map", "0:v", "-map", "1:a"] + (["-map", "2:s"] if subtitle else [])
+    if sup:
+        pgs = path.with_suffix(".tmp.sup")
+        pgs.write_bytes(sup)
+        cmd += ["-i", str(pgs)]
+    cmd += ["-map", "0:v", "-map", "1:a"] + (["-map", "2:s"] if subtitle else []) + (["-map", "3:s" if subtitle else "2:s"] if sup else [])
     cmd += ["-c:v", vcodec, "-pix_fmt", "yuv420p", "-g", "12", "-c:a", acodec, "-ac", str(channels)]
     if subtitle:
-        cmd += ["-c:s", "srt" if path.suffix == ".mkv" else "mov_text"]
+        cmd += ["-c:s:0", "srt" if path.suffix == ".mkv" else "mov_text"]
+    if sup:
+        cmd += [f"-c:s:{1 if subtitle else 0}", "copy"]
     cmd += [str(path)]
     subprocess.run(cmd, check=True)
     if subtitle:
         path.with_suffix(".tmp.srt").unlink()
+    if sup:
+        path.with_suffix(".tmp.sup").unlink()
     return path
 
 

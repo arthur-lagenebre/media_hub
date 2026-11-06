@@ -11,7 +11,7 @@ Tu travailles sur l'interface de **media_hub** (`hub/web/`). Elle est servie tel
 
 ## Structure
 
-- `index.html` charge dans cet ordre : `core.js`, `audio.js`, `views.js`, `music.js`, `player.js`, `reader.js`, `boot.js`. Un nouveau script doit respecter cet ordre de dépendances et être ajouté à `index.html`.
+- `index.html` charge dans cet ordre : `core.js`, `audio.js`, `views.js`, `music.js`, `pgs.js`, `player.js`, `reader.js`, `boot.js`. Un nouveau script doit respecter cet ordre de dépendances et être ajouté à `index.html`.
 - Tout passe par l'espace de noms global `H` (voir `core.js`) : préférences (`H.pref`), appareil (`H.device`, `H.detectDevice`), requêtes, navigation. Lis `core.js` avant d'ajouter une fonction : elle existe peut-être déjà.
 - `style.css` : une seule feuille. Les variantes par appareil s'appuient sur l'attribut `data-device` (`pc`, `phone`, `tablet`, `tv`) posé sur `<html>`.
 - Le style JS est celui des fichiers existants (fonctions et `var`, pas de syntaxe ou d'API qui échoue sur un vieux navigateur de télé). Reste dans le même registre : n'introduis ni modules ES, ni `async/await` si le fichier n'en utilise pas déjà.

@@ -352,7 +352,7 @@ Réponse :
 | `resume` | nombre | position de reprise en secondes ; `0` s'il n'y en a pas, si le fichier est fini ou en deçà de 20 s |
 | `warning` | chaîne | `""`, ou un avertissement à afficher (4K à convertir sans carte vidéo) |
 | `audio` | liste | `{"index", "label", "lang", "selected", "commentary"}` ; `selected` : la piste que ce plan utilise |
-| `subs` | liste | `{"id", "label", "lang", "forced", "default", "text", "where", "url"}` ; `where` : `mkv` (dans le fichier) ou `fichier` (fichier voisin) ; `url` : WebVTT, **`""` si `text` est faux** (sous-titres image PGS / VobSub : non pris en charge) |
+| `subs` | liste | `{"id", "label", "lang", "forced", "default", "text", "image", "where", "url"}` ; `where` : `mkv` (dans le fichier) ou `fichier` (fichier voisin) ; `text` : piste de texte, `url` en WebVTT ; `image` : `"pgs"` pour un sous-titre en image de Blu-ray, dont `url` est le `.sup` brut (à dessiner côté client) ; `""` sinon. **`url` vaut `""` si `text` et `image` sont faux** (VobSub, DVD : non pris en charge) |
 | `video` | objet ou `null` | `{"codec", "width", "height", "hdr"}` |
 | `next` | objet ou `null` | `{"id", "title", "season", "number"}` : le fichier vidéo suivant du même élément (épisode, partie) |
 
@@ -378,11 +378,11 @@ Un MP4 fragmenté produit à la volée par ffmpeg.
 - **Avancer** : redemander la même URL avec `&start=<secondes>` (la conversion repart de là). La durée totale et la position absolue viennent du plan (`duration`), pas du lecteur : en flux converti, la position absolue est `start + position du lecteur`. L'interface web fait ainsi (`base + currentTime`) ; en `direct` (`seekable: true`), on se déplace dans le fichier normalement.
 - Un flux converti occupe un emplacement (`max_streams`) jusqu'à ce que le client coupe la connexion. Au-delà : **503** (`N conversions en cours : attends la fin de l'une d'elles.`). Pas de ffmpeg : **501**. ffmpeg qui ne produit rien : 500 avec sa dernière ligne d'erreur. Une erreur **après** le début du flux ne peut plus être signalée : la connexion se ferme.
 - 400 `paramètre <nom> invalide` pour un nombre mal formé.
-- Les sous-titres ne sont jamais incrustés : le client les affiche lui-même.
+- Les sous-titres ne sont jamais incrustés : le client les affiche lui-même (texte, ou image PGS dessinée sur un canvas).
 
-### `GET /api/subs/<entry>/<e|s><n>.vtt`
+### `GET /api/subs/<entry>/<e|s><n>.<vtt|sup>`
 
-Le sous-titre en WebVTT (`text/vtt`). `e<n>` : piste n° `n` du fichier ; `s<n>` : fichier voisin n° `n`. Les valeurs viennent de `subs[].url` : ne pas les construire. 404 `sous-titres introuvables`, 500 si la conversion échoue. Le cache est gardé côté serveur. Comme `/media/`, cette route accepte `?token=<media_token>` : un `<track src>` ou une piste de texte Cast peut donc charger `subs[].url` + `?token=…` sans en-tête.
+Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, tel quel au format `.sup` (`.sup`, `application/octet-stream` : la suite de segments PGS, horodatés comme dans le film, que le client décode et dessine ; l'interface le fait avec `hub/web/js/pgs.js`). `e<n>` : piste n° `n` du fichier ; `s<n>` : fichier voisin n° `n` (WebVTT seulement). Les valeurs viennent de `subs[].url` : ne pas les construire. 404 `sous-titres introuvables` (dont un `.sup` demandé pour une piste qui n'est pas un PGS, ou pour un fichier voisin), 500 si la conversion ou l'extraction échoue. Le cache est gardé côté serveur ; la première extraction d'un `.sup` lit tout le fichier vidéo, ce qui peut durer plusieurs minutes pour un remux de 30 Go (délai de 15 minutes), les suivantes sont instantanées. Comme `/media/`, cette route accepte `?token=<media_token>` : un `<track src>` ou une piste de texte Cast peut donc charger `subs[].url` + `?token=…` sans en-tête.
 
 ## Images
 

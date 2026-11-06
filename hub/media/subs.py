@@ -1,6 +1,6 @@
 """Sous-titres : ceux posés à côté de la vidéo (.srt, .vtt, .ass) et ceux que le .mkv porte, rendus en WebVTT.
 
-Le lecteur les affiche lui-même (voir app.js) : les repères de temps sont ceux du film, même quand la lecture repart d'un autre point. Les sous-titres en image (PGS, VobSub) ne se convertissent pas en texte : ils sont listés, mais grisés.
+Le lecteur les affiche lui-même (voir player.js) : les repères de temps sont ceux du film, même quand la lecture repart d'un autre point. Les sous-titres en image ne se convertissent pas en texte : les PGS (Blu-ray) sont extraits tels quels en .sup et dessinés par le navigateur (voir pgs.js) ; les VobSub (DVD) sont listés, mais grisés.
 """
 
 from __future__ import annotations
@@ -69,6 +69,20 @@ def ffmpeg_vtt(ffmpeg, source, stream=None, timeout=120):
     if done.returncode != 0 or not done.stdout:
         raise RuntimeError(done.stderr.decode("utf-8", "replace").strip()[:200] or "conversion impossible")
     return done.stdout.decode("utf-8", "replace")
+
+
+def is_pgs(codec):
+    return codec == "hdmv_pgs_subtitle"
+
+
+def ffmpeg_sup(ffmpeg, source, stream, timeout=900):
+    """Une piste PGS du fichier telle quelle (format .sup), sans rien décoder : ffmpeg lit tout le fichier pour la trouver, d'où le délai large pour un remux de 30 Go."""
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg est introuvable : impossible d'extraire ces sous-titres.")
+    done = subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-i", str(source), "-map", f"0:s:{stream}", "-c", "copy", "-f", "sup", "pipe:1"], capture_output=True, timeout=timeout)
+    if done.returncode != 0 or not done.stdout:
+        raise RuntimeError(done.stderr.decode("utf-8", "replace").strip()[:200] or "extraction impossible")
+    return done.stdout
 
 
 def side_vtt(ffmpeg, path):
