@@ -506,6 +506,28 @@ class TestVideoPlayer(UiCase):
         self.assertIn("Lecture impossible", self.page.inner_text(".player .err"))
 
 
+class TestVideoResume(UiCase):
+    """Reprendre un film dont le son est converti : l'image est recopiée, le flux ne peut partir que d'une image clé, et le lecteur compte sa position depuis celle-là (sinon l'horloge et les sous-titres glissent)."""
+
+    @classmethod
+    def add_media(cls, root):
+        fixtures.write_video(root / "srv" / "Films" / "Reprise (2024)" / "Reprise (2024).mkv", seconds=60, size="160x90", acodec="ac3", channels=6)
+
+    def test_the_stream_restarts_from_the_keyframe_the_server_names_and_the_clock_counts_from_there(self):
+        entry = self.entries("films", "Reprise")[0]["id"]
+        self.api("/api/progress", {"entry": entry, "position": 40.3, "duration": 60, "done": False})
+        start = self.api(f"/api/play/{entry}/start?t=40.3")["start"]
+        self.assertLess(start, 40.3)                                                   # l'image clé précède l'instant de la reprise : c'est ce que l'ancien lecteur ignorait
+        self.assertGreater(start, 39.7)
+        self.open("#/play/" + entry)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.assertEqual(self.page.inner_text(".player .pill"), "Son converti")
+        self.assertIn(f"&start={start:.3f}", self.page.evaluate("document.querySelector('.player video').src"))
+        shown = self.page.evaluate("document.querySelector('.player .times span').textContent")       # « 0:40 » : l'horloge part de l'image clé, pas de l'instant demandé
+        self.assertEqual(shown, "0:40")
+
+
 def ycc(y, cr, cb):
     """Le rouge, vert, bleu d'une entrée de palette PGS (norme BT.709, image HD), comme le décodeur les calcule."""
     l = 1.164 * (y - 16)

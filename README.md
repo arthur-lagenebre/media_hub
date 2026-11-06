@@ -124,6 +124,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
 | `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, sagas, casting, progression |
 | `POST /api/play/<entry>` | plan de lecture (url, pistes audio, sous-titres, reprise, suivant) |
+| `GET /api/play/<entry>/start?t=` | où part vraiment un flux remux repris à `t` (l'image clé), pour compter l'horloge et les sous-titres depuis là |
 | `GET /media/<entry>/file`, `/media/<entry>/stream` | fichier (Range, `?download=1`) ; flux MP4 fragmenté (remux / transcodage, `?start=`) |
 | `GET /api/subs/<entry>/<e\|s><n>.<vtt\|sup>` | sous-titres en WebVTT, ou piste PGS brute (`.sup`) |
 | `POST /api/progress`, `/api/item/<id>/seen`, `/api/entry/<id>/seen` | progression, vu / pas vu |

@@ -366,6 +366,14 @@ L'ordre de préférence est toujours **direct, puis remux, puis transcode**.
 
 Paramètres de `…/stream` (déjà dans `url`, ne pas les recalculer) : `m` (`remux` \| `transcode`), `a` (indice de piste audio), `ca` (`1` : recopier le son, seulement en remux), `k` (débit en kb/s), `h` (hauteur), `c` (voies audio, 1 à 6), `start` (secondes, décimal).
 
+### `GET /api/play/<entry>/start` — où part vraiment un flux `remux`
+
+Paramètre : `t` (secondes, décimal ; 0 par défaut). Réponse : `{"start": 40.0}`.
+
+Dans un flux `remux` l'image est recopiée : elle ne peut commencer que sur une image clé. `start` est l'image clé sur laquelle le fichier se place pour `t` (à la milliseconde, souvent un peu avant `t`, parfois plusieurs secondes). C'est la valeur à passer à `…/stream?…&start=` **et** celle à partir de laquelle le client compte sa position. `0` pour un `t` nul ou négatif ; `t` lui-même si ffprobe ne répond pas (le client part alors de ce qu'il a demandé, avec le décalage possible). Le serveur ajoute lui-même une marge de 0,25 s à l'instant donné à ffmpeg pour une image recopiée, pour retomber sur cette image clé et pas sur la précédente (voir `KEYFRAME_MARGIN`).
+
+Droit : lire la bibliothèque. 400 : le fichier n'est pas une vidéo, ou `t` n'est pas un nombre ; 404 : fichier inconnu.
+
 ### `GET /media/<entry>/file`
 
 Le fichier d'origine : `Range` (206, `Accept-Ranges: bytes`, 416 hors limites), `Content-Length`, `Content-Type` d'après l'extension (`.mkv` → `video/x-matroska`…). `?download=1` ajoute `Content-Disposition: attachment` et demande le droit de **télécharger** la bibliothèque (403 `téléchargement non autorisé` sinon) ; lire le fichier sans `download` (lecture directe, `Range`) demande celui de la **lire** (403 `lecture non autorisée`) : le droit de télécharger ne peut pas empêcher un lecteur qui reçoit le fichier de le garder. 404 si le fichier est introuvable. Sert aussi la musique et les livres.
@@ -376,6 +384,7 @@ Un MP4 fragmenté produit à la volée par ffmpeg.
 
 - **Pas de `Content-Length`, pas de `Range`** : la réponse porte `Accept-Ranges: none` et `Connection: close`, et le corps est envoyé au fil de l'eau. On ne peut pas demander un octet précis.
 - **Avancer** : redemander la même URL avec `&start=<secondes>` (la conversion repart de là). La durée totale et la position absolue viennent du plan (`duration`), pas du lecteur : en flux converti, la position absolue est `start + position du lecteur`. L'interface web fait ainsi (`base + currentTime`) ; en `direct` (`seekable: true`), on se déplace dans le fichier normalement.
+- **Avancer en `remux`** : l'image est recopiée, le flux ne peut commencer que sur une **image clé**, parfois plusieurs secondes avant l'instant voulu. Demander `start=<t>` tel quel fait donc partir le flux plus tôt que `t` sans le dire, et la position `start + position du lecteur` (horloge, sous-titres, progression) glisse d'autant. Avant de redemander le flux, appeler `GET /api/play/<entry>/start` (plus bas) et utiliser son `start`. En `transcode`, l'image est ré-encodée : le flux part exactement de `start`, aucun appel n'est nécessaire.
 - Un flux converti occupe un emplacement (`max_streams`) jusqu'à ce que le client coupe la connexion. Au-delà : **503** (`N conversions en cours : attends la fin de l'une d'elles.`). Pas de ffmpeg : **501**. ffmpeg qui ne produit rien : 500 avec sa dernière ligne d'erreur. Une erreur **après** le début du flux ne peut plus être signalée : la connexion se ferme.
 - 400 `paramètre <nom> invalide` pour un nombre mal formé.
 - Les sous-titres ne sont jamais incrustés : le client les affiche lui-même (texte, ou image PGS dessinée sur un canvas).

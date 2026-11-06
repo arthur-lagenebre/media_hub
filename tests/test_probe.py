@@ -110,6 +110,36 @@ class TestRunFfprobe(unittest.TestCase):
                 self.run_with(side_effect=failure)
 
 
+class TestKeyframeAt(unittest.TestCase):
+    """D'où part vraiment une image recopiée : la première image que ffprobe lit après s'être placé à l'instant voulu."""
+
+    def lands(self, stdout=b"30.000000,K__\n", returncode=0, at=33.0, ffprobe="ffprobe", **failure):
+        done = SimpleNamespace(returncode=returncode, stdout=stdout, stderr=b"")
+        with mock.patch.object(prober.subprocess, "run", return_value=done, **failure) as run:
+            return prober.keyframe_at(ffprobe, "/films/a.mkv", at), run
+
+    def test_the_stream_starts_on_the_keyframe_ffprobe_lands_on(self):
+        start, run = self.lands()
+        self.assertEqual(start, 30.0)
+        cmd = run.call_args.args[0]
+        self.assertEqual((cmd[0], cmd[cmd.index("-read_intervals") + 1], cmd[-1]), ("ffprobe", "33.000%+#1", "/films/a.mkv"))
+        self.assertEqual(cmd[cmd.index("-select_streams") + 1], "v:0")
+
+    def test_the_keyframe_is_given_to_the_millisecond(self):
+        self.assertEqual(self.lands(stdout=b"29.919958,K__\n")[0], 29.92)
+
+    def test_a_start_at_the_beginning_asks_nothing(self):
+        start, run = self.lands(at=0)
+        self.assertEqual(start, 0.0)
+        run.assert_not_called()
+        self.assertEqual(self.lands(at=-4)[0], 0.0)
+
+    def test_without_a_trustworthy_answer_the_start_stays_where_it_was_asked(self):
+        for kw in ({"stdout": b""}, {"stdout": b"30.000000,___\n"}, {"stdout": b"N/A,K__\n"}, {"returncode": 1}, {"side_effect": OSError("pas de programme")},
+                   {"side_effect": subprocess.TimeoutExpired("ffprobe", 30)}, {"ffprobe": ""}):
+            self.assertEqual(self.lands(**kw)[0], 33.0, kw)
+
+
 class TestPlan(unittest.TestCase):
     def plan(self, probe=None, caps=CAPS, **kw):
         return prober.plan(probe or info(), caps, **kw)
@@ -228,10 +258,16 @@ class TestFfmpegCommand(unittest.TestCase):
         self.assertIn("0:a:0", cmd)
 
     def test_the_start_is_given_to_the_input_in_seconds(self):
-        cmd = self.command(start=12.5)
+        cmd = self.command(decision=self.TRANSCODE, start=12.5)
         self.assertLess(cmd.index("-ss"), cmd.index("-i"))
-        self.assertEqual(self.after(cmd, "-ss"), "12.500")
+        self.assertEqual(self.after(cmd, "-ss"), "12.500")                 # l'image ré-encodée commence à l'instant demandé
         self.assertNotIn("-ss", self.command(start=-3))
+
+    def test_a_copied_image_is_asked_a_little_after_its_keyframe(self):
+        """`start` d'une image recopiée est une image clé ; ffmpeg retire parfois 0,13 s à l'instant demandé avant de chercher (MKV avec images B) et partirait de l'image clé d'avant."""
+        self.assertEqual(self.after(self.command(start=12.5), "-ss"), "12.750")
+        self.assertEqual(self.after(self.command(decision={**self.TRANSCODE, "copy_video": True}, start=12.5), "-ss"), "12.750")
+        self.assertNotIn("-ss", self.command(start=0))                      # pas de départ, pas de marge
 
     def test_a_copied_hevc_is_tagged_for_apple_players(self):
         self.assertEqual(self.after(self.command(info(codec="hevc")), "-tag:v"), "hvc1")
@@ -270,7 +306,7 @@ class TestFfmpegCommand(unittest.TestCase):
 
     def test_a_start_at_zero_is_no_start(self):
         self.assertNotIn("-ss", self.command(start=0))
-        self.assertEqual(self.after(self.command(start=0.5), "-ss"), "0.500")
+        self.assertEqual(self.after(self.command(decision=self.TRANSCODE, start=0.5), "-ss"), "0.500")
 
     def test_a_probe_without_video_height_is_not_scaled(self):
         probe = info()

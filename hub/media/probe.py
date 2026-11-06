@@ -36,6 +36,25 @@ def run_ffprobe(ffprobe, path):
     return summarize(json.loads(done.stdout or b"{}"))
 
 
+def keyframe_at(ffprobe, path, at):
+    """Où une image recopiée commence vraiment quand on reprend à `at` secondes : l'image clé sur laquelle le fichier se place (celle qui contient `at`), à la milliseconde. `at` si ffprobe ne répond pas.
+
+    Une image recopiée ne peut commencer que sur une image clé : demander `at` tombe sur la précédente, parfois plusieurs secondes avant, sans que personne le dise. Le client doit compter sa position (horloge, sous-titres) depuis cette image-là."""
+    if at <= 0 or not ffprobe:
+        return max(0.0, at)
+    try:
+        done = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", "-read_intervals", f"{at:.3f}%+#1", str(path)],
+                              capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return at
+    first = (done.stdout.decode("utf-8", "replace").splitlines() or [""])[0]            # le premier paquet lu après le placement : l'image clé
+    when, _, flags = first.partition(",")
+    try:
+        return round(float(when), 3) if done.returncode == 0 and "K" in flags else at
+    except ValueError:
+        return at
+
+
 def _fps(text):
     try:
         top, _, bottom = (text or "0/1").partition("/")
@@ -212,9 +231,16 @@ def _audio_args(probe, decision, channels):
     return ["-c:a", "aac", "-b:a", f"{96 + 64 * out_channels}k", "-ac", str(out_channels)]
 
 
+KEYFRAME_MARGIN = 0.25    # secondes : pour une image recopiée, `start` est une image clé (voir keyframe_at) ; ffmpeg retire parfois 0,13 s à l'instant demandé avant de chercher (MKV avec images B) et retomberait sur l'image clé d'avant
+
+
 def ffmpeg_command(ffmpeg, path, probe, decision, start=0, max_kbps=0, max_height=0, channels=2, preset="veryfast"):
-    """La ligne de commande qui produit un MP4 fragmenté sur la sortie standard. Le MP4 fragmenté se lit en continu, sans que le fichier soit fini."""
+    """La ligne de commande qui produit un MP4 fragmenté sur la sortie standard. Le MP4 fragmenté se lit en continu, sans que le fichier soit fini.
+
+    `start` : où reprendre. Quand l'image est ré-encodée, le flux commence à cet instant. Quand elle est recopiée, il commence sur l'image clé qui le contient : `start` doit être celle que rend `keyframe_at`."""
     track = decision["audio"]
+    if decision["copy_video"] and start > 0:
+        start += KEYFRAME_MARGIN
     cmd = [ffmpeg, "-v", "error", "-nostdin"] + (["-ss", f"{start:.3f}"] if start > 0 else [])
     cmd += ["-i", str(path), "-map", "0:v:0"] + ([] if track is None else ["-map", f"0:a:{track}"])
     cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"] + _video_args(probe, decision, max_kbps, max_height, preset)

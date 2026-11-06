@@ -1764,6 +1764,18 @@ def api_play(h, m, q):
     })
 
 
+@route("GET", r"/api/play/(\w+)/start")
+def api_play_start(h, m, q):
+    """D'où part vraiment un flux `remux` redemandé à `t` secondes : l'image est recopiée, elle ne peut commencer que sur une image clé. Le client compte sa position (horloge, sous-titres, progression) depuis ce `start`, et demande le flux avec `&start=<start>`."""
+    hub = h.hub
+    entry = entry_of(h, m.group(1), "play")
+    if entry["kind"] != "video":
+        raise HttpError(400, "ce fichier n'est pas une vidéo")
+    at = max(0.0, query_number(q, "t", float, 0.0))
+    lib, path = hub.path_of(entry)
+    h.send_json({"start": prober.keyframe_at(hub.cfg.ffprobe, path, at)})
+
+
 @route("GET", r"/media/(\w+)/file")
 def media_file(h, m, q):
     entry = entry_of(h, m.group(1), "download" if q.get("download") else "play")         # `?download=1` demande le droit de télécharger ; sans lui, c'est la lecture directe (Range) : le droit de lire
