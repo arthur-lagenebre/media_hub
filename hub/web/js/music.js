@@ -343,8 +343,14 @@
       return h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320' + v + ')' }),
         h('div', { class: 'hero-in' }, H.picture(face + '?w=480' + v, d.name, 'sq big'), box));
     }
+    // Sur la fiche d'un artiste, le nom de l'artiste sous chaque pochette serait répété : la carte n'a que l'année.
+    function withoutGroup(a) {
+      var copy = {};
+      for (var k in a) if (Object.prototype.hasOwnProperty.call(a, k) && k !== 'grp') copy[k] = a[k];
+      return copy;
+    }
     function albumsSection(d) {
-      return h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, shelf(d).map(function (a) { return a.wanted ? wantedCard(a) : H.card(a, false); })));
+      return h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, shelf(d).map(function (a) { return a.wanted ? wantedCard(a) : H.card(withoutGroup(a), false); })));
     }
     // Les membres du groupe : les actuels, puis les anciens.
     function memberSections(info) {
