@@ -1,5 +1,5 @@
 /* Le lecteur vidéo : choisit avec le serveur comment lire (direct, audio converti, tout converti), puis repart où l'on s'était arrêté.
-   Les sous-titres sont affichés ici (WebVTT lu et dessiné par la page) : ils restent justes même quand le film est relancé depuis un autre point. */
+   Les sous-titres sont affichés ici (WebVTT lu et dessiné par la page, ou PGS décodé par pgs.js sur un canvas) : ils restent justes même quand le film est relancé depuis un autre point. */
 (function () {
   'use strict';
   var H = window.Hub, h = H.h;
@@ -71,7 +71,7 @@
     var id = m[1];
     H.audio.pause();
     var video = h('video', { playsinline: '', preload: 'auto' });
-    var subBox = h('div', { class: 'cue' });
+    var subBox = h('div', { class: 'cue' }), subPic = h('canvas', { class: 'pgs', hidden: true });
     var spin = h('div', { class: 'spin', hidden: true }, h('i'));
     var osd = h('div', { class: 'osd', hidden: true });
     var title = h('div', { class: 'ti' }), sub = h('div', { class: 'su' }), pill = h('span', { class: 'pill' });
@@ -87,10 +87,10 @@
       h('div', { class: 'bottom' }, h('div', { class: 'times' }, tCur, tEnd), seekbar,
         h('div', { class: 'btns' }, playBtn, H.button('10 s', 'rew', { onclick: function () { nudge(-1, 10); } }), H.button('10 s', 'fwd', { onclick: function () { nudge(1, 10); } }), h('span', { class: 'sp' }), bAudio, bSubs, bQual, bNext, bFull)));
     var err = h('div', { class: 'err', hidden: true });
-    var el = h('section', { class: 'player idle' }, video, subBox, spin, osd, ctl, err);
+    var el = h('section', { class: 'player idle' }, video, subPic, subBox, spin, osd, ctl, err);
 
     var plan = null, base = 0, level = 0, firstPlan = true, closing = false, pending = null, pendingTimer = null, hideTimer = null, tickTimer = null, reportTimer = null, lastReport = 0;
-    var steps = 0, stepsTimer = null, audioIdx = null, subs = { cues: [], sel: '' }, subText = '';
+    var steps = 0, stepsTimer = null, audioIdx = null, subs = { cues: [], sel: '', pgs: null, shown: null }, subText = '';
 
     function q() { return QUALITIES[H.pref('quality')] || QUALITIES.auto; }
     function cur() { var t = video.currentTime || 0; return plan && !plan.seekable ? base + t : t; }
@@ -243,7 +243,7 @@
     }
     function pickSubs() {
       var opts = [{ label: 'Désactivés', value: '' }].concat(plan.subs.map(function (s) {
-        return { label: s.label, detail: s.text ? s.where : 'image, non prise en charge', value: s.id, disabled: !s.text };
+        return { label: s.label, detail: s.text ? s.where : s.image ? 'image · ' + s.where : 'image, non prise en charge', value: s.id, disabled: !s.text && !s.image };
       }));
       H.menu('Sous-titres', opts, subs.sel, function (v) {
         setSub(v);
@@ -257,21 +257,34 @@
       H.menu('Qualité', opts, now, function (v) { H.pref('quality', v); level = 0; open(cur()); });
     }
     function chooseDefaultSub() {
-      var want = H.pref('subLang'), list = plan.subs.filter(function (s) { return s.text; }), pick = null;
+      var want = H.pref('subLang'), text = plan.subs.filter(function (s) { return s.text; }), list = text.concat(plan.subs.filter(function (s) { return s.image; })), pick = null;
       if (want === 'off') pick = null;
       else if (want && want !== 'any') pick = list.filter(function (s) { return s.lang === want && !s.forced; })[0] || list.filter(function (s) { return s.lang === want; })[0];
-      else if (!want) pick = list.filter(function (s) { return s.forced && /^(fr|fre|fra)$/.test(s.lang); })[0] || list.filter(function (s) { return s.default; })[0];
+      else if (!want) pick = text.filter(function (s) { return s.forced && /^(fr|fre|fra)$/.test(s.lang); })[0] || text.filter(function (s) { return s.default; })[0];       // une piste image n'est jamais prise sans que l'utilisateur l'ait choisie : l'extraire peut durer
       setSub(pick ? pick.id : '');
     }
     function setSub(sid) {
-      subs.sel = sid; subs.cues = []; subText = ''; H.clear(subBox);
+      subs.sel = sid; subs.cues = []; subs.pgs = null; subs.shown = undefined; subText = ''; H.clear(subBox); subPic.hidden = true;
       var track = plan.subs.filter(function (s) { return s.id === sid; })[0];
       if (!track) return;
+      if (track.image) {
+        H.toast('Préparation des sous-titres image… la première fois, cela peut durer.', 5000);
+        fetch(track.url, { credentials: 'same-origin' }).then(function (r) { if (!r.ok) throw new Error('sous-titres indisponibles'); return r.arrayBuffer(); }).then(function (data) {
+          if (subs.sel !== sid) return;
+          subs.pgs = H.pgs.parse(data); subPic.hidden = false;
+        }).catch(function (e) { H.toast(e.message); });
+        return;
+      }
       fetch(track.url, { credentials: 'same-origin' }).then(function (r) { if (!r.ok) throw new Error('sous-titres indisponibles'); return r.text(); }).then(function (text) {
         if (subs.sel === sid) subs.cues = parseVtt(text);
       }).catch(function (e) { H.toast(e.message); });
     }
     tickTimer = setInterval(function () {
+      if (subs.pgs) {
+        var set = H.pgs.at(subs.pgs, cur());
+        if (set !== subs.shown) { subs.shown = set; H.pgs.draw(subPic, subs.pgs, set); }
+        return;
+      }
       if (!subs.cues.length) return;
       var t = cur(), lines = [];
       for (var i = 0; i < subs.cues.length; i++) { var c = subs.cues[i]; if (c.s > t) break; if (t < c.e) lines.push(c.t); }

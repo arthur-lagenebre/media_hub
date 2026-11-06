@@ -44,12 +44,17 @@ class UiCase(unittest.TestCase):
         root = pathlib.Path(cls.tmp)
         fixtures.build_library(root / "srv")
         make_media(root)
+        cls.add_media(root)
         cls.run_ = Running.__new__(Running)           # Running reconstruit la bibliothèque : on la prépare nous-mêmes
         cls.run_.root = root
         cls.start(root)
         cls.pw = sync_playwright().start()
         cls.browser = cls.pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
         cls.base = f"http://127.0.0.1:{cls.run_.port}"
+
+    @classmethod
+    def add_media(cls, root):
+        """Les films en plus qu'une classe de tests veut dans la médiathèque (les autres n'en ont pas besoin, et leurs comptes resteraient justes)."""
 
     @classmethod
     def start(cls, root, password=""):
@@ -498,6 +503,116 @@ class TestVideoPlayer(UiCase):
         self.open("#/play/" + broken)
         self.page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
         self.assertIn("Lecture impossible", self.page.inner_text(".player .err"))
+
+
+def ycc(y, cr, cb):
+    """Le rouge, vert, bleu d'une entrée de palette PGS (norme BT.709, image HD), comme le décodeur les calcule."""
+    l = 1.164 * (y - 16)
+    return [l + 1.793 * (cr - 128), l - 0.213 * (cb - 128) - 0.533 * (cr - 128), l + 2.112 * (cb - 128)]
+
+
+SUP_ROWS = [[(1, 1), (2, 70), (0, 9)], [(3, 64), (0, 16)]]                      # 80 × 2 : un rouge, 70 verts, 9 vides ; 64 bleus à moitié transparents, 16 vides
+SUP_PALETTE = {1: fixtures.RED, 2: fixtures.GREEN, 3: fixtures.HALF_BLUE}
+
+
+class TestPgsDecoder(UiCase):
+    """pgs.js : un .sup fabriqué octet par octet, décodé et dessiné par la page."""
+    DRAW = """([b64, at]) => {
+      var bytes = Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); });
+      var track = Hub.pgs.parse(bytes.buffer), canvas = document.createElement('canvas');
+      Hub.pgs.draw(canvas, track, Hub.pgs.at(track, at));
+      var ctx = canvas.getContext('2d');
+      return { size: [track.width, track.height], sets: track.sets.length,
+               shown: [[100, 900], [101, 900], [170, 900], [171, 900], [100, 901], [163, 901], [164, 901], [102, 900], [109, 900], [110, 900]].map(function (p) { return Array.from(ctx.getImageData(p[0], p[1], 1, 1).data); }) };
+    }"""
+
+    def draw(self, sup, at=3):
+        import base64
+        self.open()
+        return self.page.evaluate(self.DRAW, [base64.b64encode(sup).decode(), at])
+
+    def assertPixel(self, got, rgb, alpha):
+        self.assertEqual(got[3], alpha, got)
+        for channel, expected in zip(got[:3], rgb):
+            self.assertAlmostEqual(channel, max(0, min(255, expected)), delta=3, msg=got)
+
+    def test_runs_palette_and_transparency_are_decoded(self):
+        sup = fixtures.pgs_show(2, SUP_ROWS, SUP_PALETTE) + fixtures.pgs_clear(15)
+        out = self.draw(sup)
+        self.assertEqual((out["size"], out["sets"]), ([1920, 1080], 2))
+        red, green, blue = ycc(*fixtures.RED[:3]), ycc(*fixtures.GREEN[:3]), ycc(*fixtures.HALF_BLUE[:3])
+        shown = out["shown"]
+        self.assertPixel(shown[0], red, 255)           # l'octet seul
+        self.assertPixel(shown[1], green, 255)         # le début de la répétition de 70
+        self.assertPixel(shown[2], green, 255)         # sa fin
+        self.assertEqual(shown[3], [0, 0, 0, 0])       # les 9 pixels vides qui suivent
+        self.assertPixel(shown[4], blue, 128)          # la deuxième ligne : une répétition de 64, la transparence de la palette est gardée
+        self.assertPixel(shown[5], blue, 128)
+        self.assertEqual(shown[6], [0, 0, 0, 0])
+
+    def test_an_image_sent_in_two_pieces_is_the_same_image(self):
+        whole = self.draw(fixtures.pgs_show(2, SUP_ROWS, SUP_PALETTE))["shown"]
+        pieces = self.draw(fixtures.pgs_show(2, SUP_ROWS, SUP_PALETTE, fragments=2))["shown"]
+        self.assertEqual(pieces, whole)
+        self.assertEqual(whole[0][3], 255)
+
+    def test_a_cropped_object_shows_only_its_part_at_its_position(self):
+        out = self.draw(fixtures.pgs_show(2, SUP_ROWS, SUP_PALETTE, crop=(2, 0, 10, 1)))["shown"]
+        green = ycc(*fixtures.GREEN[:3])
+        self.assertPixel(out[0], green, 255)                          # le pixel n° 2 de l'image, posé à l'endroit de l'objet
+        self.assertPixel(out[8], green, 255)                          # (109, 900) : le dernier des 10 pixels gardés
+        self.assertEqual(out[9], [0, 0, 0, 0])                        # (110, 900) : déjà hors de la découpe
+        self.assertEqual(out[4], [0, 0, 0, 0])                        # la deuxième ligne est découpée
+
+    def test_what_is_on_screen_depends_on_the_time(self):
+        import base64
+        self.open()
+        sup = base64.b64encode(fixtures.pgs_show(2, SUP_ROWS, SUP_PALETTE) + fixtures.pgs_clear(15) + fixtures.pgs_show(20, SUP_ROWS, SUP_PALETTE)).decode()
+        shown = self.page.evaluate("""(b64) => {
+          var bytes = Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); }), track = Hub.pgs.parse(bytes.buffer);
+          return [0, 1.99, 2, 14.9, 15, 19, 20, 24.9, 25.1].map(function (t) { var s = Hub.pgs.at(track, t); return s ? s.s : null; });
+        }""", sup)
+        self.assertEqual(shown, [None, None, 2, 2, None, None, 20, 20, None])       # sans suite, un ensemble ne dure que 5 s
+
+    def test_garbage_is_not_a_subtitle_track(self):
+        self.open()
+        out = self.page.evaluate("""() => [new ArrayBuffer(0), new Uint8Array([80, 71, 1, 2, 3]).buffer, new Uint8Array(200).buffer].map(function (b) { return Hub.pgs.parse(b).sets.length; })""")
+        self.assertEqual(out, [0, 0, 0])
+
+
+class TestPgsInThePlayer(UiCase):
+    @classmethod
+    def add_media(cls, root):
+        sup = fixtures.pgs_show(2, SUP_ROWS, SUP_PALETTE, x=100, y=900) + fixtures.pgs_clear(15)
+        fixtures.write_video(root / "srv" / "Films" / "Image (2024)" / "Image (2024).mkv", seconds=20, size="160x90", acodec="aac", channels=2, sup=sup)
+
+    def pixel(self, x, y):
+        return self.page.evaluate("(p) => Array.from(document.querySelector('.player .pgs').getContext('2d').getImageData(p[0], p[1], 1, 1).data)", [x, y])
+
+    def test_the_picture_subtitles_of_a_blu_ray_are_drawn_over_the_film(self):
+        entry = self.entries("films", "Image")[0]["id"]
+        track = self.api("/api/play/" + entry, {})["subs"][0]
+        self.assertEqual((track["text"], track["image"], track["url"]), (False, "pgs", f"/api/subs/{entry}/e0.sup"))
+        self.open("#/play/" + entry)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.assertTrue(self.page.locator(".player .pgs").is_hidden())              # jamais choisie d'office : l'extraire peut durer
+        self.page.locator(".player .btn", has_text="Sous-titres").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertIn("image · mkv", self.page.locator(".veil .opt").nth(1).inner_text())
+        self.assertTrue(self.page.locator(".veil .opt").nth(1).is_enabled())
+        self.page.locator(".veil .opt").nth(1).click()
+        self.page.wait_for_function("(() => { var c = document.querySelector('.player .pgs'); return !c.hidden && c.getContext('2d').getImageData(150, 900, 1, 1).data[3] > 0 })()", timeout=20000)
+        red, green = self.pixel(100, 900), self.pixel(150, 900)
+        self.assertGreater(red[0], 230)
+        self.assertLess(red[1], 60)
+        self.assertGreater(green[1], 150)                                           # le vert de la répétition, au bon endroit de l'écran du Blu-ray
+        self.assertEqual(self.pixel(100, 950)[3], 0)
+        self.assertEqual(self.page.evaluate("localStorage.getItem('hub.subLang')"), '"any"')     # le choix est mémorisé (la piste n'a pas de langue)
+        self.page.locator(".player .btn", has_text="Sous-titres").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt").nth(0).click()                              # « Désactivés »
+        self.page.wait_for_function("document.querySelector('.player .pgs').hidden")
 
 
 class TestReader(UiCase):
