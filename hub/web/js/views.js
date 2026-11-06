@@ -191,16 +191,24 @@
     if (sub) sub.insertBefore(h('i', { class: 'dot' }), sub.firstChild);
     return card;
   }
-  // « Pas encore vu » : ce que le serveur propose (films et séries jamais touchés par ce compte), sans ce que `taken` (les nouveautés montrées) affiche déjà, 12 au plus ; chacun garde sa bibliothèque.
+  // « Pas encore vu » : un rayon par bibliothèque que le serveur dit avoir un `unseen` (films, séries, animations… et toute bibliothèque vidéo ajoutée plus tard), dans l'ordre des bibliothèques.
+  // Chaque rayon : ce que le serveur propose, sans ce que `taken` (les nouveautés montrées) affiche déjà, 12 au plus ; une bibliothèque sans rien à proposer n'a pas de rayon.
   var UNSEEN_SHOWN = 12;
-  H.unseen = function (offered, libraries, taken) {
-    var byId = {}, skip = {};
-    libraries.forEach(function (lib) { byId[lib.id] = lib; });
+  H.unseen = function (libraries, taken) {
+    var skip = {};
     taken.forEach(function (e) { skip[e.item.id] = true; });
-    return offered.filter(function (it) { return !skip[it.id] && byId[it.lib]; }).slice(0, UNSEEN_SHOWN).map(function (it) { return { item: it, lib: byId[it.lib] }; });
+    return libraries.map(function (lib) {
+      return { lib: lib, items: (lib.unseen || []).filter(function (it) { return !skip[it.id]; }).slice(0, UNSEEN_SHOWN) };
+    }).filter(function (shelf) { return shelf.items.length; });
   };
   function cardsSection(cls, title, entries) {
     return h('section', { class: 'shelf ' + cls }, h('h2', null, title), h('div', { class: 'grid' }, entries.map(latestCard)));
+  }
+  // Le rayon d'une bibliothèque : son titre est un lien vers elle, précédé du point de sa couleur (comme dans la recherche).
+  function libraryShelf(cls, title, lib, items) {
+    return h('section', { class: 'shelf ' + cls, 'data-lib': lib.id },
+      h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + lib.label)),
+      h('div', { class: 'grid' }, items.map(function (it) { return H.card(it, false); })));
   }
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
@@ -227,8 +235,9 @@
         if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
         if (latest.length) el.appendChild(cardsSection('latest', 'Nouveautés', latest));
-        var unseen = H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.unseen || [], data.libraries, latest);
-        if (unseen.length) el.appendChild(cardsSection('unseen', 'Pas encore vu', unseen));
+        (H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest)).forEach(function (shelf) {
+          el.appendChild(libraryShelf('unseen', 'Pas encore vu', shelf.lib, shelf.items));
+        });
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
         if (!a || a === document.body || (a.closest && a.closest('#nav')) && el.style.display !== 'none') H.focus.first();

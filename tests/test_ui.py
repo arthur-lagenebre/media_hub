@@ -1642,30 +1642,41 @@ class TestHomeUnseen(UiCase):
     def setUp(self):
         super().setUp()
         db = self.run_.hub.db
-        films = [dict(r) for r in db.query("SELECT * FROM items WHERE lib='films'")]
-        entries = [dict(r) for r in db.query("SELECT * FROM entries WHERE lib='films'")]
-        old = [{**films[0], "id": f"vieux{n:03d}", "title": f"Vieux film {n:03d}", "sort": f"vieux film {n:03d}", "grp": "", "added": 100 + n, "meta": "{}"} for n in range(100)]
-        files = [{**entries[0], "id": f"vieuxf{n:03d}", "item_id": f"vieux{n:03d}", "rel": f"vieux{n:03d}/film.mkv"} for n in range(100)]
-        db.replace_library("films", films + old, entries + files)
-        self.addCleanup(db.replace_library, "films", films, entries)
+        for lib in ("films", "series", "animations"):                                                          # de quoi remplir un rayon dans chacune, au-delà des nouveautés
+            items = [dict(r) for r in db.query("SELECT * FROM items WHERE lib=?", (lib,))]
+            entries = [dict(r) for r in db.query("SELECT * FROM entries WHERE lib=?", (lib,))]
+            old = [{**items[0], "id": f"vieux{lib}{n:03d}", "title": f"Vieux {lib} {n:03d}", "sort": f"vieux {lib} {n:03d}", "grp": "", "added": 100 + n, "meta": "{}"} for n in range(100)]
+            files = [{**entries[0], "id": f"vieuxf{lib}{n:03d}", "item_id": f"vieux{lib}{n:03d}", "rel": f"vieux{lib}{n:03d}/film.mkv"} for n in range(100)]
+            db.replace_library(lib, items + old, entries + files)
+            self.addCleanup(db.replace_library, lib, items, entries)
         day = mock.patch("hub.server.app.today", return_value="2026-11-04")          # le serveur tourne dans ce processus : l'ordre du jour ne change pas pendant le test
         day.start()
         self.addCleanup(day.stop)
         self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show"}))
 
-    def offered(self):
-        return [u["id"] for u in self.api("/api/home")["unseen"]]
+    def libraries(self):
+        return self.api("/api/home")["libraries"]
 
-    def test_the_shelf_follows_the_new_ones_and_never_repeats_a_film_they_already_show(self):
+    def offered(self, lib="films"):
+        return [u["id"] for l in self.libraries() if l["id"] == lib for u in l["unseen"]]
+
+    def test_each_video_library_has_its_own_shelf_after_the_new_ones(self):
         self.open()
         self.view(".shelf.unseen .card").first.wait_for()
-        self.assertEqual(self.view(".shelf h2").all_inner_texts(), ["Nouveautés", "Pas encore vu"])
+        wanted = [l["label"] for l in self.libraries() if "unseen" in l and l["unseen"]]
+        self.assertGreater(len(wanted), 1)                                                                  # films, séries, animations : pas un seul rayon pour tout
+        self.assertEqual(self.view(".shelf h2").all_inner_texts(), ["Nouveautés"] + ["Pas encore vu · " + label for label in wanted])
+        self.assertEqual(self.view(".shelf.unseen").evaluate_all("els => els.map(e => e.getAttribute('data-lib'))"), [l["id"] for l in self.libraries() if l.get("unseen")])
+        self.assertEqual(self.view(".shelf.unseen[data-lib=films] h2 a").get_attribute("href"), "#/l/films")      # le titre mène à la bibliothèque
+
+    def test_the_shelf_never_repeats_a_film_the_new_ones_already_show(self):
+        self.open()
+        self.view(".shelf.unseen .card").first.wait_for()
         latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
-        shown = self.view(".shelf.unseen .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        shown = self.view(".shelf.unseen[data-lib=films] .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
         self.assertEqual(shown, [i for i in self.offered() if i not in latest][:12])
         self.assertEqual(len(shown), 12)
         self.assertFalse(set(shown) & set(latest))
-        self.assertEqual(self.view(".shelf.unseen .card[data-lib=films] .s .dot").count(), 12)             # comme les nouveautés : le point de sa bibliothèque
 
     def test_a_film_that_is_started_leaves_the_shelf(self):
         self.open()
@@ -1685,8 +1696,8 @@ class TestHomeUnseen(UiCase):
         self.api("/api/me/settings", {"home_unseen": "show", "home_latest": "hide"})
         self.open()
         self.view(".shelf.unseen .card").first.wait_for()
-        self.assertEqual(self.view(".shelf h2").all_inner_texts(), ["Pas encore vu"])
-        shown = self.view(".shelf.unseen .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        self.assertNotIn("Nouveautés", self.view(".shelf h2").all_inner_texts())
+        shown = self.view(".shelf.unseen[data-lib=films] .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
         self.assertEqual(shown, self.offered()[:12])                                                       # sans nouveautés, rien à ne pas répéter
         self.api("/api/me/settings", {"home_unseen": "hide"})
         self.open()

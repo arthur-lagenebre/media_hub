@@ -732,11 +732,13 @@ class TestHomeUnseen(RouteCase):
 
     def unseen(self, day="2026-11-04"):
         with mock.patch("hub.server.app.today", return_value=day):
-            return [r["id"] for r in self.get("/api/home").json()["unseen"]]
+            libs = self.get("/api/home").json()["libraries"]
+        return [r["id"] for r in libs[0]["unseen"]]
 
-    def test_each_film_offered_names_its_library_since_it_is_not_in_a_list_of_its_own(self):
-        offered = self.get("/api/home").json()["unseen"]
-        self.assertEqual({r["lib"] for r in offered}, {"lib"})
+    def test_the_films_offered_are_in_the_list_of_their_library(self):
+        libs = self.get("/api/home").json()
+        self.assertNotIn("unseen", libs)
+        self.assertEqual([(l["id"], len(l["unseen"])) for l in libs["libraries"]], [("lib", 24)])
 
     def test_it_offers_at_most_twenty_four_films_the_account_has_not_started(self):
         ids = self.unseen()
@@ -764,12 +766,39 @@ class TestHomeUnseen(RouteCase):
         self.assertEqual(self.unseen(), [])
 
 
+class TestHomeUnseenPerLibrary(RouteCase):
+    """Un rayon par bibliothèque vidéo : en ajouter une (de n'importe quel nom) suffit à lui en donner un."""
+
+    def setUp(self):
+        super().setUp()
+        self.docs = config.Library("docs", "Documentaires", "movies", self.root / "docs")
+        self.series = config.Library("series", "Séries", "shows", self.root / "series")
+        self.music = config.Library("musique", "Musique", "music", self.root / "musique")
+        self.hub.cfg.libraries = [self.lib, self.series, self.docs, self.music]
+        self.db.replace_library("lib", [item("mv1", title="Film un")], [entry("v1", "mv1", duration=100.0)])
+        self.db.replace_library("series", [item("sr1", "show", lib="series", title="Série un")], [entry("s1", "sr1", lib="series", duration=100.0)])
+        self.db.replace_library("docs", [item("dc1", lib="docs", title="Doc un"), item("dc2", lib="docs", title="Doc deux")], [entry("d1", "dc1", lib="docs", duration=100.0), entry("d2", "dc2", lib="docs", duration=100.0)])
+        self.db.replace_library("musique", [item("al1", "album", lib="musique", title="Un album")], [entry("a1", "al1", kind="audio", lib="musique", duration=100.0)])
+
+    def shelves(self):
+        return {l["id"]: [r["id"] for r in l["unseen"]] for l in self.get("/api/home").json()["libraries"] if "unseen" in l}
+
+    def test_each_video_library_has_its_own_list_and_music_has_none(self):
+        shelves = {lib: sorted(ids) for lib, ids in self.shelves().items()}
+        self.assertEqual(shelves, {"lib": ["mv1"], "series": ["sr1"], "docs": ["dc1", "dc2"]})
+
+    def test_what_one_account_has_started_leaves_only_its_own_library(self):
+        self.post("/api/progress", {"entry": "s1", "position": 5, "duration": 100})
+        self.assertEqual(self.shelves()["series"], [])
+        self.assertEqual(self.shelves()["lib"], ["mv1"])
+
+
 class TestHomeUnseenOtherKinds(RouteCase):
     kind = "music"
 
     def test_music_is_not_something_one_has_not_seen_yet(self):
         self.fill([item("al1", "album", title="Un album"), item("al2", "album", title="Un autre")], [entry("a1", "al1", kind="audio", duration=100.0), entry("a2", "al2", kind="audio", duration=100.0)])
-        self.assertEqual(self.get("/api/home").json()["unseen"], [])
+        self.assertNotIn("unseen", self.get("/api/home").json()["libraries"][0])
 
 
 class TestHomeMusic(RouteCase):
