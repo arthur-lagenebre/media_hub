@@ -11,23 +11,23 @@
     ui.cover = h('div', { class: 'cov' });
     ui.title = h('div', { class: 'ti' });
     ui.sub = h('div', { class: 'su' });
-    ui.prev = H.button('', 'prev', { 'aria-label': 'Piste précédente', onclick: function () { step(-1); } });
-    ui.play = H.button('', 'play', { 'aria-label': 'Lecture / pause', onclick: toggle });
-    ui.next = H.button('', 'next', { 'aria-label': 'Piste suivante', onclick: function () { step(1); } });
-    ui.queue = H.button('', 'queue', { 'aria-label': 'File d’attente', onclick: function () { if (H.music) H.music.openQueue(); } });
+    ui.prev = H.button('', 'prev', { 'aria-label': H.t('Piste précédente'), onclick: function () { step(-1); } });
+    ui.play = H.button('', 'play', { 'aria-label': H.t('Lecture / pause'), onclick: toggle });
+    ui.next = H.button('', 'next', { 'aria-label': H.t('Piste suivante'), onclick: function () { step(1); } });
+    ui.queue = H.button('', 'queue', { 'aria-label': H.t('File d’attente'), onclick: function () { if (H.music) H.music.openQueue(); } });
     ui.count = h('span', { class: 'qn' });
     ui.queue.appendChild(ui.count);
-    ui.stop = H.button('', 'close', { 'aria-label': 'Fermer le lecteur', onclick: stop });
+    ui.stop = H.button('', 'close', { 'aria-label': H.t('Fermer le lecteur'), onclick: stop });
     ui.fill = h('i');
-    ui.seek = h('div', { class: 'seek f', role: 'slider', tabindex: '0', 'aria-label': 'Position', onclick: function (e) {
+    ui.seek = h('div', { class: 'seek f', role: 'slider', tabindex: '0', 'aria-label': H.t('Position'), onclick: function (e) {
       var r = ui.seek.getBoundingClientRect();
       if (el.duration) el.currentTime = el.duration * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
     }, onkeydown: function (e) {
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { el.currentTime = Math.max(0, el.currentTime + (e.key === 'ArrowLeft' ? -10 : 10)); e.preventDefault(); }
     } }, ui.fill);
     ui.time = h('div', { class: 'tm' });
-    ui.mute = H.button('', 'audio', { 'aria-label': 'Couper le son', onclick: function () { el.muted = !el.muted; if (!el.muted && !el.volume) el.volume = 0.5; } });
-    ui.vol = h('input', { type: 'range', class: 'vol f', min: '0', max: '1', step: '0.05', 'aria-label': 'Volume', oninput: function () {
+    ui.mute = H.button('', 'audio', { 'aria-label': H.t('Couper le son'), onclick: function () { el.muted = !el.muted; if (!el.muted && !el.volume) el.volume = 0.5; } });
+    ui.vol = h('input', { type: 'range', class: 'vol f', min: '0', max: '1', step: '0.05', 'aria-label': H.t('Volume'), oninput: function () {
       el.volume = Number(ui.vol.value);
       el.muted = el.volume === 0;
     } });
@@ -47,7 +47,7 @@
     el.addEventListener('pause', paintPlay);
     el.addEventListener('ended', function () { finish(); step(1, true); });
     el.addEventListener('error', function () {
-      H.toast('Cette piste ne se lit pas : ' + (queue[idx] ? queue[idx].title : ''), 4500);
+      H.toast(H.t('Cette piste ne se lit pas : {title}', { title: queue[idx] ? queue[idx].title : '' }), 4500);
       step(1, true);
     });
     restore();
@@ -69,7 +69,7 @@
     var icon = ui.mute.querySelector('.ic');
     var fresh = H.icon(silent ? 'mute' : 'audio');
     if (icon) ui.mute.replaceChild(fresh, icon);
-    ui.mute.setAttribute('aria-label', silent ? 'Remettre le son' : 'Couper le son');
+    ui.mute.setAttribute('aria-label', silent ? H.t('Remettre le son') : H.t('Couper le son'));
     ui.vol.value = silent ? 0 : el.volume;
     H.pref('volume', { v: el.volume, m: el.muted });
   }
@@ -127,7 +127,7 @@
   function step(delta, auto) {
     var n = idx + delta;
     if (n < 0) { if (el.getAttribute('src')) el.currentTime = 0; return; }
-    if (n >= queue.length) { if (auto) { el.pause(); H.toast('Fin de la liste'); } return; }
+    if (n >= queue.length) { if (auto) { el.pause(); H.toast(H.t('Fin de la liste')); } return; }
     load(n);
   }
   function toggle() {

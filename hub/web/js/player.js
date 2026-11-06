@@ -4,8 +4,8 @@
   'use strict';
   var H = window.Hub, h = H.h;
 
-  var QUALITIES = { auto: { k: 0, h: 0, label: 'Qualité d’origine' }, '1080': { k: 8000, h: 1080, label: '1080p · 8 Mb/s' }, '720': { k: 4000, h: 720, label: '720p · 4 Mb/s' }, '480': { k: 1500, h: 480, label: '480p · 1,5 Mb/s' } };
-  var MODES = { direct: 'Lecture directe', remux: 'Son converti', transcode: 'Image convertie' };
+  var QUALITIES = { auto: { k: 0, h: 0, label: H.t('Qualité d’origine') }, '1080': { k: 8000, h: 1080, label: '1080p · 8 Mb/s' }, '720': { k: 4000, h: 720, label: '720p · 4 Mb/s' }, '480': { k: 1500, h: 480, label: H.t('480p · 1,5 Mb/s') } };
+  var MODES = { direct: H.t('Lecture directe'), remux: H.t('Son converti'), transcode: H.t('Image convertie') };
 
   // Ce que ce navigateur sait lire, d'après lui-même.
   function capabilities(level) {
@@ -76,12 +76,12 @@
     var osd = h('div', { class: 'osd', hidden: true });
     var title = h('div', { class: 'ti' }), sub = h('div', { class: 'su' }), pill = h('span', { class: 'pill' });
     var fill = h('i'), thumb = h('b'), tCur = h('span'), tEnd = h('span');
-    var seekbar = h('div', { class: 'seekbar f', role: 'slider', tabindex: '0', 'data-autofocus': '1', 'aria-label': 'Position dans le film' }, h('div', { class: 'track' }, fill, thumb));
-    var playBtn = H.button('', 'pause', { 'aria-label': 'Lecture / pause', onclick: toggle });
-    var bAudio = H.button('Audio', 'audio', { onclick: pickAudio }), bSubs = H.button('Sous-titres', 'subs', { onclick: pickSubs }), bQual = H.button('Qualité', 'quality', { onclick: pickQuality });
-    var bNext = H.button('Suivant', 'next', { onclick: goNext, hidden: true });
-    var bFull = H.button('', 'full', { 'aria-label': 'Plein écran', onclick: fullscreen });
-    var bBack = H.button('', 'back', { 'aria-label': 'Retour', onclick: function () { H.back('#/'); } });
+    var seekbar = h('div', { class: 'seekbar f', role: 'slider', tabindex: '0', 'data-autofocus': '1', 'aria-label': H.t('Position dans le film') }, h('div', { class: 'track' }, fill, thumb));
+    var playBtn = H.button('', 'pause', { 'aria-label': H.t('Lecture / pause'), onclick: toggle });
+    var bAudio = H.button(H.t('Audio'), 'audio', { onclick: pickAudio }), bSubs = H.button(H.t('Sous-titres'), 'subs', { onclick: pickSubs }), bQual = H.button(H.t('Qualité'), 'quality', { onclick: pickQuality });
+    var bNext = H.button(H.t('Suivant'), 'next', { onclick: goNext, hidden: true });
+    var bFull = H.button('', 'full', { 'aria-label': H.t('Plein écran'), onclick: fullscreen });
+    var bBack = H.button('', 'back', { 'aria-label': H.t('Retour'), onclick: function () { H.back('#/'); } });
     var ctl = h('div', { class: 'ctl' },
       h('div', { class: 'top' }, bBack, h('div', { class: 'txt' }, title, sub), pill),
       h('div', { class: 'bottom' }, h('div', { class: 'times' }, tCur, tEnd), seekbar,
@@ -106,13 +106,13 @@
         if (audioIdx === null) { var chosen = p.audio.filter(function (a) { return a.selected; })[0]; audioIdx = chosen ? chosen.index : null; }
         title.textContent = p.show || p.title || '';
         sub.textContent = p.show ? [(p.season !== null && p.season !== undefined ? 'S' + p.season : ''), (p.number !== null && p.number !== undefined ? 'E' + p.number : ''), p.title].filter(Boolean).join(' · ') : '';
-        pill.textContent = MODES[p.mode]; pill.title = p.why.join('\n'); pill.setAttribute('data-mode', p.mode);
+        pill.textContent = MODES[p.mode]; pill.title = p.why.map(function (w) { return H.tr(w); }).join('\n'); pill.setAttribute('data-mode', p.mode);
         bNext.hidden = !p.next;
         bAudio.hidden = p.audio.length < 2;
         bSubs.hidden = !p.subs.length;
-        if (p.warning) H.toast(p.warning, 7000);
+        if (p.warning) H.toast(H.tr(p.warning), 7000);
         var start = at !== undefined ? at : (query.t !== undefined ? parseFloat(query.t) || 0 : p.resume);
-        if (firstPlan) { firstPlan = false; chooseDefaultSub(); if (start >= 20 && query.t === undefined) H.toast('Reprise à ' + H.time(start)); }
+        if (firstPlan) { firstPlan = false; chooseDefaultSub(); if (start >= 20 && query.t === undefined) H.toast(H.t('Reprise à {time}', { time: H.time(start) })); }
         attach(start);
       }).catch(function (e) { spin.hidden = true; showError(e.message); });
     }
@@ -139,8 +139,8 @@
       paintTime();
     }
     function showError(message) {
-      H.clear(err).appendChild(h('div', null, h('h2', null, 'Lecture impossible'), h('p', null, message),
-        h('div', { class: 'actions' }, H.button('Réessayer', 'refresh', { 'data-autofocus': '1', onclick: function () { level = 0; open(cur()); } }), H.button('Retour', 'back', { onclick: function () { H.back('#/'); } }))));
+      H.clear(err).appendChild(h('div', null, h('h2', null, H.t('Lecture impossible')), h('p', null, message),
+        h('div', { class: 'actions' }, H.button(H.t('Réessayer'), 'refresh', { 'data-autofocus': '1', onclick: function () { level = 0; open(cur()); } }), H.button(H.t('Retour'), 'back', { onclick: function () { H.back('#/'); } }))));
       err.hidden = false; show(true);
       H.focus.first(err);
     }
@@ -150,14 +150,14 @@
       var at = cur();
       if (level < 2 && plan.mode !== 'transcode') {
         level++;
-        H.toast(level === 1 ? 'Lecture directe impossible : conversion du conteneur.' : 'Ce lecteur ne lit pas cette image : conversion complète.', 4500);
+        H.toast(level === 1 ? H.t('Lecture directe impossible : conversion du conteneur.') : H.t('Ce lecteur ne lit pas cette image : conversion complète.'), 4500);
         open(at);
         return;
       }
       spin.hidden = true;
       H.api('/api/state').then(function (s) {
-        showError(s.streams >= s.max_streams ? 'Le serveur convertit déjà ' + s.streams + ' flux (maximum ' + s.max_streams + '). Réessaie dans un instant.' : (plan.why.join(' · ') || 'Le fichier n’a pas pu être lu.'));
-      }, function () { showError('Le serveur ne répond plus.'); });
+        showError(s.streams >= s.max_streams ? H.t('Le serveur convertit déjà {n} flux (maximum {max}). Réessaie dans un instant.', { n: s.streams, max: s.max_streams }) : (plan.why.map(function (w) { return H.tr(w); }).join(' · ') || H.t('Le fichier n’a pas pu être lu.')));
+      }, function () { showError(H.t('Le serveur ne répond plus.')); });
     });
     video.addEventListener('waiting', function () { spin.hidden = false; });
     video.addEventListener('playing', function () { spin.hidden = true; paintPlay(); schedule(); });
@@ -246,16 +246,16 @@
 
     // --- Pistes ---------------------------------------------------------------------
     function pickAudio() {
-      H.menu('Audio', plan.audio.map(function (a) { return { label: a.label + (a.commentary ? ' (commentaires)' : ''), value: a.index }; }), audioIdx, function (v) {
+      H.menu(H.t('Audio'), plan.audio.map(function (a) { return { label: H.tr(a.label) + (a.commentary ? ' ' + H.t('(commentaires)') : ''), value: a.index }; }), audioIdx, function (v) {
         if (v === audioIdx) return;
         audioIdx = v; open(cur());
       });
     }
     function pickSubs() {
-      var opts = [{ label: 'Désactivés', value: '' }].concat(plan.subs.map(function (s) {
-        return { label: s.label, detail: s.text ? s.where : s.image ? 'image · ' + s.where : 'image, non prise en charge', value: s.id, disabled: !s.text && !s.image };
+      var opts = [{ label: H.t('Désactivés'), value: '' }].concat(plan.subs.map(function (s) {
+        return { label: H.tr(s.label), detail: s.text ? H.tr(s.where) : s.image ? H.t('image · {where}', { where: H.tr(s.where) }) : H.t('image, non prise en charge'), value: s.id, disabled: !s.text && !s.image };
       }));
-      H.menu('Sous-titres', opts, subs.sel, function (v) {
+      H.menu(H.t('Sous-titres'), opts, subs.sel, function (v) {
         setSub(v);
         var track = plan.subs.filter(function (s) { return s.id === v; })[0];
         H.pref('subLang', v ? (track && track.lang) || 'any' : 'off');
@@ -264,7 +264,7 @@
     function pickQuality() {
       var now = H.pref('quality') || 'auto';
       var opts = Object.keys(QUALITIES).map(function (k) { return { label: QUALITIES[k].label, detail: k === now ? MODES[plan.mode] : '', value: k }; });
-      H.menu('Qualité', opts, now, function (v) { H.pref('quality', v); level = 0; open(cur()); });
+      H.menu(H.t('Qualité'), opts, now, function (v) { H.pref('quality', v); level = 0; open(cur()); });
     }
     function chooseDefaultSub() {
       var want = H.pref('subLang'), text = plan.subs.filter(function (s) { return s.text; }), list = text.concat(plan.subs.filter(function (s) { return s.image; })), pick = null;
@@ -278,14 +278,14 @@
       var track = plan.subs.filter(function (s) { return s.id === sid; })[0];
       if (!track) return;
       if (track.image) {
-        H.toast('Préparation des sous-titres image… la première fois, cela peut durer.', 5000);
-        fetch(track.url, { credentials: 'same-origin' }).then(function (r) { if (!r.ok) throw new Error('sous-titres indisponibles'); return r.arrayBuffer(); }).then(function (data) {
+        H.toast(H.t('Préparation des sous-titres image… la première fois, cela peut durer.'), 5000);
+        fetch(track.url, { credentials: 'same-origin' }).then(function (r) { if (!r.ok) throw new Error(H.t('sous-titres indisponibles')); return r.arrayBuffer(); }).then(function (data) {
           if (subs.sel !== sid) return;
           subs.pgs = H.pgs.parse(data); subPic.hidden = false;
         }).catch(function (e) { H.toast(e.message); });
         return;
       }
-      fetch(track.url, { credentials: 'same-origin' }).then(function (r) { if (!r.ok) throw new Error('sous-titres indisponibles'); return r.text(); }).then(function (text) {
+      fetch(track.url, { credentials: 'same-origin' }).then(function (r) { if (!r.ok) throw new Error(H.t('sous-titres indisponibles')); return r.text(); }).then(function (text) {
         if (subs.sel === sid) subs.cues = parseVtt(text);
       }).catch(function (e) { H.toast(e.message); });
     }
