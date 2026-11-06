@@ -87,7 +87,7 @@ L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste es
 
 ## Langue de l'interface
 
-L'interface existe en **français** (par défaut) et en **anglais**. Le choix est dans *Paramètres > Lecture > Langue*, **par navigateur** (comme la taille du texte) : la page se recharge dans l'autre langue, et la page de connexion suit (elle a aussi un lien *English* / *Français*). Rien ne change pour qui ne touche à rien.
+L'interface existe en **français** (par défaut) et en **anglais**. Le choix est dans *Paramètres > Interface > Langue*, **par navigateur** (comme la taille du texte) : la page se recharge dans l'autre langue, et la page de connexion suit (elle a aussi un lien *English* / *Français*). Rien ne change pour qui ne touche à rien.
 
 - **Traduit** : tous les textes de l'interface, les messages d'erreur du serveur, les noms des bibliothèques par défaut (*Films* devient *Movies*, *Musique* devient *Music*), les noms des tâches et leur journal, les raisons d'une conversion, les libellés des pistes audio et des sous-titres, le pays et la durée de vie d'un artiste.
 - **Pas traduit** : ce que disent les fichiers et les services (titres, synopsis, genres, résumé Wikipédia en français, noms de dossiers comme `Films` ou `Series`), et le nom d'une bibliothèque que l'on a donné soi-même dans `HUB_LIBRARIES`.
