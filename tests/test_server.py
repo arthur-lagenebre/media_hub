@@ -839,6 +839,35 @@ class TestPlayback(ServerCase):
         later = self.ffprobe(self.api.get(plan["url"] + "&start=2")[2])["format"]
         self.assertLess(float(later["duration"]), float(whole["duration"]) - 1)
 
+    def stream_start(self, entry, at):
+        status, data = self.api.json(f"/api/play/{entry}/start?t={at}")
+        self.assertEqual(status, 200, data)
+        return data["start"]
+
+    def test_a_resume_in_remux_starts_on_the_keyframe_the_server_names(self):
+        """Une image recopiée ne commence que sur une image clé (ici toutes les 0,5 s) : le client doit partir de celle que le serveur donne, pas de l'instant demandé."""
+        entry = self.entry("Vrai Film")
+        plan = self.play(entry, caps=CAPS_ALL)
+        whole = float(self.ffprobe(self.api.get(plan["url"])[2])["format"]["duration"])
+        for at in (2.3, 2.0, 2.45):
+            start = self.stream_start(entry, at)
+            self.assertLessEqual(start, at + 0.001)
+            self.assertGreater(start, at - 0.5)
+            self.assertAlmostEqual(start * 2, round(start * 2), places=1)                       # une image clé
+            got = float(self.ffprobe(self.api.get(f"{plan['url']}&start={start}")[2])["format"]["duration"])
+            self.assertAlmostEqual(got, whole - start, delta=0.2, msg=f"reprise à {at} : le flux part de {start}")      # il part bien de là, pas de l'image clé d'avant
+
+    def test_the_start_of_a_stream_is_zero_at_the_beginning(self):
+        entry = self.entry("Vrai Film")
+        self.assertEqual(self.stream_start(entry, 0), 0)
+        self.assertEqual(self.stream_start(entry, 0.2), 0)
+
+    def test_the_start_of_a_stream_is_refused_for_what_is_not_a_video_or_not_a_number(self):
+        track = self.detail(self.item_by_title("musique", "Discovery")["id"])["entries"][0]["id"]
+        self.assertEqual(self.api.json(f"/api/play/{track}/start?t=1")[0], 400)
+        self.assertEqual(self.api.json(f"/api/play/{self.entry('Vrai Film')}/start?t=abc")[0], 400)
+        self.assertEqual(self.api.json("/api/play/xxxx/start?t=1")[0], 404)
+
     def test_audio_and_subtitle_listing(self):
         plan = self.play(self.entry("Vrai Film"), caps=CAPS_ALL)
         self.assertEqual(len(plan["audio"]), 1)

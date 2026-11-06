@@ -116,10 +116,20 @@
         attach(start);
       }).catch(function (e) { spin.hidden = true; showError(e.message); });
     }
+    // En remux l'image est recopiée : le flux ne peut commencer que sur une image clé, parfois bien avant l'instant voulu. Le serveur dit laquelle ; c'est de là que l'horloge et les sous-titres comptent.
+    var attaching = 0;
     function attach(at) {
       at = Math.max(0, Math.min(at || 0, Math.max(0, dur() - 2)));
+      var turn = ++attaching;
+      if (plan.seekable || plan.mode !== 'remux' || at <= 0) { begin(at); return; }
+      spin.hidden = false;
+      H.api('/api/play/' + id + '/start?t=' + at.toFixed(3)).then(function (r) { return r.start; }, function () { return at; }).then(function (start) {
+        if (turn === attaching && !closing) begin(start);
+      });
+    }
+    function begin(at) {
       base = plan.seekable ? 0 : at;
-      video.src = plan.seekable ? plan.url : plan.url + '&start=' + at.toFixed(1);
+      video.src = plan.seekable ? plan.url : plan.url + '&start=' + at.toFixed(3);
       if (plan.seekable && at > 0) {
         var once = function () { video.removeEventListener('loadedmetadata', once); try { video.currentTime = at; } catch (e) { /* tant pis */ } };
         video.addEventListener('loadedmetadata', once);
