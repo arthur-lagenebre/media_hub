@@ -34,7 +34,7 @@ def cbz_page(path, number):
 def epub_spine(path):
     """{'base': dossier de l'.opf, 'spine': [chemins des chapitres dans l'archive], 'title'}."""
     with open_zip(path) as archive:
-        root, opf_path = epub._opf_root(archive)
+        root, opf_path = epub.opf_root(archive)
         base = posixpath.dirname(opf_path)
         manifest = root.find(f"{OPF}manifest")
         hrefs = {i.get("id"): i.get("href") for i in (list(manifest) if manifest is not None else [])}
