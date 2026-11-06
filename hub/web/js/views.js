@@ -563,11 +563,10 @@
       var list = h('div', { class: 'tracks' }), disc = null, multi = (d.discs || 1) > 1;
       d.entries.forEach(function (e, i) {
         if (multi && e.disc !== disc) { disc = e.disc; list.appendChild(h('h3', { class: 'grp' }, discHeading(d, disc))); }
-        var done = e.progress && e.progress.done;
         var track = trackList()[i], shown = H.music.credit(e.title, e.artist, d.artist || d.grp, e.artists, d.artist_mbids);
         list.appendChild(h('div', { class: 'trkwrap' },
           h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.audio.play(trackList(), i); else H.actions.denyPlay(); } },
-            h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, shown.title, shown.line ? h('small', null, shown.line) : null), done ? h('span', { class: 'seen' }, H.icon('check')) : null, h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')),
+            h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, shown.title, shown.line ? h('small', null, shown.line) : null), h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')),
           H.button('', 'more', { class: 'trkmore', 'aria-label': 'Actions de la piste', 'data-key': 'm' + e.id, onclick: function () { H.music.trackMenu(track, null, d.library && d.library.id); } })));
       });
       var sec = h('section', null, list);
