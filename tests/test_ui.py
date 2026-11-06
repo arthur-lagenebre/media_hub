@@ -242,6 +242,14 @@ class TestDetailPages(UiCase):
         self.page.locator("#abar .btn").last.click()                 # fermer
         self.assertTrue(self.page.locator("#abar").is_hidden())
 
+    def test_a_listened_track_shows_no_check_mark(self):
+        track = self.entries("musique", "Discovery")[0]["id"]
+        self.api("/api/progress", {"entry": track, "position": 3, "duration": 3, "done": True})        # écoutée jusqu'au bout
+        self.addCleanup(lambda: self.api(f"/api/entry/{track}/seen", {"done": False}))
+        self.open("#/i/" + self.item("musique", "Discovery")["id"])
+        self.view(".trk").first.wait_for()
+        self.assertEqual(self.view(".trk .seen").count(), 0)
+
     def test_guests_of_a_track_come_from_its_artist_or_its_title(self):
         self.open("#/i/" + self.item("musique", "Discovery")["id"])
         self.view(".trk").first.wait_for()
