@@ -10,15 +10,15 @@
   H.nav = {
     build: function () {
       var nav = H.clear(document.getElementById('nav'));
-      nav.appendChild(h('button', { class: 'tool f back', 'aria-label': 'Retour', title: 'Retour', hidden: 'hidden', onclick: function () { H.back('#/'); } }, H.icon('back')));
-      nav.appendChild(h('a', { class: 'brand f', href: '#/', 'data-nav': '#/' }, H.icon('home'), h('span', { class: 'name' }, 'Médiathèque')));
+      nav.appendChild(h('button', { class: 'tool f back', 'aria-label': H.t('Retour'), title: H.t('Retour'), hidden: 'hidden', onclick: function () { H.back('#/'); } }, H.icon('back')));
+      nav.appendChild(h('a', { class: 'brand f', href: '#/', 'data-nav': '#/' }, H.icon('home'), h('span', { class: 'name' }, H.t('Médiathèque'))));
       var links = h('nav', { class: 'links' });
       H.libs.forEach(function (l) {
-        links.appendChild(h('a', { class: 'link f', href: '#/l/' + l.id, 'data-nav': '#/l/' + l.id, 'data-lib': l.id }, h('i', { class: 'dot' }), l.label));
+        links.appendChild(h('a', { class: 'link f', href: '#/l/' + l.id, 'data-nav': '#/l/' + l.id, 'data-lib': l.id }, h('i', { class: 'dot' }), H.tr(l.label)));
       });
       nav.appendChild(links);
-      nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': 'Recherche' }, H.icon('search')));
-      nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': 'Paramètres' }, H.icon('gear')));
+      nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': H.t('Recherche') }, H.icon('search')));
+      nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': H.t('Paramètres') }, H.icon('gear')));
     },
     mark: function (hash) {
       var back = document.querySelector('#nav .back');
@@ -43,8 +43,8 @@
   function itemSub(it, kind) {
     var parts = [];
     if (it.type === 'album') { if (it.grp) parts.push(it.grp); if (it.year) parts.push(it.year); }
-    else if (it.type === 'show') { if (it.year) parts.push(it.year); parts.push(it.n + ' ép.'); }
-    else if (it.type === 'series') { parts.push(H.plural(it.n, 'volume')); if (it.missing) parts.push(it.missing + ' manquant' + (it.missing > 1 ? 's' : '')); }
+    else if (it.type === 'show') { if (it.year) parts.push(it.year); parts.push(H.t('{n} ép.', { n: it.n })); }
+    else if (it.type === 'series') { parts.push(H.plural(it.n, 'volume')); if (it.missing) parts.push(H.plural(it.missing, 'manquant')); }
     else { if (it.year) parts.push(it.year); }
     return parts.join(' · ');
   }
@@ -78,10 +78,10 @@
   function missingCard(m, hide) {
     var pic = H.picture(m.cover ? m.cover + '?w=300' : '', m.title, '');
     pic.appendChild(h('span', { class: 'part' }, m.rank));
-    var state = m.coming ? 'pas encore sorti' : 'manquant';           // un film annoncé est grisé comme les autres, mais il ne manque à personne
-    var card = h('div', { class: 'card wanted', title: m.title + ' (' + state + ')' }, pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, m.coming ? 'À venir' : 'Manquant'].filter(Boolean).join(' · ')));
+    var state = m.coming ? H.t('pas encore sorti') : 'manquant';           // un film annoncé est grisé comme les autres, mais il ne manque à personne
+    var card = h('div', { class: 'card wanted', title: m.title + ' (' + state + ')' }, pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, m.coming ? H.t('À venir') : H.t('Manquant')].filter(Boolean).join(' · ')));
     if (!hide || !m.ignorable) return card;
-    return h('div', { class: 'mcell' }, card, H.button('Ne pas afficher', 'close', { class: 'mhide', 'data-key': 'hide-' + m.tmdb, 'aria-label': 'Ne pas afficher ' + m.title + ' comme manquant', onclick: function () { hide(m); } }));
+    return h('div', { class: 'mcell' }, card, H.button(H.t('Ne pas afficher'), 'close', { class: 'mhide', 'data-key': 'hide-' + m.tmdb, 'aria-label': H.t('Ne pas afficher {title} comme manquant', { title: m.title }), onclick: function () { hide(m); } }));
   }
   // Combien de ces films manquent vraiment : ceux qui ne sont pas encore sortis ne comptent pas.
   function lacking(absent) { return (absent || []).filter(function (m) { return !m.coming; }).length; }
@@ -110,13 +110,13 @@
     var pic = H.picture('/img/item/' + it.id + '?w=300', it.title, square ? 'sq' : '');
     var total = it.n || 1;
     if (it.seen >= total && it.seen > 0) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
-    else if (it.seen || it.started) pic.appendChild(h('span', { class: 'badge' }, it.type === 'movie' ? 'En cours' : (it.seen || 0) + '/' + total));
+    else if (it.seen || it.started) pic.appendChild(h('span', { class: 'badge' }, it.type === 'movie' ? H.t('En cours') : (it.seen || 0) + '/' + total));
     if (square && H.music) pic.appendChild(H.music.cardTools(it));
     if (it.type === 'movie' || it.type === 'show') { pic.appendChild(H.actions.tools(it)); H.actions.bind(a, it); }
     if (withPart && it.part !== undefined && it.part !== null) pic.appendChild(h('span', { class: 'part' }, it.part));
     a.appendChild(pic);
     a.appendChild(h('div', { class: 't' }, it.title));
-    a.appendChild(h('div', { class: 's' }, (withGroup && it.grp ? it.grp + ' · ' : '') + itemSub(it)));
+    a.appendChild(h('div', { class: 's' }, (withGroup && it.grp ? H.tr(it.grp) + ' · ' : '') + itemSub(it)));
     return a;
   };
   function row(title, href, cards, more) {
@@ -135,13 +135,13 @@
   // La ligne « S1 · E2 · Titre » (série), « Tome 3 » (livre), ou le titre de l'épisode ; rien pour un film.
   function resumeLabel(c) {
     if (c.item.type === 'show') return 'S' + (c.season || 1) + ' · E' + (c.number || '?') + (c.title ? ' · ' + c.title : '');
-    if (c.kind === 'book') return c.label ? 'Tome ' + c.label : c.title;
+    if (c.kind === 'book') return c.label ? H.t('Tome {n}', { n: c.label }) : c.title;
     return c.item.type === 'movie' ? '' : c.title;
   }
   // Où on en est : « À 12:30 », « Page 4 », ou ce qui vient ensuite.
   function resumeNote(c) {
-    if (c.resume) return c.kind === 'book' ? 'Page ' + (Math.floor(c.position) + 1) : 'À ' + H.time(c.position);
-    return c.kind === 'book' ? 'Volume suivant' : 'Épisode suivant';
+    if (c.resume) return c.kind === 'book' ? H.t('Page {n}', { n: Math.floor(c.position) + 1 }) : H.t('À {time}', { time: H.time(c.position) });
+    return c.kind === 'book' ? H.t('Volume suivant') : H.t('Épisode suivant');
   }
   // La vignette : l'image du fichier, à défaut celle de l'élément, à défaut une lettre ; une barre dit où on en est.
   function resumePicture(c) {
@@ -154,22 +154,22 @@
   }
   function resumeCard(c, onRemove) {
     var pic = resumePicture(c), card;
-    function fail(e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.'); }
+    function fail(e) { H.toast(e && e.message ? e.message : H.t('Impossible pour le moment.')); }
     // Garder (rien ne change), Retirer de Reprendre (la progression est gardée : l'élément y revient dès qu'on le relance), Remettre à zéro (la progression de tout l'élément est effacée).
     function remove() {
-      H.menu('Que faire de « ' + c.item.title + ' » ?', [
-        { label: 'Garder', detail: 'Rien ne change', value: 'keep' },
-        { label: 'Retirer de Reprendre', detail: 'La progression est gardée', value: 'hide' },
-        { label: 'Remettre à zéro', detail: 'La progression est effacée', value: 'reset' }], 'keep', function (v) {
-        if (v === 'hide') H.api('/api/item/' + c.item.id + '/dismiss', {}).then(function () { H.toast('Retiré de Reprendre'); onRemove(card); }).catch(fail);
-        if (v === 'reset') H.api('/api/item/' + c.item.id + '/seen', { done: false }).then(function () { H.toast('Remis à zéro'); onRemove(card); }).catch(fail);
+      H.menu(H.t('Que faire de « {title} » ?', { title: c.item.title }), [
+        { label: H.t('Garder'), detail: H.t('Rien ne change'), value: 'keep' },
+        { label: H.t('Retirer de Reprendre'), detail: H.t('La progression est gardée'), value: 'hide' },
+        { label: H.t('Remettre à zéro'), detail: H.t('La progression est effacée'), value: 'reset' }], 'keep', function (v) {
+        if (v === 'hide') H.api('/api/item/' + c.item.id + '/dismiss', {}).then(function () { H.toast(H.t('Retiré de Reprendre')); onRemove(card); }).catch(fail);
+        if (v === 'reset') H.api('/api/item/' + c.item.id + '/seen', { done: false }).then(function () { H.toast(H.t('Remis à zéro')); onRemove(card); }).catch(fail);
       });
     }
     card = h('a', { class: 'card wide f', href: playHref(c), 'data-key': 'c' + c.id,
       oncontextmenu: function (e) { e.preventDefault(); remove(); },
       onkeydown: function (e) { if (e.key === 'Delete' || e.key === 'ContextMenu' || e.keyCode === 46 || e.keyCode === 93) { e.preventDefault(); remove(); } } },
       pic, h('div', { class: 't' }, c.item.title), h('div', { class: 's' }, [resumeLabel(c), resumeNote(c)].filter(Boolean).join(' · ')));
-    pic.appendChild(h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Retirer ou remettre à zéro', title: 'Retirer ou remettre à zéro',
+    pic.appendChild(h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': H.t('Retirer ou remettre à zéro'), title: H.t('Retirer ou remettre à zéro'),
       onclick: function (e) { e.preventDefault(); e.stopPropagation(); remove(); } }, H.icon('close'))));
     return card;
   }
@@ -208,7 +208,7 @@
   // Le rayon d'une bibliothèque : son titre est un lien vers elle, précédé du point de sa couleur (comme dans la recherche).
   function libraryShelf(cls, title, lib, items) {
     return h('section', { class: 'shelf ' + cls, 'data-lib': lib.id },
-      h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + lib.label)),
+      h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + H.tr(lib.label))),
       h('div', { class: 'grid' }, items.map(function (it) { return H.card(it, false); })));
   }
   H.route(/^\/$/, function () {
@@ -224,25 +224,25 @@
         var total = data.libraries.reduce(function (n, l) { return n + l.count; }, 0);
         if (!total) {
           el.appendChild(h('div', { class: 'blank' },
-            h('h1', null, 'Ta médiathèque est vide pour l’instant'),
-            h('p', null, !H.isAdmin() ? 'Rien n’est encore indexé : l’administrateur doit lancer une mise à jour de la médiathèque.' : H.libs.length ? 'Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.' : 'Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Animations, Musique, Livres), ou décris-les avec HUB_LIBRARIES.'),
-            H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/settings?tab=gestion', 'data-autofocus': '1' }, 'Ouvrir les paramètres') : null));
+            h('h1', null, H.t('Ta médiathèque est vide pour l’instant')),
+            h('p', null, !H.isAdmin() ? H.t('Rien n’est encore indexé : l’administrateur doit lancer une mise à jour de la médiathèque.') : H.libs.length ? H.t('Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.') : H.t('Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Animations, Musique, Livres), ou décris-les avec HUB_LIBRARIES.')),
+            H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/settings?tab=gestion', 'data-autofocus': '1' }, H.t('Ouvrir les paramètres')) : null));
           clearTimeout(timer);
           timer = setTimeout(function () { if (document.body.contains(el) && !document.hidden) load(); }, 4000);
           return;
         }
         var me = H.session.auth && H.session.user && H.session.user.name;
-        el.appendChild(h('h1', { class: 'greeting' }, me ? 'Bonjour ' + me : 'Bonjour'));
-        if (data.continue.length) el.appendChild(row('Reprendre', null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
+        el.appendChild(h('h1', { class: 'greeting' }, me ? H.t('Bonjour {name}', { name: me }) : H.t('Bonjour')));
+        if (data.continue.length) el.appendChild(row(H.t('Reprendre'), null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
-        if (latest.length) el.appendChild(cardsSection('latest', 'Nouveautés', latest));
+        if (latest.length) el.appendChild(cardsSection('latest', H.t('Nouveautés'), latest));
         (H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10))).forEach(function (shelf) {
-          el.appendChild(libraryShelf('unseen', 'Pas encore vu', shelf.lib, shelf.items));
+          el.appendChild(libraryShelf('unseen', H.t('Pas encore vu'), shelf.lib, shelf.items));
         });
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
         if (!a || a === document.body || (a.closest && a.closest('#nav')) && el.style.display !== 'none') H.focus.first();
-      }).catch(function (e) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Le serveur ne répond pas'), h('p', null, e.message), h('button', { class: 'btn f', onclick: load, 'data-autofocus': '1' }, 'Réessayer'))); });
+      }).catch(function (e) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Le serveur ne répond pas')), h('p', null, e.message), h('button', { class: 'btn f', onclick: load, 'data-autofocus': '1' }, H.t('Réessayer')))); });
     }
     load();
     return { el: el, nav: '#/', refresh: load, destroy: function () { clearTimeout(timer); } };
@@ -250,8 +250,8 @@
 
   // --- Bibliothèque ----------------------------------------------------------------
   var SORTS = {
-    movies: [['title', 'Titre'], ['added', 'Ajouts récents'], ['year', 'Plus récents'], ['year-asc', 'Plus anciens']],
-    books: [['title', 'Collection'], ['added', 'Ajouts récents'], ['year', 'Plus récents'], ['year-asc', 'Plus anciens']]
+    movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')]],
+    books: [['title', H.t('Collection')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')]]
   };
   H.route(/^\/l\/([\w-]+)$/, function (m) {
     var libId = m[1], lib = H.lib(libId);
@@ -266,22 +266,22 @@
     var grid = h('div', { class: 'grid' + (kind === 'music' ? ' sq' : '') });
     var sentinel = h('div', { class: 'sentinel' });
     var count = h('span', { class: 'count' });
-    var search = h('input', { class: 'f field', type: 'search', placeholder: 'Filtrer ' + (lib ? lib.label.toLowerCase() : ''), 'aria-label': 'Filtrer',
+    var search = h('input', { class: 'f field', type: 'search', placeholder: H.t('Filtrer {name}', { name: lib ? H.tr(lib.label).toLowerCase() : '' }), 'aria-label': H.t('Filtrer'),
       oninput: function () { clearTimeout(search.t); search.t = setTimeout(function () { st.q = search.value; reset(); }, 280); },
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
     var bLetter = H.button('', null, { onclick: pickLetter }), bGenre = H.button('', null, { onclick: pickGenre }), bSort = H.button('', null, { onclick: pickSort });
-    var bSeen = H.button('Non vus', null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
-    var bLists = H.button('Playlists', 'queue', { onclick: function () { H.go('#/playlists'); } });
+    var bSeen = H.button(H.t('Non vus'), null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
+    var bLists = H.button(H.t('Playlists'), 'queue', { onclick: function () { H.go('#/playlists'); } });
     var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bSeen, kind === 'music' ? bLists : null, count);
-    var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': 'Accès rapides', hidden: true });
+    var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': H.t('Accès rapides'), hidden: true });
     var empty = h('div', { class: 'blank', hidden: true });
-    var el = h('section', { class: 'library' }, h('h1', null, lib ? lib.label : 'Bibliothèque'), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
+    var el = h('section', { class: 'library' }, h('h1', null, lib ? H.tr(lib.label) : H.t('Bibliothèque')), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
 
     function label(btn, name, value) { H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('small', null, name + ' '), value])); }
     function paint() {
-      label(bLetter, 'Lettre', st.letter || 'Toutes');
-      label(bGenre, 'Genre', st.genre || 'Tous');
-      label(bSort, 'Tri', (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
+      label(bLetter, H.t('Lettre'), st.letter || H.t('Toutes'));
+      label(bGenre, H.t('Genre'), st.genre || H.t('Tous'));
+      label(bSort, H.t('Tri'), (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
       bSeen.setAttribute('aria-pressed', st.unseen ? 'true' : 'false');
       bSeen.classList.toggle('on', st.unseen);
       bGenre.hidden = !facets.genres.length;
@@ -297,7 +297,7 @@
       var all = list.reduce(function (n, x) { return n + x[1]; }, 0);
       var focus = quick.contains(document.activeElement) ? document.activeElement.getAttribute('data-section') : null;
       H.clear(quick);
-      [['', 'Tout', all]].concat(list.map(function (x) { return [x[0], x[0], x[1]]; })).forEach(function (x) {
+      [['', H.t('Tout'), all]].concat(list.map(function (x) { return [x[0], H.tr(x[0]), x[1]]; })).forEach(function (x) {
         var on = st.section === x[0];
         quick.appendChild(h('button', { class: 'chip f' + (on ? ' on' : ''), type: 'button', 'data-section': x[0], 'aria-pressed': on ? 'true' : 'false',
           onclick: function () { st.section = x[0]; H.pref('section.' + libId, x[0] || null); reset(); } }, x[1], h('small', null, ' ' + H.number(x[2]))));
@@ -305,15 +305,15 @@
       if (focus !== null) { var again = quick.querySelector('[data-section="' + focus.replace(/"/g, '\\"') + '"]'); if (again) H.focus.set(again, true); }
     }
     function pickLetter() {
-      var list = [{ label: 'Toutes', value: '' }].concat(facets.letters.map(function (l) { return { label: l[0], detail: String(l[1]), value: l[0] }; }));
-      H.menu(kind === 'music' ? 'Artiste commençant par' : 'Commence par', list, st.letter, function (v) { st.letter = v; reset(); });
+      var list = [{ label: H.t('Toutes'), value: '' }].concat(facets.letters.map(function (l) { return { label: l[0], detail: String(l[1]), value: l[0] }; }));
+      H.menu(kind === 'music' ? H.t('Artiste commençant par') : H.t('Commence par'), list, st.letter, function (v) { st.letter = v; reset(); });
     }
     function pickGenre() {
-      var list = [{ label: 'Tous les genres', value: '' }].concat(facets.genres.map(function (g) { return { label: g[0], detail: String(g[1]), value: g[0] }; }));
-      H.menu('Genre', list, st.genre, function (v) { st.genre = v; reset(); });
+      var list = [{ label: H.t('Tous les genres'), value: '' }].concat(facets.genres.map(function (g) { return { label: g[0], detail: String(g[1]), value: g[0] }; }));
+      H.menu(H.t('Genre'), list, st.genre, function (v) { st.genre = v; reset(); });
     }
     function pickSort() {
-      H.menu('Trier par', sorts.map(function (s) { return { label: s[1], value: s[0] }; }), st.sort, function (v) { st.sort = v; H.pref('sort.' + libId, v); reset(); });
+      H.menu(H.t('Trier par'), sorts.map(function (s) { return { label: s[1], value: s[0] }; }), st.sort, function (v) { st.sort = v; H.pref('sort.' + libId, v); reset(); });
     }
     function query(offset) {
       var q = ['offset=' + offset, 'limit=240', 'sort=' + encodeURIComponent(st.sort)];
@@ -331,7 +331,7 @@
       list.forEach(function (it) {
         if ((kind === 'music' || kind === 'books') && st.sort === 'title' && !artistMode() && it.grp !== lastGrp) {
           lastGrp = it.grp;
-          var heading = it.grp || (kind === 'music' ? 'Artiste inconnu' : 'Sans collection');
+          var heading = it.grp ? H.tr(it.grp) : (kind === 'music' ? H.t('Artiste inconnu') : H.t('Sans collection'));
           frag.appendChild(h('h3', { class: 'grp' }, kind === 'music' && it.artist_id ? h('a', { class: 'f head', href: '#/artist/' + libId + '/' + it.artist_id }, heading) : heading));
         }
         frag.appendChild(H.card(it, false));
@@ -359,9 +359,9 @@
     function showEmpty() {
       var filtered = st.q || st.letter || st.genre || st.unseen || st.section;
       H.clear(empty).appendChild(h('div', null,
-        h('h2', null, filtered ? 'Rien ne correspond' : 'Cette bibliothèque est vide'),
-        h('p', null, filtered ? 'Change ou retire un filtre.' : 'Vérifie que le dossier est bien monté, puis lance une mise à jour.'),
-        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.letter = st.genre = st.section = ''; st.unseen = false; search.value = ''; H.pref('section.' + libId, null); reset(); } }, 'Retirer les filtres') : H.isAdmin() ? h('a', { class: 'btn f', href: '#/admin' }, 'Ouvrir la gestion') : null));
+        h('h2', null, filtered ? H.t('Rien ne correspond') : H.t('Cette bibliothèque est vide')),
+        h('p', null, filtered ? H.t('Change ou retire un filtre.') : H.t('Vérifie que le dossier est bien monté, puis lance une mise à jour.')),
+        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.letter = st.genre = st.section = ''; st.unseen = false; search.value = ''; H.pref('section.' + libId, null); reset(); } }, H.t('Retirer les filtres')) : H.isAdmin() ? h('a', { class: 'btn f', href: '#/admin' }, H.t('Ouvrir la gestion')) : null));
     }
     function reset() {
       token++; items = []; total = 0; lastGrp = null; loading = false;
@@ -395,7 +395,7 @@
 
   // --- Fiche -----------------------------------------------------------------------
   // TMDB donne le statut d'une série en anglais, quelle que soit la langue demandée.
-  var SHOW_STATUS = { 'Ended': 'Terminée', 'Returning Series': 'En cours', 'Canceled': 'Annulée', 'In Production': 'En production', 'Planned': 'Prévue', 'Pilot': 'Pilote' };
+  var SHOW_STATUS = { 'Ended': H.t('Terminée'), 'Returning Series': H.t('En cours'), 'Canceled': H.t('Annulée'), 'In Production': H.t('En production'), 'Planned': H.t('Prévue'), 'Pilot': H.t('Pilote') };
   function entryProgress(e) { return e.progress && !e.progress.done && e.progress.position >= (e.kind === 'book' ? 1 : 20) ? e.progress : null; }
   function epLabel(e) { return 'S' + (e.season === null || e.season === undefined ? 1 : e.season) + ' · E' + (e.number === null || e.number === undefined ? '?' : e.number); }
 
@@ -403,7 +403,7 @@
     var id = m[1], el = h('section', { class: 'detail' }), season = null, data = null;
     function load() {
       return H.api('/api/item/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
-        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/', 'data-autofocus': '1' }, 'Accueil')));
+        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Introuvable')), h('p', null, e.message), h('a', { class: 'btn f', href: '#/', 'data-autofocus': '1' }, H.t('Accueil'))));
       });
     }
     function setSeen(done, seasonNo) { H.api('/api/item/' + id + '/seen', { done: done, season: seasonNo === undefined ? null : seasonNo }).then(load); }
@@ -416,7 +416,7 @@
     function totalDuration(entries) { return entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); }
 
     // Les types de sortie MusicBrainz (RELEASETYPE), dits en français ; un type inconnu s'affiche tel quel, avec une majuscule.
-    var RELEASE_TYPES = { album: 'Album', single: 'Single', ep: 'EP', compilation: 'Compilation', live: 'Live', soundtrack: 'Bande originale', remix: 'Remix' };
+    var RELEASE_TYPES = { album: 'Album', single: 'Single', ep: 'EP', compilation: 'Compilation', live: 'Live', soundtrack: H.t('Bande originale'), remix: 'Remix' };
     function releaseTypes(d) {
       return (d.release_types || []).filter(function (t) { return typeof t === 'string' && t; }).map(function (t) { return RELEASE_TYPES[t] || t.charAt(0).toUpperCase() + t.slice(1); }).join(', ');
     }
@@ -450,7 +450,7 @@
         return meta;
       },
       books: function (d) {
-        var meta = [d.grp || 'Livres', H.plural(d.entries.length, d.unit || 'volume', d.units)];
+        var meta = [d.grp ? H.tr(d.grp) : H.t('Livres'), H.plural(d.entries.length, d.unit || 'volume', d.units)];
         if (d.year) meta.push(d.year);
         return meta;
       }
@@ -460,44 +460,49 @@
     // Les lignes « De », « Par » et l'artiste d'un album, sous les genres.
     function credits(d) {
       var out = [];
-      if (d.directors && d.directors.length) out.push(h('p', { class: 'credit' }, 'De ' + d.directors.join(', ')));
-      if (d.authors && d.authors.length) out.push(h('p', { class: 'credit' }, 'Par ' + d.authors.join(', ')));
+      if (d.directors && d.directors.length) out.push(h('p', { class: 'credit' }, H.t('De {names}', { names: d.directors.join(', ') })));
+      if (d.authors && d.authors.length) out.push(h('p', { class: 'credit' }, H.t('Par {names}', { names: d.authors.join(', ') })));
       if (d.type === 'album' && d.artist && d.artist_id) out.push(h('p', { class: 'credit' }, h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + d.artist_id }, d.artist)));
       return out;
     }
     function doubtNote(d) {
-      return h('p', { class: 'warn doubt', role: 'note' }, 'Fiche TMDB à vérifier : ' + d.doubts.join(' ; ') + '.' + (H.device === 'tv' ? '' : ' Ce n’est pas la bonne série ? « Changer la fiche TMDB ».'));
+      return h('p', { class: 'warn doubt', role: 'note' }, H.t('Fiche TMDB à vérifier : {doubts}.', { doubts: d.doubts.map(function (x) { return H.tr(x); }).join(' ; ') }) + (H.device === 'tv' ? '' : ' ' + H.t('Ce n’est pas la bonne série ? « Changer la fiche TMDB ».')));
     }
 
     // Les boutons de lecture d'un album.
     function albumButtons(d) {
-      if (!H.actions.canPlay(d.library && d.library.id)) return [H.button('Playlist', 'plus', { 'data-autofocus': '1', onclick: function () { H.music.addToPlaylist(trackList().map(function (t) { return t.id; }), d.title); } })];
+      if (!H.actions.canPlay(d.library && d.library.id)) return [H.button(H.t('Playlist'), 'plus', { 'data-autofocus': '1', onclick: function () { H.music.addToPlaylist(trackList().map(function (t) { return t.id; }), d.title); } })];
       return [
-        H.button('Lire l’album', 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.audio.play(trackList(), 0); } }),
-        H.button('Aléatoire', 'shuffle', { onclick: function () { H.audio.play(trackList(), 0, true); } }),
-        H.button('Jouer ensuite', null, { onclick: function () { H.music.queueTracks(trackList(), 'next', d.title); } }),
-        H.button('À la file', 'queue', { onclick: function () { H.music.queueTracks(trackList(), 'end', d.title); } }),
-        H.button('Playlist', 'plus', { onclick: function () { H.music.addToPlaylist(trackList().map(function (t) { return t.id; }), d.title); } })
+        H.button(H.t('Lire l’album'), 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.audio.play(trackList(), 0); } }),
+        H.button(H.t('Aléatoire'), 'shuffle', { onclick: function () { H.audio.play(trackList(), 0, true); } }),
+        H.button(H.t('Jouer ensuite'), null, { onclick: function () { H.music.queueTracks(trackList(), 'next', d.title); } }),
+        H.button(H.t('À la file'), 'queue', { onclick: function () { H.music.queueTracks(trackList(), 'end', d.title); } }),
+        H.button(H.t('Playlist'), 'plus', { onclick: function () { H.music.addToPlaylist(trackList().map(function (t) { return t.id; }), d.title); } })
       ];
     }
     // Les boutons de lecture d'un film, d'une série ou de tomes : lire ou reprendre là où on s'est arrêté, et repartir du début.
     function playButtons(d, view) {
       var resume = view.resume, prog = view.prog;
       if (!resume || !H.actions.canPlay(d.library && d.library.id)) return [];
-      var what = d.type === 'show' ? epLabel(resume) : (d.type === 'series' ? 'tome ' + (resume.label || resume.number || '') : '');
-      var main = prog ? 'Reprendre' + (what ? ' ' + what : '') + (resume.kind === 'book' ? ' (page ' + (Math.floor(prog.position) + 1) + ')' : ' à ' + H.time(prog.position)) : (d.type === 'movie' && view.allDone ? 'Revoir' : 'Lire' + (what ? ' ' + what : ''));
+      var what = d.type === 'show' ? epLabel(resume) : (d.type === 'series' ? H.t('tome {n}', { n: resume.label || resume.number || '' }) : '');
+      var main;
+      if (prog) {
+        var at = resume.kind === 'book' ? Math.floor(prog.position) + 1 : H.time(prog.position);
+        if (resume.kind === 'book') main = what ? H.t('Reprendre {what} (page {at})', { what: what, at: at }) : H.t('Reprendre (page {at})', { at: at });
+        else main = what ? H.t('Reprendre {what} à {at}', { what: what, at: at }) : H.t('Reprendre à {at}', { at: at });
+      } else main = d.type === 'movie' && view.allDone ? H.t('Revoir') : (what ? H.t('Lire {what}', { what: what }) : H.t('Lire'));
       var out = [H.button(main, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go(playHref(resume)); } })];
-      if (prog) out.push(H.button('Depuis le début', 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
+      if (prog) out.push(H.button(H.t('Depuis le début'), 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
       return out;
     }
     // Les autres boutons : vu / non vu, saga, télécharger, affiche, fiche TMDB, liens.
     function otherButtons(d, view) {
       var out = [], entries = d.entries;
       if (d.type !== 'album' && entries.length) out.push(H.button(H.actions.seenLabel(d.type, view.allDone), 'check', { onclick: function () { setSeen(!view.allDone); } }));
-      if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) out.push(H.button('Ajouter à une saga', 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
-      if (entries.length && H.actions.canDownload(d.library && d.library.id)) out.push(H.button(d.type === 'album' ? 'Télécharger l’album' : 'Télécharger', 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
+      if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) out.push(H.button(H.t('Ajouter à une saga'), 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
+      if (entries.length && H.actions.canDownload(d.library && d.library.id)) out.push(H.button(d.type === 'album' ? H.t('Télécharger l’album') : H.t('Télécharger'), 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
       return out.concat(H.actions.posterTools(d, load), H.actions.tmdbTools(d, load),
-        (d.links || []).map(function (l) { return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label); }));
+        (d.links || []).map(function (l) { return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, H.tr(l.label)); }));
     }
     function actionsRow(d, view) {
       var actions = h('div', { class: 'actions' });
@@ -530,7 +535,7 @@
     }
     function castSection(d) {
       if (!(d.actors && d.actors.length)) return null;
-      return h('section', { class: 'cast' }, h('h2', null, 'Distribution'), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); })));
+      return h('section', { class: 'cast' }, h('h2', null, H.t('Distribution')), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); })));
     }
     function sagaBoxes(d) {
       return (d.sagas || []).map(function (saga, k) {
@@ -567,7 +572,7 @@
     // « Disque 2 » ou, quand MusicBrainz titre le disque, « Disque 2 · Bonus » (le titre vient du scan, `disc_titles`).
     function discHeading(d, disc) {
       var title = d.disc_titles && d.disc_titles[disc || 1];
-      return 'Disque ' + (disc || 1) + (typeof title === 'string' && title ? ' · ' + title : '');
+      return H.t('Disque {n}', { n: disc || 1 }) + (typeof title === 'string' && title ? ' · ' + title : '');
     }
     function tracks(d) {
       var list = h('div', { class: 'tracks' }), disc = null, multi = (d.discs || 1) > 1;
@@ -577,7 +582,7 @@
         list.appendChild(h('div', { class: 'trkwrap' },
           h('button', { class: 'trk f', 'data-key': e.id, onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.audio.play(trackList(), i); else H.actions.denyPlay(); } },
             h('span', { class: 'no' }, e.number || i + 1), h('span', { class: 'ti' }, shown.title, shown.line ? h('small', null, shown.line) : null), h('span', { class: 'du' }, e.duration ? H.time(e.duration) : '')),
-          H.button('', 'more', { class: 'trkmore', 'aria-label': 'Actions de la piste', 'data-key': 'm' + e.id, onclick: function () { H.music.trackMenu(track, null, d.library && d.library.id); } })));
+          H.button('', 'more', { class: 'trkmore', 'aria-label': H.t('Actions de la piste'), 'data-key': 'm' + e.id, onclick: function () { H.music.trackMenu(track, null, d.library && d.library.id); } })));
       });
       var sec = h('section', null, list);
       H.audio.mark(list);
@@ -596,11 +601,11 @@
     function episodeRow(d, e) {
       var done = e.progress && e.progress.done, no = episodeNumber(e);
       return h('div', { class: 'epwrap' }, h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.go(playHref(e)); else H.actions.denyPlay(); } }, h('div', { class: 'thumb' }, episodeThumb(d, e)),
-        h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, no === '' ? '' : no + '.'), ' ', e.title || 'Épisode'),
+        h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, no === '' ? '' : no + '.'), ' ', e.title || H.t('Épisode')),
           e.summary ? h('div', { class: 'su' }, e.summary) : null,
           h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
         done ? h('span', { class: 'seen' }, H.icon('check')) : null),
-        H.button('', 'more', { class: 'epmore', 'aria-label': 'Actions de l’épisode', 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load, d.library && d.library.id); } }));
+        H.button('', 'more', { class: 'epmore', 'aria-label': H.t('Actions de l’épisode'), 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load, d.library && d.library.id); } }));
     }
     // La saison ouverte au début : celle de l'épisode où reprendre, sinon la première.
     function firstSeason(d, seasons) {
@@ -617,7 +622,7 @@
         if (bSeason) {          // le bouton annonce ce qu'il va faire de la saison affichée
           var done = seasonDone();
           bSeason.classList.toggle('done', done);
-          H.clear(bSeason).appendChild(h('span', null, H.icon(done ? 'close' : 'check'), done ? ' Marquer la saison non vue' : ' Marquer la saison vue'));
+          H.clear(bSeason).appendChild(h('span', null, H.icon(done ? 'close' : 'check'), ' ', done ? H.t('Marquer la saison non vue') : H.t('Marquer la saison vue')));
         }
         H.clear(list);
         var text = (d.season_summaries || {})[String(season)] || '';
@@ -628,7 +633,7 @@
       if (seasons.length > 1 || seasons[0] !== 1) seasons.forEach(function (s) {
         chips.appendChild(h('button', { class: 'chip f' + (s === season ? ' on' : ''), 'data-key': 's' + s, 'aria-pressed': s === season ? 'true' : 'false', onclick: function () {
           season = s; Array.prototype.forEach.call(chips.querySelectorAll('.chip'), function (c) { var on = c.getAttribute('data-key') === 's' + s; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on ? 'true' : 'false'); }); fill();
-        } }, s === 0 ? 'Spéciaux' : 'Saison ' + s));
+        } }, s === 0 ? H.t('Spéciaux') : H.t('Saison {n}', { n: s })));
       });
       if (seasons.length > 1) {
         bSeason = h('button', { class: 'chip f ghost', 'data-key': 'sv', onclick: function () { setSeen(!seasonDone(), season); } });
@@ -639,7 +644,7 @@
       return sec;
     }
     function volumes(d) {
-      var sec = h('section', { class: 'volumes' }, h('h2', null, d.units ? d.units.charAt(0).toUpperCase() + d.units.slice(1) : 'Volumes'));
+      var sec = h('section', { class: 'volumes' }, h('h2', null, d.units ? H.t(d.units).charAt(0).toUpperCase() + H.t(d.units).slice(1) : 'Volumes'));
       var grid = h('div', { class: 'grid small' });
       d.entries.forEach(function (e) {
         var p = entryProgress(e), done = e.progress && e.progress.done;
@@ -647,16 +652,16 @@
         if (H.actions.canDownload(d.library && d.library.id)) pic.appendChild(H.actions.entryTools(e, load, d.library.id));
         if (done) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
         else if (p) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(Math.min(1, p.position / Math.max(1, p.duration || 1)) * 100) + '%' })));
-        grid.appendChild(h('a', { class: 'card f', href: H.actions.canPlay(d.library && d.library.id) ? playHref(e) : '#/i/' + d.id, onclick: H.actions.canPlay(d.library && d.library.id) ? null : function (ev) { ev.preventDefault(); H.actions.denyPlay(); }, 'data-key': e.id }, pic, h('div', { class: 't' }, e.label ? 'N° ' + e.label : (e.title || '')), h('div', { class: 's' }, [(e.format || '').toUpperCase(), e.pages ? e.pages + ' p.' : ''].filter(Boolean).join(' · '))));
+        grid.appendChild(h('a', { class: 'card f', href: H.actions.canPlay(d.library && d.library.id) ? playHref(e) : '#/i/' + d.id, onclick: H.actions.canPlay(d.library && d.library.id) ? null : function (ev) { ev.preventDefault(); H.actions.denyPlay(); }, 'data-key': e.id }, pic, h('div', { class: 't' }, e.label ? H.t('N° {n}', { n: e.label }) : (e.title || '')), h('div', { class: 's' }, [(e.format || '').toUpperCase(), e.pages ? H.t('{n} p.', { n: e.pages }) : ''].filter(Boolean).join(' · '))));
       });
       sec.appendChild(grid);
       if (d.missing && d.missing.length) {
-        sec.appendChild(h('p', { class: 'missing' }, 'Manquants : ' + d.missing.map(function (x) { return (x.label ? x.label + ' ' : '') + x.numbers.join(', '); }).join(' ; ')));
+        sec.appendChild(h('p', { class: 'missing' }, H.t('Manquants : {list}', { list: d.missing.map(function (x) { return (x.label ? x.label + ' ' : '') + x.numbers.join(', '); }).join(' ; ') })));
       }
       return sec;
     }
     function parts(d) {
-      var sec = h('section', { class: 'eps' }, h('h2', null, 'Parties'));
+      var sec = h('section', { class: 'eps' }, h('h2', null, H.t('Parties')));
       d.entries.forEach(function (e) {
         sec.appendChild(h('button', { class: 'ep f', onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.go(playHref(e)); else H.actions.denyPlay(); } }, h('div', { class: 'txt' }, h('div', { class: 'ti' }, e.title), h('div', { class: 'du' }, H.dur(e.duration)))));
       });
@@ -671,46 +676,46 @@
     var libId = m[1], name = query.g || '', data = null;
     var el = h('section', { class: 'detail sagapage', 'data-lib': libId });
     function load() {
-      if (!name) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Introuvable'), h('p', null, 'Aucune saga n’est indiquée.'), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, 'Retour'))); return Promise.resolve(); }
+      if (!name) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Introuvable')), h('p', null, H.t('Aucune saga n’est indiquée.')), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, H.t('Retour')))); return Promise.resolve(); }
       return H.api('/api/library/' + libId + '?group=' + encodeURIComponent(name) + '&sort=part&limit=600').then(function (d) { data = d; render(); }).catch(function (e) {
-        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, 'Retour')));
+        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Introuvable')), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, H.t('Retour'))));
       });
     }
     function render() {
       var focusKey = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
       var films = data.items, absent = data.missing || [];
       H.clear(el);
-      if (!films.length) { el.appendChild(h('div', { class: 'blank' }, h('h1', null, name), h('p', null, 'Cette saga ne contient plus de film.'), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, 'Retour'))); return; }
+      if (!films.length) { el.appendChild(h('div', { class: 'blank' }, h('h1', null, name), h('p', null, H.t('Cette saga ne contient plus de film.')), h('a', { class: 'btn f', href: '#/l/' + libId, 'data-autofocus': '1' }, H.t('Retour')))); return; }
       var done = films.filter(function (f) { return f.seen >= Math.max(1, f.n); }).length;
       var next = films.filter(function (f) { return !(f.seen >= Math.max(1, f.n)); })[0];
       var years = films.map(function (f) { return f.year; }).filter(Boolean).sort();
       var meta = [H.plural(films.length, 'film')];
       if (lacking(absent)) meta.push(H.plural(lacking(absent), 'manquant'));
       if (years.length) meta.push(years[0] === years[years.length - 1] ? years[0] : years[0] + '–' + years[years.length - 1]);
-      if (done) meta.push(done === films.length ? 'Tous vus' : done + '/' + films.length + ' vus');
+      if (done) meta.push(done === films.length ? H.t('Tous vus') : H.t('{done}/{n} vus', { done: done, n: films.length }));
       var info = h('div', { class: 'info' }, h('h1', null, name), h('p', { class: 'meta' }, meta.join(' · ')));
       var actions = h('div', { class: 'actions' });
       var target = next || films[0];
-      actions.appendChild(H.button(next ? (done ? 'Continuer : ' : 'Commencer : ') + next.title : 'Revoir : ' + films[0].title, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go('#/i/' + target.id); } }));
+      actions.appendChild(H.button(next ? (done ? H.t('Continuer : {title}', { title: next.title }) : H.t('Commencer : {title}', { title: next.title })) : H.t('Revoir : {title}', { title: films[0].title }), 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go('#/i/' + target.id); } }));
       var all = done === films.length;
-      actions.appendChild(H.button(all ? 'Marquer la saga non vue' : 'Marquer la saga vue', all ? 'close' : 'check', { 'data-key': 'seen', onclick: function () { setSeen(!all); } }));
+      actions.appendChild(H.button(all ? H.t('Marquer la saga non vue') : H.t('Marquer la saga vue'), all ? 'close' : 'check', { 'data-key': 'seen', onclick: function () { setSeen(!all); } }));
       info.appendChild(actions);
       el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + films[0].id + '?w=300)' }),
         h('div', { class: 'hero-in' }, h('div', { class: 'stack-big' }, H.stack(films.map(function (f) { return f.id; }), name, 500)), info)));
-      el.appendChild(h('div', { class: 'body' }, h('section', { class: 'sagaall' }, h('h2', null, 'Les films de la saga'),
+      el.appendChild(h('div', { class: 'body' }, h('section', { class: 'sagaall' }, h('h2', null, H.t('Les films de la saga')),
         h('div', { class: 'grid' }, sagaCells(films, absent, function (f) { return H.card(f, false, true); }, H.isAdmin() ? hide : null)))));
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
     // Marque tous les films de la saga vus (ou non vus) : un appel par film, comme le menu « … » d'une carte de saga.
     function setSeen(done) {
       Promise.all(data.items.map(function (f) { return H.api('/api/item/' + f.id + '/seen', { done: done }); }))
-        .then(function () { H.toast(done ? 'Saga marquée comme vue' : 'Saga marquée comme non vue'); return load(); })
-        .catch(function (e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.', 5000); return load(); });
+        .then(function () { H.toast(done ? H.t('Saga marquée comme vue') : H.t('Saga marquée comme non vue')); return load(); })
+        .catch(function (e) { H.toast(e && e.message ? e.message : H.t('Impossible pour le moment.'), 5000); return load(); });
     }
     // Cache un film que la collection TMDB compte et pas nous : il ne sera plus montré comme manquant (Paramètres > Gestion > Sagas le rétablit).
     function hide(m) {
       H.api('/api/sagas/ignore', { tmdb: m.tmdb }).then(function () {
-        H.toast('« ' + m.title + ' » ne sera plus montré comme manquant (Paramètres > Gestion > Sagas pour le rétablir)', 5000);
+        H.toast(H.t('« {title} » ne sera plus montré comme manquant (Paramètres > Gestion > Sagas pour le rétablir)', { title: m.title }), 5000);
         return load();
       }).catch(function (e) { H.toast(e.message, 5000); });
     }
@@ -721,36 +726,36 @@
   // --- Recherche -------------------------------------------------------------------
   H.route(/^\/search$/, function () {
     var out = h('div', { class: 'results' }), last = '', timer = null;
-    var input = h('input', { class: 'f field big', type: 'search', placeholder: 'Titre, artiste, collection…', 'aria-label': 'Rechercher', 'data-autofocus': '1', autocomplete: 'off',
+    var input = h('input', { class: 'f field big', type: 'search', placeholder: H.t('Titre, artiste, collection…'), 'aria-label': H.t('Rechercher'), 'data-autofocus': '1', autocomplete: 'off',
       oninput: function () { clearTimeout(timer); timer = setTimeout(run, 300); },
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); run(); var c = out.querySelector('.f'); if (c) { input.blur(); H.focus.set(c); } } } });
     function run() {
       var q = input.value.trim();
       if (q === last) return;
       last = q;
-      if (q.length < 2) { H.clear(out).appendChild(h('p', { class: 'muted' }, 'Tape au moins deux lettres.')); return; }
+      if (q.length < 2) { H.clear(out).appendChild(h('p', { class: 'muted' }, H.t('Tape au moins deux lettres.'))); return; }
       H.api('/api/search?q=' + encodeURIComponent(q)).then(function (res) {
         if (q !== last) return;
         H.clear(out);
-        if (!res.results.length) { out.appendChild(h('p', { class: 'muted' }, 'Aucun résultat pour « ' + q + ' ».')); return; }
+        if (!res.results.length) { out.appendChild(h('p', { class: 'muted' }, H.t('Aucun résultat pour « {q} ».', { q: q }))); return; }
         res.results.forEach(function (g) {
-          var sec = h('section', { class: 'shelf', 'data-lib': g.id }, h('h2', null, h('a', { class: 'f head', href: '#/l/' + g.id }, g.label)), h('div', { class: 'grid' + (g.kind === 'music' ? ' sq' : '') }, g.items.map(function (it) { return H.card(it, g.kind === 'music'); })));
+          var sec = h('section', { class: 'shelf', 'data-lib': g.id }, h('h2', null, h('a', { class: 'f head', href: '#/l/' + g.id }, H.tr(g.label))), h('div', { class: 'grid' + (g.kind === 'music' ? ' sq' : '') }, g.items.map(function (it) { return H.card(it, g.kind === 'music'); })));
           out.appendChild(sec);
         });
       }).catch(function (e) { H.clear(out).appendChild(h('p', { class: 'muted' }, e.message)); });
     }
-    var el = h('section', { class: 'search' }, h('h1', null, 'Recherche'), input, out);
+    var el = h('section', { class: 'search' }, h('h1', null, H.t('Recherche')), input, out);
     return { el: el, nav: '#/search' };
   });
 
   // --- Gestion ---------------------------------------------------------------------
   function ago(ts) {
-    if (!ts) return 'jamais';
+    if (!ts) return H.t('jamais');
     var s = Math.max(0, Date.now() / 1000 - ts);
-    if (s < 90) return 'à l’instant';
-    if (s < 5400) return 'il y a ' + Math.round(s / 60) + ' min';
-    if (s < 129600) return 'il y a ' + Math.round(s / 3600) + ' h';
-    return 'il y a ' + Math.round(s / 86400) + ' j';
+    if (s < 90) return H.t('à l’instant');
+    if (s < 5400) return H.t('il y a {n} min', { n: Math.round(s / 60) });
+    if (s < 129600) return H.t('il y a {n} h', { n: Math.round(s / 3600) });
+    return H.t('il y a {n} j', { n: Math.round(s / 86400) });
   }
   // Une fenêtre à champs (comptes) : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password', auto}], extra: [éléments sous les champs],
   // ok: libellé du bouton, danger, submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse, done(résultat) une fois la fenêtre fermée}.
@@ -784,16 +789,16 @@
     });
     (o.extra || []).forEach(function (x) { box.appendChild(x); });
     box.appendChild(err);
-    ok = H.button(o.ok || 'Valider', o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: send });
-    box.appendChild(h('div', { class: 'btns' }, ok, H.button('Annuler', null, { 'data-autofocus': o.fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));
+    ok = H.button(o.ok || H.t('Valider'), o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: send });
+    box.appendChild(h('div', { class: 'btns' }, ok, H.button(H.t('Annuler'), null, { 'data-autofocus': o.fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));
     H.overlay.open(box);
     if (o.fields.length) setTimeout(function () { try { list[0].focus(); } catch (e) { /* tant pis */ } }, 30);
   }
-  var ROLES = { admin: 'Administrateur', user: 'Utilisateur' };
+  var ROLES = { admin: H.t('Administrateur'), user: H.t('Utilisateur') };
   function checkPassword(pw, again) {
-    if (pw.length < 8) return 'Le mot de passe doit faire au moins 8 caractères.';
-    if (pw.length > 200) return 'Le mot de passe est trop long (200 caractères au plus).';
-    if (pw !== again) return 'Les deux mots de passe ne sont pas identiques.';
+    if (pw.length < 8) return H.t('Le mot de passe doit faire au moins 8 caractères.');
+    if (pw.length > 200) return H.t('Le mot de passe est trop long (200 caractères au plus).');
+    if (pw !== again) return H.t('Les deux mots de passe ne sont pas identiques.');
     return '';
   }
 
@@ -801,11 +806,11 @@
   H.route(/^\/(?:admin|settings)$/, function (m, query) {
     var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, wasAdmin = null, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '';
     var tab = query.tab || H.pref('settings.tab') || '', openJobs = {};
-    function qualityLabel(v) { return { auto: 'Qualité d’origine quand c’est possible', '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': '480p · 1,5 Mb/s' }[v] || v; }
+    function qualityLabel(v) { return { auto: H.t('Qualité d’origine quand c’est possible'), '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': H.t('480p · 1,5 Mb/s') }[v] || v; }
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
     }
-    var TABS = [{ id: 'gestion', label: 'Gestion', admin: true }, { id: 'lecture', label: 'Lecture' }, { id: 'comptes', label: 'Comptes' }, { id: 'taches', label: 'Tâches', admin: true }, { id: 'serveur', label: 'Serveur', admin: true }];
+    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'lecture', label: H.t('Lecture') }, { id: 'comptes', label: H.t('Comptes') }, { id: 'taches', label: H.t('Tâches'), admin: true }, { id: 'serveur', label: H.t('Serveur'), admin: true }];
     function visibleTabs() { return TABS.filter(function (t) { return !t.admin || H.isAdmin(); }); }
     function activeTab() {          // un onglet réservé à l'administrateur ne s'ouvre pas pour un autre compte : on retombe sur le premier
         var ids = visibleTabs().map(function (t) { return t.id; });
@@ -823,7 +828,7 @@
       var focus = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
       H.clear(el);
       logPanel = null;
-      el.appendChild(h('h1', null, 'Paramètres'));
+      el.appendChild(h('h1', null, H.t('Paramètres')));
       var bar = tabBar();
       el.appendChild(bar);
       var body = h('div', { class: 'tabbody' }), active = activeTab();
@@ -840,76 +845,82 @@
       if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
     }
     function refreshCovers(l) {
-      H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast('Covers à relire : ' + l.label + ' (' + H.plural(r.removed, 'vignette') + ' oubliée' + (r.removed > 1 ? 's' : '') + ')'); })
+      H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast(r.removed > 1 ? H.t('Covers à relire : {name} ({n} vignettes oubliées)', { name: H.tr(l.label), n: r.removed }) : H.t('Covers à relire : {name} ({n} vignette oubliée)', { name: H.tr(l.label), n: r.removed })); })
         .catch(function (e) { H.toast(e.message, 5000); });
     }
     function gestion(body) {
-      var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, 'Bibliothèques'),
-        H.button('Tout mettre à jour', 'refresh', { class: 'primary', 'data-key': 'scan-all', title: 'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.', onclick: function () { start('/api/scan', {}, 'Mise à jour lancée'); } })));
+      var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Bibliothèques')),
+        H.button(H.t('Tout mettre à jour'), 'refresh', { class: 'primary', 'data-key': 'scan-all', title: H.t('Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.'), onclick: function () { start('/api/scan', {}, H.t('Mise à jour lancée')); } })));
       state.libraries.forEach(function (l) {
         libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
-          h('div', { class: 'what' }, h('b', null, l.label), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · mis à jour ' + ago(l.scanned) : 'dossier introuvable')),
-          l.kind === 'shows' ? H.button('Enrichir (TMDB)', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Enrichissement lancé : ' + l.label); } }) : null,
-          l.kind === 'movies' ? H.button('Sagas (TMDB)', null, { 'data-key': 'enrich-' + l.id, title: 'Cherche chez TMDB les films qui manquent à tes sagas.', onclick: function () { start('/api/enrich', { lib: l.id }, 'Recherche des films manquants lancée : ' + l.label); } }) : null,
-          l.kind === 'music' ? H.button('Fiches artistes', null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, 'Fiches artistes demandées : ' + l.label); } }) : null,
-          l.kind === 'movies' ? H.button('Relire les covers', null, { 'data-key': 'covers-' + l.id, title: 'Vide les vignettes gardées : chacune se refait depuis folder.jpg ou la jaquette du .mkv. Les affiches choisies à la main restent.', onclick: function () { refreshCovers(l); } }) : null,
-          H.button('Mettre à jour', 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, 'Mise à jour lancée : ' + l.label); } })));
+          h('div', { class: 'what' }, h('b', null, H.tr(l.label)), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · ' + H.t('mis à jour {when}', { when: ago(l.scanned) }) : H.t('dossier introuvable'))),
+          l.kind === 'shows' ? H.button(H.t('Enrichir (TMDB)'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Enrichissement lancé : {name}', { name: H.tr(l.label) })); } }) : null,
+          l.kind === 'movies' ? H.button(H.t('Sagas (TMDB)'), null, { 'data-key': 'enrich-' + l.id, title: H.t('Cherche chez TMDB les films qui manquent à tes sagas.'), onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.tr(l.label) })); } }) : null,
+          l.kind === 'music' ? H.button(H.t('Fiches artistes'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Fiches artistes demandées : {name}', { name: H.tr(l.label) })); } }) : null,
+          l.kind === 'movies' ? H.button(H.t('Relire les covers'), null, { 'data-key': 'covers-' + l.id, title: H.t('Vide les vignettes gardées : chacune se refait depuis folder.jpg ou la jaquette du .mkv. Les affiches choisies à la main restent.'), onclick: function () { refreshCovers(l); } }) : null,
+          H.button(H.t('Mettre à jour'), 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, H.t('Mise à jour lancée : {name}', { name: H.tr(l.label) })); } })));
       });
       body.appendChild(libs);
-      body.appendChild(h('section', { class: 'panel' }, h('h2', null, 'Sagas'), h('div', { class: 'line' },
-        h('div', { class: 'what' }, h('b', null, 'Sagas composées à la main'), h('span', null, 'Une trilogie que TMDB ne réunit pas, l’ordre du MCU… : des listes de films dans l’ordre de ton choix, en plus de la saga de l’étiquette.')),
-        h('a', { class: 'btn f', href: '#/sagas', 'data-key': 'sagas' }, H.icon('edit'), h('span', { class: 'lbl' }, 'Composer')))));
+      body.appendChild(h('section', { class: 'panel' }, h('h2', null, H.t('Sagas')), h('div', { class: 'line' },
+        h('div', { class: 'what' }, h('b', null, H.t('Sagas composées à la main')), h('span', null, H.t('Une trilogie que TMDB ne réunit pas, l’ordre du MCU… : des listes de films dans l’ordre de ton choix, en plus de la saga de l’étiquette.'))),
+        h('a', { class: 'btn f', href: '#/sagas', 'data-key': 'sagas' }, H.icon('edit'), h('span', { class: 'lbl' }, H.t('Composer'))))));
 
-      var tools = h('section', { class: 'panel' }, h('h2', null, 'Entretien'));
-      tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Fichiers parasites'), h('span', null, 'Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.')),
-        H.button('Compter', null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, 'Simulation lancée'); } }),
-        H.button('Supprimer', null, { 'data-key': 'junk-del', onclick: confirmCleanup })));
+      var tools = h('section', { class: 'panel' }, h('h2', null, H.t('Entretien')));
+      tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Fichiers parasites')), h('span', null, H.t('Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.'))),
+        H.button(H.t('Compter'), null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, H.t('Simulation lancée')); } }),
+        H.button(H.t('Supprimer'), null, { 'data-key': 'junk-del', onclick: confirmCleanup })));
       body.appendChild(tools);
     }
     function reading(body) {
-      var play = h('section', { class: 'panel' }, h('h2', null, 'Lecture'));
+      var play = h('section', { class: 'panel' }, h('h2', null, H.t('Lecture')));
       var q = H.pref('quality') || 'auto', surround = !!H.pref('surround');
-      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Qualité'), h('span', null, qualityLabel(q))),
-        H.button('Changer', 'quality', { 'data-key': 'quality', onclick: function () {
-          H.menu('Qualité de lecture', ['auto', '1080', '720', '480'].map(function (v) { return { label: qualityLabel(v), value: v }; }), q, function (v) { H.pref('quality', v); render(); H.focus.key(el, 'quality'); });
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Qualité')), h('span', null, qualityLabel(q))),
+        H.button(H.t('Changer'), 'quality', { 'data-key': 'quality', onclick: function () {
+          H.menu(H.t('Qualité de lecture'), ['auto', '1080', '720', '480'].map(function (v) { return { label: qualityLabel(v), value: v }; }), q, function (v) { H.pref('quality', v); render(); H.focus.key(el, 'quality'); });
         } })));
       var chosen = H.pref('device') || 'auto', names = {};
       H.devices.forEach(function (d) { names[d[0]] = d[1]; });
-      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Appareil'),
-        h('span', null, (chosen === 'auto' ? 'Détecté : ' : 'Choisi : ') + names[H.device] + ' — taille du texte, effets de survol, envoi de photo'), h('span', { class: 'ua' }, navigator.userAgent)),
-        H.button('Changer', 'quality', { 'data-key': 'device', onclick: function () {
-          H.menu('Type d’appareil', H.devices.map(function (d) { return { label: d[1], detail: d[0] === 'auto' ? 'Deviné d’après le navigateur (' + names[H.detectDevice()] + ')' : '', value: d[0] }; }), chosen, function (v) {
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Appareil')),
+        h('span', null, chosen === 'auto' ? H.t('Détecté : {name} — taille du texte, effets de survol, envoi de photo', { name: names[H.device] }) : H.t('Choisi : {name} — taille du texte, effets de survol, envoi de photo', { name: names[H.device] })), h('span', { class: 'ua' }, navigator.userAgent)),
+        H.button(H.t('Changer'), 'quality', { 'data-key': 'device', onclick: function () {
+          H.menu(H.t('Type d’appareil'), H.devices.map(function (d) { return { label: d[1], detail: d[0] === 'auto' ? H.t('Deviné d’après le navigateur ({name})', { name: names[H.detectDevice()] }) : '', value: d[0] }; }), chosen, function (v) {
             H.pref('device', v === 'auto' ? null : v); H.applyDevice(); render(); H.focus.key(el, 'device');
           });
         } })));
       var sizeNames = {};
       H.textSizes.forEach(function (s) { sizeNames[s[0]] = s[1]; });
-      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Taille du texte'), h('span', null, sizeNames[H.textSize] + ' — s’ajoute à la taille propre à l’appareil')),
-        H.button('Changer', 'quality', { 'data-key': 'textSize', onclick: function () {
-          H.menu('Taille du texte', H.textSizes.map(function (s) { return { label: s[1], detail: s[2], value: s[0] }; }), H.textSize, function (v) {
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Taille du texte')), h('span', null, H.t('{size} — s’ajoute à la taille propre à l’appareil', { size: sizeNames[H.textSize] }))),
+        H.button(H.t('Changer'), 'quality', { 'data-key': 'textSize', onclick: function () {
+          H.menu(H.t('Taille du texte'), H.textSizes.map(function (s) { return { label: s[1], detail: s[2], value: s[0] }; }), H.textSize, function (v) {
             H.pref('textSize', v === 'normal' ? null : v); H.applyTextSize(); render(); H.focus.key(el, 'textSize');
           });
         } })));
-      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, 'Son surround 5.1'), h('span', null, surround ? 'Activé : le 5.1 est envoyé tel quel si l’appareil le lit.' : 'Désactivé : le son est ramené en stéréo (le plus sûr).')),
-        H.button(surround ? 'Désactiver' : 'Activer', 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
+      var langNames = {};
+      H.langs.forEach(function (l) { langNames[l[0]] = l[1]; });
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Langue')), h('span', null, H.t('{lang} — la langue de l’interface, pour ce navigateur', { lang: langNames[H.lang] }))),
+        H.button(H.t('Changer'), 'quality', { 'data-key': 'lang', onclick: function () {
+          H.menu(H.t('Langue'), H.langs.map(function (l) { return { label: l[1], value: l[0] }; }), H.lang, function (v) { if (v !== H.lang) H.setLang(v); });
+        } })));
+      play.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Son surround 5.1')), h('span', null, surround ? H.t('Activé : le 5.1 est envoyé tel quel si l’appareil le lit.') : H.t('Désactivé : le son est ramené en stéréo (le plus sûr).'))),
+        H.button(surround ? H.t('Désactiver') : H.t('Activer'), 'audio', { 'data-key': 'surround', onclick: function () { H.pref('surround', !surround); render(); H.focus.key(el, 'surround'); } })));
       body.appendChild(play);
     }
     // Les réglages d'affichage du compte : chacun se choisit dans une liste.
-    var ON_OFF = [{ label: 'Affiché', detail: 'Le rayon est sur la page d’accueil', value: 'show' }, { label: 'Masqué', detail: 'Le rayon n’est pas sur la page d’accueil', value: 'hide' }];
-    var DISPLAY = [{ key: 'music_view', title: 'Bibliothèque de musique', note: 'Comment elle s’ouvre',
-      choices: [{ label: 'Albums', detail: 'Tous les albums, regroupés sous le nom de leur artiste', value: 'albums' }, { label: 'Artistes', detail: 'Un artiste par carte, avec sa photo, sans ses albums', value: 'artists' }] },
-      { key: 'movie_view', title: 'Bibliothèque de films', note: 'Comment elle s’ouvre',
-        choices: [{ label: 'Sagas', detail: 'Les films d’une même saga sur une seule carte', value: 'sagas' }, { label: 'Films', detail: 'Tous les films, chacun sur sa carte', value: 'films' }] },
-      { key: 'home_latest', title: 'Nouveautés', note: 'Sur la page d’accueil', choices: ON_OFF },
-      { key: 'home_unseen', title: 'Pas encore vu', note: 'Sur la page d’accueil', choices: ON_OFF },
-      { key: 'home_unseen_count', title: 'Pas encore vu : cartes par rayon', note: 'Sur la page d’accueil',
-        choices: [['6', 'Peu'], ['12', 'Habituel'], ['18', 'Beaucoup'], ['24', 'Le maximum']].map(function (c) { return { label: c[0] + ' cartes', detail: c[1], value: c[0] }; }) }];
+    var ON_OFF = [{ label: H.t('Affiché'), detail: H.t('Le rayon est sur la page d’accueil'), value: 'show' }, { label: H.t('Masqué'), detail: H.t('Le rayon n’est pas sur la page d’accueil'), value: 'hide' }];
+    var DISPLAY = [{ key: 'music_view', title: H.t('Bibliothèque de musique'), note: H.t('Comment elle s’ouvre'),
+      choices: [{ label: H.t('Albums'), detail: H.t('Tous les albums, regroupés sous le nom de leur artiste'), value: 'albums' }, { label: H.t('Artistes'), detail: H.t('Un artiste par carte, avec sa photo, sans ses albums'), value: 'artists' }] },
+      { key: 'movie_view', title: H.t('Bibliothèque de films'), note: H.t('Comment elle s’ouvre'),
+        choices: [{ label: H.t('Sagas'), detail: H.t('Les films d’une même saga sur une seule carte'), value: 'sagas' }, { label: H.t('Films'), detail: H.t('Tous les films, chacun sur sa carte'), value: 'films' }] },
+      { key: 'home_latest', title: H.t('Nouveautés'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
+      { key: 'home_unseen', title: H.t('Pas encore vu'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
+      { key: 'home_unseen_count', title: H.t('Pas encore vu : cartes par rayon'), note: H.t('Sur la page d’accueil'),
+        choices: [['6', H.t('Peu')], ['12', H.t('Habituel')], ['18', H.t('Beaucoup')], ['24', H.t('Le maximum')]].map(function (c) { return { label: H.t('{n} cartes', { n: c[0] }), detail: c[1], value: c[0] }; }) }];
     function displayPanel() {
-      var panel = h('section', { class: 'panel' }, h('h2', null, 'Affichage'));
+      var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Affichage')));
       DISPLAY.forEach(function (setting) {
         var current = H.setting(setting.key), shown = setting.choices.filter(function (c) { return c.value === current; })[0] || setting.choices[0];
         panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, setting.title), h('span', null, setting.note + ' : ' + shown.label)),
-          H.button('Changer', 'edit', { 'data-key': 'display-' + setting.key, onclick: function () {
+          H.button(H.t('Changer'), 'edit', { 'data-key': 'display-' + setting.key, onclick: function () {
             H.menu(setting.title, setting.choices, shown.value, function (v) {
               H.saveSetting(setting.key, v).then(function () { render(); H.focus.key(el, 'display-' + setting.key); }).catch(function (e) { H.toast(e.message, 5000); });
             });
@@ -927,9 +938,9 @@
       body.appendChild(logPanel);
     }
     function serverFacts(body) {
-      var server = h('section', { class: 'panel' }, h('h2', null, 'Serveur'));
-      var facts = [['Version', state.version], ['ffmpeg', state.ffmpeg ? 'présent' : 'absent : lecture directe uniquement'], ['TMDB', state.tmdb ? 'clé configurée' : 'pas de clé (TMDB_KEY)'],
-        ['Conversions', state.streams + ' en cours sur ' + state.max_streams], ['Accès', state.auth ? 'protégé par mot de passe' : 'sans mot de passe']];
+      var server = h('section', { class: 'panel' }, h('h2', null, H.t('Serveur')));
+      var facts = [['Version', state.version], ['ffmpeg', state.ffmpeg ? H.t('présent') : H.t('absent : lecture directe uniquement')], ['TMDB', state.tmdb ? H.t('clé configurée') : H.t('pas de clé (TMDB_KEY)')],
+        [H.t('Conversions'), H.t('{n} en cours sur {max}', { n: state.streams, max: state.max_streams })], [H.t('Accès'), state.auth ? H.t('protégé par mot de passe') : H.t('sans mot de passe')]];
       server.appendChild(h('dl', null, facts.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })));
       body.appendChild(server);
     }
@@ -938,19 +949,19 @@
     function confirmCleanup() {
       var sim = jobs.filter(function (j) { return j.status === 'done' && j.result && j.label.indexOf('simulation') >= 0; })[0];
       var counting = false;
-      function said(found) { return found === 1 ? 'La dernière simulation en a compté 1.' : 'La dernière simulation en a compté ' + found + '.'; }
-      var count = h('p', { class: 'lead', role: 'status' }, sim ? said(sim.result.found) : 'Aucune simulation faite : lance « Compter » pour savoir combien il y en a.');
-      var sample = h('ul', { class: 'sample', 'aria-label': 'Les premiers fichiers qui seraient supprimés' });
+      function said(found) { return found === 1 ? H.t('La dernière simulation en a compté 1.') : H.t('La dernière simulation en a compté {n}.', { n: found }); }
+      var count = h('p', { class: 'lead', role: 'status' }, sim ? said(sim.result.found) : H.t('Aucune simulation faite : lance « Compter » pour savoir combien il y en a.'));
+      var sample = h('ul', { class: 'sample', 'aria-label': H.t('Les premiers fichiers qui seraient supprimés') });
       function listed(result) {          // les premiers fichiers que la simulation a nommés, et combien d'autres
         H.clear(sample);
         var names = (result && result.sample) || [];
         names.forEach(function (name) { sample.appendChild(h('li', null, name)); });
-        if (result && result.found > names.length) sample.appendChild(h('li', { class: 'more' }, '… et ' + (result.found - names.length) + ' autre(s)'));
+        if (result && result.found > names.length) sample.appendChild(h('li', { class: 'more' }, H.t('… et {n} autre(s)', { n: result.found - names.length })));
       }
       listed(sim && sim.result);
-      var recount = H.button('Compter', null, { 'data-key': 'junk-recount', 'aria-label': 'Compter de nouveau les fichiers parasites', onclick: function () {
+      var recount = H.button(H.t('Compter'), null, { 'data-key': 'junk-recount', 'aria-label': H.t('Compter de nouveau les fichiers parasites'), onclick: function () {
         if (counting) return;
-        counting = true; count.textContent = 'Comptage en cours…'; listed(null);
+        counting = true; count.textContent = H.t('Comptage en cours…'); listed(null);
         function wait(id) {
           return H.api('/api/jobs').then(function (r) {
             var job = r.jobs.filter(function (j) { return j.id === id; })[0];
@@ -959,84 +970,84 @@
           });
         }
         H.api('/api/cleanup', {}).then(function (r) { return wait(r.job.id); }).then(function (job) {
-          count.textContent = job && job.status === 'done' && job.result ? said(job.result.found) : 'Le comptage a échoué : voir l’onglet Tâches.';
+          count.textContent = job && job.status === 'done' && job.result ? said(job.result.found) : H.t('Le comptage a échoué : voir l’onglet Tâches.');
           if (job && job.status === 'done') listed(job.result);
         }, function (e) { count.textContent = e.message; }).then(function () { counting = false; poll(); });
       } });
-      dialog({ title: 'Supprimer les fichiers parasites ?', ok: 'Supprimer définitivement', danger: true, fields: [],
-        lead: ['Les fichiers parasites seront supprimés de la médiathèque, et cela ne s’annule pas.'], extra: [count, sample, recount],
+      dialog({ title: H.t('Supprimer les fichiers parasites ?'), ok: H.t('Supprimer définitivement'), danger: true, fields: [],
+        lead: [H.t('Les fichiers parasites seront supprimés de la médiathèque, et cela ne s’annule pas.')], extra: [count, sample, recount],
         submit: function () { return H.api('/api/cleanup', { apply: true }); },
-        done: function () { H.toast('Nettoyage lancé'); poll(); } });
+        done: function () { H.toast(H.t('Nettoyage lancé')); poll(); } });
     }
     // Le compte connecté : nom, rôle, changement de mot de passe, déconnexion. Serveur ouvert : comment créer le premier compte.
     function accountPanel() {
-      var panel = h('section', { class: 'panel' }, h('h2', null, 'Mon compte'));
+      var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Mon compte')));
       var me = H.session.user;
       if (!H.session.auth || !me) {
-        panel.appendChild(h('p', { class: 'muted' }, 'Aucun compte n’existe : le serveur est ouvert, et toute personne qui peut l’atteindre voit et gère tout. Pour le protéger, crée le premier compte (il sera administrateur) sur le serveur avec ',
-          h('code', null, 'python -m hub user add <nom>'), ', ou définis ', h('code', null, 'HUB_PASSWORD'), ' avant de démarrer le serveur. Les comptes suivants se gèrent ensuite ici.'));
+        panel.appendChild(h('p', { class: 'muted' }, H.t('Aucun compte n’existe : le serveur est ouvert, et toute personne qui peut l’atteindre voit et gère tout. Pour le protéger, crée le premier compte (il sera administrateur) sur le serveur avec '),
+          h('code', null, H.t('python -m hub user add <nom>')), H.t(', ou définis '), h('code', null, 'HUB_PASSWORD'), H.t(' avant de démarrer le serveur. Les comptes suivants se gèrent ensuite ici.')));
         return panel;
       }
       panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, me.name), h('span', null, ROLES[me.role] || me.role)),
-        H.button('Changer mon mot de passe', 'edit', { 'data-key': 'mypw', onclick: changeMine }),
-        H.button('Déconnecter les autres appareils', null, { 'data-key': 'signout-others', onclick: signOutOthers }),
-        h('a', { class: 'btn f', href: '/api/logout', 'data-key': 'logout', onclick: function () { H.forgetAccount(); } }, 'Se déconnecter')));
+        H.button(H.t('Changer mon mot de passe'), 'edit', { 'data-key': 'mypw', onclick: changeMine }),
+        H.button(H.t('Déconnecter les autres appareils'), null, { 'data-key': 'signout-others', onclick: signOutOthers }),
+        h('a', { class: 'btn f', href: '/api/logout', 'data-key': 'logout', onclick: function () { H.forgetAccount(); } }, H.t('Se déconnecter'))));
       return panel;
     }
     function changeMine() {
-      dialog({ title: 'Changer mon mot de passe', ok: 'Changer',
-        fields: [{ key: 'current', label: 'Mot de passe actuel', type: 'password', auto: 'current-password' }, { key: 'next', label: 'Nouveau mot de passe (8 caractères au moins)', type: 'password', auto: 'new-password' }, { key: 'again', label: 'Nouveau mot de passe, encore une fois', type: 'password', auto: 'new-password' }],
+      dialog({ title: H.t('Changer mon mot de passe'), ok: H.t('Changer'),
+        fields: [{ key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }, { key: 'next', label: H.t('Nouveau mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Nouveau mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
         submit: function (v) {
-          if (!v.current) return 'Saisis ton mot de passe actuel.';
+          if (!v.current) return H.t('Saisis ton mot de passe actuel.');
           var bad = checkPassword(v.next, v.again);
           if (bad) return bad;
           return H.api('/api/me/password', { current: v.current, 'new': v.next });   // le serveur renouvelle le cookie : rien à garder ici
         },
-        done: function () { H.toast('Mot de passe changé. Les autres appareils devront se reconnecter.', 5000); H.focus.key(el, 'mypw'); } });
+        done: function () { H.toast(H.t('Mot de passe changé. Les autres appareils devront se reconnecter.'), 5000); H.focus.key(el, 'mypw'); } });
     }
     // Les autres appareils du compte (téléphone, télé, navigateur oublié) sont déconnectés ; celui-ci reste connecté : le serveur renouvelle son cookie.
     function signOutOthers() {
-      dialog({ title: 'Déconnecter les autres appareils', ok: 'Déconnecter',
-        lead: ['Tous les autres appareils connectés à ce compte devront se reconnecter. Celui-ci reste connecté. Ton mot de passe ne change pas.'],
-        fields: [{ key: 'current', label: 'Mot de passe actuel', type: 'password', auto: 'current-password' }],
+      dialog({ title: H.t('Déconnecter les autres appareils'), ok: H.t('Déconnecter'),
+        lead: [H.t('Tous les autres appareils connectés à ce compte devront se reconnecter. Celui-ci reste connecté. Ton mot de passe ne change pas.')],
+        fields: [{ key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }],
         submit: function (v) {
-          if (!v.current) return 'Saisis ton mot de passe actuel.';
+          if (!v.current) return H.t('Saisis ton mot de passe actuel.');
           return H.api('/api/me/signout-others', { current: v.current });
         },
-        done: function () { H.toast('Les autres appareils sont déconnectés.', 5000); H.focus.key(el, 'signout-others'); } });
+        done: function () { H.toast(H.t('Les autres appareils sont déconnectés.'), 5000); H.focus.key(el, 'signout-others'); } });
     }
     // Gestion des comptes (administrateur, serveur avec comptes).
     function usersPanel() {
-      var panel = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, 'Comptes'),
-        H.button('Ajouter un compte', 'plus', { 'data-key': 'user-add', onclick: addUser })));
+      var panel = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Comptes')),
+        H.button(H.t('Ajouter un compte'), 'plus', { 'data-key': 'user-add', onclick: addUser })));
       if (usersError) panel.appendChild(h('p', { class: 'muted' }, usersError));
-      else if (!users) panel.appendChild(h('p', { class: 'muted' }, 'Chargement…'));
+      else if (!users) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
       (users || []).forEach(function (u) {
         var mine = H.session.user && u.id === H.session.user.id;
-        panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' (toi)' : '')),
-          h('span', null, (ROLES[u.role] || u.role) + ' · créé le ' + new Date(u.created * 1000).toLocaleDateString('fr-FR')), u.role === 'admin' ? null : h('span', { 'data-rights': u.id }, rightsSummary(u))),
-          u.role === 'admin' ? null : H.button('Droits', 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': 'Droits de ' + u.name + ' : consulter, lecture, télécharger', onclick: function () { rightsOf(u); } }),
-          H.button('Mot de passe', 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': 'Changer le mot de passe de ' + u.name, onclick: function () { passwordOf(u, mine); } }),
-          H.button('Supprimer', 'trash', { 'data-key': 'del-' + u.id, 'aria-label': 'Supprimer le compte de ' + u.name, onclick: function () { deleteUser(u, mine); } })));
+        panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' ' + H.t('(toi)') : '')),
+          h('span', null, (ROLES[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? null : h('span', { 'data-rights': u.id }, rightsSummary(u))),
+          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger', { name: u.name }), onclick: function () { rightsOf(u); } }),
+          H.button(H.t('Mot de passe'), 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': H.t('Changer le mot de passe de {name}', { name: u.name }), onclick: function () { passwordOf(u, mine); } }),
+          H.button(H.t('Supprimer'), 'trash', { 'data-key': 'del-' + u.id, 'aria-label': H.t('Supprimer le compte de {name}', { name: u.name }), onclick: function () { deleteUser(u, mine); } })));
       });
       return panel;
     }
     function addUser() {
-      var role = 'user', toggle = H.button('Rôle : ' + ROLES.user, null, { 'data-key': 'new-role', 'aria-label': 'Rôle du nouveau compte, à changer', onclick: function () {
+      var role = 'user', toggle = H.button(H.t('Rôle : {role}', { role: ROLES.user }), null, { 'data-key': 'new-role', 'aria-label': H.t('Rôle du nouveau compte, à changer'), onclick: function () {
         role = role === 'user' ? 'admin' : 'user';
-        toggle.querySelector('.lbl').textContent = 'Rôle : ' + ROLES[role];
+        toggle.querySelector('.lbl').textContent = H.t('Rôle : {role}', { role: ROLES[role] });
       } });
-      dialog({ title: 'Ajouter un compte', ok: 'Créer le compte',
-        lead: ['Un administrateur gère la médiathèque et les comptes ; un utilisateur lit, avec sa propre progression et ses propres playlists.'],
-        fields: [{ key: 'name', label: 'Nom (40 caractères au plus)', type: 'text' }, { key: 'pw', label: 'Mot de passe (8 caractères au moins)', type: 'password', auto: 'new-password' }, { key: 'again', label: 'Mot de passe, encore une fois', type: 'password', auto: 'new-password' }],
+      dialog({ title: H.t('Ajouter un compte'), ok: H.t('Créer le compte'),
+        lead: [H.t('Un administrateur gère la médiathèque et les comptes ; un utilisateur lit, avec sa propre progression et ses propres playlists.')],
+        fields: [{ key: 'name', label: H.t('Nom (40 caractères au plus)'), type: 'text' }, { key: 'pw', label: H.t('Mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
         extra: [toggle],
         submit: function (v) {
-          if (!v.name) return 'Donne un nom au compte.';
+          if (!v.name) return H.t('Donne un nom au compte.');
           var bad = checkPassword(v.pw, v.again);
           if (bad) return bad;
           return H.api('/api/users', { name: v.name, password: v.pw, role: role });
         },
-        done: function (u) { H.toast('Compte créé : ' + u.name); refreshUsers('user-add'); } });
+        done: function (u) { H.toast(H.t('Compte créé : {name}', { name: u.name })); refreshUsers('user-add'); } });
     }
     // Ce qu'un compte peut consulter, lire et télécharger, en une phrase pour la liste des comptes.
     function rightsSummary(u) {
@@ -1044,9 +1055,9 @@
       if (!libs.length) return '';
       function who(perm) {
         var list = libs.filter(function (l) { return !rights[l.id] || rights[l.id][perm]; });
-        return list.length === libs.length ? 'tout' : list.length ? list.map(function (l) { return l.label; }).join(', ') : 'rien';
+        return list.length === libs.length ? H.t('tout') : list.length ? list.map(function (l) { return H.tr(l.label); }).join(', ') : H.t('rien');
       }
-      return 'Consulter : ' + who('view') + ' · Lecture : ' + who('play') + ' · Télécharger : ' + who('download');
+      return H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') });
     }
     // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Les droits valent tout de suite, sans que la personne se reconnecte.
     function rightsOf(u) {
@@ -1067,48 +1078,48 @@
       var buttons = {};
       (state.libraries || []).forEach(function (l) {
         buttons[l.id] = { view: toggle(l, 'view'), play: toggle(l, 'play'), download: toggle(l, 'download') };
-        rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, l.label), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
+        rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, H.tr(l.label)), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
       });
       function paint() {
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
           b.view.classList.toggle('on', d.view); b.view.setAttribute('aria-pressed', d.view ? 'true' : 'false');
-          b.view.querySelector('.lbl').textContent = (d.view ? '✓ ' : '') + 'Consulter';
+          b.view.querySelector('.lbl').textContent = (d.view ? '✓ ' : '') + H.t('Consulter');
           b.play.classList.toggle('on', d.play); b.play.setAttribute('aria-pressed', d.play ? 'true' : 'false');
-          b.play.querySelector('.lbl').textContent = (d.play ? '✓ ' : '') + 'Lecture';
+          b.play.querySelector('.lbl').textContent = (d.play ? '✓ ' : '') + H.t('Lecture');
           b.play.disabled = !d.view;
           b.download.classList.toggle('on', d.download); b.download.setAttribute('aria-pressed', d.download ? 'true' : 'false');
-          b.download.querySelector('.lbl').textContent = (d.download ? '✓ ' : '') + 'Télécharger';
+          b.download.querySelector('.lbl').textContent = (d.download ? '✓ ' : '') + H.t('Télécharger');
           b.download.disabled = !d.view;
         });
       }
       paint();
-      dialog({ title: 'Droits de ' + u.name, ok: 'Enregistrer', cls: 'rightsbox', fields: [],
-        lead: ['Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.'],
+      dialog({ title: H.t('Droits de {name}', { name: u.name }), ok: H.t('Enregistrer'), cls: 'rightsbox', fields: [],
+        lead: [H.t('Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.')],
         extra: [rows],
         submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/rights', { rights: draft }); },
-        done: function () { H.toast('Droits enregistrés : ' + u.name); refreshUsers('rights-' + u.id); } });
+        done: function () { H.toast(H.t('Droits enregistrés : {name}', { name: u.name })); refreshUsers('rights-' + u.id); } });
     }
     function passwordOf(u, mine) {
       if (mine) { changeMine(); return; }                              // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)
-      dialog({ title: 'Mot de passe de ' + u.name, ok: 'Changer',
-        lead: ['Les sessions ouvertes de ce compte seront fermées ; la personne se reconnectera avec le nouveau mot de passe.'],
-        fields: [{ key: 'pw', label: 'Nouveau mot de passe (8 caractères au moins)', type: 'password', auto: 'new-password' }, { key: 'again', label: 'Encore une fois', type: 'password', auto: 'new-password' }],
+      dialog({ title: H.t('Mot de passe de {name}', { name: u.name }), ok: H.t('Changer'),
+        lead: [H.t('Les sessions ouvertes de ce compte seront fermées ; la personne se reconnectera avec le nouveau mot de passe.')],
+        fields: [{ key: 'pw', label: H.t('Nouveau mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Encore une fois'), type: 'password', auto: 'new-password' }],
         submit: function (v) {
           var bad = checkPassword(v.pw, v.again);
           if (bad) return bad;
           return H.api('/api/user/' + encodeURIComponent(u.id) + '/password', { password: v.pw });
         },
-        done: function () { H.toast('Mot de passe changé : ' + u.name); H.focus.key(el, 'pw-' + u.id); } });
+        done: function () { H.toast(H.t('Mot de passe changé : {name}', { name: u.name })); H.focus.key(el, 'pw-' + u.id); } });
     }
     function deleteUser(u, mine) {
-      var lead = ['Supprimer le compte « ' + u.name + ' » ? Sa progression de lecture, ses playlists et ses éléments retirés de « Reprendre » seront perdus, et cela ne s’annule pas. Les fichiers de la médiathèque ne sont pas touchés.'];
-      if (mine) lead.push('C’est le compte avec lequel tu es connecté : tu seras déconnecté. Il doit rester au moins un autre administrateur.');
-      dialog({ title: 'Supprimer le compte de ' + u.name, ok: 'Supprimer définitivement', danger: true, lead: lead, fields: [],
+      var lead = [H.t('Supprimer le compte « {name} » ? Sa progression de lecture, ses playlists et ses éléments retirés de « Reprendre » seront perdus, et cela ne s’annule pas. Les fichiers de la médiathèque ne sont pas touchés.', { name: u.name })];
+      if (mine) lead.push(H.t('C’est le compte avec lequel tu es connecté : tu seras déconnecté. Il doit rester au moins un autre administrateur.'));
+      dialog({ title: H.t('Supprimer le compte de {name}', { name: u.name }), ok: H.t('Supprimer définitivement'), danger: true, lead: lead, fields: [],
         submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/delete', {}); },
         done: function () {
           if (mine) { H.forgetAccount(); location.href = '/login'; return; }
-          H.toast('Compte supprimé : ' + u.name);
+          H.toast(H.t('Compte supprimé : {name}', { name: u.name }));
           refreshUsers('user-add');
         } });
     }
@@ -1117,14 +1128,14 @@
     }
     function jobsPanel() {
       var all = jobs.length > 0 && jobs.every(function (j) { return openJobs[j.id]; });
-      var log = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, 'Tâches', busy ? h('span', { class: 'busy' }, '…') : null),
-        jobs.length ? H.button(all ? 'Tout replier' : 'Tout déplier', null, { 'data-key': 'jobs-all', onclick: function () { jobs.forEach(function (j) { openJobs[j.id] = !all; }); showJobs('jobs-all'); } }) : null));
-      if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, 'Aucune tâche pour l’instant.'));
+      var log = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Tâches'), busy ? h('span', { class: 'busy' }, '…') : null),
+        jobs.length ? H.button(all ? H.t('Tout replier') : H.t('Tout déplier'), null, { 'data-key': 'jobs-all', onclick: function () { jobs.forEach(function (j) { openJobs[j.id] = !all; }); showJobs('jobs-all'); } }) : null));
+      if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, H.t('Aucune tâche pour l’instant.')));
       jobs.forEach(function (j) {
-        var status = { waiting: 'en attente', running: 'en cours', done: 'terminée', failed: 'échec' }[j.status], open = !!openJobs[j.id];
+        var status = { waiting: H.t('en attente'), running: H.t('en cours'), done: H.t('terminée'), failed: H.t('échec') }[j.status], open = !!openJobs[j.id];
         var node = h('div', { class: 'job ' + j.status }, h('button', { class: 'jhead f', 'aria-expanded': open ? 'true' : 'false', 'data-key': 'job-' + j.id,
-          onclick: function () { openJobs[j.id] = !open; showJobs('job-' + j.id); } }, h('span', { class: 'jt' }, h('b', null, j.label), h('span', null, status))));
-        if (open) node.appendChild(j.log && j.log.length ? h('pre', null, j.log.join('\n')) : h('p', { class: 'muted' }, 'Rien n’a été noté.'));
+          onclick: function () { openJobs[j.id] = !open; showJobs('job-' + j.id); } }, h('span', { class: 'jt' }, h('b', null, H.tr(j.label)), h('span', null, status))));
+        if (open) node.appendChild(j.log && j.log.length ? h('pre', null, j.log.map(function (line) { return H.tr(line); }).join('\n')) : h('p', { class: 'muted' }, H.t('Rien n’a été noté.')));
         log.appendChild(node);
       });
       return log;
@@ -1149,7 +1160,7 @@
         var page = JSON.stringify([r[0], users, usersError]), tasks = JSON.stringify(r[1].jobs);
         state = r[0]; jobs = r[1].jobs; H.libs = state.libraries;
         busy = r[1].busy;
-        if (wasBusy && !busy) H.toast('Terminé');
+        if (wasBusy && !busy) H.toast(H.t('Terminé'));
         wasBusy = busy;
         // Pendant une tâche on revient ici toutes les 1,5 s : reconstruire la page entière coupait le défilement (molette, tactile). On ne refait que ce qui a changé.
         if (page !== lastPage || H.isAdmin() !== wasAdmin) render();

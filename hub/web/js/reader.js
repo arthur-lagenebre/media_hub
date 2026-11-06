@@ -2,15 +2,15 @@
 (function () {
   'use strict';
   var H = window.Hub, h = H.h;
-  var THEMES = { night: { bg: '#15181c', fg: '#d9d5cc', label: 'Nuit' }, sepia: { bg: '#f1e6d0', fg: '#3b3226', label: 'Sépia' }, day: { bg: '#ffffff', fg: '#1b1b1b', label: 'Jour' } };
+  var THEMES = { night: { bg: '#15181c', fg: '#d9d5cc', label: H.t('Nuit') }, sepia: { bg: '#f1e6d0', fg: '#3b3226', label: H.t('Sépia') }, day: { bg: '#ffffff', fg: '#1b1b1b', label: H.t('Jour') } };
 
   H.route(/^\/read\/(\w+)$/, function (m, query) {
     var id = m[1];
     var stage = h('div', { class: 'stage' });
     var label = h('span', { class: 'pg' }), title = h('div', { class: 'ti' });
-    var slider = h('div', { class: 'seekbar f', role: 'slider', tabindex: '0', 'aria-label': 'Avancement' }, h('div', { class: 'track' }, h('i'), h('b')));
+    var slider = h('div', { class: 'seekbar f', role: 'slider', tabindex: '0', 'aria-label': H.t('Avancement') }, h('div', { class: 'track' }, h('i'), h('b')));
     var tools = h('div', { class: 'btns' });
-    var bBack = H.button('', 'back', { 'aria-label': 'Retour', onclick: function () { H.back('#/'); } });
+    var bBack = H.button('', 'back', { 'aria-label': H.t('Retour'), onclick: function () { H.back('#/'); } });
     var bar = h('div', { class: 'rbar' }, h('div', { class: 'top' }, bBack, h('div', { class: 'txt' }, title), label), h('div', { class: 'bottom' }, slider, tools));
     var msg = h('div', { class: 'err', hidden: true });
     var el = h('section', { class: 'reader' }, stage, bar, msg);
@@ -33,14 +33,14 @@
     }
     function later() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 1500); }
     function fail(text) {
-      var save = H.actions.canDownloadKind('books') ? h('a', { class: 'btn f primary', href: '/media/' + id + '/file?download=1', 'data-autofocus': '1' }, 'Télécharger le fichier') : null;
-      H.clear(msg).appendChild(h('div', null, h('h2', null, 'Lecture impossible ici'), h('p', null, text),
-        h('div', { class: 'actions' }, save, H.button('Retour', 'back', { 'data-autofocus': save ? null : '1', onclick: function () { H.back('#/'); } }))));
+      var save = H.actions.canDownloadKind('books') ? h('a', { class: 'btn f primary', href: '/media/' + id + '/file?download=1', 'data-autofocus': '1' }, H.t('Télécharger le fichier')) : null;
+      H.clear(msg).appendChild(h('div', null, h('h2', null, H.t('Lecture impossible ici')), h('p', null, text),
+        h('div', { class: 'actions' }, save, H.button(H.t('Retour'), 'back', { 'data-autofocus': save ? null : '1', onclick: function () { H.back('#/'); } }))));
       msg.hidden = false; bar.hidden = true;
       H.focus.first(msg);
     }
     function openNext() {
-      if (info && info.next) { save(true); H.go('#/read/' + info.next.id, true); } else H.toast('C’est la fin.');
+      if (info && info.next) { save(true); H.go('#/read/' + info.next.id, true); } else H.toast(H.t('C’est la fin.'));
     }
 
     // --- BD / manga -----------------------------------------------------------------
@@ -55,13 +55,15 @@
       });
       var start = query.p !== undefined ? parseInt(query.p, 10) : info.position;
       page(Math.min(Math.max(0, Math.floor(start || 0)), info.pages - 1));
-      tool('Ajuster : ' + (fit === 'height' ? 'hauteur' : 'largeur'), null, function (b) {
-        fit = fit === 'height' ? 'width' : 'height'; H.pref('fit', fit); img.className = 'page ' + fit; stage.classList.toggle('wide', fit === 'width'); stage.scrollTop = 0; setLabel(b, 'Ajuster : ' + (fit === 'height' ? 'hauteur' : 'largeur'));
+      function fitText() { return fit === 'height' ? H.t('Ajuster : hauteur') : H.t('Ajuster : largeur'); }
+      function directionText() { return rtl ? H.t('Lecture : droite → gauche') : H.t('Lecture : gauche → droite'); }
+      tool(fitText(), null, function (b) {
+        fit = fit === 'height' ? 'width' : 'height'; H.pref('fit', fit); img.className = 'page ' + fit; stage.classList.toggle('wide', fit === 'width'); stage.scrollTop = 0; setLabel(b, fitText());
       });
-      tool('Lecture : ' + (rtl ? 'droite → gauche' : 'gauche → droite'), null, function (b) {
-        rtl = !rtl; H.pref('rtl', rtl); setLabel(b, 'Lecture : ' + (rtl ? 'droite → gauche' : 'gauche → droite'));
+      tool(directionText(), null, function (b) {
+        rtl = !rtl; H.pref('rtl', rtl); setLabel(b, directionText());
       });
-      if (info.next) tool('Volume suivant', 'next', openNext);
+      if (info.next) tool(H.t('Volume suivant'), 'next', openNext);
     }
     function page(n) {
       pos = n;
@@ -75,7 +77,7 @@
       var n = pos + delta;
       if (n < 0) return;
       if (n >= info.pages) {
-        if (!endArmed) { endArmed = true; save(true); H.toast(info.next ? 'Fin du volume · encore une fois pour passer au suivant' : 'Fin du volume'); return; }
+        if (!endArmed) { endArmed = true; save(true); H.toast(info.next ? H.t('Fin du volume · encore une fois pour passer au suivant') : H.t('Fin du volume')); return; }
         openNext(); return;
       }
       page(n);
@@ -83,19 +85,20 @@
 
     // --- Roman ---------------------------------------------------------------------
     function epub() {
-      frame = h('iframe', { class: 'book', title: 'Livre', sandbox: 'allow-same-origin' });
+      frame = h('iframe', { class: 'book', title: H.t('Livre'), sandbox: 'allow-same-origin' });
       stage.appendChild(frame);
       stage.classList.add('epub');
       frame.addEventListener('load', styleFrame);
       var start = info.position || 0;
       chapter(Math.min(Math.floor(start), info.chapters.length - 1), start - Math.floor(start));
-      tool('Texte −', null, function () { setSize(size - 10); });
-      tool('Texte +', null, function () { setSize(size + 10); });
-      tool('Thème : ' + THEMES[theme].label, null, function (b) {
-        var names = Object.keys(THEMES); theme = names[(names.indexOf(theme) + 1) % names.length]; H.pref('theme', theme); setLabel(b, 'Thème : ' + THEMES[theme].label); styleFrame();
+      tool(H.t('Texte −'), null, function () { setSize(size - 10); });
+      tool(H.t('Texte +'), null, function () { setSize(size + 10); });
+      function themeText() { return H.t('Thème : {theme}', { theme: THEMES[theme].label }); }
+      tool(themeText(), null, function (b) {
+        var names = Object.keys(THEMES); theme = names[(names.indexOf(theme) + 1) % names.length]; H.pref('theme', theme); setLabel(b, themeText()); styleFrame();
       });
-      tool('Chapitre précédent', 'prev', function () { skipChapter(-1); });
-      tool('Chapitre suivant', 'next', function () { skipChapter(1); });
+      tool(H.t('Chapitre précédent'), 'prev', function () { skipChapter(-1); });
+      tool(H.t('Chapitre suivant'), 'next', function () { skipChapter(1); });
     }
     var chap = 0, wanted = 0;
     function chapter(n, fraction) {
@@ -109,7 +112,7 @@
       if (n >= info.chapters.length) { pos = info.chapters.length; save(true); openNext(); return; }
       chapter(n, 0);
     }
-    function setSize(v) { size = Math.max(70, Math.min(220, v)); H.pref('fontSize', size); styleFrame(); H.toast('Texte à ' + size + ' %'); }
+    function setSize(v) { size = Math.max(70, Math.min(220, v)); H.pref('fontSize', size); styleFrame(); H.toast(H.t('Texte à {size} %', { size: size })); }
     function styleFrame() {
       var doc;
       try { doc = frame.contentDocument; } catch (e) { return; }
@@ -156,7 +159,7 @@
     function setLabel(b, text) { var l = b.querySelector('.lbl'); if (l) l.textContent = text; }
     function paint() {
       var n = total(), shown = info.format === 'cbz' ? pos + 1 : Math.floor(pos) + 1;
-      label.textContent = info.format === 'cbz' ? 'Page ' + shown + ' / ' + n : 'Chapitre ' + shown + ' / ' + n;
+      label.textContent = H.t(info.format === 'cbz' ? 'Page {n} / {total}' : 'Chapitre {n} / {total}', { n: shown, total: n });
       var ratio = n ? (info.format === 'cbz' ? (pos + 1) / n : pos / n) : 0;
       slider.querySelector('i').style.width = Math.min(100, ratio * 100) + '%';
       slider.querySelector('b').style.left = Math.min(100, ratio * 100) + '%';
@@ -206,7 +209,7 @@
       title.textContent = data.title;
       if (data.format === 'cbz') cbz();
       else if (data.format === 'epub') epub();
-      else fail('Le format ' + (data.format || 'inconnu').toUpperCase() + ' ne se lit pas dans le navigateur.');
+      else fail(H.t('Le format {format} ne se lit pas dans le navigateur.', { format: (data.format || H.t('inconnu')).toUpperCase() }));
     }).catch(function (e) { fail(e.message); });
 
     return {

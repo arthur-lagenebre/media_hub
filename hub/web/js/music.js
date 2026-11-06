@@ -43,7 +43,7 @@
     if (!own || same(own, albumArtist)) return { title: shown.title, line: shown.guests ? 'feat. ' + shown.guests : '' };
     return { title: shown.title, line: own + (shown.guests ? ' feat. ' + shown.guests : '') };
   };
-  function fail(e) { H.toast(e && e.message ? e.message : 'Impossible pour le moment.'); }
+  function fail(e) { H.toast(e && e.message ? e.message : H.t('Impossible pour le moment.')); }
 
   M.playItem = function (itemId, shuffle) { return M.tracksOf(itemId).then(function (list) { if (list.length) H.audio.play(list, 0, shuffle); }).catch(fail); };
   M.queueItem = function (itemId, where, title) {
@@ -53,21 +53,22 @@
     var playing = H.audio.active();
     var n = H.audio.enqueue(list, where);
     if (!n) return;
-    H.toast(playing ? (where === 'next' ? 'Jouée ensuite : ' : 'Ajouté à la file : ') + (title || H.plural(n, 'piste')) : 'Lecture : ' + (title || H.plural(n, 'piste')));
+    var what = title || H.plural(n, 'piste');
+    H.toast(!playing ? H.t('Lecture : {what}', { what: what }) : where === 'next' ? H.t('Jouée ensuite : {what}', { what: what }) : H.t('Ajouté à la file : {what}', { what: what }));
   }
   M.queueTracks = queueTracks;
 
   // --- Ajouter à une playlist ---------------------------------------------------------
   M.addToPlaylist = function (entryIds, label) {
     H.api('/api/playlists').then(function (res) {
-      var options = [{ label: 'Nouvelle playlist…', value: '+' }].concat(res.playlists.map(function (p) { return { label: p.name, detail: H.plural(p.count, 'piste'), value: p.id }; }));
-      H.menu('Ajouter à une playlist', options, null, function (v) {
+      var options = [{ label: H.t('Nouvelle playlist…'), value: '+' }].concat(res.playlists.map(function (p) { return { label: p.name, detail: H.plural(p.count, 'piste'), value: p.id }; }));
+      H.menu(H.t('Ajouter à une playlist'), options, null, function (v) {
         if (v === '+') {
-          H.prompt('Nom de la nouvelle playlist', '', 'Créer', function (name) {
-            H.api('/api/playlists', { name: name, entries: entryIds }).then(function (p) { H.toast('Ajouté à « ' + p.name + ' »'); }).catch(fail);
+          H.prompt(H.t('Nom de la nouvelle playlist'), '', H.t('Créer'), function (name) {
+            H.api('/api/playlists', { name: name, entries: entryIds }).then(function (p) { H.toast(H.t('Ajouté à « {name} »', { name: p.name })); }).catch(fail);
           });
         } else {
-          H.api('/api/playlist/' + v + '/add', { entries: entryIds }).then(function (p) { H.toast('Ajouté à « ' + p.name + ' »' + (label ? ' : ' + label : '')); }).catch(fail);
+          H.api('/api/playlist/' + v + '/add', { entries: entryIds }).then(function (p) { H.toast(label ? H.t('Ajouté à « {name} » : {label}', { name: p.name, label: label }) : H.t('Ajouté à « {name} »', { name: p.name })); }).catch(fail);
         }
       });
     }).catch(fail);
@@ -78,8 +79,8 @@
   function canGet(libId) { return libId ? H.actions.canDownload(libId) : H.actions.canDownloadKind('music'); }          // une file ou une playlist mêle les bibliothèques : sans la sienne, une bibliothèque de musique au moins
   M.albumMenu = function (itemId, title, libId) {
     H.menu(title, (canHear(libId) ? [
-      { label: 'Lire l’album', value: 'play' }, { label: 'Lecture aléatoire', value: 'shuffle' },
-      { label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }] : []).concat([{ label: 'Ajouter à une playlist…', value: 'list' }]).concat(canGet(libId) ? [{ label: 'Télécharger l’album', value: 'download' }] : []), null, function (v) {
+      { label: H.t('Lire l’album'), value: 'play' }, { label: H.t('Lecture aléatoire'), value: 'shuffle' },
+      { label: H.t('Jouer ensuite'), value: 'next' }, { label: H.t('Ajouter à la file d’attente'), value: 'end' }] : []).concat([{ label: H.t('Ajouter à une playlist…'), value: 'list' }]).concat(canGet(libId) ? [{ label: H.t('Télécharger l’album'), value: 'download' }] : []), null, function (v) {
       if (v === 'download') M.tracksOf(itemId).then(function (list) { H.actions.download(list.map(function (t) { return t.id; })); }).catch(fail);
       else if (v === 'play') M.playItem(itemId);
       else if (v === 'shuffle') M.playItem(itemId, true);
@@ -89,7 +90,7 @@
   };
   // `extra` : actions propres à l'endroit où l'on est (dans une playlist : monter, descendre, retirer) : [{label, value, run}]
   M.trackMenu = function (track, extra, libId) {
-    var options = (canHear(libId) ? [{ label: 'Jouer ensuite', value: 'next' }, { label: 'Ajouter à la file d’attente', value: 'end' }] : []).concat([{ label: 'Ajouter à une playlist…', value: 'list' }]).concat(canGet(libId) ? [{ label: 'Télécharger', value: 'download' }] : [], extra || []);
+    var options = (canHear(libId) ? [{ label: H.t('Jouer ensuite'), value: 'next' }, { label: H.t('Ajouter à la file d’attente'), value: 'end' }] : []).concat([{ label: H.t('Ajouter à une playlist…'), value: 'list' }]).concat(canGet(libId) ? [{ label: H.t('Télécharger'), value: 'download' }] : [], extra || []);
     H.menu(track.title, options, null, function (v) {
       if (v === 'download') H.actions.download([track.id]);
       else if (v === 'next' || v === 'end') queueTracks([track], v, track.title);
@@ -102,8 +103,8 @@
   M.cardTools = function (it) {
     function stop(e) { e.preventDefault(); e.stopPropagation(); }
     return h('div', { class: 'qa' },
-      canHear() ? h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Lire ' + it.title, title: 'Lire', onclick: function (e) { stop(e); M.playItem(it.id); } }, H.icon('play')) : null,
-      h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': 'Plus d’actions', title: 'Plus d’actions', onclick: function (e) { stop(e); M.albumMenu(it.id, it.title); } }, H.icon('more')));
+      canHear() ? h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': H.t('Lire {title}', { title: it.title }), title: H.t('Lire'), onclick: function (e) { stop(e); M.playItem(it.id); } }, H.icon('play')) : null,
+      h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': H.t('Plus d’actions'), title: H.t('Plus d’actions'), onclick: function (e) { stop(e); M.albumMenu(it.id, it.title); } }, H.icon('more')));
   };
   // Touche « lecture / pause » de la télécommande sur une pochette : lance l'album
   document.addEventListener('keydown', function (e) {
@@ -117,31 +118,31 @@
   // --- La file d'attente ---------------------------------------------------------------
   M.openQueue = function () {
     var list = h('div', { class: 'menu-list qlist' });
-    var title = h('h3', null, 'File d’attente');
-    var box = h('div', { class: 'menu queue', role: 'dialog', 'aria-label': 'File d’attente' }, title, list);
+    var title = h('h3', null, H.t('File d’attente'));
+    var box = h('div', { class: 'menu queue', role: 'dialog', 'aria-label': H.t('File d’attente') }, title, list);
     var footer = h('div', { class: 'btns' });
     box.appendChild(footer);
 
     function paint(focusKey) {
       var s = H.audio.state();
       H.clear(list); H.clear(footer);
-      title.textContent = s.queue.length ? 'File d’attente · ' + H.plural(s.queue.length, 'piste') : 'File d’attente';
-      if (!s.queue.length) list.appendChild(h('p', { class: 'muted' }, 'Rien en attente. Ajoute un album ou une piste avec « Jouer ensuite » ou « Ajouter à la file d’attente ».'));
+      title.textContent = s.queue.length ? H.t('File d’attente') + ' · ' + H.plural(s.queue.length, 'piste') : H.t('File d’attente');
+      if (!s.queue.length) list.appendChild(h('p', { class: 'muted' }, H.t('Rien en attente. Ajoute un album ou une piste avec « Jouer ensuite » ou « Ajouter à la file d’attente ».')));
       s.queue.forEach(function (t, i) {
         var now = i === s.idx;
         list.appendChild(h('div', { class: 'qrow' + (now ? ' now' : '') },
           h('button', { class: 'qt f', 'data-key': 'q' + i, 'data-autofocus': now ? '1' : null, onclick: function () { H.audio.jump(i); paint('q' + i); } },
             h('span', { class: 'no' }, now ? H.icon('play') : i + 1), h('span', { class: 'ti' }, h('b', null, t.title), h('small', null, [t.artist, t.album].filter(Boolean).join(' · '))), h('span', { class: 'du' }, t.duration ? H.time(t.duration) : '')),
-          H.button('', 'up', { class: 'qb', 'aria-label': 'Monter', disabled: i === 0, onclick: function () { H.audio.move(i, i - 1); paint('qu' + (i - 1)); }, 'data-key': 'qu' + i }),
-          H.button('', 'down', { class: 'qb', 'aria-label': 'Descendre', disabled: i === s.queue.length - 1, onclick: function () { H.audio.move(i, i + 1); paint('qd' + (i + 1)); }, 'data-key': 'qd' + i }),
-          H.button('', 'close', { class: 'qb', 'aria-label': 'Retirer de la file', onclick: function () { H.audio.remove(i); if (H.audio.state().queue.length) paint('q' + Math.min(i, H.audio.state().queue.length - 1)); else H.overlay.close(); }, 'data-key': 'qx' + i })));
+          H.button('', 'up', { class: 'qb', 'aria-label': H.t('Monter'), disabled: i === 0, onclick: function () { H.audio.move(i, i - 1); paint('qu' + (i - 1)); }, 'data-key': 'qu' + i }),
+          H.button('', 'down', { class: 'qb', 'aria-label': H.t('Descendre'), disabled: i === s.queue.length - 1, onclick: function () { H.audio.move(i, i + 1); paint('qd' + (i + 1)); }, 'data-key': 'qd' + i }),
+          H.button('', 'close', { class: 'qb', 'aria-label': H.t('Retirer de la file'), onclick: function () { H.audio.remove(i); if (H.audio.state().queue.length) paint('q' + Math.min(i, H.audio.state().queue.length - 1)); else H.overlay.close(); }, 'data-key': 'qx' + i })));
       });
       if (s.queue.length) {
-        footer.appendChild(H.button('Enregistrer en playlist', 'plus', { onclick: function () { M.addToPlaylist(H.audio.state().queue.map(function (t) { return t.id; }), 'la file d’attente'); } }));
-        if (s.idx < s.queue.length - 1) footer.appendChild(H.button('Vider la suite', null, { onclick: function () { H.audio.clearNext(); paint(); } }));
-        footer.appendChild(H.button('Tout arrêter', 'close', { onclick: function () { H.audio.clear(); H.overlay.close(); } }));
+        footer.appendChild(H.button(H.t('Enregistrer en playlist'), 'plus', { onclick: function () { M.addToPlaylist(H.audio.state().queue.map(function (t) { return t.id; }), H.t('la file d’attente')); } }));
+        if (s.idx < s.queue.length - 1) footer.appendChild(H.button(H.t('Vider la suite'), null, { onclick: function () { H.audio.clearNext(); paint(); } }));
+        footer.appendChild(H.button(H.t('Tout arrêter'), 'close', { onclick: function () { H.audio.clear(); H.overlay.close(); } }));
       }
-      footer.appendChild(H.button('Fermer', null, { onclick: function () { H.overlay.close(); } }));
+      footer.appendChild(H.button(H.t('Fermer'), null, { onclick: function () { H.overlay.close(); } }));
       if (focusKey) H.focus.key(box, focusKey);
       var now = list.querySelector('.qrow.now');
       if (now && !focusKey) now.scrollIntoView({ block: 'center' });
@@ -165,7 +166,7 @@
     var el = h('section', { class: 'library playlists', 'data-lib': lib });
     var grid = h('div', { class: 'grid sq' });
     function create() {
-      H.prompt('Nom de la nouvelle playlist', '', 'Créer', function (name) {
+      H.prompt(H.t('Nom de la nouvelle playlist'), '', H.t('Créer'), function (name) {
         H.api('/api/playlists', { name: name }).then(function (p) { H.go('#/playlist/' + p.id); }).catch(fail);
       });
     }
@@ -178,10 +179,10 @@
         empty.hidden = res.playlists.length > 0;
       }).catch(function (e) { H.clear(grid); H.clear(empty).appendChild(h('p', null, e.message)); empty.hidden = false; });
     }
-    var empty = h('div', { class: 'blank', hidden: true }, h('h2', null, 'Aucune playlist pour l’instant'),
-      h('p', null, 'Crée une playlist, puis ajoute-y des pistes ou des albums entiers avec « Ajouter à une playlist » (bouton ⋯ d’une pochette, d’un album ou d’une piste).'));
-    var tools = h('div', { class: 'tools' }, H.button('Nouvelle playlist', 'plus', { class: 'primary', 'data-autofocus': '1', onclick: create }), H.button('Retour à la musique', 'back', { onclick: function () { H.go('#/l/' + lib); } }));
-    el.appendChild(h('h1', null, 'Playlists')); el.appendChild(tools); el.appendChild(grid); el.appendChild(empty);
+    var empty = h('div', { class: 'blank', hidden: true }, h('h2', null, H.t('Aucune playlist pour l’instant')),
+      h('p', null, H.t('Crée une playlist, puis ajoute-y des pistes ou des albums entiers avec « Ajouter à une playlist » (bouton ⋯ d’une pochette, d’un album ou d’une piste).')));
+    var tools = h('div', { class: 'tools' }, H.button(H.t('Nouvelle playlist'), 'plus', { class: 'primary', 'data-autofocus': '1', onclick: create }), H.button(H.t('Retour à la musique'), 'back', { onclick: function () { H.go('#/l/' + lib); } }));
+    el.appendChild(h('h1', null, H.t('Playlists'))); el.appendChild(tools); el.appendChild(grid); el.appendChild(empty);
     load();
     return { el: el, nav: '#/l/' + lib, lib: lib, refresh: load };
   });
@@ -204,24 +205,24 @@
   }
   // Un album qui manque : sa pochette grisée, rien à ouvrir ni à lire (la case n'est donc pas dans la navigation à la télécommande)
   function wantedCard(w) {
-    return h('div', { class: 'card wanted', title: w.title + ' (manquant)' },
+    return h('div', { class: 'card wanted', title: H.t('{title} (manquant)', { title: w.title }) },
       H.picture(w.cover ? w.cover + '?w=300' : '', w.title, 'sq'),
-      h('div', { class: 't' }, w.title), h('div', { class: 's' }, [w.year, 'Manquant'].join(' · ')));
+      h('div', { class: 't' }, w.title), h('div', { class: 's' }, [w.year, H.t('Manquant')].join(' · ')));
   }
   // Recadrer une photo : un cadre carré (la vignette) sur l'image qu'on déplace et qu'on agrandit. `src` est l'image à montrer ; `onOk(cadre)` envoie le cadre (x, y, largeur, hauteur en fractions de l'image) et rend une promesse : la fenêtre se ferme si elle réussit, reste ouverte avec le message si elle échoue. Ce qui est hors du cadre ne sera pas gardé.
   function cropPhoto(src, onOk, onClosed) {
     var S = 0, pad = 0, F = 0;       // côté de la fenêtre de l'image, marge autour du cadre, côté du cadre (voir size)
     var nw = 0, nh = 0, base = 1, zoom = 1, ox = 0, oy = 0, busy = false, drag = null;
     var err = h('p', { class: 'formerr', role: 'alert' });
-    var ok = H.button('Valider', null, { class: 'primary', disabled: true, onclick: validate });
+    var ok = H.button(H.t('Valider'), null, { class: 'primary', disabled: true, onclick: validate });
     var img = h('img', { alt: '', draggable: 'false', onload: function () {
       nw = this.naturalWidth; nh = this.naturalHeight;
-      if (!nw || !nh) { err.textContent = 'Image illisible.'; return; }
+      if (!nw || !nh) { err.textContent = H.t('Image illisible.'); return; }
       ok.disabled = false; layout();
-    }, onerror: function () { err.textContent = 'Image illisible.'; } });
-    var slider = h('input', { type: 'range', class: 'f', min: '0', max: '100', step: '1', value: '0', 'aria-label': 'Zoom', oninput: function () { zoomTo(1 + this.value / 25); } });
+    }, onerror: function () { err.textContent = H.t('Image illisible.'); } });
+    var slider = h('input', { type: 'range', class: 'f', min: '0', max: '100', step: '1', value: '0', 'aria-label': H.t('Zoom'), oninput: function () { zoomTo(1 + this.value / 25); } });
     var frameEl = h('div', { class: 'crop-frame' });
-    var stage = h('div', { class: 'crop-stage f', tabindex: '0', role: 'application', 'aria-label': 'Photo à recadrer : flèches pour déplacer, + et - pour agrandir, Entrée pour valider', 'data-autofocus': '1' }, img, frameEl);
+    var stage = h('div', { class: 'crop-stage f', tabindex: '0', role: 'application', 'aria-label': H.t('Photo à recadrer : flèches pour déplacer, + et - pour agrandir, Entrée pour valider'), 'data-autofocus': '1' }, img, frameEl);
     function size(side) {
       S = Math.round(side); pad = Math.round(S * 0.08); F = S - 2 * pad;
       stage.style.width = stage.style.height = S + 'px';
@@ -256,7 +257,7 @@
     function validate() {
       if (busy || !nw) return;
       busy = true; ok.disabled = true; err.textContent = '';
-      Promise.resolve(onOk(frame())).then(function () { H.overlay.close(); }, function (e) { busy = false; ok.disabled = false; err.textContent = e && e.message ? e.message : 'Impossible pour le moment.'; });
+      Promise.resolve(onOk(frame())).then(function () { H.overlay.close(); }, function (e) { busy = false; ok.disabled = false; err.textContent = e && e.message ? e.message : H.t('Impossible pour le moment.'); });
     }
     stage.addEventListener('pointerdown', function (e) {
       if (e.button) return;
@@ -279,11 +280,11 @@
       e.preventDefault(); place();
     });
     img.src = src;       // après les gestionnaires : une image déjà en cache déclenche onload tout de suite
-    var box = h('div', { class: 'menu crop', role: 'dialog', 'aria-label': 'Recadrer la photo' },
-      h('h3', null, 'Recadrer la photo'),
-      h('p', { class: 'lead' }, 'Déplace l’image et agrandis-la : seule la partie dans le cadre est gardée, le reste est retiré de la photo.'),
-      stage, h('label', { class: 'zoom' }, h('span', null, 'Zoom'), slider), err,
-      h('div', { class: 'btns' }, ok, H.button('Annuler', null, { onclick: function () { H.overlay.close(); } })));
+    var box = h('div', { class: 'menu crop', role: 'dialog', 'aria-label': H.t('Recadrer la photo') },
+      h('h3', null, H.t('Recadrer la photo')),
+      h('p', { class: 'lead' }, H.t('Déplace l’image et agrandis-la : seule la partie dans le cadre est gardée, le reste est retiré de la photo.')),
+      stage, h('label', { class: 'zoom' }, h('span', null, H.t('Zoom')), slider), err,
+      h('div', { class: 'btns' }, ok, H.button(H.t('Annuler'), null, { onclick: function () { H.overlay.close(); } })));
     size(Math.max(160, Math.min(560, window.innerWidth * 0.92 - 80)));
     H.overlay.open(box, onClosed);
     // La fenêtre ne dépasse jamais l'écran, quelle que soit la taille du texte (rem) : l'image prend ce qui reste une fois le reste mesuré
@@ -298,43 +299,43 @@
       onchange: function () { var file = this.files && this.files[0]; this.value = ''; if (file) upload(file); } });
     function saved(message) { stamp = Date.now(); H.toast(message); return load(); }
     function upload(file) {       // l'image choisie s'ouvre dans le recadrage ; rien n'est envoyé avant « Valider »
-      if (file.size > 10 * 1024 * 1024) { H.toast('Image trop grosse (10 Mo au plus).'); return; }
+      if (file.size > 10 * 1024 * 1024) { H.toast(H.t('Image trop grosse (10 Mo au plus).')); return; }
       var url = URL.createObjectURL(file);
       cropPhoto(url, function (f) {
-        return H.api('/api/artist/' + lib + '/' + id + '/photo?crop=' + [f.x, f.y, f.w, f.h].join(','), file, { raw: true }).then(function () { return saved('Photo enregistrée'); });
+        return H.api('/api/artist/' + lib + '/' + id + '/photo?crop=' + [f.x, f.y, f.w, f.h].join(','), file, { raw: true }).then(function () { return saved(H.t('Photo enregistrée')); });
       }, function () { URL.revokeObjectURL(url); });
     }
     function recrop() {       // la photo qu'il a déjà, rognée une seconde fois
       cropPhoto('/img/artist/' + lib + '/' + id + '?w=1280&v=' + (stamp || 1), function (f) {
-        return H.api('/api/artist/' + lib + '/' + id + '/photo/crop', f).then(function () { return saved('Photo recadrée'); });
+        return H.api('/api/artist/' + lib + '/' + id + '/photo/crop', f).then(function () { return saved(H.t('Photo recadrée')); });
       });
     }
     function load() {
       return H.api('/api/artist/' + lib + '/' + id).then(function (d) { data = d; render(); }).catch(function (e) {
-        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Artiste introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + lib, 'data-autofocus': '1' }, 'Retour à la musique')));
+        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Artiste introuvable')), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + lib, 'data-autofocus': '1' }, H.t('Retour à la musique'))));
       });
     }
     // Les boutons de la fiche d'un artiste : lire, mettre en file, et pour l'administrateur la photo.
     function artistActions(d, list) {
       var hear = canHear(d.library && d.library.id);
       return h('div', { class: 'actions' },
-        hear ? H.button('Tout lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }) : null,
-        hear ? H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }) : null,
-        hear ? H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }) : null,
-        hear ? H.button('À la file', 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }) : null,
-        H.device === 'tv' || !H.isAdmin() ? null : H.button('Changer la photo', 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
-        H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button('Recadrer', 'full', { 'data-key': 'crop', onclick: recrop }));
+        hear ? H.button(H.t('Tout lire'), 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }) : null,
+        hear ? H.button(H.t('Aléatoire'), 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }) : null,
+        hear ? H.button(H.t('Jouer ensuite'), null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }) : null,
+        hear ? H.button(H.t('À la file'), 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }) : null,
+        H.device === 'tv' || !H.isAdmin() ? null : H.button(H.t('Changer la photo'), 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
+        H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button(H.t('Recadrer'), 'full', { 'data-key': 'crop', onclick: recrop }));
     }
     // Le texte à droite de la photo : nom, faits, genres, totaux, résumé Wikipédia, boutons.
     function artistInfo(d, info) {
       var list = d.tracks;
       var meta = [H.plural(d.albums.length, 'album'), H.plural(list.length, 'piste'), d.duration ? H.dur(d.duration) : ''].filter(Boolean).join(' · ');
       var box = h('div', { class: 'info' }, h('h1', null, d.name));
-      if (info && info.facts) box.appendChild(h('p', { class: 'meta' }, info.facts));
+      if (info && info.facts) box.appendChild(h('p', { class: 'meta' }, info.facts.split(' · ').map(function (part) { return H.tr(part); }).join(' · ')));
       var tags = [info && info.disambiguation ? info.disambiguation : ''].concat(d.genres || []).filter(Boolean).join(', ');
       if (tags) box.appendChild(h('p', { class: 'genres' }, tags));
       box.appendChild(h('p', { class: info && info.facts ? 'credit' : 'meta' }, meta));
-      if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, 'Wikipédia')));
+      if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, H.t('Wikipédia'))));
       box.appendChild(artistActions(d, list));
       return box;
     }
@@ -350,7 +351,7 @@
       return copy;
     }
     function albumsSection(d) {
-      return h('section', null, h('h2', null, 'Albums'), h('div', { class: 'grid' }, shelf(d).map(function (a) { return a.wanted ? wantedCard(a) : H.card(withoutGroup(a), false); })));
+      return h('section', null, h('h2', null, H.t('Albums')), h('div', { class: 'grid' }, shelf(d).map(function (a) { return a.wanted ? wantedCard(a) : H.card(withoutGroup(a), false); })));
     }
     // Les membres du groupe : les actuels, puis les anciens.
     function memberSections(info) {
@@ -359,20 +360,20 @@
       var members = function (title, list) {
         if (!list.length) return null;
         return h('section', { class: 'cast' }, h('h2', null, title), h('ul', null, list.map(function (p) {
-          return h('li', null, h('b', null, p.name), [p.roles.join(', '), p.period].filter(Boolean).length ? h('span', null, [p.roles.join(', '), p.period].filter(Boolean).join(' · ')) : null);
+          return h('li', null, h('b', null, p.name), [p.roles.join(', '), p.period].filter(Boolean).length ? h('span', null, [p.roles.join(', '), H.tr(p.period)].filter(Boolean).join(' · ')) : null);
         })));
       };
-      return [members(former.length ? 'Membres actuels' : 'Membres', current), members('Anciens membres', former)];       // « actuels » ne veut dire quelque chose que s'il y en a d'anciens
+      return [members(former.length ? H.t('Membres actuels') : H.t('Membres'), current), members(H.t('Anciens membres'), former)];       // « actuels » ne veut dire quelque chose que s'il y en a d'anciens
     }
     function linksSection(info) {
       if (!(info && info.links && info.links.length)) return null;
-      return h('section', { class: 'links-out' }, h('h2', null, 'Liens'), h('div', { class: 'actions' }, info.links.map(function (l) {
-        return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label);
+      return h('section', { class: 'links-out' }, h('h2', null, H.t('Liens')), h('div', { class: 'actions' }, info.links.map(function (l) {
+        return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, H.tr(l.label));
       })));
     }
     function noSheetNote(info) {
       if (info) return null;
-      return h('p', { class: 'muted' }, H.isAdmin() ? 'Pas encore de fiche : lance « Fiches artistes » dans Paramètres > Gestion pour récupérer le résumé, les membres et les liens.' : 'Pas encore de fiche pour cet artiste.');
+      return h('p', { class: 'muted' }, H.isAdmin() ? H.t('Pas encore de fiche : lance « Fiches artistes » dans Paramètres > Gestion pour récupérer le résumé, les membres et les liens.') : H.t('Pas encore de fiche pour cet artiste.'));
     }
     function artistBody(d, info) {
       var body = h('div', { class: 'body' });
@@ -399,7 +400,7 @@
     var el = h('section', { class: 'detail playlist', 'data-lib': lib });
     function load() {
       return H.api('/api/playlist/' + pid).then(function (d) { data = d; render(); }).catch(function (e) {
-        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, 'Playlist introuvable'), h('p', null, e.message), h('a', { class: 'btn f', href: '#/playlists', 'data-autofocus': '1' }, 'Toutes les playlists')));
+        H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Playlist introuvable')), h('p', null, e.message), h('a', { class: 'btn f', href: '#/playlists', 'data-autofocus': '1' }, H.t('Toutes les playlists'))));
       });
     }
     function edit(action, body, focus) { return H.api('/api/playlist/' + pid + '/' + action, body).then(function (d) { data = d; render(focus); }).catch(fail); }
@@ -410,34 +411,34 @@
       H.clear(el);
       var meta = [H.plural(d.count, 'piste'), d.duration ? H.dur(d.duration) : ''].filter(Boolean).join(' · ');
       var info = h('div', { class: 'info' }, h('h1', null, d.name), h('p', { class: 'meta' }, meta));
-      if (d.missing) info.appendChild(h('p', { class: 'muted' }, H.plural(d.missing, 'piste') + ' introuvable' + (d.missing > 1 ? 's' : '') + ' (fichier déplacé ou supprimé).'));
+      if (d.missing) info.appendChild(h('p', { class: 'muted' }, d.missing > 1 ? H.t('{n} pistes introuvables (fichier déplacé ou supprimé).', { n: d.missing }) : H.t('{n} piste introuvable (fichier déplacé ou supprimé).', { n: d.missing })));
       var hear = canHear();
       var actions = h('div', { class: 'actions' },
-        hear ? H.button('Lire', 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }) : null,
-        hear ? H.button('Aléatoire', 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }) : null,
-        hear ? H.button('Jouer ensuite', null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }) : null,
-        H.button('Renommer', 'edit', { onclick: function () { H.prompt('Renommer la playlist', d.name, 'Renommer', function (name) { edit('rename', { name: name }); }); } }),
-        H.button('Supprimer', 'trash', { onclick: function () {
-          H.menu('Supprimer « ' + d.name + ' » ?', [{ label: 'Supprimer la playlist', value: 'yes' }, { label: 'Garder', value: 'no' }], 'no', function (v) {
-            if (v === 'yes') H.api('/api/playlist/' + pid + '/delete', {}).then(function () { H.toast('Playlist supprimée'); H.go('#/playlists', true); }).catch(fail);
+        hear ? H.button(H.t('Lire'), 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }) : null,
+        hear ? H.button(H.t('Aléatoire'), 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }) : null,
+        hear ? H.button(H.t('Jouer ensuite'), null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }) : null,
+        H.button(H.t('Renommer'), 'edit', { onclick: function () { H.prompt(H.t('Renommer la playlist'), d.name, H.t('Renommer'), function (name) { edit('rename', { name: name }); }); } }),
+        H.button(H.t('Supprimer'), 'trash', { onclick: function () {
+          H.menu(H.t('Supprimer « {name} » ?', { name: d.name }), [{ label: H.t('Supprimer la playlist'), value: 'yes' }, { label: H.t('Garder'), value: 'no' }], 'no', function (v) {
+            if (v === 'yes') H.api('/api/playlist/' + pid + '/delete', {}).then(function () { H.toast(H.t('Playlist supprimée')); H.go('#/playlists', true); }).catch(fail);
           });
         } }));
       info.appendChild(actions);
       var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: d.covers[0] ? 'background-image:url(/img/item/' + d.covers[0] + '?w=300)' : '' }), h('div', { class: 'hero-in' }, mosaic(d), info));
       el.appendChild(hero);
       var body = h('div', { class: 'body' });
-      if (!list.length) body.appendChild(h('div', { class: 'blank' }, h('h2', null, 'Cette playlist est vide'), h('p', null, 'Ajoute des pistes depuis un album : bouton ⋯ d’une piste, ou « Playlist » en haut de l’album.')));
+      if (!list.length) body.appendChild(h('div', { class: 'blank' }, h('h2', null, H.t('Cette playlist est vide')), h('p', null, H.t('Ajoute des pistes depuis un album : bouton ⋯ d’une piste, ou « Playlist » en haut de l’album.'))));
       else {
         var box = h('div', { class: 'tracks' });
         list.forEach(function (t, i) {
           var tools = [];
-          if (i > 0) tools.push({ label: 'Monter', value: 'up', run: function () { edit('move', { from: i, to: i - 1 }, 'p' + (i - 1)); } });
-          if (i < list.length - 1) tools.push({ label: 'Descendre', value: 'down', run: function () { edit('move', { from: i, to: i + 1 }, 'p' + (i + 1)); } });
-          tools.push({ label: 'Retirer de la playlist', value: 'remove', run: function () { edit('remove', { index: i }, 'p' + Math.min(i, list.length - 2)); } });
+          if (i > 0) tools.push({ label: H.t('Monter'), value: 'up', run: function () { edit('move', { from: i, to: i - 1 }, 'p' + (i - 1)); } });
+          if (i < list.length - 1) tools.push({ label: H.t('Descendre'), value: 'down', run: function () { edit('move', { from: i, to: i + 1 }, 'p' + (i + 1)); } });
+          tools.push({ label: H.t('Retirer de la playlist'), value: 'remove', run: function () { edit('remove', { index: i }, 'p' + Math.min(i, list.length - 2)); } });
           box.appendChild(h('div', { class: 'trkwrap' },
             h('button', { class: 'trk f', 'data-key': 'p' + i, 'data-track': t.id, onclick: function () { H.audio.play(list, i); } },
               h('span', { class: 'no' }, i + 1), h('span', { class: 'ti' }, h('b', null, t.title), h('small', null, [t.artist, t.album].filter(Boolean).join(' · '))), h('span', { class: 'du' }, t.duration ? H.time(t.duration) : '')),
-            H.button('', 'more', { class: 'trkmore', 'aria-label': 'Actions de la piste', 'data-key': 'pm' + i, onclick: function () { M.trackMenu(t, tools); } })));
+            H.button('', 'more', { class: 'trkmore', 'aria-label': H.t('Actions de la piste'), 'data-key': 'pm' + i, onclick: function () { M.trackMenu(t, tools); } })));
         });
         body.appendChild(box);
       }

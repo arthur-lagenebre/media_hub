@@ -4,7 +4,7 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 
 - Version du contrat : `GET /api/state` renvoie `"api": 1`. Ce nombre ne change qu'en cas de **rupture** (champ retiré, renommé, ou de sens différent). Ajouter un champ n'en est pas une : **un client ignore les champs qu'il ne connaît pas**.
 - « optionnel » = la clé est **absente** de l'objet (jamais `null`), sauf mention contraire.
-- Tout est en UTF-8. Les messages d'erreur et les libellés sont en français.
+- Tout est en UTF-8. Les messages d'erreur et les libellés sont en français, sauf si la requête porte le cookie `hub_lang=en` (que l'interface pose quand on choisit l'anglais) : alors les libellés que le serveur compose lui-même (`label` des pistes audio et des sous-titres, le pays dans `info.facts` d'un artiste) et la page `/login` sont en anglais. Les autres messages (erreurs, tâches) restent en français : c'est le client qui les traduit (voir [lang-en.js](../hub/web/js/lang-en.js)). Un client natif qui veut l'anglais fait de même, ou pose ce cookie.
 
 ## Conventions
 

@@ -80,7 +80,7 @@
         var data = null;
         try { data = t ? JSON.parse(t) : null; } catch (e) { data = null; }
         if (!r.ok) {
-          var err = new Error((data && data.error) || ('Erreur ' + r.status));
+          var err = new Error(data && data.error ? H.tr(data.error) : H.t('Erreur {status}', { status: r.status }));
           err.status = r.status;
           throw err;
         }
@@ -123,7 +123,7 @@
 
   // --- Appareil : pc, phone, tablet ou tv ----------------------------------------------
   // Le navigateur ne dit pas « je suis une télé » : on le devine à son identifiant (Tizen, webOS, Fire TV…), puis au toucher. Approximatif, donc modifiable dans Gestion.
-  H.devices = [['auto', 'Automatique'], ['pc', 'Ordinateur'], ['phone', 'Smartphone'], ['tablet', 'Tablette'], ['tv', 'Télévision']];
+  H.devices = [['auto', H.t('Automatique')], ['pc', H.t('Ordinateur')], ['phone', H.t('Smartphone')], ['tablet', 'Tablette'], ['tv', H.t('Télévision')]];
   H.detectDevice = function () {
     var ua = navigator.userAgent || '', touch = (navigator.maxTouchPoints || 0) > 1;
     var tizenPhone = /Tizen/i.test(ua) && /Mobile/i.test(ua) && !/TV/i.test(ua);                        // Tizen est aussi celui de quelques téléphones Samsung ; un Fire TV, lui, s'annonce « Mobile »
@@ -142,7 +142,7 @@
   H.applyDevice();
 
   // --- Taille du texte : celle de l'appareil (par défaut) ou un cran plus petit, au choix, sur n'importe quel appareil ---
-  H.textSizes = [['normal', 'Normale', 'La taille prévue pour l’appareil'], ['small', 'Petite', 'Un peu plus petite, sur tous les appareils']];
+  H.textSizes = [['normal', H.t('Normale'), H.t('La taille prévue pour l’appareil')], ['small', H.t('Petite'), H.t('Un peu plus petite, sur tous les appareils')]];
   H.applyTextSize = function () {
     var chosen = H.pref('textSize');
     H.textSize = H.textSizes.some(function (s) { return s[0] === chosen; }) ? chosen : 'normal';
@@ -163,8 +163,6 @@
     if (!s) return '';
     return s >= 60 ? Math.floor(s / 60) + ' h ' + pad(s % 60) : s + ' min';
   };
-  H.plural = function (n, one, many) { return n + ' ' + (n > 1 ? (many || one + 's') : one); };
-  H.number = function (n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); };
   H.hue = function (text) {
     var x = 0;
     for (var i = 0; i < text.length; i++) x = (x * 31 + text.charCodeAt(i)) % 360;
@@ -228,7 +226,7 @@
         h('span', { class: 'mark' }, on ? H.icon('check') : null), h('span', { class: 'lbl' }, o.label), o.detail ? h('span', { class: 'det' }, o.detail) : null);
       list.appendChild(b);
     });
-    if (!options.length) list.appendChild(h('p', { class: 'muted' }, 'Rien à choisir.'));
+    if (!options.length) list.appendChild(h('p', { class: 'muted' }, H.t('Rien à choisir.')));
     H.overlay.open(box);
   };
 
@@ -242,7 +240,7 @@
     }
     input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
     var box = h('div', { class: 'menu prompt', role: 'dialog', 'aria-label': title }, h('h3', null, title), input,
-      h('div', { class: 'btns' }, H.button(okLabel || 'Valider', 'check', { class: 'primary', onclick: submit }), H.button('Annuler', null, { onclick: function () { H.overlay.close(); } })));
+      h('div', { class: 'btns' }, H.button(okLabel || H.t('Valider'), 'check', { class: 'primary', onclick: submit }), H.button(H.t('Annuler'), null, { onclick: function () { H.overlay.close(); } })));
     H.overlay.open(box);
     setTimeout(function () { try { input.focus(); input.select(); } catch (e) { /* tant pis */ } }, 30);
   };
@@ -397,7 +395,7 @@
         return { hash: hash, el: view.el, view: view, scroll: 0, focus: null };
       }
     }
-    var el = h('section', { class: 'view empty' }, h('h1', null, 'Page introuvable'), h('a', { class: 'btn f', href: '#/', 'data-autofocus': '1' }, 'Retour à l’accueil'));
+    var el = h('section', { class: 'view empty' }, h('h1', null, H.t('Page introuvable')), h('a', { class: 'btn f', href: '#/', 'data-autofocus': '1' }, H.t('Retour à l’accueil')));
     document.getElementById('views').appendChild(el);
     return { hash: hash, el: el, view: { el: el }, scroll: 0, focus: null };
   }

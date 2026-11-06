@@ -312,6 +312,11 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             self.connection.settimeout(self.timeout)       # la connexion persiste : un client inactif ne garde pas un fil une heure de plus
 
+    @property
+    def lang(self):
+        """'fr' ou 'en' : la langue choisie dans l'interface (cookie `hub_lang`) ; le français quand rien n'est choisi."""
+        return page_language(self, {})[0]
+
     # --- Aiguillage -------------------------------------------------------
     def session_user(self):
         """Le compte du jeton de session, en cookie puis en `Authorization: Bearer` ; None s'il n'y en a pas ou s'il ne vaut rien."""
@@ -500,19 +505,40 @@ def route(method, pattern):
 # ---------------------------------------------------------------------------
 # Connexion
 # ---------------------------------------------------------------------------
-LOGIN_PAGE = """<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Médiathèque</title>
+LOGIN_PAGE = """<!doctype html><html lang="%(lang)s"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%(title)s</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1115;color:#e8e8ea;font:18px system-ui,sans-serif}form{display:grid;gap:14px;width:min(360px,86vw)}
 h1{font-size:26px;margin:0 0 8px}input,button{font:inherit;padding:14px 16px;border-radius:12px;border:1px solid #2a2c34;background:#1c1e26;color:inherit}button{background:#7cc4ff;color:#0b1220;border:0;font-weight:700;cursor:pointer}
-input:focus,button:focus{outline:3px solid #7cc4ff}p{color:#ff8b8b;margin:0;min-height:1.2em}</style>
-<form method="post" action="/api/login"><h1>Médiathèque</h1>%s<input type="password" name="password" placeholder="Mot de passe" autofocus autocomplete="current-password"><button>Entrer</button><p>%s</p></form></html>"""
-LOGIN_USER_FIELD = '<input type="text" name="user" placeholder="Nom" autocomplete="username" autofocus>'     # seulement quand il y a plusieurs comptes
+input:focus,button:focus{outline:3px solid #7cc4ff}p{color:#ff8b8b;margin:0;min-height:1.2em}a{color:#9aa0ad;font-size:15px;text-align:center}</style>
+<form method="post" action="/api/login"><h1>%(title)s</h1>%(field)s<input type="password" name="password" placeholder="%(password)s" autofocus autocomplete="current-password"><button>%(enter)s</button><p>%(shown)s</p><a href="/login?lang=%(other)s">%(other_name)s</a></form></html>"""
+# La page de connexion est la seule page que le serveur écrit lui-même : sa langue est celle du cookie `hub_lang` (posé par l'interface), ou de `?lang=` quand on la change ici.
+LOGIN_LANGS = {
+    "fr": {"title": "Médiathèque", "password": "Mot de passe", "name": "Nom", "enter": "Entrer", "other": "en", "other_name": "English",
+           "errors": {"1": "Nom ou mot de passe incorrect.", "2": "Trop d'essais : réessaie dans quelques minutes."}},
+    "en": {"title": "Media library", "password": "Password", "name": "Name", "enter": "Sign in", "other": "fr", "other_name": "Français",
+           "errors": {"1": "Wrong name or password.", "2": "Too many attempts: try again in a few minutes."}},
+}
+LANG_COOKIE = "hub_lang"
+
+
+def page_language(h, query):
+    """('fr' | 'en', cookie à poser ou None) : `?lang=` d'abord, sinon le cookie `hub_lang` ; le français quand rien n'est choisi."""
+    asked = query.get("lang")
+    if asked in LOGIN_LANGS:
+        return asked, f"{LANG_COOKIE}={asked}; Path=/; Max-Age=31536000; SameSite=Lax"
+    found = re.search(rf"(?:^|;\s*){LANG_COOKIE}=(fr|en)\s*(?:;|$)", h.headers.get("Cookie", ""))
+    return (found.group(1) if found else "fr"), None
 
 
 @route("GET", r"/login")
 def login_page(h, m, q):
-    field = LOGIN_USER_FIELD if len(accounts.rows(h.hub.db)) > 1 else ""
-    shown = {"1": "Nom ou mot de passe incorrect.", "2": "Trop d'essais : réessaie dans quelques minutes."}.get(q.get("error", ""), "")
-    h.send_body((LOGIN_PAGE % (field, shown)).encode("utf-8"), "text/html; charset=utf-8", 200, {"Cache-Control": "no-store"}, h.command == "HEAD")
+    lang, cookie = page_language(h, q)
+    words = LOGIN_LANGS[lang]
+    field = f'<input type="text" name="user" placeholder="{words["name"]}" autocomplete="username" autofocus>' if len(accounts.rows(h.hub.db)) > 1 else ""     # seulement quand il y a plusieurs comptes
+    page = LOGIN_PAGE % {**words, "lang": lang, "field": field, "shown": words["errors"].get(q.get("error", ""), "")}
+    headers = {"Cache-Control": "no-store"}
+    if cookie:
+        headers["Set-Cookie"] = cookie
+    h.send_body(page.encode("utf-8"), "text/html; charset=utf-8", 200, headers, h.command == "HEAD")
 
 
 def session_cookie(hub, row):
@@ -1320,15 +1346,15 @@ def api_item(h, m, q):
     h.send_json(out)
 
 
-def artist_sheet(info, mbid=""):
-    """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo)."""
+def artist_sheet(info, mbid="", lang="fr"):
+    """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo). Le pays est traduit en français pour `lang` = 'fr', sinon tel que MusicBrainz le donne."""
     members = [{"name": mem["name"], "roles": mem.get("roles", []), "period": artistinfo.period(mem), "former": bool(mem.get("ended"))} for mem in info.get("members") or []]
     links = enrich.pick_links(info.get("links", []))       # aussi à l'affichage : les fiches déjà gardées gardent peut-être d'autres liens
     if (info.get("wiki") or {}).get("url"):
         links.append({"label": "Wikipédia", "url": info["wiki"]["url"]})
     if mbid:
         links.append({"label": "MusicBrainz", "url": musicbrainz.artist_url(mbid)})
-    return {"facts": artistinfo.facts({**info, "area": countries.french(info.get("area"))}), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": links}
+    return {"facts": artistinfo.facts({**info, "area": countries.french(info.get("area")) if lang == "fr" else info.get("area")}), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": links}
 
 
 def artist_albums(hub, lib_id, artist_id):
@@ -1423,7 +1449,7 @@ def api_artist(h, m, q):
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
     kept = artist_kept(hub, rows)
     if kept:
-        out["info"] = artist_sheet(kept["info"], kept["mbid"])
+        out["info"] = artist_sheet(kept["info"], kept["mbid"], h.lang)
     out["wanted"] = [{"year": w["year"], "title": w["title"], "cover": f"/img/wanted/{lib.id}/{m.group(2)}/{w['key']}" if w["cover"] else ""} for w in wanted_albums(hub, lib.id, m.group(2))]
     out["photo"] = artist_photo(hub, m.group(2), kept, artist_home(lib, rows)) is not None
     if out["photo"]:
@@ -1658,27 +1684,41 @@ def probe_of(hub, entry):
     return probe
 
 
-def track_label(track):
-    parts = [subtitles.language(track["lang"]) or (f"Piste {track['index'] + 1}" if not track["title"] else ""), track["title"]]
+LABEL_WORDS = {"fr": {"track": "Piste", "forced": "Forcé", "stereo": "stéréo", "subtitles": "Sous-titres"},
+               "en": {"track": "Track", "forced": "Forced", "stereo": "stereo", "subtitles": "Subtitles"}}
+
+
+def track_label(track, lang="fr"):
+    words = LABEL_WORDS.get(lang, LABEL_WORDS["fr"])
+    parts = [subtitles.language(track["lang"]) or (f"{words['track']} {track['index'] + 1}" if not track["title"] else ""), track["title"]]
     codec = track.get("codec", "")
     extra = {"ac3": "AC-3", "eac3": "E-AC-3", "dts": "DTS", "truehd": "TrueHD", "aac": "AAC", "flac": "FLAC", "opus": "Opus"}.get(codec, codec.upper())
-    channels = {1: "mono", 2: "stéréo", 6: "5.1", 8: "7.1"}.get(track.get("channels"), "")
+    channels = {1: "mono", 2: words["stereo"], 6: "5.1", 8: "7.1"}.get(track.get("channels"), "")
     detail = " ".join(x for x in (extra, channels) if x)
     return " · ".join(x for x in parts if x) + (f" ({detail})" if detail else "")
 
 
-def sub_label(track):
-    parts = [subtitles.language(track["lang"]) or f"Piste {track['index'] + 1}", track["title"], "Forcé" if track.get("forced") else ""]
+def sub_label(track, lang="fr"):
+    words = LABEL_WORDS.get(lang, LABEL_WORDS["fr"])
+    parts = [subtitles.language(track["lang"]) or f"{words['track']} {track['index'] + 1}", track["title"], words["forced"] if track.get("forced") else ""]
     return " · ".join(x for x in parts if x)
 
 
-def subtitle_list(hub, entry, probe, path):
+def side_label(label, lang="fr"):
+    """Le libellé d'un fichier de sous-titres voisin (« Français · Forcé »), dans la langue de la page : seuls les mots du hub changent, pas la langue ni le nom du fichier."""
+    if lang == "fr":
+        return label
+    swap = {LABEL_WORDS["fr"]["forced"]: LABEL_WORDS[lang]["forced"], LABEL_WORDS["fr"]["subtitles"]: LABEL_WORDS[lang]["subtitles"]}
+    return " · ".join(swap.get(part, part) for part in label.split(" · "))
+
+
+def subtitle_list(hub, entry, probe, path, lang="fr"):
     out = []
     for sub in probe["subs"]:
         image = "pgs" if subtitles.is_pgs(sub.get("codec")) else ""
-        out.append({"id": f"e{sub['index']}", "label": sub_label(sub), "lang": sub["lang"], "forced": sub["forced"], "default": sub["default"], "text": sub["text"], "image": image, "where": "mkv"})
+        out.append({"id": f"e{sub['index']}", "label": sub_label(sub, lang), "lang": sub["lang"], "forced": sub["forced"], "default": sub["default"], "text": sub["text"], "image": image, "where": "mkv"})
     for side in subtitles.side_files(path):
-        out.append({"id": f"s{side['index']}", "label": side["label"], "lang": side["lang"], "forced": side["forced"], "default": False, "text": True, "image": "", "where": "fichier"})
+        out.append({"id": f"s{side['index']}", "label": side_label(side["label"], lang), "lang": side["lang"], "forced": side["forced"], "default": False, "text": True, "image": "", "where": "fichier"})
     for sub in out:
         extension = "vtt" if sub["text"] else "sup" if sub["image"] else ""
         sub["url"] = f"/api/subs/{entry['id']}/{sub['id']}.{extension}" if extension else ""
@@ -1757,8 +1797,8 @@ def api_play(h, m, q):
         "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": show_title(hub, entry), "season": entry["season"], "number": entry["number"],
         "mode": decision["mode"], "why": decision["why"], "url": play_url(entry, decision, caps, kbps, height), "seekable": decision["mode"] == "direct",
         "duration": probe["duration"] or entry["duration"], "resume": resume_position(hub, h.user["id"], entry), "warning": play_warning(decision, video),
-        "audio": [{"index": t["index"], "label": track_label(t), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
-        "subs": subtitle_list(hub, entry, probe, path),
+        "audio": [{"index": t["index"], "label": track_label(t, h.lang), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
+        "subs": subtitle_list(hub, entry, probe, path, h.lang),
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
         "next": next_summary(next_entry(hub, entry)),
     })
