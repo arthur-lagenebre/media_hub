@@ -430,6 +430,7 @@
     'Compter': 'Count',
     'Simulation lancée': 'Dry run started',
     'Lecture': 'Playback',
+    'Interface': 'Interface',
     'Qualité de lecture': 'Playback quality',
     'Appareil': 'Device',
     'Détecté : {name} — taille du texte, effets de survol, envoi de photo': 'Detected: {name} — text size, hover effects, photo upload',

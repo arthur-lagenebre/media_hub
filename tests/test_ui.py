@@ -1681,7 +1681,7 @@ class TestTextSize(UiCase):
         return self.page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
 
     def test_the_text_is_the_size_of_the_device_until_a_smaller_one_is_chosen(self):
-        self.open("#/settings?tab=lecture")
+        self.open("#/settings?tab=interface")
         self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-text')"), None)
         normal = self.root_size()
         self.view('button[data-key="textSize"]').click()
@@ -1990,7 +1990,7 @@ class TestSettings(UiCase):
         self.view(".panel").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Paramètres")
         self.assertEqual(self.page.locator("#nav .tool[data-nav='#/settings']").get_attribute("aria-label"), "Paramètres")
-        self.assertEqual(self.tabs(), ["Gestion", "Lecture", "Comptes", "Tâches", "Serveur"])
+        self.assertEqual(self.tabs(), ["Gestion", "Lecture", "Interface", "Comptes", "Tâches", "Serveur"])
         self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Gestion")
         self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien"])
 
@@ -2002,12 +2002,22 @@ class TestSettings(UiCase):
     def test_each_tab_has_its_own_panels(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        for name, titles in (("Lecture", ["Lecture"]), ("Comptes", ["Mon compte", "Affichage"]), ("Tâches", ["Tâches"]), ("Serveur", ["Serveur"])):
+        for name, titles in (("Lecture", ["Lecture"]), ("Interface", ["Interface"]), ("Comptes", ["Mon compte", "Affichage"]), ("Tâches", ["Tâches"]), ("Serveur", ["Serveur"])):
             self.tab(name)
             self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == name)
             self.assertEqual(self.titles(), titles, name)
         self.tab("Serveur")
         self.assertIn("Version", self.view("dl").inner_text())
+
+    def test_playback_and_interface_settings_are_apart(self):
+        """Lecture : ce qui touche à la vidéo et au son. Interface : l'appareil, la taille du texte et la langue."""
+        lines = lambda: self.view(".panel .line .what b").all_inner_texts()
+        self.open("#/settings?tab=lecture")
+        self.view(".panel").first.wait_for()
+        self.assertEqual(lines(), ["Qualité", "Son surround 5.1"])
+        self.open("#/settings?tab=interface")
+        self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == "Interface")
+        self.assertEqual(lines(), ["Appareil", "Taille du texte", "Langue"])
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
@@ -2107,7 +2117,7 @@ class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
                 page = context.new_page()
                 page.goto(base + "/#/settings")
                 page.wait_for_selector(".tabs .tab")
-                self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Lecture", "Comptes"])
+                self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Lecture", "Interface", "Comptes"])
                 page.locator(".tabs .tab", has_text="Comptes").click()
                 page.wait_for_selector(".panel h2")
                 self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte", "Affichage"])
