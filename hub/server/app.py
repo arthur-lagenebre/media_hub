@@ -847,27 +847,31 @@ UNSEEN = 24
 
 
 def unseen_row(rows, seen, profile, day, n=UNSEEN):
-    """Des films et des séries que ce compte n'a pas encore touchés (ni vus, ni commencés : aucune progression sur aucun de leurs fichiers), dans un ordre qui ne dépend que du compte et du jour : le même toute la journée, un autre demain."""
+    """Les films ou les séries d'une bibliothèque que ce compte n'a pas encore touchés (ni vus, ni commencés : aucune progression sur aucun de leurs fichiers), dans un ordre qui ne dépend que du compte et du jour : le même toute la journée, un autre demain."""
     pool = [r for r in rows if r["id"] not in seen]
     pool.sort(key=lambda r: hashlib.sha1(f"{day}:{profile}:{r['id']}".encode()).hexdigest())
-    return [{**summary(r), "lib": r["lib"]} for r in pool[:n]]            # `lib` : ces films ne sont pas rangés par bibliothèque comme les nouveautés
+    return [summary(r) for r in pool[:n]]
+
+
+UNSEEN_KINDS = ("movies", "shows")          # les genres de bibliothèque qui ont un rayon « Pas encore vu » : une nouvelle bibliothèque vidéo d'un de ces genres en a un sans autre réglage
 
 
 @route("GET", r"/api/home")
 def api_home(h, m, q):
     hub = h.hub
     seen = seen_counts(hub, h.user["id"])
-    rows, video = [], []
+    day, rows = today(), []
     for lib in h.visible_libs():
+        items = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
         if lib.kind == "music":
-            recent = recent_music(hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,)), seen, 24)
+            recent = recent_music(items, seen, 24)
         else:
             recent = [with_seen(r, seen) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
-        if lib.kind in ("movies", "shows"):
-            video += hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
-        rows.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": recent,
-                     "count": hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]})
-    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play")), "libraries": rows, "unseen": unseen_row(video, seen, h.user["id"], today())})
+        row = {"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": recent, "count": len(items)}
+        if lib.kind in UNSEEN_KINDS:
+            row["unseen"] = unseen_row(items, seen, h.user["id"], day)
+        rows.append(row)
+    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play")), "libraries": rows})
 
 
 @route("GET", r"/api/search")
