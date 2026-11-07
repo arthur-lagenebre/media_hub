@@ -365,11 +365,42 @@
       };
       return [members(former.length ? H.t('Membres actuels') : H.t('Membres'), current), members(H.t('Anciens membres'), former)];       // « actuels » ne veut dire quelque chose que s'il y en a d'anciens
     }
+    // Les liens de la fiche. L'administrateur (hors télé : saisir une adresse à la télécommande se fait mal) peut en ajouter et en retirer ; le serveur répond par la liste à jour.
     function linksSection(info) {
-      if (!(info && info.links && info.links.length)) return null;
-      return h('section', { class: 'links-out' }, h('h2', null, H.t('Liens')), h('div', { class: 'actions' }, info.links.map(function (l) {
-        return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, H.tr(l.label));
-      })));
+      var manage = !!info && H.isAdmin() && H.device !== 'tv';
+      if (!info || (!manage && !(info.links && info.links.length))) return null;
+      var section = h('section', { class: 'links-out' });
+      function draw(focusKey) {
+        var key = focusKey || (document.activeElement && section.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null);
+        H.clear(section);
+        section.appendChild(h('h2', null, H.t('Liens')));
+        var box = h('div', { class: 'actions' });
+        (info.links || []).forEach(function (l, i) {
+          var label = H.tr(l.label), a = h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, label);
+          if (!manage) { box.appendChild(a); return; }
+          box.appendChild(h('span', { class: 'linkset' }, a, H.button('', 'close', { class: 'linkx', 'data-key': 'lx' + i, 'aria-label': H.t('Retirer le lien « {label} »', { label: label }), title: H.t('Retirer ce lien'),
+            onclick: function () { drop(l, label, i); } })));
+        });
+        if (manage) box.appendChild(H.button(H.t('Ajouter un lien'), 'plus', { 'data-key': 'link-add', onclick: add }));
+        section.appendChild(box);
+        if (key && !H.focus.key(section, key, true) && manage) H.focus.key(section, 'link-add', true);
+      }
+      function done(reply, message, focusKey) { info.links = reply.links || []; draw(focusKey); H.toast(message); }
+      function add() {
+        H.prompt(H.t('Ajouter un lien'), '', H.t('Ajouter'), function (url) {
+          H.api('/api/artist/' + lib + '/' + id + '/links', { url: url }).then(function (reply) { done(reply, H.t('Lien ajouté'), 'link-add'); }).catch(fail);
+        }, { maxlength: 2000, placeholder: 'https://' });
+      }
+      function drop(l, label, i) {
+        H.menu(H.t('Retirer le lien « {label} » ?', { label: label }), [{ label: H.t('Retirer le lien'), detail: H.t('Pour le remettre, ajoute la même adresse'), value: 'yes' }, { label: H.t('Garder'), value: 'no' }], 'no', function (v) {
+          if (v !== 'yes') return;
+          H.api('/api/artist/' + lib + '/' + id + '/links/remove', { url: l.url }).then(function (reply) {
+            done(reply, H.t('Lien retiré. Pour le remettre, ajoute la même adresse.'), (reply.links || []).length ? 'lx' + Math.min(i, reply.links.length - 1) : 'link-add');
+          }).catch(fail);
+        });
+      }
+      draw();
+      return section;
     }
     function noSheetNote(info) {
       if (info) return null;

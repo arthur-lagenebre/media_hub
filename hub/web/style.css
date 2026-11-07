@@ -132,6 +132,10 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .info .synopsis { max-width: 52rem; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
 .actions { margin-top: 1.2rem; display: flex; flex-wrap: wrap; }
 .actions .btn { margin: 0 0.7rem 0.7rem 0; }
+.actions .linkset { display: inline-flex; margin: 0 0.7rem 0.7rem 0; }
+.actions .linkset .btn { margin: 0; }
+.actions .linkset a.btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.actions .linkset .btn.linkx { min-width: 2.75rem; min-height: 2.75rem; padding: 0.5rem; margin-left: 2px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .body { padding: 0 var(--gut); }
 .body h2 { font-size: 1.25rem; margin: 1.6rem 0 0.7rem; }
 .body .shelf h2 { padding: 0; }

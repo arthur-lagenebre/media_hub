@@ -36,6 +36,27 @@ def make_media(root):
     fixtures.write_video(series / "Vidéo Série" / "Saison 1" / "02 - Deux.mkv", seconds=8, size="160x90", acodec="aac", channels=2)
 
 
+ARTIST_MBID = "99999999-aaaa-bbbb-cccc-000000000001"
+OFFICIAL = "https://daftpunk.example/"
+WIKIPEDIA = "https://fr.wikipedia.org/wiki/Daft_Punk"
+MUSICBRAINZ = f"https://musicbrainz.org/artist/{ARTIST_MBID}"
+
+
+def give_artist_a_sheet(db):
+    """Donne à Daft Punk (la seule artiste de la médiathèque factice) un identifiant MusicBrainz et une fiche gardée : un site officiel, Wikipédia, MusicBrainz. Son identifiant, et de quoi tout remettre."""
+    row = db.one("SELECT id, meta FROM items WHERE lib='musique' AND type='album'")
+    meta = json.loads(row["meta"])
+    db.execute("UPDATE items SET meta=? WHERE id=?", (json.dumps({**meta, "artist_mbid": ARTIST_MBID}), row["id"]))
+    db.kv_set(f"artist:{ARTIST_MBID}", {"fetched": "2099-01-01", "info": {"type": "Group", "members": [], "links": [{"label": "Site officiel", "url": OFFICIAL}],
+                                                                           "wiki": {"lang": "fr", "title": "Daft Punk", "url": WIKIPEDIA, "extract": "Un duo."}}})
+
+    def undo():
+        db.execute("UPDATE items SET meta=? WHERE id=?", (row["meta"], row["id"]))
+        db.kv_delete(f"artist:{ARTIST_MBID}")
+        db.kv_delete(f"artistlinks:{ARTIST_MBID}")
+    return meta["artist_id"], undo
+
+
 @unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
 class UiCase(unittest.TestCase):
     @classmethod
@@ -1003,6 +1024,124 @@ class TestArtistPhotoCrop(UiCase):
         self.view(".actions .btn", has_text="Recadrer").click()
         self.page.locator(".menu.crop .btn", has_text="Annuler").click()                           # annuler ne touche à rien
         self.page.wait_for_selector(".menu.crop", state="detached")
+
+
+class TestArtistLinks(UiCase):
+    """La section « Liens » de la fiche d'un artiste : l'administrateur retire et ajoute des liens ; une télé et un compte ordinaire ne font que les lire."""
+
+    def setUp(self):
+        super().setUp()
+        self.artist, undo = give_artist_a_sheet(self.run_.hub.db)
+        self.addCleanup(undo)
+
+    def open_sheet(self):
+        self.open(f"#/artist/musique/{self.artist}")
+        self.view(".links-out a").first.wait_for()
+
+    def shown(self):
+        return self.view(".links-out a").all_inner_texts()
+
+    def kept(self):
+        return [link["url"] for link in self.api(f"/api/artist/musique/{self.artist}")["info"]["links"]]
+
+    def toast(self, text):
+        """Attend le message, puis l'efface : le suivant ne se confond pas avec lui."""
+        self.page.locator("#toast.on", has_text=text).wait_for()
+        self.page.evaluate("document.getElementById('toast').classList.remove('on')")
+
+    def ask_to_add(self, url):
+        self.view(".links-out .btn", has_text="Ajouter un lien").click()
+        self.page.locator(".menu.prompt input").fill(url)
+        self.page.locator(".menu.prompt .btn.primary").click()
+
+    def remove_first(self):
+        self.view(".links-out .linkx").first.click()
+        self.page.locator(".menu .opt", has_text="Retirer le lien").click()
+
+    def forgive_refusals(self):
+        """Chromium journalise chaque réponse 400 : ici, elles sont voulues."""
+        self.errors[:] = [e for e in self.errors if "status of 400" not in e]
+
+    def test_the_administrator_gets_a_cross_per_link_and_a_button_to_add_one(self):
+        self.open_sheet()
+        self.assertEqual(self.shown(), ["Site officiel", "Wikipédia", "MusicBrainz"])
+        self.assertEqual(self.view(".links-out .linkx").count(), 3)
+        self.assertEqual(self.view(".links-out .linkx").first.get_attribute("aria-label"), "Retirer le lien « Site officiel »")
+        self.view(".links-out .btn", has_text="Ajouter un lien").wait_for()
+
+    def test_a_link_is_removed_after_a_confirmation_without_reloading_the_page(self):
+        self.open_sheet()
+        self.page.evaluate("window.sameDocument = true")
+        self.view(".links-out .linkx").first.click()
+        self.page.locator(".menu .opt", has_text="Garder").click()                      # refuser ne retire rien
+        self.page.wait_for_selector(".menu", state="detached")
+        self.assertEqual(self.shown(), ["Site officiel", "Wikipédia", "MusicBrainz"])
+        self.remove_first()
+        self.until(lambda: self.shown() == ["Wikipédia", "MusicBrainz"])
+        self.toast("Lien retiré")
+        self.assertEqual(self.view(".links-out .linkx").count(), 2)
+        self.assertTrue(self.page.evaluate("window.sameDocument"))
+        self.assertEqual(self.kept(), [WIKIPEDIA, MUSICBRAINZ])
+
+    def test_a_valid_address_is_added_and_appears_at_once(self):
+        self.open_sheet()
+        self.page.evaluate("window.sameDocument = true")
+        self.ask_to_add("https://www.facebook.com/daftpunk")
+        self.until(lambda: "Facebook" in self.shown())
+        self.toast("Lien ajouté")
+        link = self.view(".links-out a", has_text="Facebook")
+        self.assertEqual((link.get_attribute("href"), link.get_attribute("rel"), link.get_attribute("target")), ("https://www.facebook.com/daftpunk", "noopener noreferrer", "_blank"))
+        self.assertEqual(self.shown(), ["Site officiel", "Facebook", "Wikipédia", "MusicBrainz"])
+        self.assertEqual(self.view(".links-out .linkx").count(), 4)
+        self.assertTrue(self.page.evaluate("window.sameDocument"))
+        self.assertIn("https://www.facebook.com/daftpunk", self.kept())
+
+    def test_an_address_that_is_not_a_web_link_shows_the_error_of_the_server_and_adds_nothing(self):
+        self.open_sheet()
+        for bad in ("javascript:alert(1)", "ftp://example.org/fichier"):
+            self.ask_to_add(bad)
+            self.toast("l'adresse doit être un lien web (http:// ou https://)")
+            self.assertEqual(self.shown(), ["Site officiel", "Wikipédia", "MusicBrainz"], bad)
+        self.assertEqual(self.kept(), [OFFICIAL, WIKIPEDIA, MUSICBRAINZ])
+        self.assertIsNone(self.run_.hub.db.kv_get(f"artistlinks:{ARTIST_MBID}"))
+        self.forgive_refusals()
+
+    def test_an_address_that_would_run_a_script_never_gets_into_the_page(self):
+        self.open_sheet()
+        for bad in ("javascript:window.scriptRan=true", "JaVaScRiPt:alert(1)", "data:text/html,<script>1</script>"):
+            self.ask_to_add(bad)
+            self.toast("l'adresse doit être un lien web")
+        self.assertEqual(self.page.locator("a[href^=javascript i], a[href^=data i]").count(), 0)
+        self.assertIsNone(self.page.evaluate("window.scriptRan"))
+        self.assertEqual(self.kept(), [OFFICIAL, WIKIPEDIA, MUSICBRAINZ])
+        self.forgive_refusals()
+
+    def test_the_section_stays_with_its_button_when_every_link_has_been_removed(self):
+        self.open_sheet()
+        for left in (2, 1, 0):
+            self.remove_first()
+            self.until(lambda: self.view(".links-out .linkx").count() == left)
+        self.assertEqual(self.view(".links-out h2").inner_text(), "Liens")
+        self.view(".links-out .btn", has_text="Ajouter un lien").wait_for()
+        self.assertEqual(self.kept(), [])
+        self.open(f"#/artist/musique/{self.artist}")                                    # rouverte : toujours là, sans lien
+        self.view(".links-out .btn", has_text="Ajouter un lien").wait_for()
+        self.assertEqual(self.view(".links-out a").count(), 0)
+
+    def test_a_television_shows_the_links_without_a_cross_or_a_button(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.open_sheet()
+        self.assertEqual(self.shown(), ["Site officiel", "Wikipédia", "MusicBrainz"])
+        self.assertEqual(self.view(".links-out .linkx").count(), 0)
+        self.assertEqual(self.view(".links-out .btn", has_text="Ajouter un lien").count(), 0)
+
+    def test_a_television_shows_no_empty_section(self):
+        for url in (OFFICIAL, WIKIPEDIA, MUSICBRAINZ):
+            self.api(f"/api/artist/musique/{self.artist}/links/remove", {"url": url})
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.open(f"#/artist/musique/{self.artist}")
+        self.view(".actions .btn", has_text="Tout lire").wait_for()
+        self.assertEqual(self.view(".links-out").count(), 0)
 
 
 class TestBooksQuickAccess(UiCase):
@@ -2149,6 +2288,37 @@ class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
                 shown = page.locator("#views > .view:visible .tabs .tab[aria-selected=true]")       # l'ancienne page reste, cachée, derrière la nouvelle
                 shown.wait_for()
                 self.assertEqual(shown.inner_text(), "Préférences")
+                browser.close()
+            run.stop()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestArtistLinksOfAnOrdinaryAccount(unittest.TestCase):
+    @unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
+    def test_the_links_are_read_only(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            run = Running(tmp, password="secret")
+            artist, _ = give_artist_a_sheet(run.hub.db)
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch()
+                context = browser.new_context()
+                base = f"http://127.0.0.1:{run.port}"
+                form = {"Content-Type": "application/x-www-form-urlencoded"}
+                context.request.post(base + "/api/login", data="password=secret", headers=form)
+                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse1", "role": "user"}), headers={"Content-Type": "application/json"})
+                context.request.post(base + "/api/logout")
+                context.clear_cookies()
+                context.request.post(base + "/api/login", data="user=lea&password=motdepasse1", headers=form)
+                page = context.new_page()
+                page.goto(f"{base}/#/artist/musique/{artist}")
+                page.wait_for_selector(".links-out a")
+                self.assertEqual(page.locator(".links-out a").all_inner_texts(), ["Site officiel", "Wikipédia", "MusicBrainz"])
+                self.assertEqual(page.locator(".links-out .linkx").count(), 0)
+                self.assertEqual(page.locator(".links-out .btn", has_text="Ajouter un lien").count(), 0)
+                refused = context.request.post(f"{base}/api/artist/musique/{artist}/links", data=json.dumps({"url": "https://example.org/"}), headers={"Content-Type": "application/json"})
+                self.assertEqual(refused.status, 403)                      # le serveur refuse aussi : l'interface n'est pas la seule garde
                 browser.close()
             run.stop()
         finally:
