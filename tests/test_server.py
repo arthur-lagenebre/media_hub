@@ -2016,7 +2016,7 @@ def entry_of(api, lib, title):
 class AccountsCase(unittest.TestCase):
     """Les comptes sur un vrai serveur : HUB_PASSWORD (« secret ») crée l'administrateur `admin`, qui crée les autres par l'API. Un serveur neuf par test (environ une seconde)."""
 
-    PASSWORD = "motdepasse1"
+    PASSWORD = "motdepasse12"
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -2403,14 +2403,14 @@ class TestAccountManagement(AccountsCase):
         self.admin.json("/api/users", good)
         self.admin.json("/api/users", {"name": "Élodie", "password": self.PASSWORD})
         for body, status in (({**good, "name": "ALICE"}, 409), ({**good, "name": " alice  "}, 409), ({**good, "name": "Admin"}, 409), ({**good, "name": "ÉLODIE"}, 409),
-                             ({**good, "name": "x", "password": "court"}, 400), ({**good, "name": "x", "password": "é" * 201}, 400), ({"name": "x"}, 400), ({"name": "x", "password": 12345678}, 400),
+                             ({**good, "name": "x", "password": "court"}, 400), ({**good, "name": "x", "password": "12345678901"}, 400),({**good, "name": "x", "password": "é" * 201}, 400), ({"name": "x"}, 400), ({"name": "x", "password": 12345678}, 400),
                              ({**good, "name": "x", "role": "root"}, 400), ({**good, "name": "x", "role": ["admin"]}, 400), ({**good, "name": ""}, 400), ({**good, "name": "   "}, 400),
                              ({**good, "name": "x" * 41}, 400), ({**good, "name": "a\x00b"}, 400), ({**good, "name": 12}, 400), ({"password": self.PASSWORD}, 400)):
             answer = self.admin.json("/api/users", body)
             self.assertEqual(answer[0], status, body)
             self.assertIn("error", answer[1])
         self.assertEqual(self.admin.json("/api/users", [1, 2])[0], 400)
-        self.assertEqual(self.admin.json("/api/users", {"name": "x" * 40, "password": "12345678"})[0], 201)       # les bornes elles-mêmes passent
+        self.assertEqual(self.admin.json("/api/users", {"name": "x" * 40, "password": "123456789012"})[0], 201)       # les bornes elles-mêmes passent
         self.assertEqual(self.admin.json("/api/users", {"name": "y", "password": "é" * 200})[0], 201)
         self.assertEqual(sorted(u["name"] for u in self.admin.json("/api/users")[1]["users"]), sorted(["admin", "alice", "Élodie", "x" * 40, "y"]))
 
@@ -2641,8 +2641,8 @@ class TestOpenServer(unittest.TestCase):
     def test_account_routes_answer_400_and_create_nothing(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
         self.addCleanup(conn.close)
-        for path, body in (("/api/users", {"name": "intrus", "password": "motdepasse1"}), ("/api/user/default/password", {"password": "motdepasse1"}),
-                           ("/api/user/default/delete", {}), ("/api/me/password", {"current": "x", "new": "motdepasse1"}), ("/api/me/signout-others", {"current": "x"})):
+        for path, body in (("/api/users", {"name": "intrus", "password": "motdepasse12"}), ("/api/user/default/password", {"password": "motdepasse12"}),
+                           ("/api/user/default/delete", {}), ("/api/me/password", {"current": "x", "new": "motdepasse12"}), ("/api/me/signout-others", {"current": "x"})):
             conn.request("POST", path, body=json.dumps(body), headers={"Content-Type": "application/json"})
             response = conn.getresponse()
             data = json.loads(response.read())
@@ -2662,18 +2662,18 @@ class TestOpenServer(unittest.TestCase):
     def test_the_first_account_closes_the_server_and_keeps_the_single_profile(self):
         dark, episodes = entry_of(self.api, "series", "Dark")
         self.api.json("/api/progress", {"entry": episodes[0]["id"], "position": 600, "duration": 3000})
-        self.cli("add", "alice", password="motdepasse1")                                            # le serveur tourne pendant ce temps
+        self.cli("add", "alice", password="motdepasse12")                                            # le serveur tourne pendant ce temps
         self.assertEqual(self.api.get("/api/state")[0], 401)                                        # fermé dès qu'un compte existe
         self.assertEqual(self.api.get("/api/users")[0], 401)
         self.assertEqual(self.api.get("/media/abc/file")[0], 302)
-        status, _, body = self.api.request("POST", "/api/token", body={"password": "motdepasse1"})
+        status, _, body = self.api.request("POST", "/api/token", body={"password": "motdepasse12"})
         session = json.loads(body)
         self.assertEqual((status, session["user"]), (200, {"id": "default", "name": "alice", "role": "admin"}))
         alice = BearerClient(self.run_.port, session["token"])
         self.assertEqual([c["item"]["id"] for c in alice.json("/api/home")[1]["continue"]], [dark])      # elle reprend la progression d'avant
         self.cli("passwd", "alice", password="autre-mot-de-passe")                                  # changer le mot de passe en ligne de commande...
         self.assertEqual(alice.get("/api/state")[0], 401)                                           # ...ferme les sessions du serveur qui tourne
-        self.cli("add", "bob", password="motdepasse1")
+        self.cli("add", "bob", password="motdepasse12")
         self.assertEqual(self.api.request("POST", "/api/token", body={"password": "autre-mot-de-passe"})[0], 401)      # deux comptes : le nom devient obligatoire
         self.assertEqual(self.api.request("POST", "/api/token", body={"user": "alice", "password": "autre-mot-de-passe"})[0], 200)
 
@@ -2834,7 +2834,7 @@ class TestImageConversions(unittest.TestCase):
 
 
 class TestAccountCommandLine(unittest.TestCase):
-    PASSWORD = "motdepasse1"
+    PASSWORD = "motdepasse12"
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -2874,7 +2874,7 @@ class TestAccountCommandLine(unittest.TestCase):
                                          (("passwd", "inconnu"), self.PASSWORD, "compte inconnu"), (("rm", "inconnu"), self.PASSWORD, "compte inconnu"),
                                          (("rm", "alice"), self.PASSWORD, "dernier administrateur")):
             self.assertIn(message, self.cli(*args, password=password, ok=False).stderr, args)
-        mismatch = run_cli(self.tmp, "add", "bob", stdin="motdepasse1\nmotdepasse2\n")
+        mismatch = run_cli(self.tmp, "add", "bob", stdin="motdepasse12\nmotdepasse2\n")
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn("ne correspondent pas", mismatch.stderr)
         self.assertEqual([line.split()[0] for line in self.cli("list").stdout.splitlines()], ["alice"])        # rien d'autre n'a été créé
@@ -2910,34 +2910,34 @@ class TestAccountPasswords(unittest.TestCase):
         return patch
 
     def test_scrypt_hashes_use_a_new_salt_each_time(self):
-        first, second = accounts.hash_password("motdepasse1"), accounts.hash_password("motdepasse1")
+        first, second = accounts.hash_password("motdepasse12"), accounts.hash_password("motdepasse12")
         self.assertTrue(first.startswith("scrypt$"), first)
         self.assertNotEqual(first, second)
-        self.assertTrue(accounts.verify_password("motdepasse1", first) and accounts.verify_password("motdepasse1", second))
+        self.assertTrue(accounts.verify_password("motdepasse12", first) and accounts.verify_password("motdepasse12", second))
         self.assertFalse(accounts.verify_password("motdepasse2", first))
-        self.assertNotIn("motdepasse1", first)
+        self.assertNotIn("motdepasse12", first)
 
     def test_pbkdf2_replaces_scrypt_when_hashlib_has_none(self):
         self.without_scrypt()
-        stored = accounts.hash_password("motdepasse1")
+        stored = accounts.hash_password("motdepasse12")
         self.assertRegex(stored, r"^pbkdf2\$1000\$[0-9a-f]{32}\$[0-9a-f]{64}$")
-        self.assertTrue(accounts.verify_password("motdepasse1", stored))
+        self.assertTrue(accounts.verify_password("motdepasse12", stored))
         self.assertFalse(accounts.verify_password("motdepasse2", stored))
-        self.assertNotEqual(stored, accounts.hash_password("motdepasse1"))
+        self.assertNotEqual(stored, accounts.hash_password("motdepasse12"))
 
     def test_pbkdf2_replaces_scrypt_when_openssl_refuses_it(self):
         with mock.patch.object(hashlib, "scrypt", side_effect=ValueError("scrypt non disponible")):
-            stored = accounts.hash_password("motdepasse1")
+            stored = accounts.hash_password("motdepasse12")
         self.assertTrue(stored.startswith("pbkdf2$"), stored)
 
     def test_hashes_stay_readable_across_both_schemes(self):
-        scrypt = accounts.hash_password("motdepasse1")
+        scrypt = accounts.hash_password("motdepasse12")
         patch = self.without_scrypt()
-        pbkdf2 = accounts.hash_password("motdepasse1")
-        self.assertFalse(accounts.verify_password("motdepasse1", scrypt))                # scrypt absent : refus net, pas d'exception
+        pbkdf2 = accounts.hash_password("motdepasse12")
+        self.assertFalse(accounts.verify_password("motdepasse12", scrypt))                # scrypt absent : refus net, pas d'exception
         patch.stop()
-        self.assertTrue(accounts.verify_password("motdepasse1", pbkdf2))                 # un compte créé avec le repli vaut encore quand scrypt est là
-        self.assertTrue(accounts.verify_password("motdepasse1", scrypt))
+        self.assertTrue(accounts.verify_password("motdepasse12", pbkdf2))                 # un compte créé avec le repli vaut encore quand scrypt est là
+        self.assertTrue(accounts.verify_password("motdepasse12", scrypt))
 
     def test_at_most_two_verifications_run_at_once(self):
         lock, state = threading.Lock(), {"now": 0, "peak": 0, "done": 0}
@@ -2954,7 +2954,7 @@ class TestAccountPasswords(unittest.TestCase):
 
         results = []
         with mock.patch.object(accounts, "_verify", slow):
-            threads = [threading.Thread(target=lambda: results.append(accounts.verify_password("motdepasse1", "x"))) for _ in range(8)]
+            threads = [threading.Thread(target=lambda: results.append(accounts.verify_password("motdepasse12", "x"))) for _ in range(8)]
             for thread in threads:
                 thread.start()
             for thread in threads:
@@ -2966,14 +2966,14 @@ class TestAccountPasswords(unittest.TestCase):
         with mock.patch.object(accounts, "_verify", side_effect=RuntimeError("panne")):
             for _ in range(4):                                                           # plus que les deux places : un oubli de libération bloquerait ici
                 with self.assertRaises(RuntimeError):
-                    accounts.verify_password("motdepasse1", "x")
-        self.assertTrue(accounts.verify_password("motdepasse1", accounts.hash_password("motdepasse1")))
+                    accounts.verify_password("motdepasse12", "x")
+        self.assertTrue(accounts.verify_password("motdepasse12", accounts.hash_password("motdepasse12")))
 
     def test_unreadable_hashes_and_passwords_never_match(self):
         for stored in ("", "x", "scrypt$", "scrypt$a$b$c$d$e", "pbkdf2$1000$zz$zz", "inconnu$1$2", "scrypt$16384$8$1$00$00"):
-            self.assertFalse(accounts.verify_password("motdepasse1", stored), stored)
-        stored = accounts.hash_password("motdepasse1")
-        for password in (None, 12, b"motdepasse1"):
+            self.assertFalse(accounts.verify_password("motdepasse12", stored), stored)
+        stored = accounts.hash_password("motdepasse12")
+        for password in (None, 12, b"motdepasse12"):
             self.assertFalse(accounts.verify_password(password, stored), repr(password))
 
 

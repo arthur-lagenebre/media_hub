@@ -759,7 +759,7 @@
   }
   var ROLES = { admin: H.t('Administrateur'), user: H.t('Utilisateur') };
   function checkPassword(pw, again) {
-    if (pw.length < 8) return H.t('Le mot de passe doit faire au moins 8 caractères.');
+    if (pw.length < 12) return H.t('Le mot de passe doit faire au moins 12 caractères.');
     if (pw.length > 200) return H.t('Le mot de passe est trop long (200 caractères au plus).');
     if (pw !== again) return H.t('Les deux mots de passe ne sont pas identiques.');
     return '';
@@ -986,7 +986,7 @@
     }
     function changeMine() {
       H.form({ title: H.t('Changer mon mot de passe'), ok: H.t('Changer'),
-        fields: [{ key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }, { key: 'next', label: H.t('Nouveau mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Nouveau mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
+        fields: [{ key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }, { key: 'next', label: H.t('Nouveau mot de passe (12 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Nouveau mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
         submit: function (v) {
           if (!v.current) return H.t('Saisis ton mot de passe actuel.');
           var bad = checkPassword(v.next, v.again);
@@ -1029,7 +1029,7 @@
       } });
       H.form({ title: H.t('Ajouter un compte'), ok: H.t('Créer le compte'),
         lead: [H.t('Un administrateur gère la médiathèque et les comptes ; un utilisateur lit, avec sa propre progression et ses propres playlists.')],
-        fields: [{ key: 'name', label: H.t('Nom (40 caractères au plus)'), type: 'text' }, { key: 'pw', label: H.t('Mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
+        fields: [{ key: 'name', label: H.t('Nom (40 caractères au plus)'), type: 'text' }, { key: 'pw', label: H.t('Mot de passe (12 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
         extra: [toggle],
         submit: function (v) {
           if (!v.name) return H.t('Donne un nom au compte.');
@@ -1094,7 +1094,7 @@
       if (mine) { changeMine(); return; }                              // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)
       H.form({ title: H.t('Mot de passe de {name}', { name: u.name }), ok: H.t('Changer'),
         lead: [H.t('Les sessions ouvertes de ce compte seront fermées ; la personne se reconnectera avec le nouveau mot de passe.')],
-        fields: [{ key: 'pw', label: H.t('Nouveau mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Encore une fois'), type: 'password', auto: 'new-password' }],
+        fields: [{ key: 'pw', label: H.t('Nouveau mot de passe (12 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Encore une fois'), type: 'password', auto: 'new-password' }],
         submit: function (v) {
           var bad = checkPassword(v.pw, v.again);
           if (bad) return bad;

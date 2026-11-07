@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from hub.accounts import AccountError, Throttle
 
@@ -51,6 +52,14 @@ class TestThrottle(unittest.TestCase):
     def test_each_address_has_its_own_count(self):
         self.fail(10, "a")
         self.assertEqual(self.throttle.delay("b"), 0.4)
+
+    def test_expired_failures_of_other_addresses_are_swept_once_the_table_is_big(self):
+        with mock.patch.object(Throttle, "SWEEP", 5):
+            for number in range(6):
+                self.throttle.failed(f"ancienne-{number}")
+            self.now += self.throttle.WINDOW + 1
+            self.throttle.failed("neuve")                           # plus de cinq adresses suivies : les échéances de toutes sont oubliées
+        self.assertEqual(list(self.throttle._fails), ["neuve"])
 
     def test_a_success_starts_the_count_again(self):
         self.fail(10)

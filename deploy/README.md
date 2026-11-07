@@ -3,10 +3,12 @@
 Deux conteneurs qui partagent le même réseau :
 
 ```text
-tailscale  ── HTTPS ──►  https://nas.tail59c227.ts.net   (partout, via ton tailnet)
+tailscale  ── HTTPS ──►  https://nas.tail59c227.ts.net   (partout, tout navigateur, sans Tailscale : Funnel)
    │ (même réseau)
 media_hub  ── :8080 ──►  http://192.168.0.42:8080         (télé, à la maison)
 ```
+
+**L'adresse `https://nas…` est ouverte à tout Internet** (Tailscale Funnel) : voir [Sécurité](#sécurité) et [Ouvrir à Internet (Funnel)](#ouvrir-à-internet-funnel) avant de la donner à quelqu'un.
 
 Le `media_hub` remplace l'ancien `updater` (page d'accueil + boutons « Mettre à jour » qui générait des pages HTML) : l'interface a son propre bouton de mise à jour. Tu peux garder le dossier Tailscale (`tailscale/`) tel quel : l'état de connexion est réutilisé, `serve.json` est le même.
 
@@ -57,7 +59,7 @@ Chaque personne a son compte (progression, playlists, « Reprendre » à elle) ;
 
 ```bash
 docker exec -it media-hub python -m hub user list
-docker exec -it media-hub python -m hub user add alice            # mot de passe demandé, 8 caractères au moins
+docker exec -it media-hub python -m hub user add alice            # mot de passe demandé, 12 caractères au moins
 docker exec -it media-hub python -m hub user add bob --admin      # un deuxième administrateur
 docker exec -it media-hub python -m hub user passwd alice
 docker exec -it media-hub python -m hub user rm alice             # supprime aussi sa progression et ses playlists
@@ -82,7 +84,7 @@ docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt')
 ## 4. Sur la télé
 
 - **Fire TV** : navigateur Silk ou Firefox. **Google TV / Android TV** : TV Bro ou Puffin TV (Chrome n'est pas proposé).
-- Ouvre `http://192.168.0.42:8080` à la maison (pas de HTTPS nécessaire) ; hors de la maison, `https://nas.tail59c227.ts.net` demande Tailscale sur l'appareil.
+- Ouvre `http://192.168.0.42:8080` à la maison (pas de HTTPS nécessaire) ; ailleurs, `https://nas.tail59c227.ts.net` s'ouvre dans n'importe quel navigateur, sans Tailscale sur la télé ni sur le téléphone (Funnel), et demande le nom et le mot de passe du compte.
 - Flèches pour naviguer, OK pour ouvrir, Retour pour revenir. Ajoute la page en favori / écran d'accueil du navigateur.
 
 ## 5. Au quotidien
@@ -104,10 +106,41 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 
 ## Sécurité
 
-- `HUB_BIND=0.0.0.0` expose le serveur sur le réseau local : `HUB_PASSWORD` est obligatoire dans le compose (sans compte, le serveur est ouvert à tous). Sur Internet, seul Tailscale (tailnet privé) est exposé ; n'active pas Funnel.
+- `HUB_BIND=0.0.0.0` expose le serveur sur le réseau local : `HUB_PASSWORD` est obligatoire dans le compose (sans compte, le serveur est ouvert à tous).
+- **Tailscale Funnel est activé** (`AllowFunnel` dans `serve.json`) : le hub est **visible de tout Internet**, à l'adresse `https://nas.tail59c227.ts.net`. Rien d'autre n'est publié : Funnel n'ouvre que le port 443 du `media_hub`, et le port 8080 de la télé reste sur le réseau local. Il n'y a **pas de double authentification** : la défense se limite au compte et à son mot de passe, avec `scrypt` pour le hachage, un ralentissement croissant à chaque échec, un blocage (429) après 10 échecs en 5 minutes, compté par adresse réelle du client, et des mots de passe de 12 caractères au moins (à la création et au changement). Un mot de passe faible ou réutilisé est donc la seule chose qui sépare un inconnu de la médiathèque : voir la procédure ci-dessous.
+- Le débit d'un Funnel est limité par Tailscale (limites non configurables, sans chiffre publié) : un film lu depuis l'extérieur peut saccader ; à la maison, utilise l'adresse locale.
 - Le conteneur `media_hub` n'a pas de nouveaux privilèges (`no-new-privileges`) et ne garde que deux capacités Linux : `DAC_OVERRIDE` et `FOWNER`, que « Supprimer » les fichiers parasites et les scripts de `media_library` demandent quand les fichiers appartiennent à un autre compte que root. Après un redéploiement, essaie *Gestion* > *Entretien* > *Supprimer*, puis *Compter* dans la fenêtre, puis *Supprimer définitivement* (avec un volume sans `:ro`) : si une erreur de droits apparaît, retire `cap_drop` du compose.
 - Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data`.
 - `.env` contient des secrets : ne le publie pas.
+
+## Ouvrir à Internet (Funnel)
+
+**Avant l'ouverture** (sur le NAS) :
+
+1. Mot de passe de **chaque** compte existant à 12 caractères au moins (un compte plus ancien garde son mot de passe plus court tant qu'on ne le change pas) : `docker exec -it media-hub python -m hub user list`, puis pour chaque nom `docker exec -it media-hub python -m hub user passwd <nom>`. Un mot de passe qu'on utilise ailleurs ne convient pas.
+2. Ne garde pas `admin` comme nom du premier compte : c'est le premier nom qu'un inconnu essaie. `HUB_ADMIN` ne vaut qu'au premier démarrage (base sans compte), le changer dans le `.env` ne renomme rien. Pour un compte déjà créé, crée un autre administrateur et supprime l'ancien :
+
+   ```bash
+   docker exec -it media-hub python -m hub user add arthur --admin    # un nom qui n'est pas « admin »
+   docker exec -it media-hub python -m hub user rm admin              # supprime aussi sa progression et ses playlists
+   ```
+
+   Connecte-toi d'abord avec le nouveau compte pour t'assurer qu'il marche, et note que la progression et les playlists de `admin` disparaissent avec lui.
+
+**Ouvrir** :
+
+1. Console Tailscale > *Access controls* : la politique du tailnet doit contenir l'attribut `funnel` pour le nœud `nas` (cherche `nodeAttrs`). Le bouton *Add Funnel to policy* de la console d'administration ajoute l'entrée par défaut, pour tous les membres (`"target": ["autogroup:member"], "attr": ["funnel"]`) ; pour le limiter à ce nœud, mets un tag sur `nas` et ce tag comme `target`. HTTPS et MagicDNS doivent déjà être activés sur le tailnet (c'est le cas si `https://nas…` marche déjà).
+2. Copie le nouveau `serve.json` dans `/mnt/tank/apps/media/tailscale-config/`, puis redéploie (redémarre l'application) pour que `tailscale` relise le fichier.
+3. Depuis un téléphone en 4G (Wi-Fi coupé, sans Tailscale), ouvre `https://nas.tail59c227.ts.net` : la page de connexion s'affiche. Un délai de quelques minutes est possible après la première ouverture (DNS public, certificat).
+4. Vérifie que les échecs de connexion sont comptés **par la vraie adresse du client**, et pas par `127.0.0.1` (sinon un seul robot bloquerait tout le monde). Le journal ne garde que les erreurs et n'écrit pas les échecs de connexion : le test se fait par le comportement. Depuis le téléphone en 4G, rate dix connexions de suite avec un faux mot de passe : la page répond alors « trop d'essais ». Pendant ce temps, connecte-toi normalement depuis un autre appareil (ordinateur à la maison, par `http://192.168.0.42:8080` ou par l'adresse `https://nas…` depuis un autre réseau) : cela doit passer. Si cet autre appareil est bloqué aussi, le serveur ne voit pas l'adresse réelle : coupe le Funnel (ci-dessous) et regarde `docker logs media-hub` et `docker logs media-hub-tailscale`. Le blocage s'efface seul après 5 minutes, ou au redémarrage du conteneur `media-hub`.
+5. Vérifie que le cookie de session est `Secure` en HTTPS : connecté à `https://nas…`, ouvre les outils du navigateur (*Application* > *Cookies*, ou *Stockage* dans Firefox) et regarde le cookie `hub` : la case `Secure` doit être cochée. Sinon `tailscale serve` n'envoie pas `X-Forwarded-Proto: https` ou le serveur ne le voit pas : coupe le Funnel et ne donne l'adresse à personne avant d'avoir trouvé pourquoi. Le cookie perd `Secure` sans aucun message d'erreur, rien d'autre ne le signale. Sur `http://192.168.0.42:8080` (la télé), le cookie n'a pas `Secure`, c'est voulu.
+6. Regarde de temps en temps `docker logs media-hub` : une avalanche d'erreurs de connexion ou de requêtes inconnues est le signe d'une attaque.
+
+**Couper en urgence** :
+
+- Retirer `AllowFunnel` de `serve.json`, puis redémarrer l'application : c'est la coupure durable, car `serve.json` est relu à chaque démarrage et remettrait le Funnel.
+- Tout de suite, sans redéployer : `docker exec media-hub-tailscale tailscale funnel reset` (coupe le Funnel du nœud ; il revient au prochain démarrage tant que `AllowFunnel` est dans `serve.json`). Cette commande n'a pas pu être vérifiée dans la documentation de Tailscale pour cette version : si elle échoue, retire `AllowFunnel` et redémarre, ou retire l'attribut `funnel` de la politique du tailnet (le Funnel cesse aussitôt).
+- Si un compte est en cause : `docker exec -it media-hub python -m hub user passwd <nom>` (ses appareils sont déconnectés) ou `user rm <nom>`.
 
 ## Dépannage
 
@@ -118,4 +151,5 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 | 503 « trop de flux » | `HUB_MAX_STREAMS` atteint ; attendre ou l'augmenter |
 | Bibliothèque vide | le dossier doit s'appeler `Films`, `Series`, `Animations`, `Musique` ou `Livres` sous `/srv` (sinon `HUB_LIBRARIES`) |
 | Mot de passe refusé alors que `HUB_PASSWORD` est bon | `HUB_PASSWORD` n'amorce que le premier compte ; ensuite : `docker exec -it media-hub python -m hub user passwd <nom>` |
-| `https://nas…` ne répond pas | `docker logs media-hub-tailscale` : clé expirée, HTTPS non activé dans la console Tailscale |
+| `https://nas…` ne répond pas | `docker logs media-hub-tailscale` : clé expirée, HTTPS non activé dans la console Tailscale, ou **Funnel non autorisé dans la politique du tailnet** (attribut `funnel` absent pour le nœud `nas` : ça marche alors avec Tailscale, pas sans) |
+| Tout le monde est bloqué (« trop d'essais ») après des échecs d'une seule personne | le serveur ne voit pas l'adresse réelle du client (tout arrive de `127.0.0.1`) : voir l'étape 4 d'« Ouvrir à Internet » ; le blocage s'efface après 5 minutes ou au redémarrage de `media-hub` |

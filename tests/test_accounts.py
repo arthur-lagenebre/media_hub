@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import unittest
@@ -54,10 +55,37 @@ class TestCreate(unittest.TestCase):
         self.assertIn("doit faire de", self.refused(lambda: accounts.create(self.db, "alice", "court")))
         self.assertEqual(accounts.create(self.db, "alice", "court", check=False)["name"], "alice")
 
+    def test_a_password_needs_twelve_characters_to_be_created_or_changed(self):
+        self.assertEqual(accounts.MIN_PASSWORD, 12)
+        self.assertIn("doit faire de 12 à 200", self.refused(lambda: accounts.create(self.db, "alice", "a" * 11)))
+        self.assertEqual(accounts.rows(self.db), [])
+        alice = accounts.create(self.db, "alice", "a" * 12)
+        self.assertIn("doit faire de 12 à 200", self.refused(lambda: accounts.set_password(self.db, alice["id"], "b" * 11)))
+        self.assertEqual(accounts.authenticate(self.db, "alice", "a" * 12)["id"], alice["id"])        # le refus n'a rien changé
+        accounts.set_password(self.db, alice["id"], "b" * 12)
+        self.assertEqual(accounts.authenticate(self.db, "alice", "b" * 12)["id"], alice["id"])
+        self.assertIn("doit faire de 12 à 200", self.refused(lambda: accounts.create(self.db, "bob", "c" * 201)))
+
+    def test_an_older_password_of_eight_characters_still_opens_the_door(self):
+        old = accounts.create(self.db, "alice", "huitcars", check=False)               # un compte d'avant la longueur de douze (ou HUB_PASSWORD)
+        self.assertEqual(accounts.authenticate(self.db, "alice", "huitcars")["id"], old["id"])
+        self.assertEqual(self.refused(lambda: accounts.authenticate(self.db, "alice", "huitcar"), 401), "mot de passe incorrect")
+
     def test_without_the_check_a_password_must_still_be_a_non_empty_text(self):
         for password in ("", None, 1234, b"octets"):
             self.assertIn("mot de passe vide", self.refused(lambda: accounts.create(self.db, "alice", password, check=False)), repr(password))
         self.assertEqual(accounts.rows(self.db), [])
+
+
+class TestInterfaceKnowsTheMinimum(unittest.TestCase):
+    def test_the_form_checks_and_announces_the_length_the_server_demands(self):
+        """Le contrôle côté client et les libellés suivent `MIN_PASSWORD` : sinon la personne tape un mot de passe « assez long » et le serveur le refuse après l'envoi."""
+        web = Path(__file__).resolve().parent.parent / "hub" / "web" / "js"
+        views = (web / "views.js").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"pw\.length < (\d+)", views), [str(accounts.MIN_PASSWORD)])
+        for name, label in (("views.js", r"\((\d+) caractères au moins\)"), ("lang-en.js", r"at least (\d+) characters")):
+            found = set(re.findall(label, (web / name).read_text(encoding="utf-8")))
+            self.assertEqual(found, {str(accounts.MIN_PASSWORD)}, name)
 
 
 class TestDeleteKeepsNothingOfTheAccount(unittest.TestCase):
