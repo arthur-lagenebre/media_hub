@@ -87,7 +87,7 @@ body.full #nav { display: none; }
 .card.more .ic svg { width: 2em; height: 2em; color: var(--accent); }
 
 /* Rayons et grilles */
-.home, .library, .detail, .search, .admin, .blank { padding-bottom: 3rem; }
+.home, .library, .detail, .search, .person, .admin, .blank { padding-bottom: 3rem; }
 body.has-audio #views { padding-bottom: 5.5rem; }
 .shelf h2 { padding: 0 var(--gut); font-size: 1.25rem; margin-top: 1.8rem; }
 .head { display: inline-flex; align-items: center; text-decoration: none; padding: 0.2rem 0.6rem; margin-left: -0.6rem; border-radius: 0.5rem; }
@@ -104,7 +104,7 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .grid .card { width: auto; }
 .grid.small { --cw: 7.5rem; padding-left: 0; padding-right: 0; }
 .grp { grid-column: 1 / -1; font-size: 1rem; color: var(--mute); font-weight: 700; margin: 1.1rem 0 -0.3rem; padding-left: 0.2rem; }
-.library h1, .search h1, .admin h1 { padding: 1.4rem var(--gut) 0.6rem; }
+.library h1, .search h1, .person h1, .admin h1 { padding: 1.4rem var(--gut) 0.6rem; }
 .library { padding-top: 0.2rem; }
 .library h1::before { content: ""; display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--accent); margin-right: 0.7rem; vertical-align: middle; }
 .tools { display: flex; flex-wrap: wrap; align-items: center; padding: 0.3rem var(--gut) 0.6rem; }
@@ -123,8 +123,9 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .blank { display: flex; flex-direction: column; align-items: flex-start; padding: 4rem var(--gut); max-width: 46rem; }
 .blank p { color: var(--mute); max-width: 36rem; }
 .blank .btn { margin-top: 0.8rem; }
-.search .results { padding-top: 0.6rem; }
-.search .results > p { padding: 0 var(--gut); }
+.search .results, .person .results { padding-top: 0.6rem; }
+.search .results > p, .person .results > p { padding: 0 var(--gut); }
+.person .roles { margin: 0; padding: 0 var(--gut); color: var(--mute); font-weight: 600; }
 .search .field { margin: 0 var(--gut); width: calc(100% - 2 * var(--gut)); max-width: 40rem; min-width: 0; }
 
 /* Fiche */
@@ -178,8 +179,20 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .info .synopsis .src { color: var(--mute); white-space: nowrap; }
 .artist .muted { color: var(--mute); }
 .cast ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; }
-.cast li { background: var(--s1); border-radius: 2rem; padding: 0.35rem 0.9rem; margin: 0 0.6rem 0.6rem 0; font-size: 0.9rem; }
+.cast li { margin: 0 0.6rem 0.6rem 0; font-size: 0.9rem; }
+.cast li .who { display: block; background: var(--s1); border-radius: 2rem; padding: 0.35rem 0.9rem; }
 .cast li span { color: var(--mute); margin-left: 0.5rem; }
+/* Un nom qui ouvre la page de la personne : l'aspect d'avant, souligné au survol et au focus (en plus du cadre du focus) */
+.who { color: inherit; text-decoration: none; }
+.who:hover, .who:focus { text-decoration: underline; text-decoration-thickness: 0.12rem; text-underline-offset: 0.2em; }
+.info .credit .who:hover, .info .credit .who:focus { color: var(--text); }
+.cast li .who:hover, .cast li .who:focus { background: var(--s2); text-decoration: none; }
+.cast li .who:hover b, .cast li .who:focus b { text-decoration: underline; text-decoration-thickness: 0.12rem; text-underline-offset: 0.2em; }
+body.mouse .cast li .who:focus:not(:hover) { background: var(--s1); }
+body.mouse .who:focus:not(:hover) { text-decoration: none; }
+body.mouse .cast li .who:focus:not(:hover) b { text-decoration: none; }
+html[data-device="phone"] .cast li .who, html[data-device="tablet"] .cast li .who { padding: 0.6rem 1rem; }
+html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .credit .who { display: inline-block; padding: 0.4rem 0; }
 .missing { color: var(--mute); font-size: 0.9rem; }
 @media (max-width: 700px) {
   .hero-in { grid-template-columns: 7rem 1fr; grid-gap: 1rem; }
