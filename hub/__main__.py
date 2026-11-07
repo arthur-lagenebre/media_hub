@@ -120,6 +120,8 @@ def announce(cfg, hub):
         print("  ffmpeg introuvable : lecture directe uniquement (voir deploy/README.md).", file=sys.stderr)
     if cfg.bind not in ("127.0.0.1", "localhost", "::1") and not hub.auth():
         print("  ATTENTION : écoute sur le réseau sans compte (HUB_PASSWORD, ou python -m hub user add).", file=sys.stderr)
+    if cfg.password and len(cfg.password) < accounts.MIN_PASSWORD:
+        print(f"  ATTENTION : HUB_PASSWORD fait moins de {accounts.MIN_PASSWORD} caractères (accepté pour les installations d'avant, mais trop court si le hub est ouvert à Internet ; il ne sert qu'à créer le premier compte).", file=sys.stderr)
 
 
 def main():

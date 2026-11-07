@@ -96,11 +96,11 @@ L'interface existe en **français** (par défaut) et en **anglais**. Le choix es
 
 ## Comptes
 
-Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques sont communes, sauf celles que l'administrateur ferme à un compte (voir [Droits par bibliothèque](#droits-par-bibliothèque)). Au premier démarrage, `HUB_PASSWORD` crée l'administrateur (`HUB_ADMIN`, « admin » par défaut) et reprend la progression d'avant les comptes ; ensuite on gère les comptes depuis l'interface (administrateur) ou en ligne de commande, serveur arrêté ou non : Les essais de connexion ratés d'une même adresse sont ralentis (jusqu'à 5 s), puis plus rien n'est vérifié pendant 5 minutes après 10 échecs (réponse 429) ; un essai réussi remet le compteur à zéro.
+Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques sont communes, sauf celles que l'administrateur ferme à un compte (voir [Droits par bibliothèque](#droits-par-bibliothèque)). Au premier démarrage, `HUB_PASSWORD` crée l'administrateur (`HUB_ADMIN`, « admin » par défaut) et reprend la progression d'avant les comptes ; ensuite on gère les comptes depuis l'interface (administrateur) ou en ligne de commande, serveur arrêté ou non : Les essais de connexion ratés d'une même adresse (pour l'IPv6, d'un même réseau /64) sont ralentis (jusqu'à 5 s), puis plus rien n'est vérifié pendant 5 minutes après 10 échecs (réponse 429) ; un essai réussi remet le compteur à zéro. Derrière un proxy local (`tailscale serve` / Funnel), l'adresse comptée est la dernière entrée de `X-Forwarded-For`, crue seulement d'une connexion venue de la machine elle-même (127.0.0.1, `::1`) ; sur le réseau local, l'en-tête est ignoré. De même, le cookie de session reçoit `Secure` quand le proxy annonce `X-Forwarded-Proto: https` ; en `http://` direct (la télé sur le réseau local) il reste sans. Un mot de passe fait de 12 à 200 caractères à la création et au changement ; la connexion, elle, accepte un mot de passe plus ancien et plus court (ou celui de `HUB_PASSWORD`).
 
 ```bash
 python -m hub user list
-python -m hub user add <nom> [--admin]     # mot de passe demandé (8 caractères au moins) ; le premier compte est toujours administrateur
+python -m hub user add <nom> [--admin]     # mot de passe demandé (12 caractères au moins) ; le premier compte est toujours administrateur
 python -m hub user passwd <nom>
 python -m hub user rm <nom>                # supprime aussi sa progression et ses playlists ; jamais le dernier administrateur
 ```

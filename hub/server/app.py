@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import math
 import mimetypes
@@ -541,8 +542,56 @@ def login_page(h, m, q):
     h.send_body(page.encode("utf-8"), "text/html; charset=utf-8", 200, headers, h.command == "HEAD")
 
 
-def session_cookie(hub, row):
-    return f"hub={hub.session_token(row)}; Path=/; Max-Age={SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax"
+def from_loopback(h):
+    """La connexion vient-elle de la machine elle-même (127.0.0.1, ::1) ? C'est le cas de tout ce qui passe par `tailscale serve` / Funnel : le conteneur tailscale partage le réseau de media_hub.
+    Seule une telle connexion a le droit de dire, par ses en-têtes `X-Forwarded-*`, qui est le vrai client ; une connexion du réseau local ou du tailnet n'est jamais crue sur ces en-têtes."""
+    try:
+        address = ipaddress.ip_address(h.client_address[0])
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)            # ::ffff:127.0.0.1 : une prise à double pile montre ainsi une connexion IPv4
+    return (mapped or address).is_loopback
+
+
+def forwarded(h, name):
+    """La dernière valeur de l'en-tête `name` (`X-Forwarded-For`, `X-Forwarded-Proto`) quand la connexion vient de la boucle locale ; None sinon, ou s'il est absent.
+    La dernière, jamais la première : le proxy ajoute la sienne à la fin de ce que le client a pu écrire (plusieurs lignes d'en-tête comprises)."""
+    if not from_loopback(h):
+        return None
+    last = ",".join(h.headers.get_all(name, [])).rpartition(",")[2].strip()
+    return last or None
+
+
+def client_ip(h):
+    """L'adresse réelle du client, la clé de l'anti-force-brute (`Throttle`) : derrière le proxy, la dernière entrée de `X-Forwarded-For` ; sinon l'adresse de la connexion.
+    L'en-tête ne compte que s'il arrive de la boucle locale et contient une adresse valide ; sinon (absent, illisible, ou envoyé par le réseau local) on retombe sur `client_address[0]`.
+    Une adresse IPv6 est comptée par réseau /64 (« 2001:db8::/64 »), une IPv4 par adresse."""
+    try:
+        address = ipaddress.ip_address(forwarded(h, "X-Forwarded-For") or "")
+    except ValueError:
+        return h.client_address[0]
+    address = getattr(address, "ipv4_mapped", None) or address      # ::ffff:203.0.113.9 et 203.0.113.9 : une seule clé
+    if address.version == 6:
+        return str(ipaddress.ip_network(f"{address}/64", strict=False))        # un abonné a tout un /64 : changer d'adresse à chaque essai ne doit pas échapper au compte
+    return str(address)
+
+
+def secure_request(h):
+    """La requête est-elle arrivée en HTTPS ? Seul le dit `X-Forwarded-Proto: https` venu de la boucle locale ; en `http://` direct (la télé sur le réseau local) la réponse est que non."""
+    return (forwarded(h, "X-Forwarded-Proto") or "").lower() == "https"
+
+
+def cookie_flags(secure):
+    return "; HttpOnly; SameSite=Lax" + ("; Secure" if secure else "")
+
+
+def session_cookie(hub, row, secure=False):
+    return f"hub={hub.session_token(row)}; Path=/; Max-Age={SESSION_DAYS * 86400}{cookie_flags(secure)}"
+
+
+def ended_session_cookie(secure=False):
+    """Le cookie qui efface la session : les mêmes attributs que celui qui l'a posée, sinon le navigateur peut le garder."""
+    return f"hub=; Path=/; Max-Age=0{cookie_flags(secure)}"
 
 
 def login_credentials(h):
@@ -563,7 +612,7 @@ def login_credentials(h):
 @route("POST", r"/api/login")
 def login(h, m, q):
     name, password = login_credentials(h)
-    who = h.client_address[0]
+    who = client_ip(h)
     try:
         wait = h.hub.throttle.delay(who) if h.hub.auth() else 0
     except accounts.AccountError:                # trop d'essais ratés : rien n'est vérifié
@@ -576,7 +625,7 @@ def login(h, m, q):
         row = None
     if row is not None:
         h.hub.throttle.passed(who)
-        h.send_body(b"", "text/plain", 303, {"Location": "/", "Set-Cookie": session_cookie(h.hub, row)})
+        h.send_body(b"", "text/plain", 303, {"Location": "/", "Set-Cookie": session_cookie(h.hub, row, secure_request(h))})
     else:
         h.hub.throttle.failed(who)
         h.send_body(b"", "text/plain", 303, {"Location": "/login?error=1"})
@@ -597,7 +646,7 @@ def api_token(h, m, q):
     body = safe_json(raw.decode("utf-8", "replace"), {})
     body = body if isinstance(body, dict) else {}
     password, name = body.get("password"), body.get("user")
-    who = h.client_address[0]
+    who = client_ip(h)
     try:
         wait = h.hub.throttle.delay(who)
     except accounts.AccountError as e:                # trop d'essais ratés : rien n'est vérifié
@@ -649,7 +698,7 @@ def check_current(h, current):
 def renewed_session(h, row):
     """Après un changement de son propre mot de passe, l'ancien jeton ne vaut plus : le nouveau, dans la réponse et en cookie (le navigateur reste connecté)."""
     token = h.hub.session_token(row)
-    return {"ok": True, "token": token}, {"Set-Cookie": session_cookie(h.hub, row)}
+    return {"ok": True, "token": token}, {"Set-Cookie": session_cookie(h.hub, row, secure_request(h))}
 
 
 @route("GET", r"/api/users")
@@ -706,7 +755,7 @@ def api_user_delete(h, m, q):
     need_accounts(h)
     h.body_json()
     account_call(accounts.delete, h.hub.db, m.group(1))
-    h.send_json({"ok": True}, 200, {"Set-Cookie": "hub=; Path=/; Max-Age=0"} if m.group(1) == h.user["id"] else None)
+    h.send_json({"ok": True}, 200, {"Set-Cookie": ended_session_cookie(secure_request(h))} if m.group(1) == h.user["id"] else None)
 
 
 @route("POST", r"/api/me/password")
@@ -749,7 +798,7 @@ def api_me_settings_save(h, m, q):
 
 @route("GET", r"/api/logout")
 def logout(h, m, q):
-    h.send_body(b"", "text/plain", 303, {"Location": "/login", "Set-Cookie": "hub=; Path=/; Max-Age=0"})
+    h.send_body(b"", "text/plain", 303, {"Location": "/login", "Set-Cookie": ended_session_cookie(secure_request(h))})
 
 
 # ---------------------------------------------------------------------------

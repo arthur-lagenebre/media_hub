@@ -481,8 +481,8 @@ class TestArtistLinks(ArtistCase):
         self.assertEqual(self.post("/api/artist/lib/nope/links", {"url": "https://example.org/"}).status, 404)
 
     def test_an_ordinary_account_cannot_change_the_links(self):
-        accounts.create(self.db, "root", "motdepasse1")
-        cookie = self.hub.cookie(accounts.create(self.db, "bob", "motdepasse1"))
+        accounts.create(self.db, "root", "motdepasse12")
+        cookie = self.hub.cookie(accounts.create(self.db, "bob", "motdepasse12"))
         self.assertEqual(self.add("https://example.org/", headers=cookie).status, 403)
         self.assertEqual(self.remove(self.OFFICIAL, headers=cookie).status, 403)
         self.assertIsNone(self.db.kv_get("artistlinks:mb1"))
@@ -676,8 +676,8 @@ class TestPosterRoutes(RouteCase):
         self.assertNotIn("poster_custom", self.get("/api/item/m1").json())
 
     def test_an_ordinary_account_cannot_change_a_poster(self):
-        accounts.create(self.db, "root", "motdepasse1")
-        bob = accounts.create(self.db, "bob", "motdepasse1")
+        accounts.create(self.db, "root", "motdepasse12")
+        bob = accounts.create(self.db, "bob", "motdepasse12")
         cookie = self.hub.cookie(bob)
         self.assertEqual(self.post("/api/item/m1/poster", self.PNG, headers=cookie).status, 403)
         self.hub.images.set_poster.assert_not_called()
@@ -696,8 +696,8 @@ class TestImageRefreshRoute(RouteCase):
         self.hub.images.forget_library.assert_not_called()
 
     def test_an_ordinary_account_cannot_do_it(self):
-        accounts.create(self.db, "root", "motdepasse1")
-        bob = accounts.create(self.db, "bob", "motdepasse1")
+        accounts.create(self.db, "root", "motdepasse12")
+        bob = accounts.create(self.db, "bob", "motdepasse12")
         self.assertEqual(self.post("/api/images/refresh", {"lib": "lib"}, headers=self.hub.cookie(bob)).status, 403)
         self.hub.images.forget_library.assert_not_called()
 
@@ -774,8 +774,8 @@ class TestTmdbSheetRoutes(RouteCase):
         self.assertNotIn("doubts", self.get("/api/item/s1").json())
 
     def test_an_ordinary_account_cannot_choose_a_sheet(self):
-        accounts.create(self.db, "root", "motdepasse1")
-        bob = accounts.create(self.db, "bob", "motdepasse1")
+        accounts.create(self.db, "root", "motdepasse12")
+        bob = accounts.create(self.db, "bob", "motdepasse12")
         cookie = self.hub.cookie(bob)
         self.assertEqual(self.get("/api/item/s1/tmdb?q=x", headers=cookie).status, 403)
         self.assertEqual(self.post("/api/item/s1/tmdb", {"tmdb": 1}, headers=cookie).status, 403)
@@ -786,8 +786,8 @@ class TestTmdbSheetRoutes(RouteCase):
 class TestSettingsRoutes(RouteCase):
     def setUp(self):
         super().setUp()
-        self.alice = accounts.create(self.db, "alice", "motdepasse1")
-        self.bob = accounts.create(self.db, "bob", "motdepasse1")
+        self.alice = accounts.create(self.db, "alice", "motdepasse12")
+        self.bob = accounts.create(self.db, "bob", "motdepasse12")
 
     def as_(self, who):
         return self.hub.cookie(who)

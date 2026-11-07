@@ -80,6 +80,18 @@ class TestUserCommand(unittest.TestCase):
         self.assertTrue(str(stop.exception))
         self.assertEqual(len(self.names()), 1)
 
+    def test_a_password_of_eleven_characters_is_refused_by_add_and_passwd(self):
+        with self.assertRaises(SystemExit) as stop:
+            self.run_cli("add", "alice", typed=("a" * 11, "a" * 11))
+        self.assertIn("de 12 à 200 caractères", str(stop.exception))
+        self.assertEqual(self.names(), [])
+        self.run_cli("add", "alice", typed=("a" * 12, "a" * 12))
+        with self.assertRaises(SystemExit) as stop:
+            self.run_cli("passwd", "alice", typed=("b" * 11, "b" * 11))
+        self.assertIn("de 12 à 200 caractères", str(stop.exception))
+        db = Database(Path(self.tmp) / "hub.db")
+        self.assertEqual(accounts.authenticate(db, "alice", "a" * 12)["name"], "alice")             # l'ancien mot de passe est resté
+
     def test_passwd_changes_the_password_of_an_existing_account(self):
         self.run_cli("add", "alice")
         said = self.run_cli("passwd", "Alice", typed=("nouveau-mot-de-passe", "nouveau-mot-de-passe"))
@@ -163,7 +175,7 @@ class Console(io.StringIO):
 
 def fake_config(tmp, **over):
     lib = types.SimpleNamespace(label="Films", kind="movies", path=Path(tmp) / "Films")
-    return types.SimpleNamespace(**{"bind": "127.0.0.1", "port": 8080, "libraries": [lib], "ffmpeg": "/usr/bin/ffmpeg", "repo": tmp, **over})
+    return types.SimpleNamespace(**{"bind": "127.0.0.1", "port": 8080, "libraries": [lib], "ffmpeg": "/usr/bin/ffmpeg", "repo": tmp, "password": "", **over})
 
 
 class TestAnnounce(unittest.TestCase):
@@ -199,6 +211,11 @@ class TestAnnounce(unittest.TestCase):
         err = self.said(fake_config(self.tmp, libraries=[], ffmpeg=""))[1]
         self.assertIn("aucune bibliothèque", err)
         self.assertIn("ffmpeg introuvable", err)
+
+    def test_a_short_hub_password_is_warned_a_long_one_is_not(self):
+        self.assertIn("HUB_PASSWORD fait moins de 12 caractères", self.said(fake_config(self.tmp, password="court"))[1])
+        self.assertNotIn("HUB_PASSWORD", self.said(fake_config(self.tmp, password="x" * accounts.MIN_PASSWORD))[1])
+        self.assertNotIn("HUB_PASSWORD", self.said(fake_config(self.tmp, password=""))[1])
 
     def test_listening_on_the_network_without_an_account_is_warned(self):
         self.assertIn("ATTENTION", self.said(fake_config(self.tmp, bind="0.0.0.0"), auth=False)[1])

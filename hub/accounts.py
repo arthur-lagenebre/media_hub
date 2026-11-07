@@ -23,8 +23,8 @@ from . import prefs
 FIRST_ID = "default"
 ROLES = ("admin", "user")
 RIGHTS = ("view", "play", "download")         # l'ordre des valeurs de `grants`
-MIN_PASSWORD = 8
-MAX_PASSWORD = 200                  # scrypt coûte du temps et de la mémoire : pas de mot de passe de plusieurs Mo
+MIN_PASSWORD = 12                   # à la création et au changement seulement : à la connexion tout mot de passe est essayé, un compte plus ancien garde son mot de passe plus court
+MAX_PASSWORD = 200                # scrypt coûte du temps et de la mémoire : pas de mot de passe de plusieurs Mo
 MAX_NAME = 40
 SCRYPT = (1 << 14, 8, 1)            # n, r, p : ~16 Mo et quelques dizaines de ms
 SCRYPT_MAXMEM = 64 << 20
@@ -61,9 +61,12 @@ _verifying = threading.Semaphore(2)     # au plus deux vérifications à la fois
 class Throttle:
     """Les essais de connexion ratés d'une même adresse : chaque échec rallonge l'attente du suivant, et au-delà de LIMIT échecs en WINDOW secondes plus rien n'est vérifié (429) : ni scrypt, ni fil retenu. Un essai réussi remet l'adresse à zéro.
 
-    Derrière un proxy (Tailscale serve) tout vient de la même adresse : un essai de force brute bloque alors aussi les autres, pour au plus WINDOW secondes. C'est le prix d'une défense sans dépendance.
+    La clé est l'adresse réelle du client (`client_ip` dans `server/app.py`) : derrière le proxy (Tailscale serve / Funnel, qui se connecte depuis 127.0.0.1) c'est la dernière entrée de `X-Forwarded-For`, que le proxy a ajoutée,
+    et l'en-tête n'est cru que d'une connexion de la boucle locale. Un robot qui rate ses essais ne verrouille donc que sa propre adresse. Si le proxy ne donne pas d'adresse valide, tout retombe sur celle de la connexion,
+    la même pour tous : un robot bloque alors aussi les autres pour au plus WINDOW secondes. Rien n'est gardé après un redémarrage.
     """
     WINDOW, FREE, LIMIT, BASE, CAP = 300, 3, 10, 0.4, 5.0
+    SWEEP = 1024                        # au-delà de ce nombre d'adresses suivies, les échecs échus de toutes les adresses sont oubliés (sur Internet, chaque adresse nouvelle ajoute une clé)
 
     def __init__(self, clock=time.time):
         self._clock, self._fails, self._lock = clock, {}, threading.Lock()
@@ -87,6 +90,9 @@ class Throttle:
 
     def failed(self, key):
         with self._lock:
+            if len(self._fails) > self.SWEEP:
+                for other in list(self._fails):
+                    self._recent(other)
             self._recent(key)
             self._fails.setdefault(key, []).append(self._clock())
 

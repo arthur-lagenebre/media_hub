@@ -1224,7 +1224,7 @@ class TestRightsInTheUi(unittest.TestCase):
             run = Running(tmp, password="secret")
             base = f"http://127.0.0.1:{run.port}"
             token = self.api(base, "/api/token", {"password": "secret"})["token"]
-            alice = self.api(base, "/api/users", {"name": "alice", "password": "motdepasse1"}, token)
+            alice = self.api(base, "/api/users", {"name": "alice", "password": "motdepasse12"}, token)
             with sync_playwright() as pw:
                 browser = pw.chromium.launch()
                 admin = browser.new_page()
@@ -1250,9 +1250,9 @@ class TestRightsInTheUi(unittest.TestCase):
                 self.assertEqual((saved["films"], saved["series"], saved["livres"]), ({"view": True, "play": True, "download": False}, {"view": True, "play": False, "download": True},
                                                                                   {"view": False, "play": False, "download": False}))
                 page = browser.new_page()
-                self.sign_in(page, base, "alice", "motdepasse1")
+                self.sign_in(page, base, "alice", "motdepasse12")
                 self.assertEqual(page.locator("#nav .link").count(), 4)                   # les livres ont disparu
-                state = self.api(base, "/api/token", {"user": "alice", "password": "motdepasse1"})["token"]
+                state = self.api(base, "/api/token", {"user": "alice", "password": "motdepasse12"})["token"]
                 film = next(i for i in self.api(base, "/api/library/films", token=state)["items"] if i["title"] == "Inception")["id"]
                 dark = next(i for i in self.api(base, "/api/library/series", token=state)["items"] if i["title"] == "Dark")["id"]
                 page.goto(f"{base}/#/i/{film}")
@@ -2053,9 +2053,9 @@ class TestHomeGreeting(unittest.TestCase):
                 base = f"http://127.0.0.1:{run.port}"
                 form = {"Content-Type": "application/x-www-form-urlencoded"}
                 context.request.post(base + "/api/login", data="password=secret", headers=form)
-                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse1", "role": "user"}), headers={"Content-Type": "application/json"})
+                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse12", "role": "user"}), headers={"Content-Type": "application/json"})
                 context.clear_cookies()
-                context.request.post(base + "/api/login", data="user=lea&password=motdepasse1", headers=form)
+                context.request.post(base + "/api/login", data="user=lea&password=motdepasse12", headers=form)
                 page = context.new_page()
                 page.goto(base + "/")
                 page.wait_for_selector(".greeting")
@@ -2276,10 +2276,10 @@ class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
                 base = f"http://127.0.0.1:{run.port}"
                 form = {"Content-Type": "application/x-www-form-urlencoded"}
                 context.request.post(base + "/api/login", data="password=secret", headers=form)
-                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse1", "role": "user"}), headers={"Content-Type": "application/json"})
+                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse12", "role": "user"}), headers={"Content-Type": "application/json"})
                 context.request.post(base + "/api/logout")
                 context.clear_cookies()
-                context.request.post(base + "/api/login", data="user=lea&password=motdepasse1", headers=form)
+                context.request.post(base + "/api/login", data="user=lea&password=motdepasse12", headers=form)
                 page = context.new_page()
                 page.goto(base + "/#/settings")
                 page.wait_for_selector(".tabs .tab")
@@ -2310,10 +2310,10 @@ class TestArtistLinksOfAnOrdinaryAccount(unittest.TestCase):
                 base = f"http://127.0.0.1:{run.port}"
                 form = {"Content-Type": "application/x-www-form-urlencoded"}
                 context.request.post(base + "/api/login", data="password=secret", headers=form)
-                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse1", "role": "user"}), headers={"Content-Type": "application/json"})
+                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse12", "role": "user"}), headers={"Content-Type": "application/json"})
                 context.request.post(base + "/api/logout")
                 context.clear_cookies()
-                context.request.post(base + "/api/login", data="user=lea&password=motdepasse1", headers=form)
+                context.request.post(base + "/api/login", data="user=lea&password=motdepasse12", headers=form)
                 page = context.new_page()
                 page.goto(f"{base}/#/artist/musique/{artist}")
                 page.wait_for_selector(".links-out a")

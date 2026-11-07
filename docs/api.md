@@ -238,7 +238,7 @@ Musique seulement (404 sinon, ou si l'artiste n'a pas d'album).
 
 ## Comptes
 
-Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la casse), un mot de passe (8 à 200 caractères) et un rôle : `admin` ou `user`. Le premier compte est toujours administrateur. Serveur ouvert (aucun compte) : `GET /api/users` répond une liste vide et les autres routes ci-dessous répondent 400 (`le serveur est ouvert, sans compte…`) ; les comptes se créent alors sur le serveur (`HUB_PASSWORD` au premier démarrage, ou `python -m hub user add`).
+Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la casse), un mot de passe (12 à 200 caractères à la création et au changement ; la connexion accepte un mot de passe plus ancien et plus court) et un rôle : `admin` ou `user`. Le premier compte est toujours administrateur. Serveur ouvert (aucun compte) : `GET /api/users` répond une liste vide et les autres routes ci-dessous répondent 400 (`le serveur est ouvert, sans compte…`) ; les comptes se créent alors sur le serveur (`HUB_PASSWORD` au premier démarrage, ou `python -m hub user add`).
 
 | Route | Corps | Réponse |
 | --- | --- | --- |

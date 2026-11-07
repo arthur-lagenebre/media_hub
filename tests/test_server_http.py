@@ -424,6 +424,152 @@ class TestLogin(RootCase):
         self.sleep.assert_called_once_with(0)
 
 
+def coming_from(address):
+    """Un gestionnaire dont la connexion vient de cette adresse (la connexion TCP, pas un en-tête)."""
+    class FromAddress(Rig):
+        def __init__(self, *args, **kw):
+            super().__init__(*args, **kw)
+            self.client_address = (address, 50000)
+    return FromAddress
+
+
+LAN, PROXY = "192.168.0.50", "127.0.0.1"
+
+
+class TestClientAddress(RootCase):
+    """Derrière `tailscale serve`, tout arrive de 127.0.0.1 : l'adresse du client est dans `X-Forwarded-For`, mais seulement crue d'une connexion de la boucle locale."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = accounts.create(self.hub.db, "alice", PASSWORD)
+        patcher = mock.patch.object(app.time, "sleep")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def address(self, source, forwarded=None, header="X-Forwarded-For"):
+        rig = coming_from(source)(self.hub, headers={header: forwarded} if forwarded is not None else None)
+        return app.client_ip(rig)
+
+    def login(self, source, forwarded, password=PASSWORD):
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        if forwarded is not None:
+            headers["X-Forwarded-For"] = forwarded
+        return call(self.hub, "POST", "/api/login", f"user=alice&password={password}".encode(), headers, rig=coming_from(source))[1]
+
+    def token(self, source, forwarded, password=PASSWORD):
+        headers = {"X-Forwarded-For": forwarded} if forwarded is not None else None
+        return call(self.hub, "POST", "/api/token", {"user": "alice", "password": password}, headers, rig=coming_from(source))[1]
+
+    def test_the_proxy_gives_the_address_it_added_at_the_right_end_of_the_header(self):
+        self.assertEqual(self.address(PROXY, "203.0.113.9"), "203.0.113.9")
+        self.assertEqual(self.address(PROXY, "6.6.6.6, 10.0.0.1,  203.0.113.9 "), "203.0.113.9")         # la première est celle du client, qui peut la choisir
+        self.assertEqual(self.address("::1", "2001:db8::7"), "2001:db8::/64")                            # un réseau /64 par clé : changer d'adresse dans son préfixe n'échappe pas au compte
+        self.assertEqual(self.address("::ffff:127.0.0.1", "203.0.113.9"), "203.0.113.9")                 # le même proxy, vu par une prise à double pile
+        self.assertEqual(self.address(PROXY, "2001:DB8:0:0:0:0:0:7"), "2001:db8::/64")                   # une seule clé, quelle que soit l'écriture
+        self.assertEqual(self.address(PROXY, "2001:db8:0:0:ffff::1"), "2001:db8::/64")                   # un autre hôte du même /64 : la même clé
+        self.assertEqual(self.address(PROXY, "2001:db8:0:1::7"), "2001:db8:0:1::/64")                    # un autre /64 : une autre clé
+        self.assertEqual(self.address(PROXY, "::ffff:203.0.113.9"), "203.0.113.9")                       # IPv4 vue en double pile : la même clé que l'IPv4
+
+    def test_several_header_lines_count_as_one_list(self):
+        rig = coming_from(PROXY)(self.hub)
+        rig.headers["X-Forwarded-For"] = "6.6.6.6"
+        rig.headers["X-Forwarded-For"] = "203.0.113.9"                  # HTTPMessage garde les deux lignes
+        self.assertEqual(app.client_ip(rig), "203.0.113.9")
+
+    def test_without_a_usable_header_the_address_is_the_one_of_the_connection(self):
+        for forwarded in (None, "", " ", "pas-une-adresse", "203.0.113.9:443", "[2001:db8::7]", "999.1.1.1", "203.0.113.9,", "unknown", "203.0.113.9, pas-une-adresse"):
+            self.assertEqual(self.address(PROXY, forwarded), PROXY, repr(forwarded))
+
+    def test_a_connection_of_the_local_network_cannot_choose_its_address(self):
+        for source in (LAN, "100.101.102.103", "fe80::1", "172.18.0.1", "::ffff:192.168.0.50"):
+            self.assertEqual(self.address(source, "203.0.113.9"), source)
+            self.assertEqual(self.address(source, "127.0.0.1, 203.0.113.9"), source)
+
+    def test_each_client_behind_the_proxy_has_its_own_count(self):
+        for _ in range(accounts.Throttle.LIMIT):
+            self.login(PROXY, "198.51.100.1", "faux")
+        self.assertEqual(self.login(PROXY, "198.51.100.1").headers["location"], "/login?error=2")       # le robot est arrêté…
+        reply = self.login(PROXY, "203.0.113.9")
+        self.assertEqual((reply.status, reply.headers["location"]), (303, "/"))                          # … pas celui qui vient d'ailleurs
+        self.assertEqual(self.token(PROXY, "198.51.100.1").status, 429)                                  # même compte pour /api/token
+        self.assertEqual(self.token(PROXY, "203.0.113.9").status, 200)
+
+    def test_a_robot_cannot_escape_its_count_by_writing_the_start_of_the_header(self):
+        for number in range(accounts.Throttle.LIMIT):
+            self.login(PROXY, f"10.0.0.{number}, 198.51.100.1", "faux")
+        self.assertEqual(self.login(PROXY, "10.9.9.9, 198.51.100.1").headers["location"], "/login?error=2")
+
+    def test_the_local_network_cannot_borrow_or_lock_the_address_of_another_by_the_header(self):
+        for number in range(accounts.Throttle.LIMIT):
+            self.login(LAN, f"203.0.113.{number}", "faux")                 # une adresse différente à chaque fois : seule la connexion compte
+        self.assertEqual(self.login(LAN, "203.0.113.200").headers["location"], "/login?error=2")
+        self.assertEqual(self.token(LAN, "203.0.113.201").status, 429)
+        self.assertEqual(self.login(PROXY, "203.0.113.5").headers["location"], "/")                  # et la victime désignée n'a rien perdu
+        self.assertEqual(self.token(PROXY, "203.0.113.5").status, 200)
+
+    def test_without_the_header_every_proxied_request_shares_the_address_of_the_connection(self):
+        for _ in range(accounts.Throttle.LIMIT):
+            self.token(PROXY, None, "faux")
+        self.assertEqual(self.token(PROXY, None).status, 429)
+
+
+class TestSecureCookie(RootCase):
+    """`Secure` quand le proxy dit que la requête était en HTTPS, et seulement alors : la télé en `http://` sur le réseau local doit continuer à se connecter."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = accounts.create(self.hub.db, "alice", PASSWORD)
+        patcher = mock.patch.object(app.time, "sleep")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def login(self, source=PROXY, proto=None):
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        if proto is not None:
+            headers["X-Forwarded-Proto"] = proto
+        return call(self.hub, "POST", "/api/login", f"user=alice&password={PASSWORD}".encode(), headers, rig=coming_from(source))[1]
+
+    def flags(self, reply):
+        return reply.headers["set-cookie"].split("; ")[1:]
+
+    def test_the_cookie_is_secure_behind_the_proxy_in_https(self):
+        reply = self.login(proto="https")
+        self.assertEqual(reply.headers["set-cookie"], f"hub={self.hub.session_token(self.alice)}; Path=/; Max-Age={90 * 86400}; HttpOnly; SameSite=Lax; Secure")
+        self.assertTrue(self.login("::1", "HTTPS").headers["set-cookie"].endswith("; Secure"))
+
+    def test_the_cookie_stays_as_it_was_without_https(self):
+        plain = f"hub={self.hub.session_token(self.alice)}; Path=/; Max-Age={90 * 86400}; HttpOnly; SameSite=Lax"
+        self.assertEqual(self.login(PROXY).headers["set-cookie"], plain)
+        self.assertEqual(self.login(PROXY, "http").headers["set-cookie"], plain)
+        self.assertEqual(self.login(PROXY, "").headers["set-cookie"], plain)
+        self.assertEqual(self.login(LAN).headers["set-cookie"], plain)                                   # http://192.168.0.42:8080
+
+    def test_the_local_network_cannot_ask_for_secure_by_the_header(self):
+        for source in (LAN, "100.101.102.103", "fe80::1"):
+            self.assertNotIn("Secure", self.flags(self.login(source, "https")), source)
+
+    def test_only_the_last_value_of_the_header_counts(self):
+        self.assertIn("Secure", self.flags(self.login(PROXY, "http, https")))
+        self.assertNotIn("Secure", self.flags(self.login(PROXY, "https, http")))
+
+    def test_the_cookies_that_end_the_session_have_the_same_attributes(self):
+        for source, proto, secure in ((PROXY, "https", True), (PROXY, None, False), (LAN, "https", False)):
+            headers = {**self.hub.cookie(self.alice), **({"X-Forwarded-Proto": proto} if proto else {})}
+            reply = call(self.hub, "GET", "/api/logout", headers=headers, rig=coming_from(source))[1]
+            expected = "hub=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" + ("; Secure" if secure else "")
+            self.assertEqual(reply.headers["set-cookie"], expected, (source, proto))
+
+    def test_the_cookie_renewed_by_a_new_password_is_secure_too(self):
+        headers = {**self.hub.cookie(self.alice), "X-Forwarded-Proto": "https"}
+        reply = call(self.hub, "POST", "/api/me/password", {"current": PASSWORD, "new": "nouveau-mot-de-passe"}, headers, rig=coming_from(PROXY))[1]
+        self.assertEqual(reply.status, 200)
+        self.assertTrue(reply.headers["set-cookie"].endswith("; HttpOnly; SameSite=Lax; Secure"))
+
+    def test_the_language_cookie_does_not_change(self):
+        reply = call(self.hub, "GET", "/login?lang=en", headers={"X-Forwarded-Proto": "https"}, rig=coming_from(PROXY))[1]
+        self.assertEqual(reply.headers["set-cookie"], "hub_lang=en; Path=/; Max-Age=31536000; SameSite=Lax")
+
+
 class TestToken(RootCase):
     def setUp(self):
         super().setUp()
