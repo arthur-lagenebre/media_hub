@@ -1233,11 +1233,14 @@ class TestRightsInTheUi(unittest.TestCase):
                 admin.locator(f'[data-key="rights-{alice["id"]}"]').click()
                 admin.locator(".rights").wait_for()
                 self.assertFalse(admin.evaluate("(() => { var m = document.querySelector('.menu.rightsbox'); return m.scrollHeight > m.clientHeight; })()"))       # la fenêtre tient sans défiler
+                widths = "Array.prototype.map.call(document.querySelectorAll('.rights .chip'), function (c) { return c.getBoundingClientRect().width; })"
+                before = admin.evaluate(widths)
                 admin.locator('[data-key="r-download-films"]').click()                    # films : voir sans télécharger
                 admin.locator('[data-key="r-view-livres"]').click()                       # livres : fermés
                 self.assertTrue(admin.locator('[data-key="r-download-livres"]').is_disabled())
                 self.assertTrue(admin.locator('[data-key="r-play-livres"]').is_disabled())
                 admin.locator('[data-key="r-play-series"]').click()                       # séries : se voient et se téléchargent, ne se lisent pas
+                self.assertEqual(admin.evaluate(widths), before)                           # coché ou non, un bouton garde la même largeur
                 admin.locator(".menu .btn", has_text="Enregistrer").click()
                 admin.locator(f'[data-user="{alice["id"]}"] [data-rights]', has_text="Consulter : Films").wait_for()
                 self.assertIn("Télécharger : Séries", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
