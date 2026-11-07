@@ -26,6 +26,7 @@ Tu travailles sur l'interface de **media_hub** (`hub/web/`). Elle est servie tel
 6. **Reprise et progression** : lecteur vidéo et liseuse envoient leur position au serveur (`POST /api/progress`) ; ne casse pas ce contrat ni la reprise « au point exact ».
 7. **Cases sans action** (album manquant grisé sur la fiche d'un artiste, `.card.wanted`) : ni focus, ni clic, ni `data-*` de navigation, sinon la télécommande s'y arrête pour rien. `H.picture` accepte une source vide (lettre sur fond de couleur) : ne demande pas d'image qui n'existe pas.
 8. Si tu as besoin d'une donnée que l'API ne fournit pas, dis-le et décris la route à ajouter plutôt que de modifier `hub/server/app.py` de ta propre initiative.
+9. **Un pop-up passe par l'une des quatre déclinaisons** (choice, confirm, form, wide : voir `docs/popups.md`) et sa fabrique de `core.js` (`H.menu`, `H.confirm`, `H.form`, `H.prompt`, `H.box`). Ne construis jamais un `div role="dialog"`, ni un bouton de pied de fenêtre, à la main ; ne crée pas une cinquième déclinaison sans en parler. Une confirmation de suppression est un `H.confirm` avec `danger: true`, pas un menu « Supprimer / Garder ».
 
 ## Vérifier
 
