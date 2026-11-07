@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from tests.rig import MiniHub, call
 from tests.test_server_views import entry, item
-from hub import accounts, config, missing, urls
+from hub import accounts, config, enrich, missing, urls
 from hub.media import images
 from hub.server import app
 
@@ -385,6 +386,157 @@ class TestArtistPhoto(ArtistCase):
         self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
         self.assertEqual((save.call_args.args[4], save.call_args.args[5]), (JPEG, (0.0, 0.25, 1.0, 0.5)))
         self.assertEqual(self.post("/api/artist/lib/ar1/photo/crop", {"x": 5}).status, 400)
+
+
+class FakeMusicBrainz:
+    """Le client de MusicBrainz et de Wikipédia, sans réseau : une fiche d'artiste avec un site officiel, un réseau social, Wikidata et Wikipédia."""
+    def __init__(self, official):
+        self.official = official
+
+    def artist(self, mbid):
+        urls = [("official homepage", self.official), ("social network", "https://facebook.com/dp"), ("wikidata", "https://www.wikidata.org/wiki/Q1"),
+                ("wikipedia", "https://fr.wikipedia.org/wiki/Daft_Punk")]
+        return {"id": mbid, "type": "Group", "relations": [{"type": kind, "url": {"resource": url}} for kind, url in urls]}
+
+    def external(self, url):
+        if "wikidata" in url:
+            return {"entities": {"Q1": {"sitelinks": {"frwiki": {"title": "Daft Punk"}}}}}
+        return {"title": "Daft Punk", "extract": "Un groupe.", "content_urls": {"desktop": {"page": "https://fr.wikipedia.org/wiki/Daft_Punk"}}}
+
+
+class TestArtistLinks(ArtistCase):
+    OFFICIAL = "https://daftpunk.example/"
+    WIKI = "https://fr.wikipedia.org/wiki/Daft_Punk"
+    MB = "https://musicbrainz.org/artist/mb1"
+
+    def setUp(self):
+        super().setUp()
+        self.db.kv_set("artist:mb1", {"fetched": "2026-01-01", "info": {"type": "Group", "wiki": {"lang": "fr", "title": "Daft Punk", "url": self.WIKI, "extract": ""}, "members": [],
+                                                                       "links": [{"label": "Site officiel", "url": self.OFFICIAL}, {"label": "Facebook", "url": "https://facebook.com/dp"}]}})
+
+    def urls(self, target="/api/artist/lib/ar1"):
+        return [link["url"] for link in self.sheet(target).json()["info"]["links"]]
+
+    def add(self, url, label=None, **kw):
+        return self.post("/api/artist/lib/ar1/links", {"url": url} if label is None else {"url": url, "label": label}, **kw)
+
+    def remove(self, url, **kw):
+        return self.post("/api/artist/lib/ar1/links/remove", {"url": url}, **kw)
+
+    def test_an_added_link_comes_before_wikipedia_and_musicbrainz_and_the_label_defaults_to_the_site(self):
+        reply = self.add("https://www.facebook.com/daftpunk")
+        self.assertEqual(reply.status, 200)
+        self.assertEqual(reply.json()["links"], [{"label": "Site officiel", "url": self.OFFICIAL}, {"label": "Facebook", "url": "https://www.facebook.com/daftpunk"},
+                                                 {"label": "Wikipédia", "url": self.WIKI}, {"label": "MusicBrainz", "url": self.MB}])
+        self.assertEqual(self.sheet().json()["info"]["links"], reply.json()["links"])
+
+    def test_a_label_can_be_given(self):
+        self.assertEqual(self.add("https://example.org/dp", "  Mon   site ").json()["links"][1], {"label": "Mon site", "url": "https://example.org/dp"})
+
+    def test_any_link_can_be_removed_wikipedia_and_musicbrainz_included(self):
+        for url in (self.OFFICIAL, self.WIKI, self.MB):
+            reply = self.remove(url)
+            self.assertEqual(reply.status, 200)
+        self.assertEqual(self.urls(), [])
+        self.assertEqual(self.db.kv_get("artistlinks:mb1")["removed"], [self.OFFICIAL, self.WIKI, self.MB])
+
+    def test_a_removed_link_stays_removed_when_the_sheet_is_rebuilt_and_adding_it_again_cancels_the_removal(self):
+        self.remove(self.OFFICIAL)
+        kept = self.db.kv_get("artist:mb1")
+        self.db.kv_set("artist:mb1", {**kept, "fetched": "2026-02-02"})
+        self.assertNotIn(self.OFFICIAL, self.urls())
+        reply = self.add(self.OFFICIAL)
+        self.assertEqual((reply.status, self.OFFICIAL in self.urls()), (200, True))
+        self.assertIsNone(self.db.kv_get("artistlinks:mb1"))
+
+    def test_an_added_link_is_forgotten_when_removed(self):
+        self.add("https://example.org/dp")
+        reply = self.remove("https://example.org/dp")
+        self.assertNotIn("https://example.org/dp", [link["url"] for link in reply.json()["links"]])
+        self.assertIsNone(self.db.kv_get("artistlinks:mb1"))
+
+    def test_a_link_that_is_not_on_the_sheet_cannot_be_removed(self):
+        self.assertEqual(self.remove("https://example.org/ailleurs").status, 404)
+        self.assertEqual(self.remove("").status, 400)
+
+    def test_only_web_addresses_are_accepted_once(self):
+        for bad in ("javascript:alert(1)", "data:text/html,x", "ftp://example.org/", "example.org", "https://", "http://[::1", "https://example.org/a b", "", "  ", 12, None):
+            self.assertEqual(self.add(bad).status, 400, bad)
+        self.assertEqual(self.add("https://example.org/" + "x" * 2000).status, 400)
+        self.assertEqual(self.add("https://example.org/", "x" * 81).status, 400)
+        self.assertEqual(self.add("https://example.org/", 5).status, 400)
+        self.assertEqual(self.add(self.OFFICIAL).status, 400)
+        self.assertEqual(self.add(self.WIKI).status, 400)
+        self.assertEqual(self.add("https://example.org/dp").status, 200)
+        self.assertEqual(self.add("https://example.org/dp").status, 400)
+        self.assertEqual(self.db.kv_get("artistlinks:mb1")["added"], [{"label": "example.org", "url": "https://example.org/dp"}])
+
+    def test_the_error_is_in_french(self):
+        self.assertEqual(self.add("javascript:alert(1)").json(), {"error": "l'adresse doit être un lien web (http:// ou https://)"})
+
+    def test_an_artist_without_a_kept_sheet_or_unknown_is_a_404(self):
+        self.db.kv_delete("artist:mb1")
+        self.assertEqual(self.add("https://example.org/").status, 404)
+        self.assertEqual(self.remove(self.OFFICIAL).status, 404)
+        self.assertEqual(self.post("/api/artist/lib/nope/links", {"url": "https://example.org/"}).status, 404)
+
+    def test_an_ordinary_account_cannot_change_the_links(self):
+        accounts.create(self.db, "root", "motdepasse1")
+        cookie = self.hub.cookie(accounts.create(self.db, "bob", "motdepasse1"))
+        self.assertEqual(self.add("https://example.org/", headers=cookie).status, 403)
+        self.assertEqual(self.remove(self.OFFICIAL, headers=cookie).status, 403)
+        self.assertIsNone(self.db.kv_get("artistlinks:mb1"))
+
+    def test_a_rescan_leaves_them_alone(self):
+        self.add("https://example.org/dp")
+        self.remove(self.OFFICIAL)
+        before = self.db.kv_get("artistlinks:mb1")
+        self.fill([item("al1", "album", grp="Daft Punk", meta={"artist_id": "ar1", "artist_mbid": "mb1"})], [])
+        self.assertEqual(self.db.kv_get("artistlinks:mb1"), before)
+
+    def test_the_changes_survive_a_real_refresh_of_the_sheet_and_a_rescan(self):
+        extra = "https://example.org/dp"
+        self.add(extra)
+        self.remove(self.OFFICIAL)
+        before = self.db.kv_get("artistlinks:mb1")
+        self.db.kv_delete("artist:mb1")                              # « Fiches artistes » refait la fiche en entier : MusicBrainz et Wikipédia sont simulés
+        with mock.patch.object(enrich, "musicbrainz", return_value=FakeMusicBrainz(self.OFFICIAL)):
+            counts = enrich.enrich_artists(types.SimpleNamespace(data=self.root), self.db, self.lib, lambda line: None, force=True)
+        self.assertEqual(counts, {"enriched": 1, "failed": 0})
+        rebuilt = self.db.kv_get("artist:mb1")["info"]
+        self.assertEqual([link["url"] for link in rebuilt["links"]], [self.OFFICIAL])           # la fiche refaite a bien remis le lien retiré...
+        self.assertEqual(self.db.kv_get("artistlinks:mb1"), before)
+        self.assertEqual(self.urls(), [extra, self.WIKI, self.MB])                              # ...mais on ne le voit pas, et le lien ajouté est toujours là
+        self.fill([item("al1", "album", grp="Daft Punk", meta={"artist_id": "ar1", "artist_mbid": "mb1"})], [])
+        self.assertEqual(self.urls(), [extra, self.WIKI, self.MB])
+
+    def test_a_link_added_by_hand_then_found_by_a_refresh_is_shown_once_and_removed_in_one_go(self):
+        extra = "https://example.org/dp"
+        self.add(extra)
+        kept = self.db.kv_get("artist:mb1")
+        kept["info"]["links"].append({"label": "YouTube", "url": extra})                 # « Fiches artistes » trouve à son tour le lien que l'administrateur avait ajouté
+        self.db.kv_set("artist:mb1", kept)
+        self.assertEqual(self.urls(), [self.OFFICIAL, extra, self.WIKI, self.MB])
+        self.assertEqual(self.add(extra).status, 400)
+        reply = self.remove(extra)
+        self.assertEqual((reply.status, extra in [link["url"] for link in reply.json()["links"]]), (200, False))
+        self.assertNotIn(extra, self.urls())
+
+    def test_an_added_link_is_not_dropped_for_sharing_a_label_with_an_automatic_one(self):
+        other = "https://other.example/"
+        reply = self.add(other, "Site officiel")                                           # même libellé qu'un lien automatique : pick_links ne touche pas aux ajouts
+        self.assertEqual(reply.status, 200)
+        self.assertEqual([(link["label"], link["url"]) for link in reply.json()["links"]],
+                         [("Site officiel", self.OFFICIAL), ("Site officiel", other), ("Wikipédia", self.WIKI), ("MusicBrainz", self.MB)])
+        self.assertEqual(self.urls(), [self.OFFICIAL, other, self.WIKI, self.MB])
+
+    def test_an_added_link_never_runs_a_script(self):
+        for bad in ("javascript:alert(1)", " JavaScript:alert(1)", "java	script:alert(1)", "vbscript:x", "//example.org/x"):
+            self.assertEqual(self.add(bad).status, 400, bad)
+        self.assertEqual(self.add("https://example.org/", "<img src=x onerror=alert(1)>").status, 200)       # le libellé n'est que du texte : l'interface ne l'insère jamais comme HTML
+        shown = self.sheet().json()["info"]["links"]
+        self.assertTrue(all(link["url"].startswith(("https://", "http://")) for link in shown), shown)
+        self.assertEqual([a["label"] for a in self.db.kv_get("artistlinks:mb1")["added"]], ["<img src=x onerror=alert(1)>"])
 
 
 class TestImageRoutes(RouteCase):
