@@ -2,6 +2,24 @@
 
 Ce qui reste ouvert. Ce qui est fait est dans `git log` et dans les pull requests ; ce qui a été tranché, surtout les « non », est dans [decisions.md](decisions.md) : à lire avant de proposer quelque chose de nouveau.
 
+## Prochaines fonctionnalités
+
+Dans l'ordre où on les prend (7 novembre 2026), un lot par PR (ou deux).
+
+- [ ] **Lot 2 : lien Animations vers les films d'animation.** Un bouton sur la page Animations mène à `#/l/films?genre=Animation` (les films d'animation sont dans Films, avec ce genre) ; la page d'une bibliothèque lit `?genre=` ; un genre inconnu retombe sur « Tous ».
+- [ ] **Lot 3 : acteurs et réalisateurs.** (a) Cliquer un nom sur une fiche mène à ses films de la médiathèque. (b) La recherche trouve aussi par nom de personne. Pas de table : balayage de `meta` (`actors`, `directors`) comme `api_search`, noms comparés par `fold()`. *Plus tard, à part :* les films manquants d'une personne. Les étiquettes n'ont que le nom, pas d'identifiant TMDB de personne : il faudrait un appel TMDB et un enrichissement par personne dans `kv` (`enrich:`), donc une clé TMDB.
+- [ ] **Lot 4 : boîte de réception (téléversement).** Des comptes qui ont le droit « Envoyer » déposent films, séries, musique ou livres ; l'administrateur les range lui-même. *Retenu :*
+  - dépôt dans `HUB_DATA/inbox/<compte>/`, jamais dans une bibliothèque (les volumes restent en `:ro`), et pas de bouton qui déplace un fichier dans la médiathèque ;
+  - un droit global par compte (colonne dans `users`, migration qui garde l'existant, administrateur toujours autorisé) ; pas d'envoi sans compte, pas de lien d'invitation ;
+  - réception en flux : morceaux de 1 Mo vers un `.part` renommé à la fin (`body_bytes` lit tout en mémoire, 10 Mo : inutilisable ici), `Content-Length` obligatoire, limite par fichier, quota par compte, contrôle d'espace libre, extensions autorisées, nom nettoyé sans écrasement, nettoyage des `.part` abandonnés ;
+  - jamais de ffprobe ni de scan sur un fichier déposé ; servi à l'administrateur seulement, en `attachment` ;
+  - interface : page « Envoyer » (glisser-déposer, XHR avec progression, masquée sur la télé) et onglet « Boîte de réception » dans Gestion.
+
+  *À essayer sur place :* un envoi de 1 à 2 Go à travers Funnel (débit et délais non configurables) et l'espace libre réel sous `/data`. La reprise d'un envoi interrompu (`Content-Range`) viendra plus tard, si le besoin se confirme.
+- [ ] **Lot 5 : fiche manga, boîte « collection ».** Comme la saga d'un film : les autres séries de la même collection, avec ce qui manque (`meta.collection`, `grp` et `missing` existent déjà). Vérifier d'abord, sur un exemple réel, que les étiquettes regroupent bien des séries. Le regroupement dans la grille, avec le badge « 3/4 » des films, ne vient qu'ensuite, si la fiche plaît.
+- [ ] **Lot 6 : manga en double page** (`reader.js`, deux images côte à côte). À trancher d'abord : le sens de lecture (japonais, de droite à gauche ; le champ `Manga` de ComicInfo peut le dire, à vérifier dans `media_library`) et la couverture seule en première page. À essayer sur une tablette.
+- [ ] **Recherche sans accents** : déjà en place, `fold()` retire accents et casse (recherche globale et filtre de bibliothèque). Si un cas échoue, noter la saisie exacte : ce serait une ligature ou un caractère que `fold` ne gère pas.
+
 ## À essayer sur place
 
 Les tests tournent dans un Chromium de bureau, pas sur la télé. Rien de tout cela ne bloque le reste.
