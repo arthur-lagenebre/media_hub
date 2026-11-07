@@ -179,7 +179,8 @@ Réponse :
  "letters": [["A", 12], ["#", 3]], "genres": [["Action", 30]]}
 ```
 
-- `total` : éléments après filtres (avant pagination). `letters` et `genres` sont comptés sur **toute** la bibliothèque (hors filtres de lettre / genre / texte) ; `genres` : 60 au plus, du plus fréquent au moins fréquent.
+- `total` : éléments après filtres (avant pagination). `letters` et `genres` sont comptés sur **toute** la bibliothèque (hors filtres de lettre / genre / texte) ; `genres` : les 60 plus fréquents, rangés **par ordre alphabétique** sans tenir compte des accents ni de la casse (c'est l'ordre du menu de l'interface).
+- Musique : `artists` et `albums`, le nombre d'artistes et d'albums de tout ce que les filtres laissent (pas seulement de la page). Avec `view=artists`, `artists` égale `total` et `albums` additionne les `n` des artistes ; sans, `albums` égale `total` et `artists` compte les artistes distincts de ces albums.
 - Livres : `sections` : `[["Manga", 40], …]`. Avec `sagas=1` : `sagas` (nombre de vignettes de saga) et `films` (nombre de films en tout).
 - Une vignette de **saga** : `id`, `lib`, `type: "saga"`, `title`, `year`, `years` (`[première, dernière]` ou `[]`), `grp: ""`, `n`, `letter`, `added`, `genres`, `covers` (ids des trois premiers films), **`cover_urls`** (leurs URLs), `seen` / `started` optionnels. **Elle n'a pas de `cover`** : l'identifiant d'une saga n'est pas celui d'un élément, `/img/item/<saga>` répondrait 404. Pour ses films : `GET /api/library/<id>?group=<title>&sort=part` ; la réponse porte alors `missing` (absent s'il est vide) : les films qui manquent à la saga, comme dans `sagas` de la fiche d'un film (`total` ne les compte pas). **Ambigu** : `lib` n'est présent que sur les sagas.
 - 404 : bibliothèque inconnue.
