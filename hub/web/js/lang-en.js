@@ -52,6 +52,7 @@
     'Volume': 'Volume',
     'Genre': 'Genre',
     '{name} :': '{name}:',
+    'Films d’animation': 'Animated movies',
     'Livres': 'Books',
     'Albums': 'Albums',
     'Artistes': 'Artists',

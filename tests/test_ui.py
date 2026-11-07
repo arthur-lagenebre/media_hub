@@ -1751,6 +1751,69 @@ class TestHeroImage(UiCase):
             self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
 
 
+class TestAnimationShortcut(UiCase):
+    """Les films d'animation sont dans Films (genre « Animation ») : un raccourci depuis la page Animations, et un genre posé par l'adresse."""
+
+    @classmethod
+    def add_media(cls, root):
+        fixtures.write_mkv(root / "srv" / "Films" / "Coco (2017)" / "Coco (2017).mkv", fixtures.movie_blocks("Coco", "Un garçon.", "2017-10-27", "movie/354912", "Animation, Famille"), minutes=105)
+
+    def genre_button(self):
+        return self.view(".tools .btn.flt").nth(1)
+
+    def titles(self):
+        return self.view(".grid .card").evaluate_all("els => els.map(e => e.title)")
+
+    def test_the_link_on_the_animations_page_leads_to_the_movies_with_the_genre_set(self):
+        self.open("#/l/animations")
+        self.view(".grid .card").first.wait_for()
+        link = self.view(".related a.f")
+        self.assertEqual(link.inner_text(), "Films d’animation")
+        link.click()
+        self.page.wait_for_url("**/#/l/films?genre=Animation")
+        self.view(".grid .card").first.wait_for()
+        self.assertEqual(self.genre_button().inner_text(), "Genre : Animation")
+        self.assertEqual(self.titles(), ["Coco"])
+        self.press("Escape", wait=500)
+        self.assertTrue(self.page.url.endswith("#/l/animations"))                          # Retour revient à Animations
+
+    def test_the_link_is_reached_and_pressed_from_the_keyboard_before_the_filters(self):
+        self.open("#/l/animations")
+        self.view(".grid .card").first.wait_for()
+        self.assertTrue(self.view(".related a.f").evaluate("el => !!(el.compareDocumentPosition(document.querySelector('.view:not([style*=none]) .tools')) & Node.DOCUMENT_POSITION_FOLLOWING)"))
+        self.view(".related a.f").focus()
+        self.press("Enter", wait=600)
+        self.assertTrue(self.page.url.endswith("#/l/films?genre=Animation"))
+
+    def test_a_genre_the_library_does_not_have_falls_back_to_all(self):
+        self.open("#/l/films?genre=Inconnu")
+        self.view(".grid .card").first.wait_for()
+        self.assertEqual(self.genre_button().inner_text(), "Genre : Tous")
+        total = self.api("/api/library/films?sagas=1")["total"]
+        self.assertEqual(self.view(".grid .card").count(), total)                          # toute la bibliothèque (sagas regroupées), pas une liste vide
+        self.assertTrue(self.view(".blank").count() == 0 or not self.view(".blank").first.is_visible())
+
+    def test_removing_the_filters_still_clears_a_genre_that_came_from_the_address(self):
+        self.open("#/l/films?genre=Animation")
+        self.view(".grid .card").first.wait_for()
+        self.view("input[type=search]").fill("zzzz")
+        self.page.wait_for_timeout(700)
+        self.view("button", has_text="Retirer les filtres").click()
+        self.page.wait_for_timeout(700)
+        self.assertEqual(self.genre_button().inner_text(), "Genre : Tous")
+        self.assertGreater(self.view(".grid .card").count(), 1)
+
+    def test_only_the_animations_page_has_the_link_and_only_for_an_account_that_sees_the_movies(self):
+        for lib in ("films", "series", "musique"):
+            self.open("#/l/" + lib)
+            self.view(".tools").first.wait_for()
+            self.assertEqual(self.view(".related").count(), 0, lib)
+        self.open("#/")
+        self.page.evaluate("Hub.libs = Hub.libs.filter(function (l) { return l.id !== 'films'; }); location.hash = '#/l/animations';")      # un compte sans le droit de voir Films : la bibliothèque n'existe pas pour lui
+        self.view(".tools").first.wait_for()
+        self.assertEqual(self.view(".related").count(), 0)
+
+
 class TestLibraryToolbar(UiCase):
     """La barre d'une bibliothèque : « Genre : Tous » (le nom en gras, la valeur en poids normal, une largeur qui ne bouge pas) et le compteur de la musique."""
 
