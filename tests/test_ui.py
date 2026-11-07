@@ -1814,6 +1814,102 @@ class TestAnimationShortcut(UiCase):
         self.assertEqual(self.view(".related").count(), 0)
 
 
+class TestPersonPage(UiCase):
+    """Les noms d'une fiche (réalisateur, acteurs) ouvrent la page de la personne, au clavier comme à la souris."""
+
+    @classmethod
+    def add_media(cls, root):
+        films = root / "srv" / "Films"
+        fixtures.write_mkv(films / "Premier Essai (2001)" / "Premier Essai (2001).mkv", fixtures.movie_blocks("Premier Essai", "Un.", "2001-01-01", "movie/9001", "Drame", ["Jane Campion"], ["Holly Hunter (Ada)", "Zoé O'Brien (Flora)"]))
+        fixtures.write_mkv(films / "Second Essai (2003)" / "Second Essai (2003).mkv", fixtures.movie_blocks("Second Essai", "Deux.", "2003-01-01", "movie/9002", "Drame", ["Jane Campion"], ["Holly Hunter (Mère)"]))
+
+    def sheet(self):
+        self.open("#/i/" + self.item("films", "Premier Essai")["id"])
+        self.view(".cast .who").first.wait_for()
+
+    def person(self, name):
+        self.open("#/person?n=" + name)
+        self.view(".shelf .card, .results > p").first.wait_for()
+
+    def titles(self):
+        return self.view(".shelf .card").evaluate_all("els => els.map(e => e.title)")
+
+    def focused_key(self):
+        return self.page.evaluate("document.activeElement && document.activeElement.getAttribute('data-key')")
+
+    def test_clicking_an_actor_opens_the_page_with_their_titles_and_back_returns_to_the_sheet(self):
+        self.sheet()
+        sheet_url = self.page.url
+        self.view(".cast .who", has_text="Holly Hunter").click()
+        self.view(".shelf .card").first.wait_for()
+        self.assertTrue(self.page.url.endswith("#/person?n=Holly%20Hunter"))
+        self.assertEqual(self.view("h1").inner_text(), "Holly Hunter")
+        self.assertEqual(self.view(".roles").inner_text(), "Acteur · 2 titres")           # aucun rôle de réalisateur : il n'est pas annoncé
+        self.assertEqual(sorted(self.titles()), ["Premier Essai", "Second Essai"])
+        self.assertTrue(self.page.evaluate("document.activeElement.classList.contains('card')"))      # le focus est sur la première carte
+        self.press("Escape", wait=500)
+        self.assertEqual(self.page.url, sheet_url)
+        self.assertEqual(self.focused_key(), "who-a-Holly Hunter")                      # le focus retrouve le nom cliqué
+
+    def test_the_director_line_links_each_name_and_keeps_its_sentence(self):
+        self.sheet()
+        self.assertEqual(self.view(".credit").first.inner_text(), "De Jane Campion")
+        self.view(".credit .who").click()
+        self.view(".shelf .card").first.wait_for()
+        self.assertEqual(self.view(".roles").inner_text(), "Réalisateur · 2 titres")
+
+    def test_a_name_with_an_accent_and_an_apostrophe(self):
+        self.sheet()
+        self.view(".cast .who", has_text="O'Brien").click()
+        self.view(".shelf .card").first.wait_for()
+        self.assertEqual(self.view("h1").inner_text(), "Zoé O'Brien")
+        self.assertEqual(self.titles(), ["Premier Essai"])
+        self.person("zoe%20o'brien")                                                    # l'adresse écrite sans accent, en minuscules : même personne, graphie de la médiathèque
+        self.assertEqual(self.view("h1").inner_text(), "Zoé O'Brien")
+        self.assertEqual(self.titles(), ["Premier Essai"])
+
+    def test_the_keyboard_goes_from_one_name_to_the_next_and_enter_opens_the_page(self):
+        self.sheet()
+        self.view(".cast .who").first.focus()
+        self.assertEqual(self.focused_key(), "who-a-Holly Hunter")
+        self.press("ArrowRight")
+        self.assertEqual(self.focused_key(), "who-a-Zoé O'Brien")
+        self.press("ArrowLeft")
+        self.assertEqual(self.focused_key(), "who-a-Holly Hunter")
+        self.press("Enter", wait=600)
+        self.assertTrue(self.page.url.endswith("#/person?n=Holly%20Hunter"))
+
+    def test_a_name_nobody_in_the_library_carries(self):
+        self.person("Personne%20Inconnue")
+        self.assertEqual(self.view("h1").inner_text(), "Personne Inconnue")
+        self.assertEqual(self.view(".results > p").first.inner_text(), "Aucun titre pour Personne Inconnue dans ta médiathèque.")
+        self.assertTrue(self.view(".roles").is_hidden())
+        self.assertEqual(self.focused(), "Rechercher")                                  # une page sans carte garde de quoi viser à la télécommande
+        self.press("Enter", wait=500)
+        self.assertTrue(self.page.url.endswith("#/search"))
+
+    def test_signs_that_are_part_of_the_address_survive_the_round_trip(self):
+        self.person("A%26B%20%2BC%20%231%3F%20100%25%20%22x%22")                        # A&B +C #1? 100% "x"
+        self.assertEqual(self.view("h1").inner_text(), 'A&B +C #1? 100% "x"')
+        self.assertEqual(self.view(".results > p").first.inner_text(), 'Aucun titre pour A&B +C #1? 100% "x" dans ta médiathèque.')
+
+    def test_coming_back_to_the_page_keeps_the_focus_on_the_card_that_was_opened(self):
+        self.person("Holly%20Hunter")
+        self.view(".shelf .card").first.wait_for()
+        card = self.view(".shelf .card").first
+        key = card.get_attribute("data-key")
+        card.click()
+        self.view(".hero").wait_for()
+        self.press("Escape", wait=800)                                                  # la page se rafraîchit au retour
+        self.view(".shelf .card").first.wait_for()
+        self.assertEqual(self.focused_key(), key)
+
+    def test_a_name_is_inserted_as_text(self):
+        self.person("%3Cb%3Ex%3C%2Fb%3E")                                              # <b>x</b>
+        self.assertEqual(self.view("h1").inner_text(), "<b>x</b>")
+        self.assertEqual(self.view("h1 b").count(), 0)
+
+
 class TestLibraryToolbar(UiCase):
     """La barre d'une bibliothèque : « Genre : Tous » (le nom en gras, la valeur en poids normal, une largeur qui ne bouge pas) et le compteur de la musique."""
 

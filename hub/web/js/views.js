@@ -49,6 +49,7 @@
     return parts.join(' · ');
   }
   function sagaHref(libId, name) { return '#/saga/' + libId + '?g=' + encodeURIComponent(name); }
+  function personHref(name) { return '#/person?n=' + encodeURIComponent(name); }
   // Les affiches d'une saga, empilées en léger décalé : la première devant, les suivantes qui dépassent derrière.
   H.stack = function (ids, title, width) {
     var box = h('div', { class: 'stack n' + Math.min(3, ids.length) });
@@ -462,10 +463,24 @@
     };
     function metaLine(d) { return (META[d.type] || META.books)(d).filter(Boolean).join(' · '); }
 
+    // Un nom de la fiche (réalisateur, acteur) qui ouvre la page de la personne. `kind` distingue le même nom cité deux fois sur la fiche (clé de focus).
+    function personLink(name, kind, children) {
+      return h('a', { class: 'f who', href: personHref(name), 'data-key': 'who-' + kind + '-' + name }, children || name);
+    }
+    // « De {names} » : les noms sont des liens, le reste de la phrase (traduit) les entoure.
+    function directedBy(d) {
+      var slot = '\u0001', around = H.t('De {names}', { names: slot }).split(slot), line = h('p', { class: 'credit' }, around[0]);
+      d.directors.forEach(function (name, i) {
+        if (i) line.appendChild(document.createTextNode(', '));
+        line.appendChild(personLink(name, 'd'));
+      });
+      line.appendChild(document.createTextNode(around[1] || ''));
+      return line;
+    }
     // Les lignes « De », « Par » et l'artiste d'un album, sous les genres.
     function credits(d) {
       var out = [];
-      if (d.directors && d.directors.length) out.push(h('p', { class: 'credit' }, H.t('De {names}', { names: d.directors.join(', ') })));
+      if (d.directors && d.directors.length) out.push(directedBy(d));
       if (d.authors && d.authors.length) out.push(h('p', { class: 'credit' }, H.t('Par {names}', { names: d.authors.join(', ') })));
       if (d.type === 'album' && d.artist && d.artist_id) out.push(h('p', { class: 'credit' }, h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + d.artist_id }, d.artist)));
       return out;
@@ -540,7 +555,7 @@
     }
     function castSection(d) {
       if (!(d.actors && d.actors.length)) return null;
-      return h('section', { class: 'cast' }, h('h2', null, H.t('Distribution')), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, h('b', null, a.name), a.role ? h('span', null, a.role) : null); })));
+      return h('section', { class: 'cast' }, h('h2', null, H.t('Distribution')), h('ul', null, d.actors.slice(0, 14).map(function (a) { return h('li', null, personLink(a.name, 'a', [h('b', null, a.name), a.role ? h('span', null, a.role) : null])); })));
     }
     function sagaBoxes(d) {
       return (d.sagas || []).map(function (saga, k) {
@@ -729,6 +744,12 @@
   });
 
   // --- Recherche -------------------------------------------------------------------
+  // Un rayon par bibliothèque qui a des résultats (la recherche et la page d'une personne).
+  function shelves(results) {
+    return results.map(function (g) {
+      return h('section', { class: 'shelf', 'data-lib': g.id }, h('h2', null, h('a', { class: 'f head', href: '#/l/' + g.id }, H.tr(g.label))), h('div', { class: 'grid' + (g.kind === 'music' ? ' sq' : '') }, g.items.map(function (it) { return H.card(it, g.kind === 'music'); })));
+    });
+  }
   H.route(/^\/search$/, function () {
     var out = h('div', { class: 'results' }), last = '', timer = null;
     var input = h('input', { class: 'f field big', type: 'search', placeholder: H.t('Titre, artiste, collection…'), 'aria-label': H.t('Rechercher'), 'data-autofocus': '1', autocomplete: 'off',
@@ -743,14 +764,49 @@
         if (q !== last) return;
         H.clear(out);
         if (!res.results.length) { out.appendChild(h('p', { class: 'muted' }, H.t('Aucun résultat pour « {q} ».', { q: q }))); return; }
-        res.results.forEach(function (g) {
-          var sec = h('section', { class: 'shelf', 'data-lib': g.id }, h('h2', null, h('a', { class: 'f head', href: '#/l/' + g.id }, H.tr(g.label))), h('div', { class: 'grid' + (g.kind === 'music' ? ' sq' : '') }, g.items.map(function (it) { return H.card(it, g.kind === 'music'); })));
-          out.appendChild(sec);
-        });
+        shelves(res.results).forEach(function (sec) { out.appendChild(sec); });
       }).catch(function (e) { H.clear(out).appendChild(h('p', { class: 'muted' }, e.message)); });
     }
     var el = h('section', { class: 'search' }, h('h1', null, H.t('Recherche')), input, out);
     return { el: el, nav: '#/search' };
+  });
+
+  // --- Une personne ----------------------------------------------------------------
+  // #/person?n=<nom> : ce qu'un réalisateur ou un acteur a fait dans les bibliothèques que ce compte voit.
+  H.route(/^\/person$/, function (m, query) {
+    var name = (query.n || '').trim(), out = h('div', { class: 'results' });
+    var title = h('h1', null, name), roles = h('p', { class: 'roles', hidden: true });
+    var el = h('section', { class: 'person' }, title, roles, out);
+    var ROLE_LABELS = [['director', H.t('Réalisateur')], ['actor', H.t('Acteur')]];
+    // Le focus va sur la première carte (ou sur le lien de secours d'une page vide), sauf si l'utilisateur est déjà ailleurs (l'ancien focus, sur la page cachée, ne compte pas).
+    // `key` : la carte qui avait le focus avant que la page soit redessinée.
+    function settle(key) {
+      var active = document.activeElement;
+      var free = !active || active === document.body || el.contains(active) || active.getClientRects().length === 0;
+      if (!free || !document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;
+      if (key && H.focus.key(out, key, true)) return;
+      H.focus.set(out.querySelector('.card') || out.querySelector('.f'), true);
+    }
+    // Une page sans carte n'aurait rien à atteindre à la télécommande : un lien vers la recherche.
+    function say(text) {
+      H.clear(out).appendChild(h('p', { class: 'muted' }, text));
+      out.appendChild(h('p', null, h('a', { class: 'btn f', href: '#/search', 'data-autofocus': '1' }, H.t('Rechercher'))));
+      settle();
+    }
+    function show(res) {
+      var shown = res.name || name, focus = document.activeElement && out.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      title.textContent = shown;
+      var counts = ROLE_LABELS.filter(function (r) { return res.roles && res.roles[r[0]] > 0; }).map(function (r) { return r[1] + ' · ' + H.plural(res.roles[r[0]], 'titre'); });
+      roles.textContent = counts.join(' · ');
+      roles.hidden = !counts.length;
+      if (!res.results.length) { say(H.t('Aucun titre pour {name} dans ta médiathèque.', { name: shown })); return; }
+      H.clear(out);
+      shelves(res.results).forEach(function (sec) { out.appendChild(sec); });
+      settle(focus);
+    }
+    function load() { return H.api('/api/person?name=' + encodeURIComponent(name)).then(show).catch(function (e) { say(e.message); }); }
+    if (!name) say(H.t('Aucun nom n’est indiqué.')); else load();
+    return { el: el, nav: '#/search', refresh: name ? load : null };      // au retour d'une fiche : les pastilles « vu » ont pu changer
   });
 
   // --- Gestion ---------------------------------------------------------------------
