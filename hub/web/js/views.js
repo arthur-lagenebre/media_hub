@@ -804,40 +804,39 @@
 
   // `#/admin` est l'ancienne adresse de la page : les signets et les liens déjà donnés continuent d'y mener.
   H.route(/^\/(?:admin|settings)$/, function (m, query) {
-    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, wasAdmin = null, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '';
+    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, wasAdmin = null, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '', libsOpen = false, libsPanelNode = null;
     var tab = query.tab || H.pref('settings.tab') || '', openJobs = {};
     function qualityLabel(v) { return { auto: H.t('Qualité d’origine quand c’est possible'), '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': H.t('480p · 1,5 Mb/s') }[v] || v; }
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
     }
-    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'lecture', label: H.t('Lecture') }, { id: 'interface', label: H.t('Interface') }, { id: 'comptes', label: H.t('Comptes') }, { id: 'taches', label: H.t('Tâches'), admin: true }, { id: 'serveur', label: H.t('Serveur'), admin: true }];
+    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'preferences', label: H.t('Préférences') }, { id: 'comptes', label: H.t('Comptes') }];
+    var OLD_TABS = { lecture: 'preferences', interface: 'preferences', taches: 'gestion', serveur: 'gestion' };          // les anciens onglets : les adresses et le choix mémorisé y mènent encore
     function visibleTabs() { return TABS.filter(function (t) { return !t.admin || H.isAdmin(); }); }
     function activeTab() {          // un onglet réservé à l'administrateur ne s'ouvre pas pour un autre compte : on retombe sur le premier
         var ids = visibleTabs().map(function (t) { return t.id; });
-        return ids.indexOf(tab) >= 0 ? tab : ids[0];
+        var wanted = OLD_TABS[tab] || tab;
+        return ids.indexOf(wanted) >= 0 ? wanted : ids[0];
     }
     function choose(id) { tab = id; H.pref('settings.tab', id); render(); H.focus.key(el, 'tab-' + id); }
     function tabBar() {
       var active = activeTab();
       return h('div', { class: 'tabs', role: 'tablist' }, visibleTabs().map(function (t) {
-        return h('button', { class: 'chip tab f' + (t.id === active ? ' on' : '') + (t.id === 'taches' && busy ? ' busy' : ''), role: 'tab', 'aria-selected': t.id === active ? 'true' : 'false', 'data-key': 'tab-' + t.id,
+        return h('button', { class: 'chip tab f' + (t.id === active ? ' on' : '') + (t.id === 'gestion' && busy ? ' busy' : ''), role: 'tab', 'aria-selected': t.id === active ? 'true' : 'false', 'data-key': 'tab-' + t.id,
           'data-autofocus': t.id === active ? '1' : null, onclick: function () { choose(t.id); } }, t.label);
       }));
     }
     function render() {
       var focus = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
       H.clear(el);
-      logPanel = null;
+      logPanel = null; libsPanelNode = null;
       el.appendChild(h('h1', null, H.t('Paramètres')));
       var bar = tabBar();
       el.appendChild(bar);
       var body = h('div', { class: 'tabbody' }), active = activeTab();
       if (active === 'gestion') gestion(body);
-      else if (active === 'lecture') reading(body);
-      else if (active === 'interface') interfaceTab(body);
-      else if (active === 'comptes') accounts(body);
-      else if (active === 'taches') tasks(body);
-      else serverFacts(body);
+      else if (active === 'preferences') preferences(body);
+      else accounts(body);
       el.appendChild(body);
       var on = bar.querySelector('.on');
       if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir (après le contenu : lire offsetLeft sur une page à moitié reconstruite la ramenait en haut)
@@ -849,9 +848,13 @@
       H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast(r.removed > 1 ? H.t('Covers à relire : {name} ({n} vignettes oubliées)', { name: H.tr(l.label), n: r.removed }) : H.t('Covers à relire : {name} ({n} vignette oubliée)', { name: H.tr(l.label), n: r.removed })); })
         .catch(function (e) { H.toast(e.message, 5000); });
     }
-    function gestion(body) {
+    // Les cinq bibliothèques tiennent sur une ligne tant qu'on ne les déplie pas : « Tout mettre à jour » suffit presque toujours.
+    function libsPanel() {
       var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Bibliothèques')),
         H.button(H.t('Tout mettre à jour'), 'refresh', { class: 'primary', 'data-key': 'scan-all', title: H.t('Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.'), onclick: function () { start('/api/scan', {}, H.t('Mise à jour lancée')); } })));
+      libs.appendChild(h('button', { class: 'jhead f', 'aria-expanded': libsOpen ? 'true' : 'false', 'data-key': 'libs-toggle',
+        onclick: function () { libsOpen = !libsOpen; showLibs('libs-toggle'); } }, h('span', { class: 'jt' }, h('b', null, H.t('Détail par bibliothèque')), h('span', null, H.plural(state.libraries.length, 'bibliothèque')))));
+      if (!libsOpen) return libs;
       state.libraries.forEach(function (l) {
         libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
           h('div', { class: 'what' }, h('b', null, H.tr(l.label)), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · ' + H.t('mis à jour {when}', { when: ago(l.scanned) }) : H.t('dossier introuvable'))),
@@ -861,7 +864,19 @@
           l.kind === 'movies' ? H.button(H.t('Relire les covers'), null, { 'data-key': 'covers-' + l.id, title: H.t('Vide les vignettes gardées : chacune se refait depuis folder.jpg ou la jaquette du .mkv. Les affiches choisies à la main restent.'), onclick: function () { refreshCovers(l); } }) : null,
           H.button(H.t('Mettre à jour'), 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, H.t('Mise à jour lancée : {name}', { name: H.tr(l.label) })); } })));
       });
-      body.appendChild(libs);
+      return libs;
+    }
+    // Remplace le panneau des bibliothèques sur place (la page garde son défilement), en rendant le focus à ce qui l'avait.
+    function showLibs(key) {
+      var fresh = libsPanel();
+      libsPanelNode.parentNode.replaceChild(fresh, libsPanelNode);
+      libsPanelNode = fresh;
+      H.focus.key(fresh, key, true);
+    }
+    // Gestion : les bibliothèques, les sagas, l'entretien, puis ce qui se lit plus qu'il ne se règle : le serveur, et les tâches que les boutons ci-dessus lancent.
+    function gestion(body) {
+      libsPanelNode = libsPanel();
+      body.appendChild(libsPanelNode);
       body.appendChild(h('section', { class: 'panel' }, h('h2', null, H.t('Sagas')), h('div', { class: 'line' },
         h('div', { class: 'what' }, h('b', null, H.t('Sagas composées à la main')), h('span', null, H.t('Une trilogie que TMDB ne réunit pas, l’ordre du MCU… : des listes de films dans l’ordre de ton choix, en plus de la saga de l’étiquette.'))),
         h('a', { class: 'btn f', href: '#/sagas', 'data-key': 'sagas' }, H.icon('edit'), h('span', { class: 'lbl' }, H.t('Composer'))))));
@@ -871,6 +886,14 @@
         H.button(H.t('Compter'), null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, H.t('Simulation lancée')); } }),
         H.button(H.t('Supprimer'), null, { 'data-key': 'junk-del', onclick: confirmCleanup })));
       body.appendChild(tools);
+      serverFacts(body);
+      tasks(body);
+    }
+    // Les réglages qu'on touche une fois : l'apparence de ce navigateur, la lecture, l'affichage du compte.
+    function preferences(body) {
+      interfaceTab(body);
+      reading(body);
+      body.appendChild(displayPanel());
     }
     function reading(body) {
       var play = h('section', { class: 'panel' }, h('h2', null, H.t('Lecture')));
@@ -936,7 +959,6 @@
     }
     function accounts(body) {
       body.appendChild(accountPanel());
-      body.appendChild(displayPanel());
       if (H.session.auth && H.isAdmin()) body.appendChild(usersPanel());
     }
     function tasks(body) {
@@ -976,7 +998,7 @@
           });
         }
         H.api('/api/cleanup', {}).then(function (r) { return wait(r.job.id); }).then(function (job) {
-          count.textContent = job && job.status === 'done' && job.result ? said(job.result.found) : H.t('Le comptage a échoué : voir l’onglet Tâches.');
+          count.textContent = job && job.status === 'done' && job.result ? said(job.result.found) : H.t('Le comptage a échoué : voir les Tâches, en bas de Gestion.');
           if (job && job.status === 'done') listed(job.result);
         }, function (e) { count.textContent = e.message; }).then(function () { counting = false; poll(); });
       } });
@@ -1171,7 +1193,7 @@
         // Pendant une tâche on revient ici toutes les 1,5 s : reconstruire la page entière coupait le défilement (molette, tactile). On ne refait que ce qui a changé.
         if (page !== lastPage || H.isAdmin() !== wasAdmin) render();
         else {
-          var mark = el.querySelector('[data-key="tab-taches"]');          // un point sur l'onglet des tâches tant qu'il y en a une en cours
+          var mark = el.querySelector('[data-key="tab-gestion"]');          // un point sur l'onglet de gestion tant qu'il y en a une en cours
           if (mark) mark.classList.toggle('busy', !!busy);
           if (logPanel && tasks !== lastTasks) showJobs();
         }
