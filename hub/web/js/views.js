@@ -757,43 +757,6 @@
     if (s < 129600) return H.t('il y a {n} h', { n: Math.round(s / 3600) });
     return H.t('il y a {n} j', { n: Math.round(s / 86400) });
   }
-  // Une fenêtre à champs (comptes) : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password', auto}], extra: [éléments sous les champs],
-  // ok: libellé du bouton, danger, submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse, done(résultat) une fois la fenêtre fermée}.
-  // Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
-  function dialog(o) {
-    var inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
-    var box = h('div', { class: 'menu prompt form' + (o.cls ? ' ' + o.cls : ''), role: 'dialog', 'aria-label': o.title }, h('h3', null, o.title));
-    box.addEventListener('focusin', function (e) { try { e.target.scrollIntoView({ block: 'nearest' }); } catch (x) { /* tant pis */ } });   // petit écran ou télé : la fenêtre défile jusqu'au bouton atteint
-    (o.lead || []).forEach(function (t) { box.appendChild(h('p', { class: 'lead' }, t)); });
-    function show(text) { err.textContent = text || ''; }
-    function send() {
-      if (busy) return;
-      var values = {};
-      o.fields.forEach(function (f) { var v = inputs[f.key].value; values[f.key] = f.type === 'password' ? v : v.replace(/\s+/g, ' ').trim(); });
-      var r = o.submit(values);
-      if (typeof r === 'string') { show(r); return; }
-      busy = true; show('');
-      r.then(function (res) { H.overlay.close(function () { if (o.done) o.done(res); }); },
-        function (e) { busy = false; show(e.message); });
-    }
-    o.fields.forEach(function (f, i) {
-      var input = h('input', { class: 'f field big', type: f.type === 'password' ? 'password' : 'text', maxlength: f.type === 'password' ? '200' : '40', autocomplete: f.auto || 'off',
-        'data-autofocus': i === 0 ? '1' : null,
-        onkeydown: function (e) {
-          if (e.key !== 'Enter') return;
-          e.preventDefault();
-          if (list[i + 1]) list[i + 1].focus(); else send();
-        } });
-      inputs[f.key] = input; list.push(input);
-      box.appendChild(h('label', { class: 'flab' }, f.label, input));
-    });
-    (o.extra || []).forEach(function (x) { box.appendChild(x); });
-    box.appendChild(err);
-    ok = H.button(o.ok || H.t('Valider'), o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: send });
-    box.appendChild(h('div', { class: 'btns' }, ok, H.button(H.t('Annuler'), null, { 'data-autofocus': o.fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));
-    H.overlay.open(box);
-    if (o.fields.length) setTimeout(function () { try { list[0].focus(); } catch (e) { /* tant pis */ } }, 30);
-  }
   var ROLES = { admin: H.t('Administrateur'), user: H.t('Utilisateur') };
   function checkPassword(pw, again) {
     if (pw.length < 8) return H.t('Le mot de passe doit faire au moins 8 caractères.');
@@ -1001,7 +964,7 @@
           if (job && job.status === 'done') listed(job.result);
         }, function (e) { count.textContent = e.message; }).then(function () { counting = false; poll(); });
       } });
-      dialog({ title: H.t('Supprimer les fichiers parasites ?'), ok: H.t('Supprimer définitivement'), danger: true, fields: [],
+      H.confirm({ title: H.t('Supprimer les fichiers parasites ?'), ok: H.t('Supprimer définitivement'), danger: true,
         lead: [H.t('Les fichiers parasites seront supprimés de la médiathèque, et cela ne s’annule pas.')], extra: [count, sample, recount],
         submit: function () { return H.api('/api/cleanup', { apply: true }); },
         done: function () { H.toast(H.t('Nettoyage lancé')); poll(); } });
@@ -1022,7 +985,7 @@
       return panel;
     }
     function changeMine() {
-      dialog({ title: H.t('Changer mon mot de passe'), ok: H.t('Changer'),
+      H.form({ title: H.t('Changer mon mot de passe'), ok: H.t('Changer'),
         fields: [{ key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }, { key: 'next', label: H.t('Nouveau mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Nouveau mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
         submit: function (v) {
           if (!v.current) return H.t('Saisis ton mot de passe actuel.');
@@ -1034,7 +997,7 @@
     }
     // Les autres appareils du compte (téléphone, télé, navigateur oublié) sont déconnectés ; celui-ci reste connecté : le serveur renouvelle son cookie.
     function signOutOthers() {
-      dialog({ title: H.t('Déconnecter les autres appareils'), ok: H.t('Déconnecter'),
+      H.form({ title: H.t('Déconnecter les autres appareils'), ok: H.t('Déconnecter'),
         lead: [H.t('Tous les autres appareils connectés à ce compte devront se reconnecter. Celui-ci reste connecté. Ton mot de passe ne change pas.')],
         fields: [{ key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }],
         submit: function (v) {
@@ -1064,7 +1027,7 @@
         role = role === 'user' ? 'admin' : 'user';
         toggle.querySelector('.lbl').textContent = H.t('Rôle : {role}', { role: ROLES[role] });
       } });
-      dialog({ title: H.t('Ajouter un compte'), ok: H.t('Créer le compte'),
+      H.form({ title: H.t('Ajouter un compte'), ok: H.t('Créer le compte'),
         lead: [H.t('Un administrateur gère la médiathèque et les comptes ; un utilisateur lit, avec sa propre progression et ses propres playlists.')],
         fields: [{ key: 'name', label: H.t('Nom (40 caractères au plus)'), type: 'text' }, { key: 'pw', label: H.t('Mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
         extra: [toggle],
@@ -1121,7 +1084,7 @@
         });
       }
       paint();
-      dialog({ title: H.t('Droits de {name}', { name: u.name }), ok: H.t('Enregistrer'), cls: 'rightsbox', fields: [],
+      H.form({ title: H.t('Droits de {name}', { name: u.name }), ok: H.t('Enregistrer'), kind: 'form', cls: 'rightsbox',
         lead: [H.t('Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.')],
         extra: [rows],
         submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/rights', { rights: draft }); },
@@ -1129,7 +1092,7 @@
     }
     function passwordOf(u, mine) {
       if (mine) { changeMine(); return; }                              // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)
-      dialog({ title: H.t('Mot de passe de {name}', { name: u.name }), ok: H.t('Changer'),
+      H.form({ title: H.t('Mot de passe de {name}', { name: u.name }), ok: H.t('Changer'),
         lead: [H.t('Les sessions ouvertes de ce compte seront fermées ; la personne se reconnectera avec le nouveau mot de passe.')],
         fields: [{ key: 'pw', label: H.t('Nouveau mot de passe (8 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Encore une fois'), type: 'password', auto: 'new-password' }],
         submit: function (v) {
@@ -1142,7 +1105,7 @@
     function deleteUser(u, mine) {
       var lead = [H.t('Supprimer le compte « {name} » ? Sa progression de lecture, ses playlists et ses éléments retirés de « Reprendre » seront perdus, et cela ne s’annule pas. Les fichiers de la médiathèque ne sont pas touchés.', { name: u.name })];
       if (mine) lead.push(H.t('C’est le compte avec lequel tu es connecté : tu seras déconnecté. Il doit rester au moins un autre administrateur.'));
-      dialog({ title: H.t('Supprimer le compte de {name}', { name: u.name }), ok: H.t('Supprimer définitivement'), danger: true, lead: lead, fields: [],
+      H.confirm({ title: H.t('Supprimer le compte de {name}', { name: u.name }), ok: H.t('Supprimer définitivement'), danger: true, lead: lead,
         submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/delete', {}); },
         done: function () {
           if (mine) { H.forgetAccount(); location.href = '/login'; return; }

@@ -1,4 +1,4 @@
-/* Outils communs : éléments, appels au serveur, formats, navigation à la télécommande, fenêtres de choix, pile de pages.
+/* Outils communs : éléments, appels au serveur, formats, navigation à la télécommande, pop-up (voir docs/popups.md), pile de pages.
    Écrit en JavaScript sobre (pas de ?. ni de ??) pour passer sur les navigateurs un peu anciens des télés. */
 (function () {
   'use strict';
@@ -176,7 +176,7 @@
     H.toast.timer = setTimeout(function () { box.classList.remove('on'); }, ms || 3200);
   };
 
-  // --- Fenêtres de choix --------------------------------------------------------
+  // --- Fenêtres : pile, voile, bouton Retour -----------------------------------------
   // Chaque fenêtre ouverte ajoute une entrée à l'historique : le bouton Retour de la télécommande la ferme sans quitter la page.
   var overlays = [], skipPops = 0, afterPop = null;
   H.overlay = {
@@ -215,10 +215,24 @@
     if (overlays.length) cleanup(overlays.pop());
   });
 
-  // Un menu de choix : [{label, detail, value, disabled}] ; `current` est la valeur cochée.
+  // --- Pop-up : un gabarit (`.menu`), quatre déclinaisons, pas une de plus (voir docs/popups.md) ---------------
+  //   choice  : choisir dans une liste, un clic ferme                      → H.menu
+  //   confirm : une question, un bouton d'action (rouge si on détruit), Annuler   → H.confirm
+  //   form    : un ou plusieurs champs, ou un petit réglage, avec Valider / Annuler → H.form, H.prompt (un seul champ)
+  //   wide    : contenu libre (liste à gérer, recherche, image à recadrer) avec un pied de boutons → H.box('wide …') puis H.overlay.open
+  // Un nouveau pop-up part d'une de ces quatre ; il ne construit jamais son `div role="dialog"` lui-même (un test le vérifie).
+  // `kind` : la déclinaison, suivie au besoin d'un modificateur (« wide queue ») ; les enfants suivants sont ajoutés tels quels.
+  H.box = function (kind, title) {
+    var box = h('div', { class: 'menu ' + kind, role: 'dialog', 'aria-label': title }, h('h3', null, title));
+    for (var i = 2; i < arguments.length; i++) add(box, arguments[i]);
+    box.addEventListener('focusin', function (e) { try { e.target.scrollIntoView({ block: 'nearest' }); } catch (x) { /* tant pis */ } });   // petit écran ou télé : la fenêtre défile jusqu'à l'élément atteint
+    return box;
+  };
+
+  // choice : un menu de choix : [{label, detail, value, disabled}] ; `current` est la valeur cochée.
   H.menu = function (title, options, current, onPick) {
     var list = h('div', { class: 'menu-list' });
-    var box = h('div', { class: 'menu', role: 'dialog', 'aria-label': title }, h('h3', null, title), list);
+    var box = H.box('choice', title, list);
     options.forEach(function (o) {
       var on = o.value === current;
       var b = h('button', { class: 'opt f' + (on ? ' on' : ''), disabled: !!o.disabled, 'data-autofocus': on ? '1' : null,
@@ -229,6 +243,46 @@
     if (!options.length) list.appendChild(h('p', { class: 'muted' }, H.t('Rien à choisir.')));
     H.overlay.open(box);
   };
+
+  // form : une fenêtre à champs, ou à contenu propre : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password', auto, maxlength}], extra: [éléments sous les champs],
+  // ok: libellé du bouton, danger, kind (« form » par défaut s'il y a des champs), cls (modificateur), submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse,
+  // done(résultat) une fois la fenêtre fermée}. Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
+  H.form = function (o) {
+    var fields = o.fields || [], inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
+    var box = H.box((o.kind || (fields.length ? 'form' : 'confirm')) + (fields.length > 1 ? ' stacked' : '') + (o.cls ? ' ' + o.cls : ''), o.title);
+    (o.lead || []).forEach(function (t) { box.appendChild(h('p', { class: 'lead' }, t)); });
+    function show(text) { err.textContent = text || ''; }
+    function send() {
+      if (busy) return;
+      var values = {};
+      fields.forEach(function (f) { var v = inputs[f.key].value; values[f.key] = f.type === 'password' ? v : v.replace(/\s+/g, ' ').trim(); });
+      var r = o.submit ? o.submit(values) : Promise.resolve();
+      if (typeof r === 'string') { show(r); return; }
+      busy = true; show('');
+      r.then(function (res) { H.overlay.close(function () { if (o.done) o.done(res); }); },
+        function (e) { busy = false; show(e.message); });
+    }
+    fields.forEach(function (f, i) {
+      var input = h('input', { class: 'f field big', type: f.type === 'password' ? 'password' : 'text', maxlength: String(f.maxlength || (f.type === 'password' ? 200 : 40)), autocomplete: f.auto || 'off',
+        'data-autofocus': i === 0 ? '1' : null,
+        onkeydown: function (e) {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          if (list[i + 1]) list[i + 1].focus(); else send();
+        } });
+      inputs[f.key] = input; list.push(input);
+      box.appendChild(h('label', { class: 'flab' }, f.label, input));
+    });
+    (o.extra || []).forEach(function (x) { box.appendChild(x); });
+    box.appendChild(err);
+    ok = H.button(o.ok || H.t('Valider'), o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: send });
+    box.appendChild(h('div', { class: 'btns' }, ok, H.button(H.t('Annuler'), null, { 'data-autofocus': fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));   // sans champ, le focus part sur Annuler : Entrée ne détruit rien
+    H.overlay.open(box);
+    if (fields.length) setTimeout(function () { try { list[0].focus(); } catch (e) { /* tant pis */ } }, 30);
+  };
+
+  // confirm : « Supprimer ceci ? ». o = {title, lead, ok, danger, extra, submit, done} comme H.form, sans champ ; `done` est appelé une fois la fenêtre fermée.
+  H.confirm = function (o) { o.fields = []; delete o.kind; H.form(o); };
 
   // Une question à une ligne de texte (nom d'une playlist) : `onOk(texte)` est appelé si le texte n'est pas vide.
   // `opts` (facultatif) : {maxlength} (80 par défaut : une adresse web en demande davantage), {placeholder}.
@@ -241,7 +295,7 @@
       H.overlay.close(function () { onOk(text); });
     }
     input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
-    var box = h('div', { class: 'menu prompt', role: 'dialog', 'aria-label': title }, h('h3', null, title), input,
+    var box = H.box('form prompt', title, input,
       h('div', { class: 'btns' }, H.button(okLabel || H.t('Valider'), 'check', { class: 'primary', onclick: submit }), H.button(H.t('Annuler'), null, { onclick: function () { H.overlay.close(); } })));
     H.overlay.open(box);
     setTimeout(function () { try { input.focus(); input.select(); } catch (e) { /* tant pis */ } }, 30);

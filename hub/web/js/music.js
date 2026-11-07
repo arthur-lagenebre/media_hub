@@ -118,10 +118,9 @@
   // --- La file d'attente ---------------------------------------------------------------
   M.openQueue = function () {
     var list = h('div', { class: 'menu-list qlist' });
-    var title = h('h3', null, H.t('File d’attente'));
-    var box = h('div', { class: 'menu queue', role: 'dialog', 'aria-label': H.t('File d’attente') }, title, list);
     var footer = h('div', { class: 'btns' });
-    box.appendChild(footer);
+    var box = H.box('wide queue', H.t('File d’attente'), list, footer);
+    var title = box.querySelector('h3');
 
     function paint(focusKey) {
       var s = H.audio.state();
@@ -280,8 +279,7 @@
       e.preventDefault(); place();
     });
     img.src = src;       // après les gestionnaires : une image déjà en cache déclenche onload tout de suite
-    var box = h('div', { class: 'menu crop', role: 'dialog', 'aria-label': H.t('Recadrer la photo') },
-      h('h3', null, H.t('Recadrer la photo')),
+    var box = H.box('wide crop', H.t('Recadrer la photo'),
       h('p', { class: 'lead' }, H.t('Déplace l’image et agrandis-la : seule la partie dans le cadre est gardée, le reste est retiré de la photo.')),
       stage, h('label', { class: 'zoom' }, h('span', null, H.t('Zoom')), slider), err,
       h('div', { class: 'btns' }, ok, H.button(H.t('Annuler'), null, { onclick: function () { H.overlay.close(); } })));
@@ -392,12 +390,11 @@
         }, { maxlength: 2000, placeholder: 'https://' });
       }
       function drop(l, label, i) {
-        H.menu(H.t('Retirer le lien « {label} » ?', { label: label }), [{ label: H.t('Retirer le lien'), detail: H.t('Pour le remettre, ajoute la même adresse'), value: 'yes' }, { label: H.t('Garder'), value: 'no' }], 'no', function (v) {
-          if (v !== 'yes') return;
+        H.confirm({ title: H.t('Retirer le lien « {label} » ?', { label: label }), lead: [H.t('Pour le remettre, ajoute la même adresse')], ok: H.t('Retirer le lien'), danger: true, done: function () {
           H.api('/api/artist/' + lib + '/' + id + '/links/remove', { url: l.url }).then(function (reply) {
             done(reply, H.t('Lien retiré. Pour le remettre, ajoute la même adresse.'), (reply.links || []).length ? 'lx' + Math.min(i, reply.links.length - 1) : 'link-add');
           }).catch(fail);
-        });
+        } });
       }
       draw();
       return section;
@@ -450,9 +447,9 @@
         hear ? H.button(H.t('Jouer ensuite'), null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }) : null,
         H.button(H.t('Renommer'), 'edit', { onclick: function () { H.prompt(H.t('Renommer la playlist'), d.name, H.t('Renommer'), function (name) { edit('rename', { name: name }); }); } }),
         H.button(H.t('Supprimer'), 'trash', { onclick: function () {
-          H.menu(H.t('Supprimer « {name} » ?', { name: d.name }), [{ label: H.t('Supprimer la playlist'), value: 'yes' }, { label: H.t('Garder'), value: 'no' }], 'no', function (v) {
-            if (v === 'yes') H.api('/api/playlist/' + pid + '/delete', {}).then(function () { H.toast(H.t('Playlist supprimée')); H.go('#/playlists', true); }).catch(fail);
-          });
+          H.confirm({ title: H.t('Supprimer « {name} » ?', { name: d.name }), ok: H.t('Supprimer la playlist'), danger: true, done: function () {
+            H.api('/api/playlist/' + pid + '/delete', {}).then(function () { H.toast(H.t('Playlist supprimée')); H.go('#/playlists', true); }).catch(fail);
+          } });
         } }));
       info.appendChild(actions);
       var hero = h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: d.covers[0] ? 'background-image:url(/img/item/' + d.covers[0] + '?w=300)' : '' }), h('div', { class: 'hero-in' }, mosaic(d), info));
