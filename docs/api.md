@@ -144,6 +144,7 @@ Un film, une série, un album, une série de livres.
 | `artist_id` | chaîne, optionnel | identifiant d'artiste (albums), pour `/api/artist/<lib>/<id>` |
 | `missing` | entier, optionnel | **séries de livres seulement** (`type: "series"`) : nombre de tomes manquants ; absent s'il n'en manque aucun. **Attention : dans la fiche (`GET /api/item/<id>`), le même nom porte une liste** (voir « Même nom, deux types »). Les albums n'ont pas de `missing` : leurs albums manquants sont dans `wanted` (`/api/artist`). |
 | `seen`, `started` | entiers, optionnels | présents si au moins un fichier a une progression (hors musique) : fichiers **vus**, fichiers **entamés** non finis. Un film est vu quand `seen >= max(1, n)`. |
+| `tmdb_rating`, `tmdb_votes` | nombre, entier, optionnels | films et séries : la note moyenne des votants TMDB, sur 10, à une décimale (`7.8`), et leur nombre. Présents ensemble, seulement quand l'enrichissement TMDB l'a demandée et qu'au moins 25 personnes ont voté ; aussi dans la fiche (`GET /api/item/<id>`). Rafraîchie par l'enrichissement quand elle a plus d'un mois. |
 
 ### Fichier (`<fichier>`)
 
@@ -436,7 +437,7 @@ Une seule tâche tourne à la fois, les autres attendent. `POST /api/scan`, `/ap
 | `GET /api/jobs` | | `{"jobs": [<tâche>], "busy": bool}` (30 dernières, sans journal). Tout compte. |
 | `GET /api/jobs?log=1` | | Idem, avec le journal de chaque tâche (`log`). Administrateur seulement : 403 sinon. |
 | `POST /api/scan` | `{"lib": "<id>"}` (sans `lib` : tout) | **202** `{"job": <tâche>}` |
-| `POST /api/enrich` | `{"lib": "<id>", "force": false}` | **202** `{"job": <tâche>}`. Séries / animations : TMDB (400 `pas de clé TMDB…` sans clé) ; films : les films qui manquent aux sagas, décrits par TMDB (400 sans clé ; une collection déjà connue n'est redemandée qu'après un mois, ou avec `force`) ; musique : fiches artistes ; autre genre : 400 |
+| `POST /api/enrich` | `{"lib": "<id>", "force": false}` | **202** `{"job": <tâche>}`. Séries / animations : TMDB (400 `pas de clé TMDB…` sans clé) ; films : les films qui manquent aux sagas, décrits par TMDB (400 sans clé ; une collection déjà connue n'est redemandée qu'après un mois, ou avec `force`) ; films et séries : ensuite, la note TMDB de chaque élément qui a un identifiant TMDB (voir `tmdb_rating`), redemandée après un mois, ou avec `force` ; musique : fiches artistes ; autre genre : 400 |
 | `POST /api/images/refresh` | `{"lib": "<id>"}` | `{"ok": true, "removed": 12}` : vide le cache des vignettes des éléments et des fichiers de cette bibliothèque (à chaque largeur, marques « pas d'image » comprises) ; chaque image se refait depuis le disque (`folder.jpg`, jaquette du `.mkv`…) à la prochaine demande, utile quand un fichier image a changé sans changer de nom. Les affiches choisies à la main et celles de TMDB sont gardées. Administrateur seulement ; 404 bibliothèque inconnue |
 | `POST /api/cleanup` | `{"apply": false}` | **202** `{"job": <tâche>}` ; sans `apply`, simule. Le `result` de la tâche terminée : `{"found": 12, "removed": 0, "sample": ["Musique/Daft Punk/Thumbs.db", …]}` : `sample` nomme les 20 premiers fichiers (dans l'ordre alphabétique, depuis le dossier de leur bibliothèque), `found` les compte tous ; une simulation les écrit aussi dans le journal |
 

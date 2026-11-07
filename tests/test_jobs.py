@@ -143,17 +143,38 @@ class TestQueue(JobsCase):
 class TestTasks(JobsCase):
     lib = types.SimpleNamespace(label="Films", id="films", path=Path("."), kind="movies")
 
+    NO_RATING = {"rated": 0, "failed": 0}
+
     def test_the_enrichments_ask_for_the_force_only_when_told_to(self):
         for task, target in (("enrich", "enrich_shows"), ("enrich_sagas", "enrich_sagas"), ("enrich_artists", "enrich_artists")):
             for force in (None, True):
-                with mock.patch.object(jobs.enrich, target, return_value="ok") as called:
+                with mock.patch.object(jobs.enrich, target, return_value={"failed": 0}) as called, \
+                        mock.patch.object(jobs.enrich, "enrich_ratings", return_value=self.NO_RATING) as ratings:
                     job = getattr(self.jobs, task)(self.lib) if force is None else getattr(self.jobs, task)(self.lib, force)
                     self.wait(job)
                 self.assertIs(called.call_args.args[-1], bool(force), (task, force))
+                if ratings.called:
+                    self.assertIs(ratings.call_args.args[-1], bool(force), (task, force))
+
+    def test_the_tmdb_enrichments_end_with_the_ratings_and_count_both(self):
+        for task, target in (("enrich", "enrich_shows"), ("enrich_sagas", "enrich_sagas")):
+            with mock.patch.object(jobs.enrich, target, return_value={"sagas": 1, "failed": 2}), \
+                    mock.patch.object(jobs.enrich, "enrich_ratings", return_value={"rated": 5, "failed": 1}) as ratings:
+                job = getattr(self.jobs, task)(self.lib)
+                self.wait(job)
+            self.assertEqual(ratings.call_args.args[2], self.lib, task)
+            self.assertLessEqual(ratings.call_args.kwargs["since"], int(job.started) + 1, task)         # le début de la tâche : ce qui a été noté depuis n'est pas redemandé
+            self.assertEqual(job.result, {"sagas": 1, "rated": 5, "failed": 3}, task)
+
+    def test_the_artists_have_no_rating(self):
+        with mock.patch.object(jobs.enrich, "enrich_artists", return_value={}), mock.patch.object(jobs.enrich, "enrich_ratings") as ratings:
+            self.wait(self.jobs.enrich_artists(self.lib))
+        ratings.assert_not_called()
 
     def test_every_task_has_its_own_label(self):
         labels = set()
-        with mock.patch.object(jobs.enrich, "enrich_shows"), mock.patch.object(jobs.enrich, "enrich_sagas"), mock.patch.object(jobs.enrich, "enrich_artists"), \
+        with mock.patch.object(jobs.enrich, "enrich_shows", return_value={"failed": 0}), mock.patch.object(jobs.enrich, "enrich_sagas", return_value={"failed": 0}), \
+                mock.patch.object(jobs.enrich, "enrich_artists"), mock.patch.object(jobs.enrich, "enrich_ratings", return_value=self.NO_RATING), \
                 mock.patch.object(jobs.scan, "scan_library", return_value={}), mock.patch.object(jobs, "clean_junk", return_value={}):
             for job in (self.jobs.scan(self.lib), self.jobs.scan_all(), self.jobs.enrich(self.lib), self.jobs.enrich_sagas(self.lib), self.jobs.enrich_artists(self.lib),
                         self.jobs.cleanup(False), self.jobs.cleanup(True)):

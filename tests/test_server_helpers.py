@@ -118,6 +118,24 @@ class TestIsUnseen(unittest.TestCase):
         self.assertFalse(app.is_unseen({"id": "s", "type": "saga", "count": 2, "all_seen": True}, {}))
 
 
+class TestShownRating(unittest.TestCase):
+    def test_a_rating_shows_from_enough_votes(self):
+        rating = {"tmdb": 1, "vote": 8.4, "votes": app.MIN_VOTES, "at": 0}
+        self.assertIs(app.shown_rating(rating), rating)
+
+    def test_too_few_votes_no_vote_or_an_older_shape_shows_nothing(self):
+        for rating in (None, 8.4, "8.4", {}, {"vote": 8.4, "votes": app.MIN_VOTES - 1}, {"vote": None, "votes": 900}, {"vote": 8.4}):
+            with self.subTest(rating=rating):
+                self.assertIsNone(app.shown_rating(rating))
+
+    def test_a_card_carries_the_rating_and_its_votes_only_when_shown(self):
+        def card(rating):
+            return app.summary({"id": "f", "type": "movie", "title": "F", "year": "", "grp": "", "count": 1, "letter": "F", "added": 0, "genres": "[]",
+                                "meta": json.dumps({"tmdb_rating": rating})})
+        self.assertEqual({k: v for k, v in card({"tmdb": 1, "vote": 8.4, "votes": 900}).items() if k.startswith("tmdb")}, {"tmdb_rating": 8.4, "tmdb_votes": 900})
+        self.assertNotIn("tmdb_rating", card(8.4))
+
+
 class TestSagaJson(unittest.TestCase):
     def saga(self, n=5):
         members = [{"id": f"f{i}", "count": 1} for i in range(n)]

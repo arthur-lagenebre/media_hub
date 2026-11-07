@@ -31,6 +31,8 @@ Les tests tournent dans un Chromium de bureau, pas sur la télé. Rien de tout c
 - [ ] **Reprendre un film en « Son converti »** sur le serveur (ffmpeg 7.0.2, MKV H.264 avec images B et son DTS, comme « La reine des damnés ») : l'image, le son et les sous-titres restent calés après une reprise, après un saut aux flèches et après un changement de piste audio. Les tests tournent avec le ffmpeg de la machine de développement, pas avec la version fixée dans `deploy/fetch-ffmpeg.sh`
 - [ ] **Les sous-titres PGS** sur un vrai remux Blu-ray : le calage dans le temps, la position sur l'image quand le `.mkv` est recadré (le canvas suit la taille de l'écran du Blu-ray, pas celle de l'image recadrée), la durée de la première extraction sur un fichier de 30 Go (délai de 15 minutes), la fluidité du décodage dans le navigateur de la télé (Android TV, Fire TV). Les tests n'ont qu'un `.sup` fabriqué à la main.
 
+- [ ] **Les notes TMDB** avec la vraie clé : un premier « Sagas (TMDB) » sur toute la bibliothèque de films (une requête par film étiqueté, sans le cache : durée réelle), puis un rescan, après lequel les notes doivent rester. Sur la télé et sur un téléphone étroit : le disque de la note (anneau SVG) en bas à gauche de la vignette ne gêne ni le bouton « … » ni la barre de progression, et reste lisible de loin.
+
 Si `test_admin_runs_an_update` échoue (il a échoué une fois sur une machine, jamais sur l'autre) : le relancer seul avec `python -W ignore -m unittest tests.test_ui.TestDetailPages.test_admin_runs_an_update` et garder les lignes de l'échec. Ce test attend au plus 30 s qu'un scan se termine.
 
 ## Limites connues, non traitées

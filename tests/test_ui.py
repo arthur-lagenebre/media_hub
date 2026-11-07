@@ -2360,6 +2360,16 @@ class TestSettings(UiCase):
         self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Gestion")
         self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Tâches", "Serveur"])
 
+    def test_the_server_panel_credits_tmdb_with_its_logo(self):
+        """Les conditions de l'API TMDB demandent la mention et le logo."""
+        self.open("#/settings")
+        credit = self.view(".credit-tmdb")
+        credit.wait_for()
+        self.assertIn("n’est ni approuvé ni certifié par TMDB", credit.inner_text())
+        logo = credit.locator("img")
+        self.assertEqual(logo.get_attribute("alt"), "TMDB")
+        self.until(lambda: logo.evaluate("img => img.complete && img.naturalWidth > 0"))          # le fichier est bien servi
+
     def test_the_old_address_still_leads_to_the_page(self):
         self.open("#/admin")
         self.view(".tabs").wait_for()
