@@ -269,7 +269,7 @@
     var search = h('input', { class: 'f field', type: 'search', placeholder: H.t('Filtrer {name}', { name: lib ? H.tr(lib.label).toLowerCase() : '' }), 'aria-label': H.t('Filtrer'),
       oninput: function () { clearTimeout(search.t); search.t = setTimeout(function () { st.q = search.value; reset(); }, 280); },
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
-    var bLetter = H.button('', null, { onclick: pickLetter }), bGenre = H.button('', null, { onclick: pickGenre }), bSort = H.button('', null, { onclick: pickSort });
+    var bLetter = H.button('', null, { class: 'flt', onclick: pickLetter }), bGenre = H.button('', null, { class: 'flt wide', onclick: pickGenre }), bSort = H.button('', null, { class: 'flt wide', onclick: pickSort });
     var bSeen = H.button(H.t('Non vus'), null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
     var bLists = H.button(H.t('Playlists'), 'queue', { onclick: function () { H.go('#/playlists'); } });
     var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bSeen, kind === 'music' ? bLists : null, count);
@@ -277,7 +277,8 @@
     var empty = h('div', { class: 'blank', hidden: true });
     var el = h('section', { class: 'library' }, h('h1', null, lib ? H.tr(lib.label) : H.t('Bibliothèque')), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
 
-    function label(btn, name, value) { H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('small', null, name + ' '), value])); }
+    // « Genre : Tous » : le nom du filtre en gras, sa valeur en poids normal ; la largeur du bouton est fixée par le CSS (.flt), la valeur trop longue est coupée
+    function label(btn, name, value) { btn.title = H.t('{name} :', { name: name }) + ' ' + value; H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('b', null, H.t('{name} :', { name: name })), ' ', h('span', { class: 'val' }, value)])); }
     function paint() {
       label(bLetter, H.t('Lettre'), st.letter || H.t('Toutes'));
       label(bGenre, H.t('Genre'), st.genre || H.t('Tous'));
@@ -286,7 +287,8 @@
       bSeen.classList.toggle('on', st.unseen);
       bGenre.hidden = !facets.genres.length;
       var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
-      count.textContent = total ? (sagaMode() && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word)) : '';
+      var music = kind === 'music' && typeof facets.albums === 'number';          // la musique compte toujours les artistes et les albums de ce que les filtres laissent, quelle que soit la vue
+      count.textContent = !total ? '' : music ? H.plural(facets.artists, 'artiste') + ' · ' + H.plural(facets.albums, 'album') : sagaMode() && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word);
     }
     // Les accès rapides des livres : une pastille par section (Manga, BD, Comics, Artbook…), avec ce qu'elle contient.
     function paintQuick() {

@@ -110,6 +110,13 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .tools { display: flex; flex-wrap: wrap; align-items: center; padding: 0.3rem var(--gut) 0.6rem; }
 .tools > * { margin: 0 0.7rem 0.6rem 0; }
 .tools .count { margin-left: auto; color: var(--mute); font-size: 0.9rem; }
+/* Boutons de filtre « Genre : Tous » : largeur fixe (elle ne dépend pas de la valeur choisie), nom en gras, valeur en poids normal, coupée par « … » si elle est trop longue */
+.tools .btn.flt { width: 11.5rem; justify-content: flex-start; }
+.tools .btn.flt.wide { width: 14.5rem; }
+.tools .btn.flt .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tools .btn.flt .lbl b { font-weight: 750; }
+.tools .btn.flt .val { font-weight: 400; }
+@media (max-width: 640px) { .tools .btn.flt, .tools .btn.flt.wide { width: calc(50% - 0.7rem); } }
 .sentinel { height: 1px; }
 .blank { display: flex; flex-direction: column; align-items: flex-start; padding: 4rem var(--gut); max-width: 46rem; }
 .blank p { color: var(--mute); max-width: 36rem; }
