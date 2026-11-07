@@ -431,7 +431,6 @@
     'Fichiers parasites': 'Junk files',
     'Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.': 'Thumbs.db, desktop.ini, .DS_Store and the AlbumArt_{…}_Large / _Small.jpg files scattered by Windows and macOS; in music, any image other than cover.jpg (or .png…), an album’s only cover, including folder.jpg.',
     'Compter': 'Count',
-    'Simulation lancée': 'Dry run started',
     'Lecture': 'Playback',
     'Interface': 'Interface',
     'Qualité de lecture': 'Playback quality',

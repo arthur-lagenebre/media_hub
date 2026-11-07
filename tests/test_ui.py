@@ -1992,7 +1992,7 @@ class TestSettings(UiCase):
         self.assertEqual(self.page.locator("#nav .tool[data-nav='#/settings']").get_attribute("aria-label"), "Paramètres")
         self.assertEqual(self.tabs(), ["Gestion", "Préférences", "Comptes"])
         self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Gestion")
-        self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Serveur", "Tâches"])
+        self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Tâches", "Serveur"])
 
     def test_the_old_address_still_leads_to_the_page(self):
         self.open("#/admin")
@@ -2002,7 +2002,7 @@ class TestSettings(UiCase):
     def test_each_tab_has_its_own_panels(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        for name, titles in (("Préférences", ["Interface", "Lecture", "Affichage"]), ("Comptes", ["Mon compte"]), ("Gestion", ["Bibliothèques", "Sagas", "Entretien", "Serveur", "Tâches"])):
+        for name, titles in (("Préférences", ["Interface", "Lecture", "Affichage"]), ("Comptes", ["Mon compte"]), ("Gestion", ["Bibliothèques", "Sagas", "Entretien", "Tâches", "Serveur"])):
             self.tab(name)
             self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == name)
             self.assertEqual(self.titles(), titles, name)
