@@ -43,7 +43,7 @@ Sans ffmpeg, le serveur ne sait que lire directement (fichiers compatibles) ; il
 1. Tailscale > Settings > Keys : crée une clé d'authentification (inutile si `tailscale/` contient déjà un état connecté).
 2. Copie `.env.example` en `.env`, à côté de `docker-compose.yml`, et remplis `TS_AUTHKEY`, `HUB_ADMIN` (nom du premier compte, `admin` par défaut), `HUB_PASSWORD` (son mot de passe, **obligatoire** : sans lui `docker compose up` refuse de démarrer, plutôt que de servir une médiathèque ouverte à tout le réseau local ; il ne sert qu'à créer ce premier compte), `TMDB_KEY` (facultative), `APPS`, `MEDIA`.
 3. TrueNAS : Apps > Discover Apps > Custom App > *Install via YAML* : colle `docker-compose.yml` (en remplaçant les `${...}` par leurs valeurs si l'éditeur ne lit pas le `.env`).
-4. Au premier démarrage, le serveur indexe les bibliothèques (quelques minutes pour des milliers de fichiers) ; l'avancement est dans le journal du conteneur et dans l'onglet *Tâches* des *Paramètres* de l'interface.
+4. Au premier démarrage, le serveur indexe les bibliothèques (quelques minutes pour des milliers de fichiers) ; l'avancement est dans le journal du conteneur et dans les *Tâches* de *Paramètres* > *Gestion* (en bas de la page).
 
 Vérification : `http://192.168.0.42:8080` demande le nom et le mot de passe (`HUB_ADMIN` / `HUB_PASSWORD`), puis affiche les bibliothèques.
 
@@ -89,15 +89,15 @@ docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt')
 
 | Besoin | Où |
 | --- | --- |
-| Nouveaux fichiers visibles | *Paramètres* > *Gestion* > Mettre à jour (ou `HUB_AUTOSCAN_HOURS`) |
-| Affiches / synopsis des séries | *Paramètres* > *Gestion* > Enrichir (TMDB) (avec `TMDB_KEY`) |
+| Nouveaux fichiers visibles | *Paramètres* > *Gestion* > Tout mettre à jour, ou *Détail par bibliothèque* > Mettre à jour (ou `HUB_AUTOSCAN_HOURS`) |
+| Affiches / synopsis des séries | *Paramètres* > *Gestion* > *Détail par bibliothèque* > Enrichir (TMDB) (avec `TMDB_KEY`) |
 | Supprimer les `Thumbs.db` | *Paramètres* > *Gestion* > Fichiers parasites > Supprimer ; retirer `:ro` des volumes concernés. Commence par *Compter* : la fenêtre liste les 20 premiers fichiers. **En musique, toute image autre que `cover.{ext}` est effacée, `folder.jpg` compris** : compte-les d'abord (`find /mnt/tank/media/Musique -iname 'folder.*' \| wc -l`) |
 | Étiqueter / renommer / convertir | scripts de `media_library`, depuis VS Code, ou dans le conteneur (volumes sans `:ro`) : `docker exec -it media-hub python /app/media_library/scripts/Video/Movies/Metadata.py --dir /srv/Films` |
 | Les fiches HTML | retirées de `media_library` ; à régénérer ponctuellement avec un prompt dans VS Code si besoin |
 
 ## Après une mise à jour du hub
 
-Lance un scan (*Paramètres* > *Gestion* > Mettre à jour) quand une version ajoute une information lue dans les fichiers : les éléments déjà indexés sont relus une fois, sans migration de base. Tant qu'il n'est pas fait, les fiches se comportent comme avant.
+Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une version ajoute une information lue dans les fichiers : les éléments déjà indexés sont relus une fois, sans migration de base. Tant qu'il n'est pas fait, les fiches se comportent comme avant.
 
 - **Musique** : les artistes de chaque piste (tag `ARTISTS`, pour les invités), le titre des disques (`DISCSUBTITLE`) et le type d'album (`RELEASETYPE`). Ces tags sont écrits par `Metadata.py --apply` de `media_library` : s'il n'est pas passé sur la musique, les intertitres restent « Disque N » et le type d'album n'apparaît pas.
 - **Photos d'artistes** (après le tout premier déploiement) : le dossier de chaque artiste n'est connu qu'après un scan.
