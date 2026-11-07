@@ -11,6 +11,7 @@ import re
 from libraries.video import ebml, naming
 
 from ..db import make_id
+from ..sagas import film_id
 from .common import entry_row, folder_image, item_row, unchanged
 
 SKIPPED_PREFIXES = ("__", "#", "@", ".")
@@ -116,9 +117,16 @@ def clean_name(name):
     return name.strip() or name
 
 
+def _sheet_meta(extra):
+    """Ce qu'une fiche gardée par l'enrichissement (voir scan.enriched_for) ajoute à `meta` : tout, sauf ce qui a sa colonne dans la table items."""
+    return {k: v for k, v in extra.items() if k not in ("summary", "genres", "year", "title")}
+
+
 # ---------------------------------------------------------------------------
 # Films
 # ---------------------------------------------------------------------------
+
+
 def _movie_parts(reader, lib, movie):
     """[(chemin, rel, taille, date, infos, durée)] des fichiers lisibles d'un film."""
     parts = []
@@ -141,14 +149,25 @@ def _movie_meta(lib, movie, info, order, parts):
     }
 
 
-def _movie_item(lib, movie, parts):
+def kept_rating(sheet, tag):
+    """La note TMDB qu'un film reprend de sa fiche gardée : seulement celle du film que disent ses tags (réétiqueté, il attend la prochaine passe). Rien d'autre de la fiche : les tags disent le reste."""
+    rating = sheet.get("tmdb_rating")
+    return rating if isinstance(rating, dict) and rating.get("tmdb") is not None and rating.get("tmdb") == film_id(tag) else None
+
+
+def _movie_item(lib, movie, parts, enriched):
+    """L'élément d'un film, d'après les tags de son premier fichier, et la note TMDB que l'enrichissement en a gardée (voir kept_rating)."""
     info = parts[0][4]
     guessed, guessed_year, order = naming.parse_title_year(naming.extract_tmdb_id(movie.rawname)[1])
     title = info.get("title") or guessed or movie.rawname
     year = (info.get("date") or "")[:4] or guessed_year or ""
     key = parts[0][1] if len(parts) == 1 else movie.folder.relative_to(lib.path).as_posix() + "/" + parts[0][1]
+    meta = _movie_meta(lib, movie, info, order, parts)
+    rating = kept_rating(enriched.get(make_id(lib.id, key), {}), meta["tmdb"])
+    if rating:
+        meta["tmdb_rating"] = rating
     return item_row(lib.id, key, "movie", title, year=year, summary=info.get("synopsis", ""), genres=info.get("genres", []),
-                    grp=info.get("collection", ""), meta=_movie_meta(lib, movie, info, order, parts), added=max(p[3] for p in parts), count=len(parts))
+                    grp=info.get("collection", ""), meta=meta, added=max(p[3] for p in parts), count=len(parts))
 
 
 def _movie_entries(lib, item, parts):
@@ -160,12 +179,13 @@ def _movie_entries(lib, item, parts):
 
 def scan_movies(lib, known, enriched=None):
     reader = Reader(lib.id, known)
+    enriched = enriched or {}
     items, entries = [], []
     for movie in naming.find_movies(lib.path):
         parts = _movie_parts(reader, lib, movie)
         if not parts:
             continue
-        item = _movie_item(lib, movie, parts)
+        item = _movie_item(lib, movie, parts, enriched)
         items.append(item)
         entries += _movie_entries(lib, item, parts)
     return items, entries, _Counts(reader.reused, reader.read)
@@ -241,7 +261,7 @@ def _show_meta(lib, folder, seasons, found, pinned, extra):
     image = folder_image(folder)
     return {"tmdb_pinned": pinned or "", "image": (folder.relative_to(lib.path) / image).as_posix() if image else "", "seasons": sorted({f[0] for f in found}),
             "season_images": _season_images(lib, folder, seasons), "folder": folder.relative_to(lib.path).as_posix(), "tagged": any(f[5].get("has_tags") for f in found),
-            **{k: v for k, v in extra.items() if k not in ("summary", "genres", "year", "title")}}
+            **_sheet_meta(extra)}
 
 
 def _show_item(lib, folder, container, seasons, found, enriched):

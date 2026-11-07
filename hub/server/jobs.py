@@ -85,10 +85,19 @@ class Jobs:
         return self._submit("Mise à jour · tout", run)
 
     def enrich(self, lib, force=False):
-        return self._submit(f"Enrichissement TMDB · {lib.label}", lambda log: enrich.enrich_shows(self.cfg, self.db, lib, log, force))
+        return self._submit(f"Enrichissement TMDB · {lib.label}", self._then_ratings(enrich.enrich_shows, lib, force))
 
     def enrich_sagas(self, lib, force=False):
-        return self._submit(f"Sagas TMDB · {lib.label}", lambda log: enrich.enrich_sagas(self.cfg, self.db, lib, log, force))
+        return self._submit(f"Sagas TMDB · {lib.label}", self._then_ratings(enrich.enrich_sagas, lib, force))
+
+    def _then_ratings(self, first, lib, force):
+        """La tâche qui fait `first` (fiches des séries, sagas des films) puis la passe des notes TMDB de la même bibliothèque : un seul bilan, les échecs des deux additionnés."""
+        def run(log):
+            started = int(time.time())
+            counts = first(self.cfg, self.db, lib, log, force)
+            ratings = enrich.enrich_ratings(self.cfg, self.db, lib, log, force, since=started)          # forcé : ce que `first` vient de noter (les séries) n'est pas redemandé
+            return {**counts, "rated": ratings["rated"], "failed": counts["failed"] + ratings["failed"]}
+        return run
 
     def enrich_artists(self, lib, force=False):
         return self._submit(f"Fiches artistes · {lib.label}", lambda log: enrich.enrich_artists(self.cfg, self.db, lib, log, force))

@@ -173,9 +173,21 @@ class TestScanMovies(TempCase):
         (self.root / "Vide (1990)").mkdir()
         self.lib = config.Library("films", "Films", "movies", self.root)
 
-    def scan(self, known=None):
-        items, entries, counts = video.scan_movies(self.lib, known or {})
+    def scan(self, known=None, enriched=None):
+        items, entries, counts = video.scan_movies(self.lib, known or {}, enriched)
         return {i["title"]: i for i in items}, {e["rel"]: e for e in entries}, counts
+
+    def test_the_rating_kept_by_the_enrichment_comes_back_and_nothing_else(self):
+        rating = {"tmdb": 27205, "vote": 8.4, "votes": 37000, "at": 1}
+        kept = {make_id("films", "Inception (2010)/Inception (2010).mkv"): {"tmdb_rating": rating, "tmdb": "movie/1", "summary": "Autre."}}
+        item = self.scan(enriched=kept)[0]["Inception"]
+        meta = json.loads(item["meta"])
+        self.assertEqual((meta["tmdb_rating"], meta["tmdb"], item["summary"]), (rating, "movie/27205", "Rêves."))          # les tags restent la référence
+        self.assertNotIn("tmdb_rating", json.loads(self.scan()[0]["Inception"]["meta"]))
+
+    def test_the_rating_of_another_film_is_not_taken_back(self):
+        kept = {make_id("films", "Inception (2010)/Inception (2010).mkv"): {"tmdb_rating": {"tmdb": 1, "vote": 2.0, "votes": 900, "at": 1}}}       # réétiqueté depuis
+        self.assertNotIn("tmdb_rating", json.loads(self.scan(enriched=kept)[0]["Inception"]["meta"]))
 
     def test_a_tagged_film_is_described_by_its_tags(self):
         item = self.scan()[0]["Inception"]

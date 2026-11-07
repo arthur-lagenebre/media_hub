@@ -257,6 +257,133 @@ class TestEnrichShow(TempCase):
         self.assertEqual(tmdb.saved, [])
         self.assertNotIn("poster_file", data)
 
+    def test_the_sheet_keeps_the_rating_of_the_show(self):
+        (_, data), _, _, _ = self.run_show({})
+        self.assertEqual({k: data["tmdb_rating"][k] for k in ("tmdb", "vote", "votes")}, {"tmdb": 42, "vote": None, "votes": 0})       # FakeShow : personne n'a voté
+        self.assertEqual(self.db.kv_get(enrich.show_key(types.SimpleNamespace(id="series"), {"id": "s1"}))["tmdb_rating"], data["tmdb_rating"])
+
+
+class TestRatingOf(unittest.TestCase):
+    def test_the_average_is_rounded_and_the_votes_are_kept(self):
+        self.assertEqual(enrich.rating_of({"vote_average": 7.8467, "vote_count": 1234}, "27205", now=100), {"tmdb": 27205, "vote": 7.8, "votes": 1234, "at": 100})
+
+    def test_without_votes_there_is_no_average(self):
+        for sheet in ({}, {"vote_average": 0, "vote_count": 0}, {"vote_average": 6.0, "vote_count": 0}, {"vote_average": None, "vote_count": None}):
+            with self.subTest(sheet=sheet):
+                self.assertEqual(enrich.rating_of(sheet, 1, now=5), {"tmdb": 1, "vote": None, "votes": 0, "at": 5})
+
+
+class TestRatingIsFresh(unittest.TestCase):
+    now = 10 * enrich.RATING_STALE
+
+    def rating(self, age=0, tmdb=27205):
+        return {"tmdb": tmdb, "vote": 7.8, "votes": 100, "at": self.now - age}
+
+    def test_a_recent_rating_of_the_same_film_is_fresh(self):
+        self.assertTrue(enrich.rating_is_fresh(self.rating(age=enrich.RATING_STALE - 1), 27205, self.now))
+
+    def test_an_old_rating_a_rating_of_another_film_or_a_forced_pass_ask_again(self):
+        self.assertFalse(enrich.rating_is_fresh(self.rating(age=enrich.RATING_STALE), 27205, self.now))
+        self.assertFalse(enrich.rating_is_fresh(self.rating(tmdb=1), 27205, self.now))              # le film a été réétiqueté
+        self.assertFalse(enrich.rating_is_fresh(self.rating(), 27205, self.now, force=True))
+
+    def test_no_rating_or_one_of_an_older_shape_is_not_fresh(self):
+        for rating in (None, 7.8, {}, {"vote": 7.8}):
+            with self.subTest(rating=rating):
+                self.assertFalse(enrich.rating_is_fresh(rating, 27205, self.now))
+
+
+class FakeRatings:
+    """Un TMDB qui note ce qu'on lui demande et répond d'après `sheets` ({adresse: fiche, ou exception})."""
+
+    def __init__(self, sheets):
+        self.sheets, self.calls = sheets, []
+
+    def get(self, endpoint):
+        self.calls.append(endpoint)
+        found = self.sheets.get(endpoint, enrich.TmdbError("introuvable sur TMDB (HTTP 404)"))
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+
+class TestEnrichRatings(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.cfg = types.SimpleNamespace(tmdb_key="cle", data=self.tmp)
+        self.films = types.SimpleNamespace(id="films", kind="movies")
+        fresh = {"tmdb": 3, "vote": 6.0, "votes": 50, "at": 2 ** 40}          # dans le futur : toujours frais
+        self.db.replace_library("films", [
+            item("a", "films", "movie", title="A", meta={"tmdb": "movie/1"}),
+            item("b", "films", "movie", title="B", meta={"tmdb": ""}),                                   # pas d'identifiant : rien à demander
+            item("c", "films", "movie", title="C", meta={"tmdb": "movie/2", "tmdb_rating": {**fresh, "tmdb": 2, "at": 0}}),     # vieille note
+            item("d", "films", "movie", title="D", meta={"tmdb": "movie/3", "tmdb_rating": fresh}),
+            item("e", "films", "movie", title="E", meta={"tmdb": "movie/4"}),
+        ], [])
+
+    def run_pass(self, tmdb, lib=None, **options):
+        log = []
+        with mock.patch.object(enrich, "tmdb_client", return_value=(tmdb, self.tmp)) as client:
+            counts = enrich.enrich_ratings(self.cfg, self.db, lib or self.films, log.append, **options)
+        return counts, log, client
+
+    def meta(self, ident):
+        return json.loads(self.db.one("SELECT meta FROM items WHERE id=?", (ident,))["meta"])
+
+    def test_the_films_without_a_fresh_rating_are_asked_and_their_rating_kept(self):
+        tmdb = FakeRatings({"movie/1": {"vote_average": 8.36, "vote_count": 900}, "movie/2": {"vote_average": 5.0, "vote_count": 30}})
+        counts, log, _ = self.run_pass(tmdb)
+        self.assertEqual(tmdb.calls, ["movie/1", "movie/2", "movie/4"])
+        self.assertEqual(counts, {"rated": 2, "failed": 1})
+        self.assertEqual(log, ["  E : pas de note (introuvable sur TMDB (HTTP 404))", "  Notes TMDB : 2 demandée(s), 1 en échec"])
+        rating = self.meta("a")["tmdb_rating"]
+        self.assertEqual({k: rating[k] for k in ("tmdb", "vote", "votes")}, {"tmdb": 1, "vote": 8.4, "votes": 900})
+        self.assertEqual(self.db.kv_get(enrich.show_key(self.films, {"id": "a"})), {"tmdb_rating": rating})        # gardée pour le scan
+        self.assertEqual(self.meta("a")["tmdb"], "movie/1")                                                       # le reste de l'élément ne bouge pas
+        self.assertNotIn("tmdb_rating", self.meta("e"))
+
+    def test_force_asks_every_film_with_an_identifier(self):
+        tmdb = FakeRatings({})
+        self.run_pass(tmdb, force=True)
+        self.assertEqual(tmdb.calls, ["movie/1", "movie/2", "movie/3", "movie/4"])
+
+    def test_a_forced_pass_does_not_ask_again_what_this_task_just_rated(self):
+        started = 2 ** 41                                           # après la note de « d » (2 ** 40) : « d » est redemandée, pas « a »
+        self.db.update_item_meta("a", meta={"tmdb_rating": {"tmdb": 1, "vote": 7.0, "votes": 40, "at": started}})
+        tmdb = FakeRatings({})
+        self.run_pass(tmdb, force=True, since=started)              # « a » : notée par la même tâche (fiche de la série)
+        self.assertEqual(tmdb.calls, ["movie/2", "movie/3", "movie/4"])
+
+    def test_a_sheet_chosen_while_the_pass_asks_tmdb_keeps_its_own_rating(self):
+        db = self.db
+
+        class ChosenMeanwhile(FakeRatings):
+            def get(self, endpoint):
+                if endpoint == "movie/1":
+                    db.update_item_meta("a", meta={"tmdb": "movie/9"})          # « Changer la fiche TMDB » pendant la requête
+                return super().get(endpoint)
+        counts, log, _ = self.run_pass(ChosenMeanwhile({"movie/1": {"vote_average": 8.0, "vote_count": 900}}))
+        self.assertNotIn("tmdb_rating", self.meta("a"))
+        self.assertIsNone(self.db.kv_get(enrich.show_key(self.films, {"id": "a"})))
+        self.assertEqual(counts["rated"], 0)
+        self.assertIn("  A : fiche TMDB changée pendant la passe, note laissée", log)
+
+    def test_tmdb_is_asked_and_not_its_cache(self):
+        self.assertEqual(self.run_pass(FakeRatings({}))[2].call_args.kwargs, {"read": False})
+
+    def test_a_show_is_asked_by_its_tv_address_and_its_sheet_keeps_the_rest(self):
+        shows = types.SimpleNamespace(id="series", kind="shows")
+        self.db.replace_library("series", [item("s1", "series", "show", title="Dark", meta={"tmdb": 70523})], [])
+        self.db.kv_set(enrich.show_key(shows, {"id": "s1"}), {"summary": "Un voyage", "tmdb": 70523})
+        tmdb = FakeRatings({"tv/70523": {"vote_average": 8.4, "vote_count": 6000}})
+        self.assertEqual(self.run_pass(tmdb, shows)[0], {"rated": 1, "failed": 0})
+        sheet = self.db.kv_get(enrich.show_key(shows, {"id": "s1"}))
+        self.assertEqual((sheet["summary"], sheet["tmdb_rating"]["vote"]), ("Un voyage", 8.4))
+
+    def test_an_authentication_error_stops_the_pass(self):
+        with self.assertRaisesRegex(RuntimeError, "TMDB : clé refusée"):
+            self.run_pass(FakeRatings({"movie/1": enrich.TmdbAuthError("clé refusée")}))
+
 
 class TestChosenSheet(TempCase):
     """La fiche TMDB choisie à la main, et les doutes de la recherche."""

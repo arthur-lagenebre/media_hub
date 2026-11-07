@@ -175,6 +175,16 @@ class Hub:
 # ---------------------------------------------------------------------------
 # Sérialisation
 # ---------------------------------------------------------------------------
+MIN_VOTES = 25          # en dessous, une moyenne TMDB tient à quelques avis : elle ne se montre pas
+
+
+def shown_rating(rating):
+    """La note TMDB gardée (voir enrich.rating_of) si elle mérite d'être montrée : une moyenne, sur au moins MIN_VOTES votes ; None sinon."""
+    if isinstance(rating, dict) and rating.get("vote") and (rating.get("votes") or 0) >= MIN_VOTES:
+        return rating
+    return None
+
+
 def summary(row, seen=None):
     meta = safe_json(row["meta"], {})
     out = {"id": row["id"], "type": row["type"], "title": row["title"], "year": row["year"], "grp": row["grp"], "n": row["count"], "letter": row["letter"],
@@ -185,6 +195,9 @@ def summary(row, seen=None):
         out["artist_id"] = meta["artist_id"]
     if row["type"] == "series" and meta.get("missing"):
         out["missing"] = sum(len(m["numbers"]) for m in meta["missing"])
+    rating = shown_rating(meta.get("tmdb_rating"))
+    if rating:
+        out["tmdb_rating"], out["tmdb_votes"] = rating["vote"], rating["votes"]
     if seen is not None:
         out["seen"] = seen
     return out
