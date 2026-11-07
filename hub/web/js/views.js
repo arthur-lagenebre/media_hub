@@ -1013,7 +1013,9 @@
       var facts = [['Version', state.version], ['ffmpeg', state.ffmpeg ? H.t('présent') : H.t('absent : lecture directe uniquement')], ['TMDB', state.tmdb ? H.t('clé configurée') : H.t('pas de clé (TMDB_KEY)')],
         [H.t('Conversions'), H.t('{n} en cours sur {max}', { n: state.streams, max: state.max_streams })], [H.t('Accès'), state.auth ? H.t('protégé par mot de passe') : H.t('sans mot de passe')]];
       server.appendChild(h('dl', null, facts.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })));
-      server.appendChild(h('p', { class: 'credit-tmdb' }, H.t('Ce produit utilise l’API TMDB mais n’est ni approuvé ni certifié par TMDB.')));         // demandé par les conditions de l'API TMDB
+      // La mention et le logo de TMDB (tmdb.svg, le logo court officiel), que demandent les conditions de son API.
+      server.appendChild(h('p', { class: 'credit-tmdb' }, h('img', { src: '/tmdb.svg', alt: 'TMDB', width: '92', height: '12' }),
+        h('span', null, H.t('Ce produit utilise l’API TMDB mais n’est ni approuvé ni certifié par TMDB.'))));
       body.appendChild(server);
     }
     // Supprimer les fichiers parasites ne s'annule pas : on demande, en rappelant ce que la dernière simulation en a compté.
