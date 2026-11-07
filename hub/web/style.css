@@ -394,6 +394,8 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .rights .rrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.4rem; padding: 0.3rem 0; border-top: 1px solid var(--line); }
 .rights .rrow b { flex: 0 0 6.2rem; }
 .rights .rrow .chip { margin: 0; padding: 0.35rem 0.85rem; }
+.rights .rrow .chip .mark { visibility: hidden; margin-right: 0.35em; }
+.rights .rrow .chip.on .mark { visibility: visible; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }

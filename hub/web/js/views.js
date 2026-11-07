@@ -1062,7 +1062,7 @@
           if (which === 'view') { d.view = !d.view; if (!d.view) { d.play = false; d.download = false; } }
           else if (d.view) d[which] = !d[which];
           paint();
-        } }, h('span', { class: 'lbl' }));
+        } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }));        // la coche a toujours sa place (visible ou non) : le bouton garde la même largeur
         return button;
       }
       var buttons = {};
@@ -1074,12 +1074,12 @@
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
           b.view.classList.toggle('on', d.view); b.view.setAttribute('aria-pressed', d.view ? 'true' : 'false');
-          b.view.querySelector('.lbl').textContent = (d.view ? '✓ ' : '') + H.t('Consulter');
+          b.view.querySelector('.lbl').textContent = H.t('Consulter');
           b.play.classList.toggle('on', d.play); b.play.setAttribute('aria-pressed', d.play ? 'true' : 'false');
-          b.play.querySelector('.lbl').textContent = (d.play ? '✓ ' : '') + H.t('Lecture');
+          b.play.querySelector('.lbl').textContent = H.t('Lecture');
           b.play.disabled = !d.view;
           b.download.classList.toggle('on', d.download); b.download.setAttribute('aria-pressed', d.download ? 'true' : 'false');
-          b.download.querySelector('.lbl').textContent = (d.download ? '✓ ' : '') + H.t('Télécharger');
+          b.download.querySelector('.lbl').textContent = H.t('Télécharger');
           b.download.disabled = !d.view;
         });
       }
