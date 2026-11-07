@@ -51,6 +51,7 @@
     'Position': 'Position',
     'Volume': 'Volume',
     'Genre': 'Genre',
+    '{name} :': '{name}:',
     'Livres': 'Books',
     'Albums': 'Albums',
     'Artistes': 'Artists',

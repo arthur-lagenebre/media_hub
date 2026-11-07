@@ -218,14 +218,17 @@ class TestLibraryRoute(RouteCase):
         out = self.get("/api/library/lib").json()
         self.assertEqual(out["letters"], [["A", 4], ["B", 2], ["#", 1]])                      # par lettre, pas par effectif
 
-    def test_the_genres_go_by_count_then_name_and_no_more_than_sixty(self):
+    def test_the_sixty_most_frequent_genres_are_listed_alphabetically_without_accents_or_case(self):
         self.fill(self.films(), [])
         out = self.get("/api/library/lib").json()
-        self.assertEqual(out["genres"][:3], [["Commun", 2], ["G1", 1], ["G2", 1]])
+        self.assertEqual(out["genres"], [["Commun", 2], ["G1", 1], ["G2", 1], ["G3", 1], ["G4", 1], ["G5", 1], ["G6", 1], ["G7", 1]])
         rows = [item(f"g{n}", title=f"Film {n}", genres=json.dumps([f"Genre {n:03d}"])) for n in range(64, -1, -1)]
+        rows += [item(f"z{n}", title=f"Zèbre {n}", genres=json.dumps(["Zèbre", "électro"] if n < 2 else ["Zèbre"])) for n in range(3)]
         self.fill(rows, [])
-        out = self.get("/api/library/lib").json()
-        self.assertEqual((len(out["genres"]), out["genres"][0], out["genres"][-1]), (60, ["Genre 000", 1], ["Genre 059", 1]))
+        genres = self.get("/api/library/lib").json()["genres"]
+        self.assertEqual(len(genres), 60)
+        self.assertEqual((genres[0], genres[1], genres[-1]), (["électro", 2], ["Genre 000", 1], ["Zèbre", 3]))          # « électro » vient avant « Genre » : l'accent et la casse ne comptent pas
+        self.assertEqual([g[0] for g in genres[1:-1]], [f"Genre {n:03d}" for n in range(58)])                             # la coupure garde les plus fréquents, puis les premiers par nom : Genre 058 à 064 sont écartés
 
     def test_a_page_of_the_list(self):
         self.fill(self.films(), [])
@@ -317,6 +320,41 @@ class ArtistCase(RouteCase):
 
     def sheet(self, target="/api/artist/lib/ar1"):
         return self.get(target)
+
+
+class TestMusicCounts(ArtistCase):
+    """Le compteur de la musique : les artistes et les albums de tout ce que les filtres laissent, quel que soit le mode."""
+
+    def counts(self, query=""):
+        out = self.get("/api/library/lib?" + query).json()
+        return out["artists"], out["albums"], out["total"]
+
+    def test_in_album_mode_the_albums_are_the_total_and_the_artists_are_those_of_the_albums(self):
+        self.assertEqual(self.counts(), (2, 4, 4))
+        self.assertEqual(self.counts("genre=B"), (1, 2, 2))                     # al1 et al2, tous deux de Daft Punk
+        self.assertEqual(self.counts("q=autre"), (1, 1, 1))
+        self.assertEqual(self.counts("genre=nulle-part"), (0, 0, 0))
+
+    def test_in_artist_mode_the_artists_are_the_total_and_the_albums_are_the_sum_of_theirs(self):
+        self.assertEqual(self.counts("view=artists"), (2, 4, 2))
+        self.assertEqual(self.counts("view=artists&genre=B"), (1, 3, 1))        # le genre garde l'artiste, avec tous ses albums : c'est la somme de ses cartes
+        self.assertEqual(self.counts("view=artists&q=autre"), (1, 1, 1))
+
+    def test_the_counts_cover_the_whole_list_not_the_page(self):
+        self.assertEqual(self.counts("limit=1"), (2, 4, 4))
+        self.assertEqual(self.counts("view=artists&limit=1"), (2, 4, 2))
+
+    def test_albums_without_an_artist_id_are_grouped_by_their_name(self):
+        self.db.execute("UPDATE items SET meta='{}', grp='daft punk' WHERE id IN ('al1', 'al2')")
+        self.assertEqual(self.counts(), (3, 4, 4))                              # al3 garde son identifiant : « Daft Punk » en fait deux, comme dans la liste des artistes
+        self.assertEqual(self.counts("view=artists"), (3, 4, 3))
+
+
+class TestNoMusicCountsElsewhere(RouteCase):
+    def test_other_libraries_do_not_carry_them(self):
+        self.fill([item("m1")], [])
+        out = self.get("/api/library/lib").json()
+        self.assertTrue("artists" not in out and "albums" not in out)
 
 
 class TestArtistRoutes(ArtistCase):

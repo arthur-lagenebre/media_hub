@@ -1243,10 +1243,31 @@ def library_item(row, seen):
     return saga_json(row, seen) if row["type"] == "saga" else with_seen(row, seen)
 
 
-def library_extras(out, kind, sections, absent, sagas, chosen):
-    """Les champs que la réponse n'a que dans certains cas : les sections des livres, les films qui manquent à une saga, le décompte des sagas d'une grille de sagas (un film de deux sagas ne compte qu'une fois)."""
+def artist_key(row):
+    """Ce qui regroupe les albums d'un même artiste (voir artist_rows)."""
+    return safe_json(row["meta"], {}).get("artist_id") or fold(row["grp"])
+
+
+def music_counts(chosen, artists):
+    """(artistes, albums) de ce que la musique montre : en mode artistes, une carte par artiste portant son nombre d'albums ; en mode albums, une carte par album, et les artistes sont ceux de ces albums."""
+    if artists:
+        return len(chosen), sum(row["count"] for row in chosen)
+    return len({artist_key(row) for row in chosen}), len(chosen)
+
+
+def genre_menu(genres):
+    """Les 60 genres les plus fréquents (à égalité, par nom), rangés par ordre alphabétique sans accent ni casse : c'est l'ordre du menu de l'interface."""
+    top = sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:60]
+    return sorted(top, key=lambda kv: (fold(kv[0]), kv[0]))
+
+
+def library_extras(out, kind, sections, absent, sagas, chosen, artists=False):
+    """Les champs que la réponse n'a que dans certains cas : les sections des livres, les films qui manquent à une saga, le décompte des sagas d'une grille de sagas (un film de deux sagas ne compte qu'une fois),
+    le nombre d'artistes et d'albums de la musique (de tout ce que filtrent les critères, pas seulement de la page)."""
     if kind == "books":
         out["sections"] = sections_json(sections)
+    if kind == "music":
+        out["artists"], out["albums"] = music_counts(chosen, artists)
     if absent:
         out["missing"] = absent
     if sagas:
@@ -1282,10 +1303,10 @@ def api_library(h, m, q):
     page = chosen[offset:offset + limit]
     out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "total": len(chosen), "offset": offset,
            "items": [library_item(r, seen) for r in page],
-           "letters": sorted(letters.items(), key=lambda kv: (kv[0] == "#", kv[0])), "genres": sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:60]}
+           "letters": sorted(letters.items(), key=lambda kv: (kv[0] == "#", kv[0])), "genres": genre_menu(genres)}
     if group and sort == "part":
         number_films(out["items"], ranks, offset + 1)
-    library_extras(out, lib.kind, sections, absent, sagas, chosen)
+    library_extras(out, lib.kind, sections, absent, sagas, chosen, artists)
     h.send_json(out)
 
 

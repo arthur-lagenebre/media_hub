@@ -1751,6 +1751,70 @@ class TestHeroImage(UiCase):
             self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
 
 
+class TestLibraryToolbar(UiCase):
+    """La barre d'une bibliothèque : « Genre : Tous » (le nom en gras, la valeur en poids normal, une largeur qui ne bouge pas) et le compteur de la musique."""
+
+    def filters(self):
+        return self.view(".tools .btn.flt")
+
+    def widths(self):
+        return self.filters().evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
+
+    def test_the_name_of_each_filter_comes_first_in_bold_then_its_value_in_normal_weight(self):
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+        self.assertEqual(self.filters().all_inner_texts(), ["Lettre : Toutes", "Genre : Tous", "Tri : Titre"])
+        weights = self.filters().evaluate_all("els => els.map(e => [+getComputedStyle(e.querySelector('b')).fontWeight, +getComputedStyle(e.querySelector('.val')).fontWeight])")
+        self.assertTrue(all(name >= 600 and value <= 500 for name, value in weights), weights)
+        self.assertEqual(self.filters().evaluate_all("els => els.map(e => e.querySelector('b').textContent)"), ["Lettre :", "Genre :", "Tri :"])
+
+    def test_the_buttons_keep_their_width_whatever_their_value(self):
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+        before = self.widths()
+        self.filters().nth(1).click()
+        self.page.locator(".veil .opt", has_text="Science-Fiction").click()
+        self.page.wait_for_timeout(600)
+        self.assertEqual(self.filters().nth(1).inner_text(), "Genre : Science-Fiction")
+        self.filters().nth(0).click()
+        self.page.locator(".veil .opt").nth(1).click()
+        self.page.wait_for_timeout(600)
+        self.assertNotEqual(self.filters().nth(0).inner_text(), "Lettre : Toutes")
+        self.assertEqual(self.widths(), before)
+
+    def test_a_value_too_long_for_its_button_is_cut_and_the_button_does_not_grow(self):
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+        before = self.widths()
+        self.filters().nth(1).evaluate("el => { el.querySelector('.val').textContent = 'Un genre au nom vraiment très très long pour ce bouton'; }")
+        self.assertEqual(self.widths(), before)
+        self.assertTrue(self.filters().nth(1).evaluate("el => { var l = el.querySelector('.lbl'); return l.scrollWidth > l.clientWidth && getComputedStyle(l).textOverflow === 'ellipsis'; }"))
+
+    def test_the_buttons_stay_readable_on_a_tv_and_on_a_phone(self):
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+        self.page.evaluate("document.documentElement.setAttribute('data-device', 'tv')")
+        self.assertTrue(self.filters().evaluate_all("els => els.every(e => { var l = e.querySelector('.lbl'); return l.scrollWidth <= l.clientWidth && parseFloat(getComputedStyle(e).fontSize) >= 18; })"))
+        self.page.evaluate("document.documentElement.setAttribute('data-device', 'phone')")
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        self.assertEqual(self.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), True)
+        self.assertTrue(self.filters().evaluate_all("els => els.every(e => { var l = e.querySelector('.lbl'); return l.scrollWidth <= l.clientWidth; })"))
+
+    def test_the_music_counter_gives_the_artists_and_the_albums_in_both_views(self):
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+        for view in ("albums", "artists"):
+            self.api("/api/me/settings", {"music_view": view})
+            self.open("#/l/musique")
+            self.view(".grid .card").first.wait_for()
+            self.assertEqual(self.view(".count").inner_text(), "1 artiste · 1 album", view)
+
+    def test_the_counters_of_the_other_libraries_do_not_change(self):
+        self.open("#/l/series")
+        self.view(".grid .card").first.wait_for()
+        total = self.api("/api/library/series")["total"]
+        self.assertEqual(self.view(".count").inner_text(), f"{total} série" + ("s" if total > 1 else ""))
+
+
 class TestArtistsView(UiCase):
     """La bibliothèque de musique par artiste : un artiste par carte, sans ses albums, quand le compte l'a choisi dans ses paramètres."""
 
@@ -1777,7 +1841,8 @@ class TestArtistsView(UiCase):
         total = self.api("/api/library/musique?view=artists")["total"]
         self.assertEqual(self.artists().count(), total)
         self.assertIn("album", self.artists().first.inner_text())
-        self.assertEqual(self.view(".count").inner_text(), f"{total} artiste" + ("s" if total > 1 else ""))      # le décompte parle d'artistes, pas d'albums
+        out = self.api("/api/library/musique?view=artists")
+        self.assertEqual(self.view(".count").inner_text(), f"{out['artists']} artiste" + ("s" if out["artists"] > 1 else "") + " · " + f"{out['albums']} album" + ("s" if out["albums"] > 1 else ""))      # les artistes et leurs albums
 
     def test_a_card_opens_the_page_of_its_artist(self):
         self.choose("artists")
