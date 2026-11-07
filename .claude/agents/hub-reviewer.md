@@ -31,6 +31,7 @@ Tu relis les changements de **media_hub**, un serveur de médiathèque (films, s
 - pas de dépendance externe ni d'étape de build : scripts chargés dans l'ordre de `index.html` ;
 - tout texte affiché est en **français** ; les données venant des fichiers passent par l'échappement/`textContent`, jamais `innerHTML` brut ;
 - tout élément interactif doit être atteignable **à la télécommande** (flèches, Entrée, Retour) et au tactile ; vérifier le focus visible et le comportement des appareils (`data-device` : pc, phone, tablet, tv) ;
+- tout pop-up passe par une des quatre déclinaisons de `docs/popups.md` (`H.menu`, `H.confirm`, `H.form`, `H.prompt`, `H.box`) : signaler un `role="dialog"` construit à la main, une confirmation faite avec un menu, ou des styles qui redéfinissent le gabarit `.menu` ;
 - le lecteur audio continue pendant la navigation : ne pas casser `audio.js`.
 
 **Base de données** (`hub/db.py`) : requêtes paramétrées uniquement (jamais de f-string dans du SQL) ; toute évolution de schéma doit migrer une base existante sans perte (progression, playlists).

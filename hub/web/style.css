@@ -212,10 +212,16 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .tab.busy::after { content: ""; display: inline-block; width: 0.5rem; height: 0.5rem; margin-left: 0.5rem; border-radius: 50%; background: var(--accent); }
 .tab.on.busy::after { background: var(--on-accent); }
 
-/* Fenêtres de choix */
+/* Fenêtres (pop-up) : un seul gabarit .menu, quatre déclinaisons (docs/popups.md) :
+   choice (liste de choix) · confirm (question + action + Annuler) · form (champs) · wide (contenu libre, pied de boutons).
+   Les modificateurs (prompt, queue, picker, crop, rightsbox, stacked) ne règlent que ce qui est propre à une fenêtre. */
 .veil { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(5, 7, 9, 0.78); }
 .menu { background: var(--s1); border-radius: 1rem; padding: 1.1rem; width: min(30rem, 92vw); max-height: 84vh; display: flex; flex-direction: column; box-shadow: 0 1.4rem 3rem rgba(0, 0, 0, 0.6); }
 .menu h3 { font-size: 1.15rem; padding: 0.2rem 0.6rem 0.8rem; }
+.menu .lead { padding: 0 0.6rem 0.7rem; color: var(--text); font-size: 0.95rem; }
+.menu > .btn { align-self: stretch; margin: 0.1rem 0.6rem 0.2rem; }      /* un bouton posé dans le corps de la fenêtre (« Compter », un rôle à changer) */
+.menu .formerr { margin: 0.1rem 0.6rem 0.2rem; color: #ffa595; font-weight: 600; }
+.menu .formerr:empty { display: none; }
 .menu-list { overflow-y: auto; }
 .opt { display: flex; align-items: center; width: 100%; background: transparent; border: 0; color: var(--text); text-align: left; padding: 0.7rem 0.6rem; border-radius: 0.6rem; cursor: pointer; }
 .opt .mark { width: 1.7rem; color: var(--accent); }
@@ -223,6 +229,36 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .opt .det { color: var(--mute); font-size: 0.85rem; margin-left: 1rem; }
 .opt.on { font-weight: 700; }
 .opt:disabled { opacity: 0.45; }
+/* Le pied de boutons, le même partout : une rangée de boutons égaux, l'action d'abord ; en colonne seulement pour plusieurs champs (la télécommande descend de champ en champ puis de bouton en bouton, sans sauter) */
+.menu .btns { margin-top: 0.8rem; padding: 0 0.6rem; flex-wrap: wrap; }
+.menu .btns .btn { flex: 1 1 auto; justify-content: center; margin: 0 0.4rem 0.4rem 0; background: var(--s2); }
+.menu .btns .btn:last-child { margin-right: 0; }
+.menu .btns .btn.primary { background: var(--accent); }
+.menu .btns .btn.danger { background: #b3402f; color: #fff; }
+.menu.stacked .btns { flex-direction: column; align-items: stretch; }
+.menu.stacked .btns .btn { margin: 0 0 0.4rem; }
+/* form : des champs */
+.menu.form { width: min(34rem, 92vw); overflow-y: auto; }
+.menu.form .flab { display: block; padding: 0 0.6rem; margin-bottom: 0.4rem; color: var(--mute); font-size: 0.9rem; }
+.menu.form .flab .field { display: block; margin: 0.2rem 0 0; }
+.menu.form .field.big { font-size: 1.05rem; padding: 0.5rem 0.9rem; }
+.menu.form h3 { padding-bottom: 0.4rem; }
+.menu.form .formerr { min-height: 1.2em; }                      /* la place de l'erreur est réservée : les boutons ne sautent pas quand elle paraît */
+.menu.form .formerr:empty { display: block; }
+.menu.prompt .field { width: 100%; margin: 0.2rem 0 0.4rem; }
+.menu.form .rights { padding: 0 0.6rem 0.4rem; }
+.menu.rightsbox .lead { margin: 0; padding-bottom: 0.4rem; }
+/* wide : contenu libre */
+.menu.wide { width: min(46rem, 94vw); }
+.menu.picker { overflow-y: auto; }
+.menu.picker .field { width: 100%; margin: 0.2rem 0 0.6rem; }
+.menu.picker .picklist { min-height: 6rem; }
+.menu.picker .picklist .muted { padding: 0.4rem 0.6rem; }
+.menu.crop { width: auto; max-width: 96vw; align-items: center; overflow-y: auto; }
+.menu.crop .lead { align-self: stretch; max-width: 34rem; }
+.menu.crop .zoom { display: flex; align-items: center; gap: 0.8rem; margin: 0.8rem 0 0.2rem; align-self: stretch; padding: 0 0.6rem; color: var(--mute); }
+.menu.crop .zoom input { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.menu.crop .btns { align-self: stretch; }
 
 /* Barre de musique */
 #abar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 12; display: flex; align-items: center; padding: 0.55rem var(--gut); background: #12171c; border-top: 1px solid var(--line); }
@@ -340,7 +376,6 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .epwrap .ep { padding-right: 4rem; }
 .btn.epmore { position: absolute; right: 0.9rem; top: 50%; transform: translateY(-50%); background: transparent; padding: 0.5rem; }
 #abar .qn { margin-left: 0.3rem; font-size: 0.75rem; color: var(--mute); font-variant-numeric: tabular-nums; }
-.menu.queue { width: min(46rem, 94vw); }
 .qlist { min-height: 4rem; }
 .qrow { display: flex; align-items: center; border-radius: 0.6rem; }
 .qrow.now { background: var(--s2); }
@@ -352,41 +387,13 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .qt .ti small { color: var(--mute); font-size: 0.8rem; }
 .qt .du { color: var(--mute); margin-left: 1rem; font-variant-numeric: tabular-nums; }
 .btn.qb { background: transparent; padding: 0.45rem; }
-.menu .btns { margin-top: 0.8rem; flex-wrap: wrap; }
-.menu .btns .btn { background: var(--s2); }
-.menu .btns .btn.primary { background: var(--accent); }
-.menu.prompt { width: min(34rem, 92vw); }
-.menu.prompt .field { width: 100%; margin: 0.2rem 0 0.4rem; }
-.menu.crop { width: auto; max-width: 96vw; align-items: center; overflow-y: auto; }
-.menu.crop .lead { align-self: stretch; padding: 0 0.6rem 0.7rem; color: var(--text); font-size: 0.95rem; max-width: 34rem; }
 .crop-stage { position: relative; flex-shrink: 0; overflow: hidden; background: #000; border-radius: 0.5rem; cursor: grab; touch-action: none; user-select: none; }
 .crop-stage:active { cursor: grabbing; }
 .crop-stage img { position: absolute; max-width: none; pointer-events: none; }
 .crop-frame { position: absolute; box-sizing: border-box; border: 2px solid var(--accent); box-shadow: 0 0 0 999px rgba(5, 7, 9, 0.66); pointer-events: none; }
-.menu.crop .zoom { display: flex; align-items: center; gap: 0.8rem; margin: 0.8rem 0 0.2rem; align-self: stretch; padding: 0 0.6rem; color: var(--mute); }
-.menu.crop .zoom input { flex: 1; accent-color: var(--accent); cursor: pointer; }
-.menu.crop .formerr:empty { display: none; }
-.menu.crop .formerr { margin: 0.2rem 0.6rem; color: #ffa595; font-weight: 600; }
-.menu.crop .btns { align-self: stretch; }
-.menu.form { overflow-y: auto; }
-.menu.form .lead { padding: 0 0.6rem 0.7rem; color: var(--text); }
-.menu.form .flab { display: block; padding: 0 0.6rem; margin-bottom: 0.4rem; color: var(--mute); font-size: 0.9rem; }
-.menu.form .flab .field { display: block; margin: 0.2rem 0 0; }
-.menu.form .field.big { font-size: 1.05rem; padding: 0.5rem 0.9rem; }
-.menu.form h3 { padding-bottom: 0.4rem; }
-.menu.form .lead { font-size: 0.95rem; }
-.menu.form > .btn { align-self: stretch; margin: 0.1rem 0.6rem 0.2rem; }
-.menu.form .formerr { min-height: 1.2em; margin: 0.1rem 0.6rem 0.2rem; color: #ffa595; font-weight: 600; }
-.menu.form .btns { padding: 0 0.6rem; flex-direction: column; align-items: stretch; }   /* en colonne : à la télécommande, Bas va de champ en champ puis de bouton en bouton, sans sauter */
-.menu.form .btns .btn { margin: 0 0 0.4rem; }
-.menu.form .rights { padding: 0 0.6rem 0.4rem; }
 .rights .rrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.4rem; padding: 0.3rem 0; border-top: 1px solid var(--line); }
 .rights .rrow b { flex: 0 0 6.2rem; }
 .rights .rrow .chip { margin: 0; padding: 0.35rem 0.85rem; }
-.menu.rightsbox .lead { margin: 0; padding-bottom: 0.4rem; }
-.menu.rightsbox .btns { flex-direction: row; }              /* pas de défilement : Enregistrer et Annuler côte à côte */
-.menu.rightsbox .btns .btn { flex: 1; margin: 0 0.4rem 0.4rem 0; justify-content: center; }
-.menu.rightsbox .formerr:empty { display: none; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
@@ -400,9 +407,6 @@ body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
 .mcell { display: flex; flex-direction: column; align-items: flex-start; }
 .mcell .card { width: 100%; }
 .btn.mhide { margin-top: 0.35rem; padding: 0.35rem 0.7rem; font-size: 0.8rem; font-weight: 600; }
-.menu.picker .field { width: 100%; margin: 0.2rem 0 0.6rem; }
-.menu.picker .picklist { min-height: 6rem; }
-.menu.picker .picklist .muted { padding: 0.4rem 0.6rem; }
 .panel code { background: var(--s2); border-radius: 0.3rem; padding: 0.05rem 0.35rem; font-size: 0.92em; color: var(--text); }
 .panel > p.muted { line-height: 1.5; }
 @media (max-width: 40rem) { .line .btn { margin: 0.5rem 0.6rem 0 0; } }

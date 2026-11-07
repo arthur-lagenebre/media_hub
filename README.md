@@ -158,12 +158,12 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 
 ## Développer avec Claude Code
 
-Six agents spécialisés (architecture, serveur, interface, tests, relecture, déploiement) sont dans `.claude/agents/` : voir [docs/agents.md](docs/agents.md). Ce qu'il reste à faire : [docs/TODO.md](docs/TODO.md) ; ce qui a été décidé, dont les refus : [docs/decisions.md](docs/decisions.md).
+Six agents spécialisés (architecture, serveur, interface, tests, relecture, déploiement) sont dans `.claude/agents/` : voir [docs/agents.md](docs/agents.md). Ce qu'il reste à faire : [docs/TODO.md](docs/TODO.md) ; ce qui a été décidé, dont les refus : [docs/decisions.md](docs/decisions.md). Les pop-up de l'interface (quatre déclinaisons, à utiliser pour tout nouveau) : [docs/popups.md](docs/popups.md).
 
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1283 tests : 1131 serveur + 152 interface
+python -m unittest discover -s tests          # 1287 tests : 1134 serveur + 153 interface
 ```
 
-`tests/test_ui.py` pilote l'interface dans Chromium (Playwright, 152 tests) ; il est ignoré si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 153 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.

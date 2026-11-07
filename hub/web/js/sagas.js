@@ -49,8 +49,7 @@
     var list = h('div', { class: 'menu-list picklist' });
     var every = H.button(H.t('Tout ajouter'), 'plus', { 'data-key': 'pick-all', disabled: true, onclick: function () { run(missing()); } });
     var close = H.button(H.t('Fermer'), null, { 'data-key': 'pick-close', 'data-autofocus': tv ? '1' : null, onclick: function () { H.overlay.close(); } });
-    var box = h('div', { class: 'menu form picker', role: 'dialog', 'aria-label': title }, h('h3', null, title), input, list, h('div', { class: 'btns' }, every, close));
-    box.addEventListener('focusin', function (e) { try { e.target.scrollIntoView({ block: 'nearest' }); } catch (x) { /* tant pis */ } });      // la liste défile jusqu'au résultat atteint à la télécommande
+    var box = H.box('wide picker', title, input, list, h('div', { class: 'btns' }, every, close));
     function missing() { return byDate(found.filter(function (f) { return !has(f.tmdb); })); }   // dans l'ordre de sortie : une saga entière se range d'elle-même
     function marks() {
       Array.prototype.forEach.call(list.querySelectorAll('[data-tmdb]'), function (b) {
@@ -243,12 +242,11 @@
       });
     }
     function remove() {
-      H.menu(H.t('Supprimer « {name} » ?', { name: name }), [{ label: H.t('Supprimer la saga'), detail: H.t('Les films ne sont pas touchés'), value: 'yes' }, { label: H.t('Garder'), value: 'no' }], 'no', function (v) {
-        if (v !== 'yes') return;
+      H.confirm({ title: H.t('Supprimer « {name} » ?', { name: name }), lead: [H.t('Les films ne sont pas touchés')], ok: H.t('Supprimer la saga'), danger: true, done: function () {
         var next = copy(data.sagas);
         next.splice(find(name), 1);
         commit(next, null, function () { H.toast(H.t('Saga supprimée')); H.back('#/sagas'); }, true);          // la liste, d'où l'on vient, se relit seule en réapparaissant
-      });
+      } });
     }
 
     load();
