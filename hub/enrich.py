@@ -307,6 +307,11 @@ def artist_key(mbid):
     return f"artist:{mbid}"
 
 
+def links_key(mbid):
+    """Les liens que l'administrateur a retirés ou ajoutés à la fiche d'un artiste : à part de `artist_key`, que « Fiches artistes » réécrit en entier à chaque rafraîchissement."""
+    return f"artistlinks:{mbid}"
+
+
 WANTED_LINKS = ("Site officiel", "Bandcamp", "SoundCloud", "YouTube")      # les seuls liens que la fiche montre, dans cet ordre
 SHEET_VERSION = 2                                                           # 2 : liens limités ; une fiche plus ancienne est refaite
 

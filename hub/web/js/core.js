@@ -231,8 +231,10 @@
   };
 
   // Une question à une ligne de texte (nom d'une playlist) : `onOk(texte)` est appelé si le texte n'est pas vide.
-  H.prompt = function (title, initial, okLabel, onOk) {
-    var input = h('input', { class: 'f field big', type: 'text', value: initial || '', maxlength: '80', 'aria-label': title, 'data-autofocus': '1', autocomplete: 'off' });
+  // `opts` (facultatif) : {maxlength} (80 par défaut : une adresse web en demande davantage), {placeholder}.
+  H.prompt = function (title, initial, okLabel, onOk, opts) {
+    opts = opts || {};
+    var input = h('input', { class: 'f field big', type: 'text', value: initial || '', maxlength: String(opts.maxlength || 80), placeholder: opts.placeholder || null, 'aria-label': title, 'data-autofocus': '1', autocomplete: 'off' });
     function submit() {
       var text = input.value.replace(/\s+/g, ' ').trim();
       if (!text) { input.focus(); return; }

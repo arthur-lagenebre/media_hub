@@ -1346,14 +1346,20 @@ def api_item(h, m, q):
     h.send_json(out)
 
 
-def artist_sheet(info, mbid="", lang="fr"):
-    """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo). Le pays est traduit en français pour `lang` = 'fr', sinon tel que MusicBrainz le donne."""
+def artist_sheet(info, mbid="", lang="fr", edits=None):
+    """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo). Le pays est traduit en français pour `lang` = 'fr', sinon tel que MusicBrainz le donne.
+    `edits` (voir artist_link_edits) : les liens que l'administrateur a ajoutés (avant Wikipédia et MusicBrainz) et retirés (de la liste finale, quels qu'ils soient)."""
     members = [{"name": mem["name"], "roles": mem.get("roles", []), "period": artistinfo.period(mem), "former": bool(mem.get("ended"))} for mem in info.get("members") or []]
+    edits = edits or {}
     links = enrich.pick_links(info.get("links", []))       # aussi à l'affichage : les fiches déjà gardées gardent peut-être d'autres liens
+    links.extend(edits.get("added", []))
     if (info.get("wiki") or {}).get("url"):
         links.append({"label": "Wikipédia", "url": info["wiki"]["url"]})
     if mbid:
         links.append({"label": "MusicBrainz", "url": musicbrainz.artist_url(mbid)})
+    removed = set(edits.get("removed", []))
+    seen = set()
+    links = [link for link in links if link["url"] not in removed and not (link["url"] in seen or seen.add(link["url"]))]       # une adresse une seule fois : une fiche refaite peut avoir trouvé ce que l'administrateur avait ajouté
     return {"facts": artistinfo.facts({**info, "area": countries.french(info.get("area")) if lang == "fr" else info.get("area")}), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": links}
 
 
@@ -1381,6 +1387,51 @@ def artist_kept(hub, rows):
 def wanted_albums(hub, lib_id, artist_id):
     """Les albums qui manquent à un artiste (voir libraries.music.wanted), tels que le dernier scan les a vus ; vide s'il n'en manque aucun."""
     return (hub.db.kv_get(f"wanted:{lib_id}") or {}).get(artist_id, [])
+
+
+LINK_URL_MAX = 2000
+LINK_LABEL_MAX = 80
+LINKS_LOCK = threading.Lock()           # lire-modifier-écrire de `artistlinks:` : deux administrateurs en même temps ne s'écrasent pas
+
+
+def artist_link_edits(hub, mbid):
+    """{'removed': [url], 'added': [{'label', 'url'}]} gardés pour cet artiste (voir enrich.links_key) ; vides s'il n'y a rien, ou si ce qui est gardé est abîmé."""
+    kept = hub.db.kv_get(enrich.links_key(mbid))
+    kept = kept if isinstance(kept, dict) else {}
+    removed = [u for u in kept.get("removed") or [] if isinstance(u, str)]
+    added = [{"label": str(a.get("label", "")), "url": a["url"]} for a in kept.get("added") or [] if isinstance(a, dict) and isinstance(a.get("url"), str)]
+    return {"removed": removed, "added": added}
+
+
+def artist_link_url(value):
+    """L'adresse d'un lien à ajouter, nettoyée ; 400 si ce n'est pas une adresse web (http ou https, avec un nom d'hôte : jamais `javascript:` ni `data:`) ou si elle dépasse 2000 caractères."""
+    if not isinstance(value, str) or not value.strip():
+        raise HttpError(400, "adresse du lien manquante")
+    url = value.strip()
+    if len(url) > LINK_URL_MAX:
+        raise HttpError(400, f"adresse trop longue ({LINK_URL_MAX} caractères au plus)")
+    try:
+        parts = urlsplit(url)
+        web = parts.scheme in ("http", "https") and bool(parts.hostname)
+    except ValueError:
+        web = False
+    if not web or any(c.isspace() or ord(c) < 32 for c in url):
+        raise HttpError(400, "l'adresse doit être un lien web (http:// ou https://)")
+    return url
+
+
+def artist_link_target(hub, m):
+    """(mbid, fiche gardée) de l'artiste visé par une route de liens ; 404 s'il est inconnu ou n'a pas de fiche (sans identifiant MusicBrainz, ou « Fiches artistes » ne l'a pas encore gardée)."""
+    lib, rows = artist_albums(hub, m.group(1), m.group(2))
+    kept = artist_kept(hub, rows)
+    if kept is None:
+        raise HttpError(404, "pas de fiche pour cet artiste")
+    return kept["mbid"], kept
+
+
+def artist_links_now(h, kept, edits):
+    """Les liens de la fiche tels qu'elle les montre, modifications comprises."""
+    return artist_sheet(kept["info"], kept["mbid"], h.lang, edits)["links"]
 
 
 PHOTO_UPLOAD_MAX = 10 << 20
@@ -1449,12 +1500,66 @@ def api_artist(h, m, q):
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
     kept = artist_kept(hub, rows)
     if kept:
-        out["info"] = artist_sheet(kept["info"], kept["mbid"], h.lang)
+        out["info"] = artist_sheet(kept["info"], kept["mbid"], h.lang, artist_link_edits(hub, kept["mbid"]))
     out["wanted"] = [{"year": w["year"], "title": w["title"], "cover": f"/img/wanted/{lib.id}/{m.group(2)}/{w['key']}" if w["cover"] else ""} for w in wanted_albums(hub, lib.id, m.group(2))]
     out["photo"] = artist_photo(hub, m.group(2), kept, artist_home(lib, rows)) is not None
     if out["photo"]:
         out["image"] = urls.artist_image(lib.id, m.group(2))
     h.send_json(out)
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/links")
+def api_artist_link_add(h, m, q):
+    """Ajoute un lien à la fiche d'un artiste : corps `{"url", "label"?}` (adresse http ou https ; sans libellé, le nom du site). Ajouter une adresse retirée plus tôt annule le retrait. Aucune requête n'est faite vers l'adresse. Rend `{"links": [...]}`, les liens de la fiche à jour. 404 si l'artiste n'a pas de fiche. Administrateur seulement."""
+    require_admin(h)
+    hub = h.hub
+    mbid, kept = artist_link_target(hub, m)
+    body = h.body_json()
+    url = artist_link_url(body.get("url"))
+    label = body.get("label")
+    if label is not None and not isinstance(label, str):
+        raise HttpError(400, "libellé du lien invalide")
+    label = " ".join((label or "").split()) or artistinfo.host_label(url)
+    if len(label) > LINK_LABEL_MAX:
+        raise HttpError(400, f"libellé trop long ({LINK_LABEL_MAX} caractères au plus)")
+    with LINKS_LOCK:
+        edits = artist_link_edits(hub, mbid)
+        was_removed = url in edits["removed"]
+        edits["removed"] = [u for u in edits["removed"] if u != url]
+        if any(link["url"] == url for link in artist_links_now(h, kept, edits)):
+            if not was_removed:
+                raise HttpError(400, "ce lien est déjà sur la fiche")
+        else:
+            edits["added"].append({"label": label, "url": url})
+        if edits["removed"] or edits["added"]:
+            hub.db.kv_set(enrich.links_key(mbid), edits)
+        else:
+            hub.db.kv_delete(enrich.links_key(mbid))
+    h.send_json({"links": artist_links_now(h, kept, edits)})
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/links/remove")
+def api_artist_link_remove(h, m, q):
+    """Retire un lien de la fiche d'un artiste, automatique ou ajouté, Wikipédia et MusicBrainz compris : corps `{"url"}`. Rend `{"links": [...]}`, les liens de la fiche à jour. 404 si l'artiste n'a pas de fiche ou si l'adresse n'y est pas. Administrateur seulement."""
+    require_admin(h)
+    hub = h.hub
+    mbid, kept = artist_link_target(hub, m)
+    url = h.body_json().get("url")
+    if not isinstance(url, str) or not url.strip():
+        raise HttpError(400, "adresse du lien manquante")
+    url = url.strip()
+    with LINKS_LOCK:
+        edits = artist_link_edits(hub, mbid)
+        if not any(link["url"] == url for link in artist_links_now(h, kept, edits)):
+            raise HttpError(404, "ce lien n'est pas sur la fiche")
+        edits["added"] = [link for link in edits["added"] if link["url"] != url]       # un lien ajouté à la main s'oublie tout simplement
+        if any(link["url"] == url for link in artist_links_now(h, kept, edits)):       # encore là : c'est aussi un lien de la fiche
+            edits["removed"].append(url)
+        if edits["removed"] or edits["added"]:
+            hub.db.kv_set(enrich.links_key(mbid), edits)
+        else:
+            hub.db.kv_delete(enrich.links_key(mbid))
+    h.send_json({"links": artist_links_now(h, kept, edits)})
 
 
 @route("POST", r"/api/artist/([\w-]+)/(\w+)/photo")
