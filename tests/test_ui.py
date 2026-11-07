@@ -430,7 +430,6 @@ class TestDetailPages(UiCase):
         self.open("#/admin")
         self.view(".panel").first.wait_for()
         self.view("button", has_text="Tout mettre à jour").click()
-        self.view(".tabs .tab", has_text="Tâches").click()
         status = self.view(".job", has_text="Mise à jour · tout").locator(".jt span")       # la liste montre d'abord les mises à jour du démarrage, terminées : c'est la nouvelle qu'on attend
         status.wait_for()
         for _ in range(60):
@@ -732,7 +731,7 @@ class TestSagasInLibrary(UiCase):
         self.addCleanup(lambda: self.api("/api/me/settings", {"movie_view": "sagas"}))
         self.open("#/l/films")
         self.view(".grid .card.saga").first.wait_for()
-        self.open("#/settings?tab=comptes")
+        self.open("#/settings?tab=preferences")
         panel = self.view(".panel", has_text="Affichage")
         panel.locator(".line", has_text="films").locator("button", has_text="Changer").click()
         self.page.locator(".menu .opt .lbl", has_text="Films").click()
@@ -1666,7 +1665,7 @@ class TestArtistsView(UiCase):
         self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
         self.open("#/l/musique")
         self.view(".grid .card[data-type=album]").first.wait_for()
-        self.open("#/settings?tab=comptes")
+        self.open("#/settings?tab=preferences")
         panel = self.view(".panel", has_text="Affichage")
         panel.locator(".line", has_text="musique").locator("button", has_text="Changer").click()
         self.page.locator(".menu .opt .lbl", has_text="Artistes").click()
@@ -1681,7 +1680,7 @@ class TestTextSize(UiCase):
         return self.page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)")
 
     def test_the_text_is_the_size_of_the_device_until_a_smaller_one_is_chosen(self):
-        self.open("#/settings?tab=interface")
+        self.open("#/settings?tab=preferences")
         self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-text')"), None)
         normal = self.root_size()
         self.view('button[data-key="textSize"]').click()
@@ -1843,7 +1842,7 @@ class TestHomeUnseen(UiCase):
         self.until(lambda: self.view(".shelf").count() == 0)
 
     def test_the_account_settings_have_a_choice_for_each_shelf(self):
-        self.open("#/settings?tab=comptes")
+        self.open("#/settings?tab=preferences")
         panel = self.view(".panel", has_text="Affichage")
         for title, key, name in (("Nouveautés", "home_latest", "Nouveautés"), ("Pas encore vu", "home_unseen", "Pas encore vu")):
             line = panel.locator(".line").filter(has=self.page.locator("b", has_text=re.compile(f"^{title}$")))
@@ -1870,7 +1869,7 @@ class TestHomeUnseen(UiCase):
             self.assertGreater(len(self.shown("series")), count - 3)                                       # le même nombre dans chaque rayon, moins ce que les nouveautés montrent déjà
 
     def test_the_number_of_cards_is_chosen_in_the_settings_of_the_account(self):
-        self.open("#/settings?tab=comptes")
+        self.open("#/settings?tab=preferences")
         line = self.view(".panel", has_text="Affichage").locator(".line").filter(has=self.page.locator("b", has_text="Pas encore vu : cartes par rayon"))
         self.assertIn("12 cartes", line.inner_text())
         line.locator("button", has_text="Changer").click()
@@ -1979,6 +1978,7 @@ class TestSettings(UiCase):
         before = len(list(cache.glob("*.jpg")))
         self.assertGreater(before, 0)
         self.open("#/settings")
+        self.view("[data-key=libs-toggle]").click()                                                  # les bibliothèques sont repliées tant qu'on ne les déplie pas
         self.view("[data-key=covers-films]").click()
         self.page.locator("#toast.on", has_text="Covers à relire").wait_for()
         self.assertLess(len(list(cache.glob("*.jpg"))), before)
@@ -1990,9 +1990,9 @@ class TestSettings(UiCase):
         self.view(".panel").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Paramètres")
         self.assertEqual(self.page.locator("#nav .tool[data-nav='#/settings']").get_attribute("aria-label"), "Paramètres")
-        self.assertEqual(self.tabs(), ["Gestion", "Lecture", "Interface", "Comptes", "Tâches", "Serveur"])
+        self.assertEqual(self.tabs(), ["Gestion", "Préférences", "Comptes"])
         self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Gestion")
-        self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien"])
+        self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Serveur", "Tâches"])
 
     def test_the_old_address_still_leads_to_the_page(self):
         self.open("#/admin")
@@ -2002,22 +2002,46 @@ class TestSettings(UiCase):
     def test_each_tab_has_its_own_panels(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        for name, titles in (("Lecture", ["Lecture"]), ("Interface", ["Interface"]), ("Comptes", ["Mon compte", "Affichage"]), ("Tâches", ["Tâches"]), ("Serveur", ["Serveur"])):
+        for name, titles in (("Préférences", ["Interface", "Lecture", "Affichage"]), ("Comptes", ["Mon compte"]), ("Gestion", ["Bibliothèques", "Sagas", "Entretien", "Serveur", "Tâches"])):
             self.tab(name)
             self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == name)
             self.assertEqual(self.titles(), titles, name)
-        self.tab("Serveur")
         self.assertIn("Version", self.view("dl").inner_text())
 
-    def test_playback_and_interface_settings_are_apart(self):
-        """Lecture : ce qui touche à la vidéo et au son. Interface : l'appareil, la taille du texte et la langue."""
-        lines = lambda: self.view(".panel .line .what b").all_inner_texts()
-        self.open("#/settings?tab=lecture")
+    def test_the_libraries_are_folded_until_unfolded(self):
+        """Tout mettre à jour reste à portée ; le détail des bibliothèques se déplie à la demande, et reste déplié tant qu'on est sur la page."""
+        self.open("#/settings")
         self.view(".panel").first.wait_for()
-        self.assertEqual(lines(), ["Qualité", "Son surround 5.1"])
-        self.open("#/settings?tab=interface")
-        self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == "Interface")
-        self.assertEqual(lines(), ["Appareil", "Taille du texte", "Langue"])
+        toggle = self.view("[data-key=libs-toggle]")
+        self.assertEqual(toggle.get_attribute("aria-expanded"), "false")
+        self.assertEqual(self.view("[data-lib]").count(), 0)
+        self.assertEqual(self.view("[data-key^=scan-]").count(), 1)                                  # « Tout mettre à jour » seul
+        total = len(self.api("/api/state")["libraries"])
+        self.assertIn(str(total), toggle.inner_text())
+        toggle.click()
+        self.assertEqual(toggle.get_attribute("aria-expanded"), "true")
+        self.assertEqual(self.view("[data-lib]").count(), total)
+        self.assertEqual(self.page.evaluate("document.activeElement.getAttribute('data-key')"), "libs-toggle")
+        self.view("[data-key=scan-all]").click()                                                     # la page se reconstruit pendant la mise à jour : le détail reste déplié
+        self.page.wait_for_timeout(2500)
+        self.assertEqual(self.view("[data-lib]").count(), total)
+        self.view("[data-key=libs-toggle]").click()
+        self.assertEqual(self.view("[data-lib]").count(), 0)
+
+    def test_the_former_tabs_lead_to_their_new_place(self):
+        for old, new in (("lecture", "Préférences"), ("interface", "Préférences"), ("taches", "Gestion"), ("serveur", "Gestion")):
+            self.open("#/settings?tab=" + old)
+            self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == new)
+
+    def test_the_preferences_are_one_tab_in_three_panels(self):
+        """Interface : l'appareil, la taille du texte et la langue. Lecture : la vidéo et le son. Affichage : les rayons de l'accueil et l'ouverture des bibliothèques."""
+        self.open("#/settings?tab=preferences")
+        self.view(".panel").first.wait_for()
+        panels = self.view(".panel")
+        self.assertEqual(panels.count(), 3)
+        self.assertEqual(panels.nth(0).locator(".line .what b").all_inner_texts(), ["Appareil", "Taille du texte", "Langue"])
+        self.assertEqual(panels.nth(1).locator(".line .what b").all_inner_texts(), ["Qualité", "Son surround 5.1"])
+        self.assertEqual(panels.nth(2).locator(".line .what b").count(), 5)
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
@@ -2033,6 +2057,7 @@ class TestSettings(UiCase):
         self.page.set_viewport_size({"width": 1280, "height": 300})
         self.open("#/settings")
         self.view(".tabs").wait_for()
+        self.view("[data-key=libs-toggle]").click()
         button = self.view("[data-key^='scan-']:not([data-key='scan-all'])").last
         button.click()                                  # Playwright amène le bouton à l'écran avant de cliquer : on mesure après
         before = self.page.evaluate("window.scrollY")
@@ -2043,7 +2068,7 @@ class TestSettings(UiCase):
 
     def test_the_account_chooses_how_the_music_library_opens(self):
         self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
-        self.open("#/settings?tab=comptes")
+        self.open("#/settings?tab=preferences")
         panel = self.view(".panel", has_text="Affichage")
         panel.wait_for()
         self.assertIn("Albums", panel.inner_text())
@@ -2059,10 +2084,10 @@ class TestSettings(UiCase):
     def test_the_tab_chosen_is_remembered(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        self.tab("Serveur")
+        self.tab("Préférences")
         self.page.reload()
         self.view(".tabs").wait_for()
-        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Serveur")
+        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Préférences")
         self.open("#/settings?tab=comptes")
         self.view(".tabs").wait_for()
         self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Comptes")
@@ -2072,12 +2097,11 @@ class TestSettings(UiCase):
         self.view(".tabs .tab").first.wait_for()
         self.view(".tabs .tab", has_text="Gestion").focus()
         self.press("ArrowRight", "Enter", wait=300)
-        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Lecture")
+        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Préférences")
 
     def test_the_tasks_unfold_one_by_one_or_all_at_once(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        self.tab("Tâches")
         self.view(".job").first.wait_for()
         jobs = self.view(".job .jhead")
         total = jobs.count()
@@ -2092,7 +2116,7 @@ class TestSettings(UiCase):
         self.assertEqual(self.view(".job .jhead[aria-expanded=true]").count(), 0)
 
     def test_every_task_of_the_history_is_listed_not_only_the_last_six(self):
-        self.open("#/settings?tab=taches")
+        self.open("#/settings?tab=gestion")
         self.view(".job").first.wait_for()
         listed = self.view(".job").count()
         self.assertEqual(listed, min(30, len(self.api("/api/jobs")["jobs"])))
@@ -2117,14 +2141,14 @@ class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
                 page = context.new_page()
                 page.goto(base + "/#/settings")
                 page.wait_for_selector(".tabs .tab")
-                self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Lecture", "Interface", "Comptes"])
+                self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Préférences", "Comptes"])
                 page.locator(".tabs .tab", has_text="Comptes").click()
                 page.wait_for_selector(".panel h2")
-                self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte", "Affichage"])
-                page.goto(base + "/#/settings?tab=serveur")                       # un onglet réservé à l'administrateur ne s'ouvre pas
+                self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte"])
+                page.goto(base + "/#/settings?tab=serveur")                       # un onglet réservé à l'administrateur ne s'ouvre pas : l'ancien « Serveur » non plus
                 shown = page.locator("#views > .view:visible .tabs .tab[aria-selected=true]")       # l'ancienne page reste, cachée, derrière la nouvelle
                 shown.wait_for()
-                self.assertEqual(shown.inner_text(), "Lecture")
+                self.assertEqual(shown.inner_text(), "Préférences")
                 browser.close()
             run.stop()
         finally:
