@@ -6,7 +6,7 @@ Ce qui reste ouvert. Ce qui est fait est dans `git log` et dans les pull request
 
 Dans l'ordre où on les prend (7 novembre 2026), un lot par PR (ou deux).
 
-- [ ] **Lot 3 : acteurs et réalisateurs.** (a) Cliquer un nom sur une fiche mène à ses films de la médiathèque. (b) La recherche trouve aussi par nom de personne. Pas de table : balayage de `meta` (`actors`, `directors`) comme `api_search`, noms comparés par `fold()`. *Plus tard, à part :* les films manquants d'une personne. Les étiquettes n'ont que le nom, pas d'identifiant TMDB de personne : il faudrait un appel TMDB et un enrichissement par personne dans `kv` (`enrich:`), donc une clé TMDB.
+- [ ] **Lot 3 (b) : la recherche trouve aussi par nom de personne** (le (a), cliquer un nom sur une fiche, est livré : `#/person?n=`). Pas de table : balayage de `meta` (`actors`, `directors`) comme `api_search`, noms comparés par `fold()`. *Plus tard, à part :* les films manquants d'une personne. Les étiquettes n'ont que le nom, pas d'identifiant TMDB de personne : il faudrait un appel TMDB et un enrichissement par personne dans `kv` (`enrich:`), donc une clé TMDB.
 - [ ] **Lot 4 : boîte de réception (téléversement).** Des comptes qui ont le droit « Envoyer » déposent films, séries, musique ou livres ; l'administrateur les range lui-même. *Retenu :*
   - dépôt dans `HUB_DATA/inbox/<compte>/`, jamais dans une bibliothèque (les volumes restent en `:ro`), et pas de bouton qui déplace un fichier dans la médiathèque ;
   - un droit global par compte (colonne dans `users`, migration qui garde l'existant, administrateur toujours autorisé) ; pas d'envoi sans compte, pas de lien d'invitation ;

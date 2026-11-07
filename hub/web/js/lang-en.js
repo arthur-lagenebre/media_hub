@@ -28,6 +28,7 @@
     'tome': 'volume', 'tomes': 'volumes',
     'livre': 'book', 'livres': 'books',
     'numéro': 'issue', 'numéros': 'issues',
+    'titre': 'title', 'titres': 'titles',
 
     // --- Général ---
     'Médiathèque': 'Media library',
@@ -210,6 +211,12 @@
     'Titre, artiste, collection…': 'Title, artist, collection…',
     'Tape au moins deux lettres.': 'Type at least two letters.',
     'Aucun résultat pour « {q} ».': 'No results for “{q}”.',
+
+    // --- Une personne (page) ---
+    'Réalisateur': 'Director',
+    'Acteur': 'Actor',
+    'Aucun titre pour {name} dans ta médiathèque.': 'No titles for {name} in your library.',
+    'Aucun nom n’est indiqué.': 'No name specified.',
 
     // --- Menus « … » ---
     'Marquer toutes les saisons non vu': 'Mark all seasons as unwatched',

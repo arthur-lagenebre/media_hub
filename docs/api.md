@@ -104,6 +104,23 @@ Trois façons de se présenter :
 
 `{"results": [{"id": "films", "label": "Films", "kind": "movies", "items": [<élément>]}]}` — au plus 40 éléments par bibliothèque, ceux dont le titre ou le groupe (artiste, saga…) contient le texte (sans accents ni casse). Moins de 2 caractères : `{"results": []}`.
 
+### `GET /api/person?name=<nom>`
+
+Ce qu'une personne a réalisé ou joué dans les **films et séries** (`movie`, `show`) :
+
+```json
+{"name": "Penélope Cruz", "roles": {"director": 0, "actor": 6}, "results": [{"id": "films", "label": "Films", "kind": "movies", "items": [<élément>]}]}
+```
+
+- `name` : la graphie la plus fréquente de ce nom dans les bibliothèques que le compte voit (à égalité, la première dans l'ordre des caractères : « PENELOPE » avant « Penelope »). Pour un nom inconnu : le nom demandé, espaces ramenés à un seul.
+- Comparaison **exacte** une fois les accents, la casse et les espaces en trop retirés : `Penelope Cruz` trouve `Penélope Cruz`, mais `Chris Evans` ne ramène pas `Chris Evans Jr`, ni `Chris` seul. Le nom se passe encodé dans l'adresse (`%26` pour `&`, `%2F` pour `/`).
+- `roles` : combien d'éléments cette personne a réalisés (`director`) et dans combien elle joue (`actor`). Un élément où elle est les deux compte dans chacun, mais n'est listé qu'une fois dans `results`.
+- `results` : groupé par bibliothèque, dans l'ordre des bibliothèques visibles, sans les bibliothèques où elle n'a rien ; `<élément>` comme dans `/api/search` (avec `seen` / `started`). Du plus récent au plus ancien (`year`, ceux sans année en dernier, puis par titre).
+- Une bibliothèque que le compte ne peut pas voir n'existe pas ici : ni ses éléments, ni son compte dans `roles`, ni sa graphie. Un nom qu'elle seule connaît répond comme un nom inconnu.
+- Un nom inconnu : `200` avec `"roles": {"director": 0, "actor": 0}` et `"results": []`. `name` absent, vide ou fait d'espaces, ou de plus de 200 caractères : `400`.
+- **Homonymes** : les étiquettes ne portent aucun identifiant de personne, seulement un nom. Deux personnes qui s'appellent pareil (ou un nom écrit de deux façons qui se confondent une fois les accents retirés) n'en font qu'une, et leurs films sont mêlés. Une personne dont le nom est écrit différemment selon les fichiers (`Chris Evans` et `Christopher Evans`) en fait deux.
+- Seuls les noms des étiquettes des films et de la fiche TMDB des séries sont lus : rien n'est interrogé en ligne. L'index est construit au premier appel puis refait après chaque scan et chaque enrichissement.
+
 ## Objets communs
 
 ### Élément (`<élément>`)

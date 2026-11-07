@@ -129,6 +129,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | Route | Rôle |
 | --- | --- |
 | `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche |
+| `GET /api/person?name=<nom>` | ce qu'une personne a réalisé ou joué (films et séries des bibliothèques que le compte voit) : `name` (graphie la plus fréquente), `roles` (`director`, `actor`), `results` (par bibliothèque, du plus récent au plus ancien). Nom comparé tel quel, sans accents ni casse (« Chris Evans » ne ramène pas « Chris Evans Jr »), inconnu : `results` vide ; absent ou de plus de 200 caractères : 400. **Homonymes** : seul le nom identifie une personne, deux personnes de même nom sont confondues |
 | `GET /api/library/<id>?q&letter&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec lettres et genres (les 60 plus fréquents, par ordre alphabétique) ; musique : `artists` et `albums`, le décompte de ce que les filtres laissent (en vue artistes, un artiste trouvé garde tous ses albums) ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
 | `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
 | `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, sagas, casting, progression |
@@ -151,6 +152,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 ## Limites connues
 
 - **Pas d'inscription publique** : seul un administrateur crée les comptes. Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques, les fiches enrichies et les albums manquants sont communs. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert (profil unique `default`).
+- **Homonymes** : `GET /api/person` retrouve une personne par son nom seul (les étiquettes ne portent pas d'identifiant) ; deux personnes qui s'appellent pareil sont confondues, un même nom écrit de deux façons (« Chris » / « Christopher ») fait deux personnes.
 - Les films ne sont indexés qu'en **`.mkv`** (c'est ce que `media_library` produit : `Mp4_To_Mkv.py`, `Avi_To_Mkv.py`).
 - **Pas de carte vidéo capable d'encoder** (GT 730) : le transcodage est logiciel. Un 1080p H.264 passe sans peine sur un i3-13100F ; un 4K HEVC en transcodage est à éviter (le plan de lecture le signale). Le mieux reste la lecture directe : un Chromecast / Fire TV 4K lit H.264, HEVC et AV1 selon le modèle.
 - Google TV n'a pas Chrome : installer un navigateur compatible télécommande (TV Bro, Puffin TV, Silk sur Fire TV). Une appli Android TV native (WebView plein écran) est la suite logique si la télécommande dans un navigateur ne convient pas.
@@ -163,7 +165,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1347 tests : 1183 serveur + 164 interface
+python -m unittest discover -s tests          # 1371 tests : 1199 serveur + 172 interface
 ```
 
-`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 164 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 172 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
