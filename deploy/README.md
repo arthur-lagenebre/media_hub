@@ -91,7 +91,7 @@ docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt')
 | --- | --- |
 | Nouveaux fichiers visibles | *Paramètres* > *Gestion* > Tout mettre à jour, ou *Détail par bibliothèque* > Mettre à jour (ou `HUB_AUTOSCAN_HOURS`) |
 | Affiches / synopsis des séries | *Paramètres* > *Gestion* > *Détail par bibliothèque* > Enrichir (TMDB) (avec `TMDB_KEY`) |
-| Supprimer les `Thumbs.db` | *Paramètres* > *Gestion* > Fichiers parasites > Supprimer ; retirer `:ro` des volumes concernés. Commence par *Compter* : la fenêtre liste les 20 premiers fichiers. **En musique, toute image autre que `cover.{ext}` est effacée, `folder.jpg` compris** : compte-les d'abord (`find /mnt/tank/media/Musique -iname 'folder.*' \| wc -l`) |
+| Supprimer les `Thumbs.db` | *Paramètres* > *Gestion* > Fichiers parasites > Supprimer ; retirer `:ro` des volumes concernés. La fenêtre qui s'ouvre compte les fichiers (bouton *Compter*) et liste les 20 premiers avant de supprimer. **En musique, toute image autre que `cover.{ext}` est effacée, `folder.jpg` compris** : compte-les d'abord (`find /mnt/tank/media/Musique -iname 'folder.*' \| wc -l`) |
 | Étiqueter / renommer / convertir | scripts de `media_library`, depuis VS Code, ou dans le conteneur (volumes sans `:ro`) : `docker exec -it media-hub python /app/media_library/scripts/Video/Movies/Metadata.py --dir /srv/Films` |
 | Les fiches HTML | retirées de `media_library` ; à régénérer ponctuellement avec un prompt dans VS Code si besoin |
 
@@ -105,7 +105,7 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 ## Sécurité
 
 - `HUB_BIND=0.0.0.0` expose le serveur sur le réseau local : `HUB_PASSWORD` est obligatoire dans le compose (sans compte, le serveur est ouvert à tous). Sur Internet, seul Tailscale (tailnet privé) est exposé ; n'active pas Funnel.
-- Le conteneur `media_hub` n'a pas de nouveaux privilèges (`no-new-privileges`) et ne garde que deux capacités Linux : `DAC_OVERRIDE` et `FOWNER`, que « Supprimer » les fichiers parasites et les scripts de `media_library` demandent quand les fichiers appartiennent à un autre compte que root. Après un redéploiement, essaie *Gestion* > *Entretien* > *Compter* puis *Supprimer* (avec un volume sans `:ro`) : si une erreur de droits apparaît, retire `cap_drop` du compose.
+- Le conteneur `media_hub` n'a pas de nouveaux privilèges (`no-new-privileges`) et ne garde que deux capacités Linux : `DAC_OVERRIDE` et `FOWNER`, que « Supprimer » les fichiers parasites et les scripts de `media_library` demandent quand les fichiers appartiennent à un autre compte que root. Après un redéploiement, essaie *Gestion* > *Entretien* > *Supprimer*, puis *Compter* dans la fenêtre, puis *Supprimer définitivement* (avec un volume sans `:ro`) : si une erreur de droits apparaît, retire `cap_drop` du compose.
 - Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data`.
 - `.env` contient des secrets : ne le publie pas.
 

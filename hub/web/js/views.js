@@ -873,7 +873,7 @@
       libsPanelNode = fresh;
       H.focus.key(fresh, key, true);
     }
-    // Gestion : les bibliothèques, les sagas, l'entretien, puis ce qui se lit plus qu'il ne se règle : le serveur, et les tâches que les boutons ci-dessus lancent.
+    // Gestion : les bibliothèques, les sagas, l'entretien, puis ce qui se lit plus qu'il ne se règle : les tâches que les boutons ci-dessus lancent, et le serveur.
     function gestion(body) {
       libsPanelNode = libsPanel();
       body.appendChild(libsPanelNode);
@@ -883,11 +883,10 @@
 
       var tools = h('section', { class: 'panel' }, h('h2', null, H.t('Entretien')));
       tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Fichiers parasites')), h('span', null, H.t('Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.'))),
-        H.button(H.t('Compter'), null, { 'data-key': 'junk-sim', onclick: function () { start('/api/cleanup', {}, H.t('Simulation lancée')); } }),
         H.button(H.t('Supprimer'), null, { 'data-key': 'junk-del', onclick: confirmCleanup })));
       body.appendChild(tools);
-      serverFacts(body);
       tasks(body);
+      serverFacts(body);
     }
     // Les réglages qu'on touche une fois : l'apparence de ce navigateur, la lecture, l'affichage du compte.
     function preferences(body) {
