@@ -1,9 +1,10 @@
 # media_hub sur TrueNAS Scale : Applications > Discover Apps > Custom App > « Install via YAML ».
 #
 # Deux conteneurs qui partagent le même réseau :
-#   tailscale  rend le serveur joignable en HTTPS depuis n'importe où (https://nas.<ton-tailnet>.ts.net) ;
+#   tailscale  seul accès distant : rend le serveur joignable en HTTPS (https://nas.<ton-tailnet>.ts.net), avec Funnel (serve.json,
+#              AllowFunnel) donc par tout navigateur, sans Tailscale ; aucun autre port n'est ouvert vers l'extérieur ;
 #   media_hub  le serveur de la médiathèque, qui écoute sur le port 8080.
-# Sur la télé, à la maison : http://192.168.0.42:8080 (le port est publié sur le réseau local).
+# Sur la télé, à la maison : http://192.168.0.42:8080 (le port est publié sur le réseau local seulement).
 #
 # Remplace /mnt/tank/... par tes datasets. Les variables ${...} viennent du fichier .env voisin
 # (copie .env.example en .env) ; avec l'éditeur YAML de TrueNAS, remplace-les directement par leurs valeurs.
