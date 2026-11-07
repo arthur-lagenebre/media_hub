@@ -7,12 +7,15 @@ import shutil
 import tempfile
 import types
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
+from urllib.parse import quote
 
+from tests.fixtures import movie_blocks, write_mkv
 from tests.rig import MiniHub, call
 from tests.test_server_views import entry, item
-from hub import accounts, config, enrich, missing, urls
+from hub import accounts, config, enrich, missing, people, scan, urls
 from hub.media import images
 from hub.server import app
 
@@ -1038,6 +1041,154 @@ class TestHomeMusic(RouteCase):
         self.fill([self.album(f"x{n:02d}", f"Titre {n:02d}", f"Artiste {n:02d}", f"id{n:02d}", -n) for n in range(30)], [])
         out = self.recent()
         self.assertEqual((len(out), {r["type"] for r in out}, out[0]["id"]), (24, {"album"}, "x00"))
+
+
+class TestPersonRoute(unittest.TestCase):
+    """GET /api/person : ce qu'une personne a réalisé ou joué, dans les bibliothèques que le compte voit."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / "web").mkdir()
+        self.libs = [config.Library("films", "Films", "movies", self.root / "films"), config.Library("series", "Séries", "shows", self.root / "series"),
+                     config.Library("prive", "Privé", "movies", self.root / "prive")]
+        for lib in self.libs:
+            lib.path.mkdir()
+        self.hub = MiniHub(self.root, self.libs)
+        self.db = self.hub.db
+        cruz = {"directors": ["Pedro Almodóvar"], "actors": [{"name": "Penélope Cruz", "role": "Raimunda"}, {"name": "Chris Evans Jr", "role": ""}]}
+        self.db.replace_library("films", [
+            item("m1", title="Volver", year="2006", lib="films", meta=cruz),
+            item("m2", title="Vicky Cristina Barcelona", year="2008", lib="films", meta={"actors": [{"name": "Penélope Cruz"}, {"name": "Chris Evans"}]}),
+            item("m3", title="Sans année", lib="films", meta={"actors": [{"name": "penelope cruz"}]}),
+            item("m4", title="Million Dollar Baby", year="2004", lib="films", meta={"directors": ["Clint Eastwood"], "actors": [{"name": "Clint Eastwood"}, {"name": "Clint Eastwood"}]}),
+            item("m5", title="Guy D'Artagnan & Fils/Co", year="1999", lib="films", meta={"directors": ["Guy D'Artagnan & Fils/Co"]}),
+            item("al", "album", title="Un album", lib="films", meta={"directors": ["Pedro Almodóvar"]}),
+        ], [])
+        self.db.replace_library("series", [item("s1", "show", title="Une série", year="2020", lib="series", meta={"actors": ["Penélope Cruz", "Chris Evans"]})], [])      # fiche ancienne : des chaînes
+        self.db.replace_library("prive", [
+            item("p1", title="Secret", year="2015", lib="prive", meta={"directors": ["Pedro Almodóvar"], "actors": [{"name": "Penelope Cruz"}, {"name": "Penelope Cruz"}, {"name": "Seule Ici"}]}),
+            item("p2", title="Autre secret", year="2016", lib="prive", meta={"actors": [{"name": "Penelope Cruz"}]}),
+        ], [])
+
+    def person(self, name, headers=None):
+        reply = call(self.hub, "GET", "/api/person?name=" + quote(name, safe=""), headers=headers)[1]
+        return reply.status, reply.json()
+
+    def titles(self, body):
+        return [[i["title"] for i in group["items"]] for group in body["results"]]
+
+    def bob(self):
+        """Les en-têtes d'un compte ordinaire qui ne voit pas la bibliothèque « prive »."""
+        self.admin = self.hub.cookie(accounts.create(self.db, "root", "motdepasse12"))
+        bob = accounts.create(self.db, "bob", "motdepasse12")
+        accounts.set_rights(self.db, bob["id"], {"films", "series", "prive"}, {"prive": {"view": False}})
+        return self.hub.cookie(bob)
+
+    def test_accents_and_case_do_not_matter(self):
+        for asked in ("Penelope Cruz", "PENÉLOPE CRUZ", "  penelope   cruz "):
+            status, body = self.person(asked)
+            self.assertEqual((status, body["name"]), (200, "Penélope Cruz"), asked)
+            self.assertEqual(self.titles(body)[0], ["Vicky Cristina Barcelona", "Volver", "Sans année"], asked)
+
+    def test_the_name_is_the_most_frequent_spelling_and_the_first_in_order_on_a_tie(self):
+        self.assertEqual(self.person("penelope cruz")[1]["name"], "Penélope Cruz")      # 3 fois, contre « Penelope Cruz » 2 fois et « penelope cruz » 1 fois
+        self.assertEqual(people.spelling({"names": {"x": Counter({"b": 1, "a": 1})}}, ["x"]), "a")
+        self.assertIsNone(people.spelling({"names": {"x": Counter({"a": 1})}}, ["y"]))
+
+    def test_the_name_must_match_exactly_not_as_a_part(self):
+        self.assertEqual(self.titles(self.person("Chris Evans")[1]), [["Vicky Cristina Barcelona"], ["Une série"]])
+        self.assertEqual(self.titles(self.person("Chris Evans Jr")[1]), [["Volver"]])
+        for part in ("Chris", "Evans", "Chris Evan", "Penelope"):
+            self.assertEqual(self.person(part)[1]["results"], [], part)
+
+    def test_a_director_an_actor_and_both_at_once(self):
+        self.assertEqual(self.person("Pedro Almodovar")[1]["roles"], {"director": 2, "actor": 0})        # Volver et Secret ; un album n'est ni un film ni une série
+        _, body = self.person("Clint Eastwood")
+        self.assertEqual(body["roles"], {"director": 1, "actor": 1})
+        self.assertEqual(self.titles(body), [["Million Dollar Baby"]])                  # un seul film, listé une fois
+        self.assertEqual(self.person("Penelope Cruz")[1]["roles"], {"director": 0, "actor": 6})      # citée deux fois dans Secret : une fois
+
+    def test_a_show_is_found_whatever_the_form_of_its_cast(self):
+        shows = [g for g in self.person("Penélope Cruz")[1]["results"] if g["id"] == "series"][0]
+        self.assertEqual(([i["title"] for i in shows["items"]], shows["kind"], shows["label"], shows["items"][0]["type"]), (["Une série"], "shows", "Séries", "show"))
+
+    def test_the_libraries_come_in_their_order_and_the_items_from_the_latest_to_the_oldest(self):
+        _, body = self.person("Penelope Cruz")
+        self.assertEqual([g["id"] for g in body["results"]], ["films", "series", "prive"])
+        self.assertEqual(self.titles(body), [["Vicky Cristina Barcelona", "Volver", "Sans année"], ["Une série"], ["Autre secret", "Secret"]])      # sans année en dernier
+
+    def test_an_item_has_the_shape_of_the_search(self):
+        found = call(self.hub, "GET", "/api/search?q=volver")[1].json()["results"][0]["items"][0]
+        self.assertEqual(self.person("Penelope Cruz")[1]["results"][0]["items"][1], found)
+
+    def test_the_progress_of_the_account_is_shown(self):
+        self.db.replace_library("films", [item("m1", title="Volver", year="2006", lib="films", meta={"actors": [{"name": "Penélope Cruz"}]})], [entry("e1", "m1", lib="films")])
+        self.db.save_progress(ME, "e1", 100, 100, True)
+        self.assertEqual(self.person("Penelope Cruz")[1]["results"][0]["items"][0]["seen"], 1)
+
+    def test_an_account_that_cannot_see_a_library_finds_nothing_of_it(self):
+        cookie = self.bob()
+        status, body = self.person("Penelope Cruz", cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual([g["id"] for g in body["results"]], ["films", "series"])
+        self.assertEqual(body["roles"], {"director": 0, "actor": 4})
+        self.assertNotIn("ecret", json.dumps(body))
+        self.assertEqual(self.person("Pedro Almodovar", cookie)[1]["roles"], {"director": 1, "actor": 0})
+
+    def test_what_only_a_hidden_library_knows_answers_as_an_unknown_name(self):
+        cookie = self.bob()
+        self.assertEqual(self.person("seule ici", cookie), (200, {"name": "seule ici", "roles": {"director": 0, "actor": 0}, "results": []}))
+        self.assertEqual(self.person("Inconnu Total", cookie), (200, {"name": "Inconnu Total", "roles": {"director": 0, "actor": 0}, "results": []}))
+        self.assertEqual(self.person("seule ici", self.admin)[1]["results"][0]["items"][0]["title"], "Secret")          # l'administrateur, lui, la voit
+
+    def test_the_spelling_shown_comes_from_the_visible_libraries_only(self):
+        self.db.replace_library("prive", [item(f"q{n}", title=f"Privé {n}", lib="prive", meta={"actors": [{"name": "PENELOPE CRUZ"}]}) for n in range(5)], [])
+        self.assertEqual(self.person("penelope cruz")[1]["name"], "PENELOPE CRUZ")          # 5 fois contre 3
+        self.assertEqual(self.person("penelope cruz", self.bob())[1]["name"], "Penélope Cruz")
+
+    def test_an_unknown_name_is_a_200_with_nothing(self):
+        self.assertEqual(self.person("Personne Du Tout"), (200, {"name": "Personne Du Tout", "roles": {"director": 0, "actor": 0}, "results": []}))
+
+    def test_a_missing_empty_blank_or_too_long_name_is_a_400(self):
+        for target in ("/api/person", "/api/person?name=", "/api/person?name=%20%20"):
+            reply = call(self.hub, "GET", target)[1]
+            self.assertEqual((reply.status, "nom attendu" in reply.json()["error"]), (400, True), target)
+        self.assertEqual(self.person("x" * 201)[0], 400)
+        self.assertEqual(self.person("x" * 200)[0], 200)
+
+    def test_names_with_an_ampersand_a_quote_or_a_slash(self):
+        for asked in ("Guy D'Artagnan & Fils/Co", "guy d'artagnan & fils/co"):
+            status, body = self.person(asked)
+            self.assertEqual((status, self.titles(body), body["roles"]["director"]), (200, [["Guy D'Artagnan & Fils/Co"]], 1), asked)
+        status, body = self.person("Robert'; DROP TABLE items; --")
+        self.assertEqual((status, body["results"]), (200, []))
+        self.assertEqual(self.db.one("SELECT COUNT(*) AS n FROM items")["n"], 9)
+
+    def test_an_item_with_odd_names_does_not_break_the_index(self):
+        self.db.replace_library("prive", [item("o1", lib="prive", meta={"directors": [None, 3, "  "], "actors": [None, {"role": "x"}, {"name": 4}, "Odd Name"]}),
+                                          item("o2", lib="prive"), item("o3", lib="prive")], [])
+        self.db.execute("UPDATE items SET meta='[]' WHERE id='o2'")
+        self.db.execute("UPDATE items SET meta='pas du json' WHERE id='o3'")
+        self.assertEqual(self.titles(self.person("odd name")[1]), [["o1"]])
+        self.assertEqual(people.names_in({"directors": "Nolan", "actors": {"name": "X"}}), [])          # pas une liste : ignoré, pas découpé en lettres
+
+    def test_a_person_is_found_after_a_scan_and_after_an_enrichment(self):
+        lib = self.libs[0]
+        write_mkv(lib.path / "A (2001)" / "A (2001).mkv", movie_blocks("A", date="2001-01-01", directors=["Jane Campion"], actors=["Holly Hunter (Ada)"]))
+        scan.scan_library(self.db, lib, log=lambda *a: None)
+        self.assertEqual(self.titles(self.person("holly hunter")[1]), [["A"]])
+        self.assertEqual(self.person("Jane Campion")[1]["roles"], {"director": 1, "actor": 0})
+        self.assertEqual(self.person("Anna Paquin")[1]["results"], [])                  # l'index existe déjà : un film de plus doit le renouveler
+        write_mkv(lib.path / "B (2003)" / "B (2003).mkv", movie_blocks("B", date="2003-01-01", actors=["Anna Paquin (Flora)", "Holly Hunter"]))
+        scan.scan_library(self.db, lib, log=lambda *a: None)
+        self.assertEqual(self.titles(self.person("Anna Paquin")[1]), [["B"]])
+        self.assertEqual(self.titles(self.person("Holly Hunter")[1]), [["B", "A"]])
+        self.db.update_item_meta("s1", meta={"actors": [{"name": "Anna Paquin", "role": "Sookie"}]})              # un enrichissement TMDB
+        self.assertEqual(self.titles(self.person("Anna Paquin")[1]), [["B"], ["Une série"]])
+        (lib.path / "B (2003)" / "B (2003).mkv").unlink()
+        scan.scan_library(self.db, lib, log=lambda *a: None)
+        self.assertEqual(self.titles(self.person("Anna Paquin")[1]), [["Une série"]])                              # un film disparu aussi
 
 
 if __name__ == "__main__":

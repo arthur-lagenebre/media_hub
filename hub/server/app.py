@@ -38,6 +38,7 @@ from .. import accounts
 from .. import countries
 from .. import enrich
 from .. import missing
+from .. import people
 from .. import playlists
 from .. import prefs
 from .. import urls
@@ -968,6 +969,45 @@ def api_search(h, m, q):
         if found:
             results.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "items": found})
     h.send_json({"results": results})
+
+
+def items_by_id(db, ids):
+    """Les lignes de ces éléments, par paquets (SQLite limite le nombre de paramètres)."""
+    ids, rows = list(ids), []
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        rows += db.query(f"SELECT * FROM items WHERE id IN ({','.join('?' * len(chunk))})", chunk)
+    return rows
+
+
+@route("GET", r"/api/person")
+def api_person(h, m, q):
+    """Ce qu'une personne a réalisé ou joué dans les films et séries que ce compte voit. Un nom inconnu, ou connu seulement d'une bibliothèque qu'il ne voit pas, répond pareil : rien."""
+    name = q.get("name", "")
+    if len(name) > people.MAX_NAME:
+        raise HttpError(400, f"nom trop long ({people.MAX_NAME} caractères au plus)")
+    if not name.strip():
+        raise HttpError(400, "nom attendu : /api/person?name=<nom>")
+    hub = h.hub
+    libs = h.visible_libs()
+    person = people.find(hub.db, name)
+    shown = people.spelling(person, [lib.id for lib in libs]) if person else None
+    roles, rows = {role: 0 for role in people.ROLES}, {}
+    if shown:
+        visible = {lib.id for lib in libs}
+        for role in people.ROLES:
+            for row in items_by_id(hub.db, person[role]):
+                if row["lib"] in visible:
+                    roles[role] += 1
+                    rows[row["id"]] = row
+    seen = seen_counts(hub, h.user["id"]) if rows else {}
+    results = []
+    for lib in libs:
+        mine = sorted((r for r in rows.values() if r["lib"] == lib.id), key=lambda r: r["sort"])
+        mine.sort(key=lambda r: r["year"] or "", reverse=True)          # du plus récent au plus ancien ; sans année en dernier ; à égalité, par titre (le tri est stable)
+        if mine:
+            results.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "items": [with_seen(r, seen) for r in mine]})
+    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": results})
 
 
 # ---------------------------------------------------------------------------

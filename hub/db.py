@@ -116,10 +116,31 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self.write_lock = threading.Lock()
+        self.items_version = 0                  # monte à chaque écriture de `items` (scan, enrichissement) : voir `derived`
+        self._derived, self._derived_lock = {}, threading.Lock()
         with self.write_lock:
             conn = self.connection()
             conn.executescript(SCHEMA)
             self._upgrade(conn)
+
+    def items_changed(self):
+        with self._derived_lock:
+            self.items_version += 1
+
+    def derived(self, name, build):
+        """Ce que `build()` tire de la table `items`, gardé en mémoire sous `name` jusqu'à la prochaine écriture des items (scan, enrichissement). Un seul processus écrit dans la base : le compteur suffit.
+        La version est lue *avant* de construire : une écriture survenue pendant la construction rend la valeur gardée périmée dès l'appel suivant, jamais l'inverse."""
+        with self._derived_lock:
+            version = self.items_version
+            hit = self._derived.get(name)
+            if hit is not None and hit[0] == version:
+                return hit[1]
+        value = build()
+        with self._derived_lock:
+            hit = self._derived.get(name)
+            if hit is None or hit[0] < version:
+                self._derived[name] = (version, value)
+        return value
 
     def _upgrade(self, conn):
         """Amène la base à SCHEMA_VERSION, une version à la fois, chacune en une transaction : une migration qui échoue laisse la base telle qu'elle était, et le hub ne démarre pas.
@@ -216,6 +237,7 @@ class Database:
             except Exception:
                 conn.rollback()
                 raise
+            self.items_changed()
 
     def set_probe(self, entry_id, probe):
         self.execute("UPDATE entries SET probe=? WHERE id=?", (json.dumps(probe), entry_id))
@@ -242,6 +264,7 @@ class Database:
                 params.append(value)
         if sets:
             self.execute(f"UPDATE items SET {', '.join(sets)} WHERE id=?", (*params, item_id))
+            self.items_changed()
 
     # --- Progression ---------------------------------------------------------
     def save_progress(self, profile, entry_id, position, duration, done):
