@@ -138,6 +138,10 @@ class UiCase(unittest.TestCase):
     def view(self, selector="", **kw):
         return self.page.locator(f"#views > .view:visible {selector}".strip(), **kw)
 
+    def shown(self, hash):
+        """Attend que la page d'adresse `hash` soit affichée. L'adresse change un instant avant que la page suive (`hashchange`) : jusque-là, `view()` désigne encore l'ancienne page, cartes et titre compris."""
+        self.page.wait_for_function("h => { var c = window.Hub.current(); return !!c && c.hash === h && c.el.style.display !== 'none'; }", arg=hash)
+
     def until(self, condition, tries=40):
         """Attend (au plus quelques secondes) que `condition()` devienne vraie : l'écran ou le serveur ne suivent pas à l'instant du clic."""
         for _ in range(tries):
@@ -1770,12 +1774,12 @@ class TestAnimationShortcut(UiCase):
         link = self.view(".related a.f")
         self.assertEqual(link.inner_text(), "Films d’animation")
         link.click()
-        self.page.wait_for_url("**/#/l/films?genre=Animation")
+        self.shown("#/l/films?genre=Animation")                                            # l'adresse change avant la page : sans cette attente, on lirait encore Animations
         self.view(".grid .card").first.wait_for()
         self.assertEqual(self.genre_button().inner_text(), "Genre : Animation")
         self.assertEqual(self.titles(), ["Coco"])
-        self.press("Escape", wait=500)
-        self.assertTrue(self.page.url.endswith("#/l/animations"))                          # Retour revient à Animations
+        self.press("Escape")
+        self.shown("#/l/animations")                                                       # Retour revient à Animations
 
     def test_the_link_is_reached_and_pressed_from_the_keyboard_before_the_filters(self):
         self.open("#/l/animations")
@@ -1797,11 +1801,8 @@ class TestAnimationShortcut(UiCase):
         self.open("#/l/films?genre=Animation")
         self.view(".grid .card").first.wait_for()
         self.view("input[type=search]").fill("zzzz")
-        self.page.wait_for_timeout(700)
-        self.view("button", has_text="Retirer les filtres").click()
-        self.page.wait_for_timeout(700)
-        self.assertEqual(self.genre_button().inner_text(), "Genre : Tous")
-        self.assertGreater(self.view(".grid .card").count(), 1)
+        self.view("button", has_text="Retirer les filtres").click()                       # n'existe qu'une fois la liste vide relue : le clic l'attend
+        self.until(lambda: self.genre_button().inner_text() == "Genre : Tous" and self.view(".grid .card").count() > 1, tries=100)      # la liste est relue, puis les boutons repeints
 
     def test_only_the_animations_page_has_the_link_and_only_for_an_account_that_sees_the_movies(self):
         for lib in ("films", "series", "musique"):
@@ -1938,18 +1939,18 @@ class TestPeopleInSearchUi(UiCase):
     def test_clicking_a_chip_opens_the_page_of_the_person_and_back_returns_to_the_search(self):
         self.search("hunter")
         self.view(".people .chip").click()
-        self.page.wait_for_url("**/#/person?n=Holly%20Hunter")
-        self.view("h1", has_text="Holly Hunter").wait_for()                              # la page est affichée (l'adresse change un instant avant)
+        self.shown("#/person?n=Holly%20Hunter")                                          # l'adresse change avant la page : jusque-là, `.shelf .card` serait la recherche parquée
         self.view(".shelf .card").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Holly Hunter")
-        self.press("Escape", wait=500)
-        self.assertTrue(self.page.url.endswith("#/search"))
+        self.press("Escape")
+        self.shown("#/search")
         self.assertEqual(self.chips(), ["Holly Hunter · 2 titres"])                  # la recherche est retrouvée telle quelle
 
     def test_accents_case_and_an_apostrophe(self):
         self.search("ZOE O'B")
         self.assertEqual(self.chips(), ["Zoé O'Brien · 1 titre"])
         self.view(".people .chip").click()
+        self.page.locator("#views > .view.person:visible").wait_for()                   # la page de la personne, pas encore la recherche
         self.view(".shelf .card").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Zoé O'Brien")
 
