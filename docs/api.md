@@ -115,7 +115,8 @@ Trois façons de se présenter :
 Ce qu'une personne a réalisé ou joué dans les **films et séries** (`movie`, `show`) :
 
 ```json
-{"name": "Penélope Cruz", "roles": {"director": 0, "actor": 6}, "results": [{"id": "films", "label": "Films", "kind": "movies", "items": [<élément>]}]}
+{"name": "Penélope Cruz", "roles": {"director": 0, "actor": 6}, "results": [{"id": "films", "label": "Films", "kind": "movies", "items": [<élément>]}],
+ "enrichable": true, "missing": [{"tmdb": 1234, "title": "Volver", "year": "2006", "rank": 1, "cover": "/img/film/1234", "role": "actor"}]}
 ```
 
 - `name` : la graphie la plus fréquente de ce nom dans les bibliothèques que le compte voit (à égalité, la première dans l'ordre des caractères : « PENELOPE » avant « Penelope »). Pour un nom inconnu : le nom demandé, espaces ramenés à un seul.
@@ -124,8 +125,19 @@ Ce qu'une personne a réalisé ou joué dans les **films et séries** (`movie`, 
 - `results` : groupé par bibliothèque, dans l'ordre des bibliothèques visibles, sans les bibliothèques où elle n'a rien ; `<élément>` comme dans `/api/search` (avec `seen` / `started`). Du plus récent au plus ancien (`year`, ceux sans année en dernier, puis par titre).
 - Une bibliothèque que le compte ne peut pas voir n'existe pas ici : ni ses éléments, ni son compte dans `roles`, ni sa graphie. Un nom qu'elle seule connaît répond comme un nom inconnu.
 - Un nom inconnu : `200` avec `"roles": {"director": 0, "actor": 0}` et `"results": []`. `name` absent, vide ou fait d'espaces, ou de plus de 200 caractères : `400`.
-- **Homonymes** : les étiquettes ne portent aucun identifiant de personne, seulement un nom. Deux personnes qui s'appellent pareil (ou un nom écrit de deux façons qui se confondent une fois les accents retirés) n'en font qu'une, et leurs films sont mêlés. Une personne dont le nom est écrit différemment selon les fichiers (`Chris Evans` et `Christopher Evans`) en fait deux.
-- Seuls les noms des étiquettes des films et de la fiche TMDB des séries sont lus : rien n'est interrogé en ligne. L'index est construit au premier appel puis refait après chaque scan et chaque enrichissement.
+- `enrichable` : toujours présent. `true` quand le bouton « films manquants » a un sens : le nom désigne **une seule** personne ayant un identifiant TMDB (voir `person_ids` ci-dessous) **et** le serveur a une clé `TMDB_KEY`. `false` sinon (nom inconnu ou que le compte ne voit pas, aucun identifiant, homonymes, pas de clé). Il ne dit pas si la personne a déjà été enrichie.
+- `missing` : liste, **absente quand elle est vide** (rien d'enrichi, rien à montrer, pas d'identifiant). Les films que TMDB attribue à la personne (voir `POST /api/enrich/person`) et qu'**aucune bibliothèque que le compte voit** n'a ; même forme que `sagas[].missing` (`tmdb`, `title`, `year`, `cover`, `rank`) plus `role` (`"director"` ou `"actor"`). Du plus récent au plus ancien ; `rank` est la place dans cette liste, de 1 à N. `cover` : `/img/film/<tmdb>`, ou `""` sans affiche. La comparaison se fait **à chaque requête**, par identifiant TMDB du film : l'étiquette `TMDB` des films des bibliothèques de films visibles, **et** celle des fichiers étiquetés `movie/<n>` d'une bibliothèque de séries visible (un long-métrage rangé dans « Animations » y est un élément série ; seule l'étiquette de son fichier dit que c'est un film, et un fichier étiqueté `tv/…` ne compte pas) : un film arrivé dans la médiathèque disparaît de la liste sans nouvel enrichissement ; un film que seule une bibliothèque cachée au compte possède y figure. Ces films ne sont ni des éléments ni des entrées : aucune liste, recherche ni compteur ne les voit.
+- **Homonymes** : l'index se fait par le nom. Deux personnes qui s'appellent pareil (ou un nom écrit de deux façons qui se confondent une fois les accents retirés) n'en font qu'une, et leurs films sont mêlés. Une personne dont le nom est écrit différemment selon les fichiers (`Chris Evans` et `Christopher Evans`) en fait deux. Seul l'identifiant TMDB lève le doute : voir ci-dessous.
+- **`person_ids`** : les étiquettes des films portent l'identifiant TMDB de chaque personne sous `DIRECTOR`, `WRITTEN_BY` et `ACTOR` (un tag fils `<TAG>/TMDB` valant `person/1234`, juste après son père ; une personne sans fils n'en a pas). Le scan les range dans le `meta` du film (`person_ids`: `{nom: nombre}`, absent des épisodes et des séries ; non exposé par `GET /api/item`) et l'index en tire, par nom, les identifiants vus avec leur nombre de films. **Une personne a un identifiant quand ses étiquettes n'en disent qu'un** ; avec deux ou plus (homonymes), elle n'en a aucun et n'est pas enrichissable. Un film sans identifiant ne contredit pas ceux qui en ont. Seules comptent les étiquettes des **bibliothèques que le compte voit** (`enrichable` et `missing` ne laissent rien deviner d'une bibliothèque cachée) ; l'administrateur les voit toutes.
+- Les noms viennent des étiquettes des films et de la fiche TMDB des séries ; `GET /api/person` n'interroge rien en ligne (`missing` vient de ce que `POST /api/enrich/person` a gardé). L'index est construit au premier appel puis refait après chaque scan et chaque enrichissement.
+
+### `POST /api/enrich/person`
+
+Corps `{"name": "<nom>", "force": false}`. **Administrateur seulement** (403 sinon). Demande à TMDB les films de la personne (`person/<id>/movie_credits`) et les garde dans la base (`personinfo:<identifiant TMDB>`, commune à tous les comptes), avec leurs affiches sous `HUB_DATA/tmdb` (les mêmes fichiers que les films manquants des sagas). **202** `{"job": <tâche>}` ; la tâche s'appelle « Films de <nom> ».
+
+- Retenus : les films **déjà sortis** (un film annoncé n'y entre qu'à la prochaine demande), réalisés par la personne (`job` « Director »), ou joués dans un des premiers rôles du casting (`order` de TMDB, qui commence à 0, au plus 10 : onze rôles) dans un film noté par au moins 100 personnes ; un film réalisé et joué n'y est qu'une fois, comme réalisé ; 40 au plus, du plus récent au plus ancien. **Le plafond de 40 est appliqué avant de comparer avec la médiathèque** : pour une filmographie plus longue, les films les plus anciens ne sont jamais proposés, même si on a tous les récents.
+- Une personne connue depuis moins de 30 jours n'est pas redemandée (la tâche réussit sans appeler TMDB), sauf avec `force`.
+- Erreurs : `400` nom absent, vide, non textuel ou de plus de 200 caractères ; `400 pas de clé TMDB…` sans `TMDB_KEY` ; `404 personne inconnue` ; `400` si le nom n'a aucun identifiant TMDB (« n'a pas d'identifiant TMDB »), ou en désigne plusieurs (homonymes). Une clé refusée par TMDB fait échouer la tâche (`status: "failed"`, le journal le dit) ; une réponse d'erreur de TMDB pour cette personne est comptée en échec (`result.failed`) sans rien effacer de ce qui était gardé.
 
 ## Objets communs
 
@@ -241,6 +253,7 @@ Un `<élément>` (champs ci-dessus) plus :
 | `GET /api/item/<id>` (série de livres) | liste de `{"label", "numbers", "total"}` | le détail des manques |
 | `GET /api/playlist/<id>` | entier | pistes de la playlist dont le fichier a disparu |
 | `GET /api/library/<id>?group=…` (clé de premier niveau de la réponse) et `sagas[]` de la fiche d'un film | liste de `{"tmdb", "title", "year", "rank", "cover"}` | les films qui manquent à une saga (voir `sagas`) : ceux de la collection TMDB déjà sortis, et ceux qu'une saga de `sagas.json` liste elle-même |
+| `GET /api/person` (clé de premier niveau de la réponse) | liste de `{"tmdb", "title", "year", "rank", "cover", "role"}` | les films qui manquent à une personne (voir `GET /api/person`) |
 
 Un client qui lit `missing` doit donc tester son type. C'est une particularité connue, conservée parce que l'interface web s'en sert telle quelle ; un renommage serait une rupture (`api` passerait à 2).
 
@@ -437,7 +450,7 @@ Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, te
 
 ## Tâches de fond (gestion)
 
-Une seule tâche tourne à la fois, les autres attendent. `POST /api/scan`, `/api/enrich` et `/api/cleanup` sont **réservés à l'administrateur** (403 `réservé à l'administrateur` sinon) ; `GET /api/jobs?log=1` (avec le journal des tâches) l'est aussi ; `GET /api/jobs` sans `log` reste ouvert à tout compte (c'est lui qui dit si le serveur est occupé). Redemander une tâche déjà en attente ou en cours renvoie celle-ci.
+Une seule tâche tourne à la fois, les autres attendent. `POST /api/scan`, `/api/enrich`, `/api/enrich/person` et `/api/cleanup` sont **réservés à l'administrateur** (403 `réservé à l'administrateur` sinon) ; `GET /api/jobs?log=1` (avec le journal des tâches) l'est aussi ; `GET /api/jobs` sans `log` reste ouvert à tout compte (c'est lui qui dit si le serveur est occupé). Redemander une tâche déjà en attente ou en cours renvoie celle-ci.
 
 | Route | Corps | Réponse |
 | --- | --- | --- |
@@ -445,6 +458,7 @@ Une seule tâche tourne à la fois, les autres attendent. `POST /api/scan`, `/ap
 | `GET /api/jobs?log=1` | | Idem, avec le journal de chaque tâche (`log`). Administrateur seulement : 403 sinon. |
 | `POST /api/scan` | `{"lib": "<id>"}` (sans `lib` : tout) | **202** `{"job": <tâche>}` |
 | `POST /api/enrich` | `{"lib": "<id>", "force": false}` | **202** `{"job": <tâche>}`. Séries / animations : TMDB (400 `pas de clé TMDB…` sans clé) ; films : les films qui manquent aux sagas, décrits par TMDB (400 sans clé ; une collection déjà connue n'est redemandée qu'après un mois, ou avec `force`) ; films et séries : ensuite, la note TMDB de chaque élément qui a un identifiant TMDB (voir `tmdb_rating`), redemandée après un mois, ou avec `force` ; musique : fiches artistes ; autre genre : 400 |
+| `POST /api/enrich/person` | `{"name": "<nom>", "force": false}` | **202** `{"job": <tâche>}` : les films d'une personne d'après TMDB, pour `missing` de `GET /api/person` (voir cette route : erreurs, filtres, cache d'un mois) |
 | `POST /api/images/refresh` | `{"lib": "<id>"}` | `{"ok": true, "removed": 12}` : vide le cache des vignettes des éléments et des fichiers de cette bibliothèque (à chaque largeur, marques « pas d'image » comprises) ; chaque image se refait depuis le disque (`folder.jpg`, jaquette du `.mkv`…) à la prochaine demande, utile quand un fichier image a changé sans changer de nom. Les affiches choisies à la main et celles de TMDB sont gardées. Administrateur seulement ; 404 bibliothèque inconnue |
 | `POST /api/cleanup` | `{"apply": false}` | **202** `{"job": <tâche>}` ; sans `apply`, simule. Le `result` de la tâche terminée : `{"found": 12, "removed": 0, "sample": ["Musique/Daft Punk/Thumbs.db", …]}` : `sample` nomme les 20 premiers fichiers (dans l'ordre alphabétique, depuis le dossier de leur bibliothèque), `found` les compte tous ; une simulation les écrit aussi dans le journal |
 
