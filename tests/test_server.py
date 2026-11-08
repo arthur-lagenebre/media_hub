@@ -756,8 +756,8 @@ class TestJobs(ServerCase):
                 return {"overview": "Synopsis de la saison %d." % number}
 
             def aggregate_credits(self, show_id):
-                return {"cast": [{"name": "Invité", "total_episode_count": 1, "roles": [{"character": "Passant", "episode_count": 1}]},
-                                 {"name": "Louis Hofmann", "total_episode_count": 26, "roles": [{"character": "Jonas", "episode_count": 26}]}]}
+                return {"cast": [{"id": 4320, "name": "Invité", "total_episode_count": 1, "roles": [{"character": "Passant", "episode_count": 1}]},
+                                 {"id": 4321, "name": "Louis Hofmann", "total_episode_count": 26, "roles": [{"character": "Jonas", "episode_count": 26}]}]}
 
         lib = next(l for l in self.hub.cfg.libraries if l.id == "series")
         self.hub.cfg.tmdb_key = "fake"
@@ -774,6 +774,9 @@ class TestJobs(ServerCase):
         self.run_.wait_jobs()
         again = self.detail(self.item_by_title("series", "Dark")["id"])
         self.assertEqual((again["summary"], again["season_summaries"], again["actors"]), (dark["summary"], dark["season_summaries"], dark["actors"]))
+        ids = json.loads(self.hub.db.one("SELECT meta FROM items WHERE id=?", (dark["id"],))["meta"])["person_ids"]
+        self.assertEqual(ids, {"Invité": 4320, "Louis Hofmann": 4321})          # les identifiants des acteurs survivent au rescan
+        self.assertNotIn("person_ids", dark)                                      # et ne sortent pas dans l'API : `actors` garde sa forme
 
 
 @unittest.skipUnless(FFMPEG, "ffmpeg absent")

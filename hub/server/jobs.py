@@ -106,6 +106,10 @@ class Jobs:
         """Les films que TMDB attribue à une personne (`person_id` : son identifiant TMDB ; `name` : pour l'intitulé de la tâche)."""
         return self._submit(f"Films de {name}", lambda log: enrich.enrich_person(self.cfg, self.db, person_id, log, force))
 
+    def enrich_people(self, libs, label="bibliothèques de films", force=False):
+        """Les films des réalisateurs et des acteurs de premier plan de ces bibliothèques `libs` : voir enrich.enrich_people. `label` : « bibliothèques de films » ou le nom de la catégorie (« Séries »), pour l'intitulé de la tâche : une tâche par catégorie."""
+        return self._submit(f"Films manquants · {label}", lambda log: enrich.enrich_people(self.cfg, self.db, libs, log, force))
+
     def cleanup(self, apply):
         def run(log):
             return clean_junk(self.cfg.libraries, apply, log)

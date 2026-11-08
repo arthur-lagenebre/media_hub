@@ -30,6 +30,7 @@ from libraries.video.tmdb import Tmdb, TmdbAuthError, TmdbError
 
 from .media import images
 from . import missing
+from . import people as peoplefile
 from . import sagas as sagafile
 
 MB_USER_AGENT = "media_hub/1.0 ( https://github.com/arthur-lagenebre/media_hub )"
@@ -57,16 +58,28 @@ def season_summaries(tmdb, show_id, seasons):
     return out
 
 
-def cast(tmdb, show_id):
-    """Le casting de la série entière : les acteurs les plus présents (par nombre d'épisodes), avec leur rôle principal."""
+def cast_with_ids(tmdb, show_id):
+    """([acteurs], {nom: identifiant TMDB}) du casting de la série entière : les acteurs les plus présents (par nombre d'épisodes), avec leur rôle principal. Une seule demande à TMDB ; `(None, None)` quand TMDB ne répond pas (on ne sait pas : ce n'est pas un casting vide).
+
+    L'identifiant de chaque acteur permet de retrouver ses films (voir enrich_people). Un acteur sans identifiant lisible n'a pas d'entrée dans le dictionnaire, ni un nom que deux acteurs du casting portent avec des identifiants différents (deux homonymes : on ne sait pas lequel est lequel, comme ailleurs dans le hub)."""
     try:
         people = tmdb.aggregate_credits(show_id).get("cast", [])
     except TmdbAuthError:
         raise
     except TmdbError:
-        return []
-    people = sorted((p for p in people if p.get("name")), key=lambda p: (-(p.get("total_episode_count") or 0), p.get("order", 9999)))
-    return [{"name": person["name"], "role": main_role(person)} for person in people[:CAST_SIZE]]
+        return None, None
+    people = sorted((p for p in people if p.get("name")), key=lambda p: (-(p.get("total_episode_count") or 0), p.get("order", 9999)))[:CAST_SIZE]
+    valid = [p for p in people if isinstance(p.get("id"), int) and not isinstance(p.get("id"), bool) and p["id"] > 0]
+    seen = {}
+    for p in valid:
+        seen.setdefault(peoplefile.key_of(p["name"]), set()).add(p["id"])
+    ids = {p["name"]: p["id"] for p in valid if len(seen[peoplefile.key_of(p["name"])]) == 1}
+    return [{"name": person["name"], "role": main_role(person)} for person in people], ids
+
+
+def cast(tmdb, show_id):
+    """Le casting de la série entière (voir cast_with_ids), sans les identifiants ; vide quand TMDB ne répond pas."""
+    return cast_with_ids(tmdb, show_id)[0] or []
 
 
 def main_role(person):
@@ -101,9 +114,9 @@ def doubts_of(printed):
 
 
 def show_is_done(db, lib, item, force):
-    """Déjà enrichie, avec les saisons, le casting et les doutes de la recherche (une fiche d'avant leur ajout est refaite) ; `force` refait tout."""
+    """Déjà enrichie, avec les saisons, le casting, les doutes de la recherche et les identifiants des acteurs (une fiche d'avant leur ajout est refaite) ; `force` refait tout."""
     before = db.kv_get(show_key(lib, item))
-    return not force and bool(before) and "season_summaries" in before and "doubts" in before
+    return not force and bool(before) and "season_summaries" in before and "doubts" in before and "person_ids" in before
 
 
 def show_facts(show, show_id):
@@ -132,7 +145,14 @@ def enrich_show(tmdb, posters, db, lib, item):
         tmdb.save_image(show["poster_path"], "w500", posters / name)
         data["poster_file"] = name
     data["season_summaries"] = season_summaries(tmdb, show_id, meta.get("seasons", []))
-    data["actors"] = cast(tmdb, show_id)
+    actors, ids = cast_with_ids(tmdb, show_id)
+    if actors is None:             # TMDB n'a pas répondu : on garde ce qu'on avait, et sans `person_ids` la série sera refaite à la prochaine passe (voir show_is_done)
+        before = db.kv_get(show_key(lib, item)) or {}
+        data["actors"] = before.get("actors", [])
+        if "person_ids" in before:
+            data["person_ids"] = before["person_ids"]
+    else:
+        data["actors"], data["person_ids"] = actors, ids          # `person_ids` toujours écrit, même vide : la série n'est pas refaite à chaque passe
     db.kv_set(show_key(lib, item), data)
     fields = {"summary": data["summary"], "genres": data["genres"], "meta": {k: v for k, v in data.items() if k not in ("summary", "genres", "year")}}
     if data["year"]:
@@ -408,27 +428,80 @@ def person_films(credits):
     return sorted(found.values(), key=lambda film: (film["date"], film["tmdb"]), reverse=True)[:MAX_FILMS]
 
 
-def enrich_person(cfg, db, person_id, log=print, force=False):
-    """Les films que TMDB attribue à la personne `person_id` (réalisés ou joués, voir `person_films`), gardés sous `personinfo:<id>` avec leurs affiches (HUB_DATA/tmdb) : `{"at", "films": [{tmdb, title, year, date, role, poster}]}`.
+def is_fresh(known, now, force):
+    """La filmographie gardée d'une personne est-elle assez récente (moins de `PERSON_STALE`) pour ne pas la redemander ? Jamais avec `force`."""
+    return bool(known) and not force and now - known.get("at", 0) < PERSON_STALE
 
-    Les films qu'on a ne sont pas retirés ici : cela se calcule à chaque requête (voir missing.of_person), la médiathèque change plus vite que TMDB. Une personne connue depuis moins de `PERSON_STALE` n'est pas redemandée (ni même le client TMDB créé), sauf avec `force`. Un échec de TMDB laisse ce qui était gardé."""
-    known = db.kv_get(person_key(person_id))
-    now = int(time.time())
-    if known and not force and now - known.get("at", 0) < PERSON_STALE:
-        return {"films": len(known.get("films") or []), "failed": 0}
-    tmdb, posters = tmdb_client(cfg, read=not force)
+
+def fetch_person(tmdb, posters, db, person_id, now, log, force, owned=()):
+    """Demande à TMDB les films de la personne `person_id` et les garde sous `personinfo:<id>` ; `{"films": n, "failed": 0}`, ou `{"films": 0, "failed": 1}` (et une ligne au journal) quand TMDB refuse cette personne : ce qui était gardé reste.
+    Pas d'affiche pour les films de `owned` (ceux qu'on a : ils n'en ont pas besoin, et c'est ce qui fait la différence sur des milliers de personnes) ; une clé refusée arrête tout (RuntimeError)."""
     try:
         films = person_films(tmdb.get(f"person/{person_id}/movie_credits"))
         kept = [{**{k: v for k, v in film.items() if k != "poster_path"},
-                 "poster": download_poster(tmdb, posters, {"id": film["tmdb"], "poster_path": film["poster_path"]}, film["title"], log, force) if film["poster_path"] else ""} for film in films]
+                 "poster": download_poster(tmdb, posters, {"id": film["tmdb"], "poster_path": film["poster_path"]}, film["title"], log, force) if film["poster_path"] and film["tmdb"] not in owned else ""} for film in films]
     except TmdbAuthError as e:
         raise RuntimeError(f"TMDB : {e}")
     except TmdbError as e:
         log(f"  personne {person_id} : {e}")
         return {"films": 0, "failed": 1}
     db.kv_set(person_key(person_id), {"at": now, "films": kept})
-    log(f"  personne {person_id} : {len(kept)} film(s) retenu(s)")
     return {"films": len(kept), "failed": 0}
+
+
+def enrich_person(cfg, db, person_id, log=print, force=False):
+    """Les films que TMDB attribue à la personne `person_id` (réalisés ou joués, voir `person_films`), gardés sous `personinfo:<id>` avec leurs affiches (HUB_DATA/tmdb) : `{"at", "films": [{tmdb, title, year, date, role, poster}]}`.
+
+    Les films qu'on a ne sont pas retirés ici : cela se calcule à chaque requête (voir missing.of_person), la médiathèque change plus vite que TMDB. Une personne connue depuis moins de `PERSON_STALE` n'est pas redemandée (ni même le client TMDB créé), sauf avec `force`. Un échec de TMDB laisse ce qui était gardé."""
+    known = db.kv_get(person_key(person_id))
+    now = int(time.time())
+    if is_fresh(known, now, force):
+        return {"films": len(known.get("films") or []), "failed": 0}
+    tmdb, posters = tmdb_client(cfg, read=not force)
+    counts = fetch_person(tmdb, posters, db, person_id, now, log, force)
+    if not counts["failed"]:
+        log(f"  personne {person_id} : {counts['films']} film(s) retenu(s)")
+    return counts
+
+
+PEOPLE_PROGRESS = 100        # une ligne de journal toutes les 100 personnes : le journal d'une tâche ne garde que 400 lignes
+PEOPLE_MAX_NOTES = 40        # lignes d'échec ou d'affiche manquante écrites au journal ; les suivantes sont comptées sans être écrites (elles chasseraient le début du journal)
+PEOPLE_MAX_FAILS = 15        # échecs de suite au bout desquels TMDB est jugé injoignable : la passe s'arrête (une tâche ne reste pas des heures sur un réseau coupé, et elle reprendra où elle en était)
+
+
+def enrich_people(cfg, db, libs, log=print, force=False):
+    """Les films de tout le monde (voir enrich_person) : les réalisateurs et les acteurs de premier plan des films de ces bibliothèques `libs` (objets Library) dont le nom désigne une seule personne (voir people.bulk_ids). `{"people", "asked", "fresh", "failed", "films"}`.
+
+    Un seul client TMDB pour toute la passe. Chaque personne est gardée dès qu'elle est faite : une passe interrompue (clé refusée, redémarrage) reprend où elle en était, les personnes connues depuis moins de `PERSON_STALE` étant sautées (sauf `force`). Une personne que TMDB refuse est comptée en échec et la passe continue. Pas d'affiche pour les films qu'on a."""
+    tmdb, posters = tmdb_client(cfg, read=not force)
+    ids = peoplefile.bulk_ids(db, [lib.id for lib in libs], MAX_ORDER + 1)
+    owned, now = missing.owned_films(db, cfg.libraries), int(time.time())          # « qu'on a » vaut pour toutes les bibliothèques, pas seulement celles de la passe : pas d'affiche pour un film rangé ailleurs
+    counts = {"people": len(ids), "asked": 0, "fresh": 0, "failed": 0, "films": 0}
+    log(f"  {len(ids)} personne(s) à parcourir")
+    notes, streak = [], 0
+
+    def note(line):
+        notes.append(line)
+        if len(notes) <= PEOPLE_MAX_NOTES:
+            log(line)
+        elif len(notes) == PEOPLE_MAX_NOTES + 1:
+            log("  … les lignes suivantes de ce genre ne sont pas écrites")
+
+    for n, ident in enumerate(ids, 1):
+        if is_fresh(db.kv_get(person_key(ident)), now, force):
+            counts["fresh"] += 1
+        else:
+            done = fetch_person(tmdb, posters, db, ident, now, note, force, owned)
+            counts["asked"] += 1
+            counts["failed"] += done["failed"]
+            counts["films"] += done["films"]
+            streak = streak + 1 if done["failed"] else 0
+            if streak >= PEOPLE_MAX_FAILS:
+                raise RuntimeError(f"TMDB injoignable : {streak} échecs de suite, passe interrompue (relance-la pour reprendre où elle en était)")
+        if n % PEOPLE_PROGRESS == 0 and n < len(ids):
+            log(f"  {n}/{len(ids)} personne(s)")
+    log(f"  {counts['asked']} interrogée(s), {counts['fresh']} déjà connue(s), {counts['films']} film(s) retenu(s), {counts['failed']} en échec")
+    return counts
 
 
 def artist_key(mbid):

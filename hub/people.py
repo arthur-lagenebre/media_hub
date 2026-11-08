@@ -3,7 +3,7 @@
 L'index se lit dans `meta["directors"]` (liste de chaînes) et `meta["actors"]` (liste de {name, role}, ou de chaînes pour une fiche ancienne) des items `movie` et `show`.
 Il est construit au premier appel puis gardé en mémoire (`Database.derived`) jusqu'à la prochaine écriture des items : un scan ou un enrichissement le renouvelle.
 
-Deux personnes de même nom n'en font qu'une : voir « homonymes » dans docs/api.md. Les étiquettes des films portent l'identifiant TMDB de chaque personne (`meta["person_ids"]`) : une personne en a un quand les étiquettes des bibliothèques qu'un compte voit n'en disent qu'un (`tmdb_id`) ; avec deux ou plus, ce sont des homonymes et elle n'en a aucun.
+Deux personnes de même nom n'en font qu'une : voir « homonymes » dans docs/api.md. Les étiquettes des films portent l'identifiant TMDB de chaque personne (`meta["person_ids"]`, que l'enrichissement TMDB d'une série écrit aussi pour son casting) : une personne en a un quand les étiquettes des bibliothèques qu'un compte voit n'en disent qu'un (`tmdb_id`) ; avec deux ou plus, ce sont des homonymes et elle n'en a aucun.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def meta_of(row):
 
 
 def ids_in(meta):
-    """{clé: identifiant TMDB} des personnes d'un item (`meta["person_ids"]`, voir scan/video.py). Ce qui n'est pas un nombre entier positif est ignoré."""
+    """{clé: identifiant TMDB} des personnes d'un item (`meta["person_ids"]` : écrit par le scan des films, voir scan/video.py, ou par l'enrichissement TMDB d'une série, voir enrich.cast_with_ids). Ce qui n'est pas un nombre entier positif est ignoré."""
     listed = meta.get("person_ids")
     return {key_of(name): ident for name, ident in (listed.items() if isinstance(listed, dict) else ())
             if isinstance(ident, int) and not isinstance(ident, bool) and ident > 0 and key_of(name)}
@@ -94,6 +94,32 @@ def build(db):
 
 def index(db):
     return db.derived("people", lambda: build(db))
+
+
+def billed(meta, top):
+    """Les clés des personnes qui comptent dans un film : ses réalisateurs, et ses `top` premiers acteurs (l'ordre du casting dans les étiquettes)."""
+    keys, actors = [], 0
+    for role, name in names_in(meta):
+        if role == "actor":
+            actors += 1
+            if actors > top:
+                continue
+        keys.append(key_of(name))
+    return [key for key in keys if key]
+
+
+def bulk_ids(db, libs, top):
+    """[identifiant TMDB] de tout le monde dans ces bibliothèques `libs` (identifiants de bibliothèques) : les réalisateurs et les `top` premiers acteurs de chaque film ou série, quand leur nom désigne **une seule** personne (voir `tmdb_id`). Chacun une fois, dans l'ordre des éléments (par titre) : les réalisateurs puis les acteurs de chacun.
+    Une série n'a que des acteurs, et seulement ceux dont l'enrichissement TMDB a gardé l'identifiant (`person_ids`, voir enrich.cast_with_ids) : une série pas encore (re)enrichie ne donne personne."""
+    found, known = {}, index(db)
+    for lib in libs:
+        for row in db.query("SELECT meta FROM items WHERE lib=? AND type IN ('movie', 'show') ORDER BY sort", (lib,)):
+            meta = meta_of(row)
+            for key in billed(meta, top) if meta is not None else ():
+                ident = tmdb_id(known.get(key), libs)
+                if ident is not None:
+                    found[ident] = None
+    return list(found)
 
 
 def find(db, name):

@@ -41,8 +41,12 @@ class TestShowIsDone(TempCase):
 
     def test_a_show_is_done_once_it_has_its_seasons(self):
         self.assertFalse(enrich.show_is_done(self.db, self.lib, self.show, False))
-        self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {}, "doubts": []})
+        self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {}, "doubts": [], "person_ids": {}})
         self.assertTrue(enrich.show_is_done(self.db, self.lib, self.show, False))
+
+    def test_a_sheet_from_before_the_ids_of_the_cast_is_done_again(self):
+        self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {"1": "x"}, "doubts": [], "actors": [{"name": "A", "role": ""}]})
+        self.assertFalse(enrich.show_is_done(self.db, self.lib, self.show, False))          # sans `person_ids`, ses acteurs n'ont pas d'identifiant TMDB : la série est refaite une fois
 
     def test_a_sheet_from_before_the_seasons_is_done_again(self):
         self.db.kv_set(enrich.show_key(self.lib, self.show), {"summary": "x"})
@@ -53,7 +57,7 @@ class TestShowIsDone(TempCase):
         self.assertFalse(enrich.show_is_done(self.db, self.lib, self.show, False))
 
     def test_force_does_everything_again(self):
-        self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {"1": "x"}, "doubts": []})
+        self.db.kv_set(enrich.show_key(self.lib, self.show), {"season_summaries": {"1": "x"}, "doubts": [], "person_ids": {}})
         self.assertFalse(enrich.show_is_done(self.db, self.lib, self.show, True))
 
 
@@ -76,6 +80,65 @@ class TestCastOrder(unittest.TestCase):
                 return {"cast": [{"name": "Sans compte", "order": 0}, {"name": "Un épisode", "total_episode_count": 1, "order": 1}]}
 
         self.assertEqual([p["name"] for p in enrich.cast(Tmdb(), 1)], ["Un épisode", "Sans compte"])
+
+
+class TestCastIds(unittest.TestCase):
+    """L'identifiant TMDB de chaque acteur du casting d'une série : de quoi retrouver ses films (voir enrich_people)."""
+
+    class Tmdb:
+        def aggregate_credits(self, show_id):
+            return {"cast": [{"id": 11, "name": "Un", "total_episode_count": 30, "roles": [{"character": "Jonas", "episode_count": 30}]},
+                             {"id": 12, "name": "Deux", "total_episode_count": 20},
+                             {"id": None, "name": "Sans identifiant", "total_episode_count": 10},
+                             {"id": "x", "name": "Identifiant illisible", "total_episode_count": 9},
+                             {"id": True, "name": "Booléen", "total_episode_count": 8},
+                             {"id": 0, "name": "Zéro", "total_episode_count": 7},
+                             {"id": 13, "name": "", "total_episode_count": 6},
+                             {"id": 14, "name": "Dernier", "total_episode_count": 1}]}
+
+    def test_the_names_and_the_ids_of_the_cast_come_from_one_request(self):
+        class Counting(self.Tmdb):
+            asked = 0
+
+            def aggregate_credits(self, show_id):
+                Counting.asked += 1
+                return super().aggregate_credits(show_id)
+
+        actors, ids = enrich.cast_with_ids(Counting(), 1)
+        self.assertEqual(Counting.asked, 1)
+        self.assertEqual(actors[0], {"name": "Un", "role": "Jonas"})
+        self.assertEqual(ids, {"Un": 11, "Deux": 12, "Dernier": 14})                  # sans identifiant lisible (ou sans nom), pas d'entrée
+
+    def test_the_actors_alone_are_what_they_were(self):
+        self.assertEqual([a["name"] for a in enrich.cast(self.Tmdb(), 1)][:2], ["Un", "Deux"])
+
+    def test_only_the_actors_that_are_kept_have_an_id(self):
+        class Many(self.Tmdb):
+            def aggregate_credits(self, show_id):
+                return {"cast": [{"id": 100 + n, "name": f"Acteur {n}", "total_episode_count": 100 - n} for n in range(enrich.CAST_SIZE + 5)]}
+
+        actors, ids = enrich.cast_with_ids(Many(), 1)
+        self.assertEqual((len(actors), len(ids)), (enrich.CAST_SIZE, enrich.CAST_SIZE))
+
+    def test_a_tmdb_that_does_not_answer_gives_nothing(self):
+        from libraries.video.tmdb import TmdbError
+
+        class Down:
+            def aggregate_credits(self, show_id):
+                raise TmdbError("HTTP 503")
+
+        self.assertEqual(enrich.cast_with_ids(Down(), 1), (None, None))                  # ni « pas d'acteur » ni « pas d'identifiant » : on ne sait pas
+        self.assertEqual(enrich.cast(Down(), 1), [])
+
+    def test_two_actors_of_the_same_name_have_no_id(self):
+        class Twins(self.Tmdb):
+            def aggregate_credits(self, show_id):
+                return {"cast": [{"id": 1, "name": "John Smith", "total_episode_count": 40}, {"id": 2, "name": "john  smith", "total_episode_count": 2},
+                                 {"id": 3, "name": "Autre", "total_episode_count": 30}, {"id": 3, "name": "Autre", "total_episode_count": 5}]}
+
+        actors, ids = enrich.cast_with_ids(Twins(), 1)
+        self.assertEqual(len(actors), 4)
+        self.assertEqual(ids, {"Autre": 3})                                             # deux John Smith : on ne sait pas lequel est lequel ; le même identifiant deux fois n'est pas un doute
 
 
 class FakeCollections:
@@ -256,6 +319,45 @@ class TestEnrichShow(TempCase):
         (_, data), _, tmdb, _ = self.run_show({}, FakeShow(poster=None))
         self.assertEqual(tmdb.saved, [])
         self.assertNotIn("poster_file", data)
+
+    def test_the_sheet_and_the_item_keep_the_ids_of_the_cast(self):
+        class Cast(FakeShow):
+            def aggregate_credits(self, show_id):
+                return {"cast": [{"id": 777, "name": "Louis Hofmann", "total_episode_count": 26, "roles": [{"character": "Jonas", "episode_count": 26}]}]}
+
+        (_, data), _, _, _ = self.run_show({}, Cast())
+        self.assertEqual((data["actors"], data["person_ids"]), ([{"name": "Louis Hofmann", "role": "Jonas"}], {"Louis Hofmann": 777}))
+        row = self.db.one("SELECT meta FROM items WHERE id='s1'")
+        self.assertEqual(json.loads(row["meta"])["person_ids"], {"Louis Hofmann": 777})
+        self.assertEqual(self.db.kv_get(enrich.show_key(types.SimpleNamespace(id="series"), {"id": "s1"}))["person_ids"], {"Louis Hofmann": 777})
+
+    def test_a_tmdb_that_fails_on_the_cast_keeps_what_was_known(self):
+        from libraries.video.tmdb import TmdbError
+
+        class NoCast(FakeShow):
+            def aggregate_credits(self, show_id):
+                raise TmdbError("HTTP 503")
+
+        key = enrich.show_key(types.SimpleNamespace(id="series"), {"id": "s1"})
+        self.db.kv_set(key, {"actors": [{"name": "Ancien", "role": "R"}], "person_ids": {"Ancien": 5}})
+        (_, data), _, _, _ = self.run_show({}, NoCast())
+        self.assertEqual((data["actors"], data["person_ids"]), ([{"name": "Ancien", "role": "R"}], {"Ancien": 5}))
+
+    def test_a_tmdb_that_fails_on_the_cast_of_a_new_show_leaves_it_to_be_done_again(self):
+        from libraries.video.tmdb import TmdbError
+
+        class NoCast(FakeShow):
+            def aggregate_credits(self, show_id):
+                raise TmdbError("HTTP 503")
+
+        (_, data), _, _, lib = self.run_show({}, NoCast())
+        self.assertEqual(data["actors"], [])
+        self.assertNotIn("person_ids", data)                                            # sans `person_ids`, show_is_done refuse : la prochaine passe refait la série
+        self.assertFalse(enrich.show_is_done(self.db, lib, {"id": "s1"}, False))
+
+    def test_a_show_without_a_cast_still_says_it_was_read_for_ids(self):
+        (_, data), _, _, _ = self.run_show({})
+        self.assertEqual(data["person_ids"], {})                                      # `{}` mais présent : la série n'est pas refaite à chaque fois
 
     def test_the_sheet_keeps_the_rating_of_the_show(self):
         (_, data), _, _, _ = self.run_show({})
@@ -482,7 +584,7 @@ class TestEnrichShows(TempCase):
 
     def test_a_show_already_done_is_skipped_unless_forced(self):
         done = self.db.one("SELECT * FROM items WHERE id=?", ("a",))
-        self.db.kv_set(enrich.show_key(self.lib, done), {"season_summaries": {}, "doubts": []})
+        self.db.kv_set(enrich.show_key(self.lib, done), {"season_summaries": {}, "doubts": [], "person_ids": {}})
         found = ({"name": "Nom"}, {"year": ""})
         outcomes = {name: found for name in "ABCD"}
         self.assertEqual(self.run_pass(outcomes)[2], ["B", "C", "D"])
