@@ -17,6 +17,8 @@ from .common import entry_row, folder_image, item_row, unchanged
 SKIPPED_PREFIXES = ("__", "#", "@", ".")
 MAX_DEPTH = 3
 NAME_JUNK = re.compile(r"[._]+")
+PERSON_TAGS = ("DIRECTOR", "WRITTEN_BY", "ACTOR")          # les tags dont chaque personne peut être suivie de son fils `<TAG>/TMDB`
+PERSON_ID = re.compile(r"^person/([0-9]{1,12})$")          # borné comme sagas.TMDB_RE
 
 
 def _first(tags, level, name):
@@ -41,6 +43,22 @@ def _split_actor(text):
     return (found.group(1), found.group(2)) if found else (text, "")
 
 
+def _person_ids(tags):
+    """{nom: identifiant TMDB} des personnes dont le tag est **immédiatement** suivi de son fils `<TAG>/TMDB` (« person/1234 »). Une personne sans fils n'a pas d'identifiant ; un fils qui ne suit pas son père, ou qui ne vaut pas « person/<nombre> », est ignoré."""
+    ids, father = {}, None
+    for level, key, value in tags:
+        if level != 50:
+            continue
+        if key in PERSON_TAGS:
+            father = (key, value)
+            continue
+        found = PERSON_ID.match(value) if father and key == father[0] + "/TMDB" else None
+        if found and father[1]:
+            ids.setdefault(_split_actor(father[1])[0] if father[0] == "ACTOR" else father[1], int(found.group(1)))
+        father = None
+    return ids
+
+
 def _tag_info(tags):
     """Ce que disent les tags Matroska d'un fichier (film ou épisode) ; ce qui est vide est omis."""
     info = {
@@ -52,6 +70,7 @@ def _tag_info(tags):
         "directors": _all(tags, 50, "DIRECTOR"),
         "writers": _all(tags, 50, "WRITTEN_BY"),
         "actors": [dict(zip(("name", "role"), _split_actor(a))) for a in _all(tags, 50, "ACTOR")],
+        "person_ids": _person_ids(tags),
         "number": _number(_first(tags, 50, "PART_NUMBER")),
         "collection": _first(tags, 70, "TITLE"),
         "collection_part": _number(_first(tags, 70, "PART_NUMBER")),
@@ -59,7 +78,7 @@ def _tag_info(tags):
         "season_title": _first(tags, 60, "TITLE"),
         "has_tags": True,
     }
-    return {k: v for k, v in info.items() if v not in ("", None, [])}
+    return {k: v for k, v in info.items() if v not in ("", None, [], {})}
 
 
 def read_file(path):
@@ -142,7 +161,7 @@ def _movie_meta(lib, movie, info, order, parts):
     image = folder_image(movie.folder) if movie.owns_folder else ""
     return {
         "tmdb": info.get("tmdb", ""), "directors": info.get("directors", []), "writers": info.get("writers", []),
-        "actors": info.get("actors", []), "date": info.get("date", ""), "part": info.get("collection_part") if info.get("collection_part") is not None else order,
+        "actors": info.get("actors", []), "person_ids": info.get("person_ids", {}), "date": info.get("date", ""), "part": info.get("collection_part") if info.get("collection_part") is not None else order,
         "image": (movie.folder.relative_to(lib.path) / image).as_posix() if image else "", "tagged": bool(info.get("has_tags")),
         "folder": movie.folder.relative_to(lib.path).as_posix() if movie.folder != lib.path else "",
         "duration": sum(p[5] for p in parts),
