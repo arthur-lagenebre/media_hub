@@ -348,6 +348,56 @@ class TestBookRoute(MediaCase):
         self.assertEqual(call(self.hub, "HEAD", "/book/r1/epub/c1.xhtml")[1].body, b"")
 
 
+class TestBookDirection(MediaCase):
+    """`rtl` : le sens de lecture par défaut d'un tome - son champ Manga, sinon la section de sa série."""
+    kind = "books"
+
+    def setUp(self):
+        super().setUp()
+        for name in ("a.cbz", "b.cbz"):
+            fixtures.write_cbz(self.lib.path / name, pages=2)
+        fixtures.write_epub(self.lib.path / "r.epub")
+        (self.lib.path / "x.pdf").write_bytes(b"%PDF")
+
+    def shelve(self, section, volume_meta, rel="a.cbz"):
+        meta = {"section": section} if section else {}
+        self.fill([item("sr", "series", meta=meta)], [dict(entry("v", "sr", kind="book", number=1), rel=rel, meta=json.dumps(volume_meta))])
+        return self.get("/api/book/v").json()
+
+    def rtl(self, section, info, **extra):
+        return self.shelve(section, {"format": "cbz", "info": info, **extra})["rtl"]
+
+    def test_the_manga_field_of_the_volume_decides(self):
+        self.assertIs(self.rtl("BD", {"Manga": "YesAndRightToLeft"}), True)
+        self.assertIs(self.rtl("Manga", {"Manga": "Yes"}), False)
+        self.assertIs(self.rtl("Manga", {"Manga": "No"}), False)
+
+    def test_the_field_is_read_without_regard_to_case(self):
+        self.assertIs(self.rtl("BD", {"Manga": "yesandrighttoleft"}), True)
+        self.assertIs(self.rtl("Manga", {"Manga": "YES"}), False)
+        self.assertIs(self.rtl("Manga", {"Manga": "no"}), False)
+
+    def test_without_the_field_the_section_of_the_series_decides(self):
+        self.assertIs(self.rtl("Manga", {"Title": "Tome 1"}), True)
+        self.assertIs(self.rtl("BD", {"Title": "Tome 1"}), False)
+        self.assertIs(self.rtl("Comics", {}), False)
+
+    def test_a_series_without_a_section_reads_left_to_right(self):
+        self.assertIs(self.rtl(None, {}), False)
+
+    def test_a_value_that_says_nothing_leaves_it_to_the_section(self):
+        self.assertIs(self.rtl("Manga", {"Manga": "Unknown"}), True)
+        self.assertIs(self.rtl("BD", {"Manga": "Unknown"}), False)
+
+    def test_a_volume_without_a_sheet_follows_its_section(self):
+        self.assertIs(self.shelve("Manga", {"format": "cbz"})["rtl"], True)
+        self.assertIs(self.shelve("BD", {"format": "cbz"})["rtl"], False)
+
+    def test_an_epub_or_an_unreadable_format_has_no_direction(self):
+        self.assertNotIn("rtl", self.shelve("Manga", {"format": "epub", "info": {"Manga": "YesAndRightToLeft"}}, rel="r.epub"))
+        self.assertNotIn("rtl", self.shelve("Manga", {"format": "pdf", "info": {"Manga": "YesAndRightToLeft"}}, rel="x.pdf"))
+
+
 class TestSubtitleList(unittest.TestCase):
     def test_a_file_next_to_the_video_is_never_the_default_one(self):
         side = {"index": 0, "label": "Français", "lang": "fre", "forced": True, "path": Path("x.srt")}

@@ -2325,7 +2325,8 @@ def api_book(h, m, q):
     if entry["kind"] != "book":
         raise HttpError(400, "ce fichier n'est pas un livre")
     lib, path = hub.path_of(entry)
-    kind = safe_json(entry["meta"], {}).get("format", "")
+    meta = safe_json(entry["meta"], {})
+    kind = meta.get("format", "")
     progress = hub.db.progress_for(h.user["id"], [entry["id"]]).get(entry["id"])
     out = {"id": entry["id"], "item": entry["item_id"], "title": entry["title"], "format": kind, "position": progress["position"] if progress and not progress["done"] else 0,
            "next": None, "file": urls.entry_file(entry["id"])}
@@ -2333,6 +2334,7 @@ def api_book(h, m, q):
         if kind == "cbz":
             out["pages"] = len(bookmedia.cbz_pages(path))
             out["page_url"] = f"/book/{entry['id']}/page/{{n}}"          # `{n}` : le numéro de page, à partir de 0
+            out["rtl"] = bookmedia.reads_right_to_left(meta.get("info"), safe_json(hub.item(entry["item_id"])["meta"], {}).get("section"))
         elif kind == "epub":
             spine = bookmedia.epub_spine(path)
             out["chapters"] = [f"/book/{entry['id']}/epub/{c}" for c in spine["spine"]]

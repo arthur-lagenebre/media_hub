@@ -427,6 +427,7 @@ Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, te
 
 - `GET /api/book/<entry>` : `{"id", "item", "title", "format", "position", "file", "next": {"id", "title"} ou null}` plus, selon le format :
   - `cbz` : `pages` (entier) et `page_url` : un gabarit `/book/<id>/page/{n}` où `{n}` est le numéro de page **à partir de 0** ;
+  - `cbz` aussi : `rtl` (booléen), le sens de lecture par défaut du tome, `true` pour de droite à gauche. Le champ `Manga` de sa fiche `ComicInfo.xml` le dit (`YesAndRightToLeft` : `true` ; `Yes` et `No` : `false`, sans tenir compte de la casse) ; sans champ (ou `Unknown`, ou tome sans fiche), `true` si la section de la série est « Manga », sinon `false`. Absent pour un epub ou un format illisible ;
   - `epub` : `chapters` : liste d'URLs `/book/<id>/epub/<chemin>` dans l'ordre de lecture ;
   - autre format : `readable: false` (seul `file` est utilisable).
   - `position` : 0 si le livre est fini ou jamais ouvert, sinon la dernière position envoyée (page ou chapitre, **Ambigu** : le serveur la stocke telle quelle).

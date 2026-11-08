@@ -18,6 +18,17 @@ mimetypes.add_type("application/xhtml+xml", ".xhtml")
 mimetypes.add_type("font/otf", ".otf")
 
 
+def reads_right_to_left(info, section):
+    """Le sens de lecture par défaut d'un tome : vrai s'il se lit de droite à gauche.
+
+    Le champ Manga de sa fiche ComicInfo le dit ("YesAndRightToLeft" : oui ; "Yes" et "No" : non) ; sans lui - champ absent ou "Unknown" -, la section « Manga » de la série le suppose.
+    """
+    field = str((info or {}).get("Manga") or "").strip().casefold()
+    if field in ("yesandrighttoleft", "yes", "no"):
+        return field == "yesandrighttoleft"
+    return section == "Manga"
+
+
 def cbz_pages(path):
     with open_zip(path) as archive:
         return image_names(archive)
