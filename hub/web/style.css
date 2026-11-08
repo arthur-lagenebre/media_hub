@@ -143,6 +143,11 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .blank p { color: var(--mute); max-width: 36rem; }
 .blank .btn { margin-top: 0.8rem; }
 .search .results, .person .results { padding-top: 0.6rem; }
+.people h2 { padding: 0 var(--gut); font-size: 1.25rem; margin: 1rem 0 0.7rem; }
+.people .chips { padding: 0 var(--gut); margin-bottom: 0; }
+.people .chip { display: inline-block; text-decoration: none; }
+.people .chip:hover, .people .chip:focus { background: var(--accent); color: var(--on-accent); }
+body.mouse .people .chip:focus:not(:hover) { background: var(--s2); color: var(--text); }
 .search .results > p, .person .results > p { padding: 0 var(--gut); }
 .person .roles { margin: 0; padding: 0 var(--gut); color: var(--mute); font-weight: 600; }
 .search .field { margin: 0 var(--gut); width: calc(100% - 2 * var(--gut)); max-width: 40rem; min-width: 0; }

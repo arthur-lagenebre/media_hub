@@ -16,6 +16,7 @@ from libraries.common.text import fold
 ROLES = ("director", "actor")
 TYPES = ("movie", "show")
 MAX_NAME = 200
+MAX_HITS = 8                    # personnes rendues par la recherche
 
 
 def key_of(name):
@@ -35,8 +36,8 @@ def names_in(meta):
 
 
 def build(db):
-    """{clé: {"names": {bibliothèque: Counter(graphie -> nombre d'items)}, "director": [id d'item], "actor": [id d'item]}}.
-    Les graphies sont comptées par bibliothèque : on ne sait ainsi dire que celles des bibliothèques qu'un compte voit."""
+    """{clé: {"names": {bibliothèque: Counter(graphie -> nombre d'items)}, "titles": {bibliothèque: nombre d'items}, "director": [id d'item], "actor": [id d'item]}}.
+    Les graphies et les titres sont comptés par bibliothèque : on ne sait ainsi dire que ceux des bibliothèques qu'un compte voit."""
     index = {}
     for row in db.query("SELECT id, lib, meta FROM items WHERE type IN (?, ?)", TYPES):
         try:
@@ -45,12 +46,15 @@ def build(db):
             continue
         if not isinstance(meta, dict):
             continue
-        spelled = set()
+        spelled, here = set(), set()
         for role, name in names_in(meta):
             key = key_of(name)
             if not key:
                 continue
-            person = index.setdefault(key, {"names": {}, "director": [], "actor": []})
+            person = index.setdefault(key, {"names": {}, "titles": {}, "director": [], "actor": []})
+            if key not in here:             # un titre compte une fois pour une personne, quel que soit son rôle
+                here.add(key)
+                person["titles"][row["lib"]] = person["titles"].get(row["lib"], 0) + 1
             if row["id"] not in person[role]:           # une personne citée deux fois dans le même item n'y compte qu'une fois
                 person[role].append(row["id"])
             if (key, name) not in spelled:
@@ -74,3 +78,17 @@ def spelling(person, libs):
     for lib in libs:
         total.update(person["names"].get(lib, ()))
     return min(total, key=lambda name: (-total[name], name)) if total else None
+
+
+def search(db, needle, libs, limit=MAX_HITS):
+    """[(nom, nombre de titres)] des personnes dont la clé contient `needle` (déjà passé par `key_of`), et qui ont au moins un titre dans ces bibliothèques.
+    Le nom exact d'abord, puis ceux qui commencent par le texte, puis les autres ; à rang égal, le plus de titres, puis l'ordre des clés."""
+    found = []
+    for key, person in index(db).items():
+        if needle not in key:
+            continue
+        titles = sum(person["titles"].get(lib, 0) for lib in libs)
+        if titles:
+            found.append((0 if key == needle else 1 if key.startswith(needle) else 2, -titles, key, person))
+    found.sort(key=lambda hit: hit[:3])
+    return [(spelling(person, libs), -negative) for _, negative, _, person in found[:limit]]
