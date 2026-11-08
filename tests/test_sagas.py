@@ -194,6 +194,14 @@ class TestSaving(TempCase):
         self.assertIn("impossible d'écrire sagas.json", message)
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["fichier"])
 
+    def test_a_write_that_fails_reports_it_even_when_the_temporary_file_cannot_be_removed(self):
+        """Linux : supprimer `fichier/sagas.json.tmp` quand `fichier` est un fichier lève NotADirectoryError (Windows : FileNotFoundError, que `missing_ok` avale)."""
+        blocker = self.root / "fichier"
+        blocker.write_text("x")
+        with mock.patch.object(Path, "unlink", side_effect=NotADirectoryError(20, "Not a directory")):
+            message = self.refused(lambda: Sagas(blocker / "sagas.json").save([("A", [])]), 500)
+        self.assertIn("impossible d'écrire sagas.json", message)
+
     def test_a_file_held_open_is_retried_a_few_times_then_the_error_is_reported(self):
         store = Sagas(self.path)
         with mock.patch.object(sagas.os, "replace", side_effect=PermissionError(13, "Accès refusé")) as replace, mock.patch.object(sagas.time, "sleep") as sleep:
