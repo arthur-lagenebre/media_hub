@@ -1,0 +1,25 @@
+name: Version
+
+# La règle de /ship, relue à chaque PR : __version__, API_VERSION et SCHEMA_VERSION suivent ce que la PR change.
+# Une incohérence (le numéro baisse, il n'est pas de la forme X.Y.Z) échoue ; le reste est un avertissement : MINOR ou PATCH est un jugement.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # le contrôle compare à la branche de base
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Contrôler la version
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: python .github/scripts/check_version.py "$BASE"
