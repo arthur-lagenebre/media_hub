@@ -1744,7 +1744,8 @@ class TestRightsInTheUi(unittest.TestCase):
                 admin.goto(base + "/#/settings?tab=comptes")
                 admin.locator(f'[data-key="rights-{alice["id"]}"]').click()
                 admin.locator(".rights").wait_for()
-                self.assertFalse(admin.evaluate("(() => { var m = document.querySelector('.menu.rightsbox'); return m.scrollHeight > m.clientHeight; })()"))       # la fenêtre tient sans défiler
+                size = admin.evaluate("(() => { var m = document.querySelector('.menu.rightsbox'); var r = document.querySelector('.rights .rrow'); return [m.scrollHeight, m.clientHeight, m.getBoundingClientRect().height, innerHeight, r.getBoundingClientRect().height, getComputedStyle(m).fontFamily]; })()")
+                self.assertLessEqual(size[0], size[1], f"la fenêtre défile : {size}")       # la fenêtre tient sans défiler
                 widths = "Array.prototype.map.call(document.querySelectorAll('.rights .chip'), function (c) { return c.getBoundingClientRect().width; })"
                 before = admin.evaluate(widths)
                 admin.locator('[data-key="r-download-films"]').click()                    # films : voir sans télécharger

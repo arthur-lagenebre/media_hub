@@ -244,31 +244,45 @@ def set_rights(db, uid, lib_ids, changes):
         raise AccountError(404, "compte inconnu")
     if row["role"] == "admin":
         raise AccountError(400, "un administrateur a tous les droits")
-    if not isinstance(changes, dict) or not changes:
-        raise AccountError(400, "droits attendus : {bibliothèque: {view, play, download}}")
-    current, new = grants(db, uid), {}
-    for lib, perms in changes.items():
-        if lib not in lib_ids:
-            raise AccountError(400, f"bibliothèque inconnue : {lib}")
-        if not isinstance(perms, dict) or not perms or set(perms) - set(RIGHTS) or not all(isinstance(v, bool) for v in perms.values()):
-            raise AccountError(400, "chaque bibliothèque attend {view, play, download}, des booléens")
-        view, play, download = current.get(lib, (True, True, True))
-        view, play, download = perms.get("view", view), perms.get("play", play), perms.get("download", download)
-        new[lib] = (view, view and play, view and download)
+    new = _new_rights(grants(db, uid), lib_ids, changes)
     with db.write_lock:
         conn = db.connection()
         try:
             for lib, (view, play, download) in new.items():
-                if view and play and download:
-                    conn.execute("DELETE FROM rights WHERE user_id=? AND lib=?", (uid, lib))        # tout autorisé : pas de ligne
-                else:
-                    conn.execute("INSERT INTO rights(user_id, lib, view, play, download) VALUES(?,?,?,?,?) ON CONFLICT(user_id, lib) DO UPDATE SET view=excluded.view, play=excluded.play, download=excluded.download",
-                                 (uid, lib, int(view), int(play), int(download)))
+                _store_right(conn, uid, lib, view, play, download)
             conn.commit()
         except Exception:
             conn.rollback()
             raise
     return grants(db, uid)
+
+
+def _new_rights(current, lib_ids, changes):
+    """Les droits résultants (`{bibliothèque: (voir, lire, télécharger)}`) une fois `changes` appliqué à `current` ; 400 si `changes` est invalide."""
+    if not isinstance(changes, dict) or not changes:
+        raise AccountError(400, "droits attendus : {bibliothèque: {view, play, download}}")
+    new = {}
+    for lib, perms in changes.items():
+        if lib not in lib_ids:
+            raise AccountError(400, f"bibliothèque inconnue : {lib}")
+        _check_perms(perms)
+        view, play, download = current.get(lib, (True, True, True))
+        view, play, download = perms.get("view", view), perms.get("play", play), perms.get("download", download)
+        new[lib] = (view, view and play, view and download)
+    return new
+
+
+def _check_perms(perms):
+    if not isinstance(perms, dict) or not perms or set(perms) - set(RIGHTS) or not all(isinstance(v, bool) for v in perms.values()):
+        raise AccountError(400, "chaque bibliothèque attend {view, play, download}, des booléens")
+
+
+def _store_right(conn, uid, lib, view, play, download):
+    if view and play and download:
+        conn.execute("DELETE FROM rights WHERE user_id=? AND lib=?", (uid, lib))        # tout autorisé : pas de ligne
+    else:
+        conn.execute("INSERT INTO rights(user_id, lib, view, play, download) VALUES(?,?,?,?,?) ON CONFLICT(user_id, lib) DO UPDATE SET view=excluded.view, play=excluded.play, download=excluded.download",
+                     (uid, lib, int(view), int(play), int(download)))
 
 
 # ---------------------------------------------------------------------------

@@ -451,9 +451,9 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .crop-stage:active { cursor: grabbing; }
 .crop-stage img { position: absolute; max-width: none; pointer-events: none; }
 .crop-frame { position: absolute; box-sizing: border-box; border: 2px solid var(--accent); box-shadow: 0 0 0 999px rgba(5, 7, 9, 0.66); pointer-events: none; }
-.rights .rrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.4rem; padding: 0.3rem 0; border-top: 1px solid var(--line); }
-.rights .rrow b { flex: 0 0 6.2rem; }
-.rights .rrow .chip { margin: 0; padding: 0.35rem 0.85rem; }
+.rights .rrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.2rem 0.4rem; padding: 0.3rem 0; border-top: 1px solid var(--line); }       /* le nom de la bibliothèque, puis trois boutons égaux : la mise en page ne dépend pas de la largeur de la police */
+.rights .rrow b { grid-column: 1 / -1; }
+.rights .rrow .chip { margin: 0; padding: 0.28rem 0.5rem; text-align: center; }
 .rights .rrow .chip .mark { visibility: hidden; margin-right: 0.35em; }
 .rights .rrow .chip.on .mark { visibility: visible; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
