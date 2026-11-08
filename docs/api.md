@@ -182,7 +182,7 @@ Paramètres (tous optionnels) :
 | `q` | filtre sur le titre / le groupe |
 | `letter` | une lettre d'index |
 | `genre` | un genre |
-| `sort` | `title` (défaut ; par artiste en musique, par collection en livres) \| `added` \| `year` \| `year-asc` \| `part` \| `rating` (« Mieux notés » : la note TMDB montrée, voir `tmdb_rating`, de la meilleure à la moins bonne, puis le plus de votes, puis le titre ; ce qui n'a pas de note montrée vient ensuite, par titre ; une vignette de saga prend la moyenne des notes de ses films notés) |
+| `sort` | `title` (défaut ; par artiste en musique, par collection en livres) \| `added` \| `year` \| `year-asc` \| `part` \| `rating` (« Mieux notés » : la note TMDB montrée, voir `tmdb_rating`, de la meilleure à la moins bonne, puis le plus de votes, puis le titre ; ce qui n'a pas de note montrée vient ensuite, par titre ; une vignette de saga prend la note de son meilleur film) |
 | `filter=unseen` | seulement ce qui n'est pas entièrement vu |
 | `offset`, `limit` | pagination (`limit` : 240 par défaut, 600 au plus) |
 | `sagas=1` | films : regroupe les sagas (au moins deux films) en une vignette `type: "saga"` |

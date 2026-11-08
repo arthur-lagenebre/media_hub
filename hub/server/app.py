@@ -1042,12 +1042,9 @@ TITLE_SORTS = {
 
 
 def row_rating(row):
-    """(note, votes) d'une ligne : sa note TMDB montrée (voir shown_rating), ou pour une vignette de saga la moyenne des notes montrées de ses films et la somme de leurs votes ; (None, 0) sans note montrée."""
+    """(note, votes) d'une ligne : sa note TMDB montrée (voir shown_rating), ou pour une vignette de saga celle de son meilleur film (à égalité, le plus voté) : une saga vaut ce qu'elle a de mieux, Terminator vaut Terminator 2 ; (None, 0) sans note montrée."""
     if isinstance(row, dict) and "members" in row:
-        rated = [found for found in map(row_rating, row["members"]) if found[0] is not None]
-        if not rated:
-            return None, 0
-        return sum(vote for vote, _ in rated) / len(rated), sum(votes for _, votes in rated)
+        return max(map(row_rating, row["members"]), key=lambda found: (found[0] is not None, found[0] or 0, found[1]), default=(None, 0))
     rating = shown_rating(safe_json(row["meta"], {}).get("tmdb_rating"))
     return (rating["vote"], rating["votes"]) if rating else (None, 0)
 

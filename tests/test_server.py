@@ -1902,10 +1902,10 @@ class TestRatingSort(ServerCase):
         by_title = [i["title"] for i in self.items("films", sort="title")["items"]]
         self.assertEqual(titles[2:], [t for t in by_title if t not in titles[:2]])       # les autres, comme dans le tri par titre
 
-    def test_a_saga_takes_the_mean_of_its_rated_films(self):
-        self.rate("Inception", 6.0, 37000)
-        self.rate("Man of Steel", 7.0, 15000)
-        self.rate("Batman v Superman", 8.0, 9000)                   # « Saga DCEU » : 7.5, devant Inception
+    def test_a_saga_takes_the_rating_of_its_best_film(self):
+        self.rate("Inception", 7.5, 37000)
+        self.rate("Man of Steel", 6.0, 15000)
+        self.rate("Batman v Superman", 8.0, 9000)                   # « Saga DCEU » : 8,0 (la moyenne, 7,0, la mettrait derrière Inception)
         cards = [(i["type"], i["title"]) for i in self.items("films", sort="rating", sagas=1)["items"]]
         self.assertEqual(cards[:2], [("saga", "Saga DCEU"), ("movie", "Inception")])
 

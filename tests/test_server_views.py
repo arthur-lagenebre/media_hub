@@ -358,11 +358,12 @@ class TestRatingOrder(unittest.TestCase):
         rows[3]["meta"] = json.dumps({"tmdb_rating": 7.8})                  # la forme d'avant : pas une note montrée
         self.assertEqual(self.order(rows), ["note", "peu", "sans", "ancien"])          # 3.0 sur 900 votes passe devant 9.9 sur trop peu de votes
 
-    def test_a_saga_is_rated_by_the_mean_of_its_rated_films(self):
+    def test_a_saga_is_rated_by_its_best_film(self):
         saga = {"id": "s", "sort": "s", "added": 0, "year": "", "grp": "", "meta": "{}",
-                "members": [self.film("a", "a", 8.0, 900), self.film("b", "b", 6.0, 900), self.film("c", "c")]}         # moyenne 7.0 ; « c » n'a pas de note : il ne compte pas
-        rows = [saga, self.film("seul", "z", 7.5, 100), self.film("bas", "y", 6.9, 100)]
-        self.assertEqual(self.order(rows), ["seul", "s", "bas"])
+                "members": [self.film("t1", "a", 8.0, 900), self.film("t2", "b", 8.6, 1200), self.film("t3", "c", 6.1, 900), self.film("sans", "d")]}     # Terminator : le 2
+        rows = [saga, self.film("seul", "z", 8.5, 100), self.film("egal", "y", 8.6, 500)]
+        self.assertEqual(self.order(rows), ["s", "egal", "seul"])                    # 8,6 sur 1 200 votes (ceux du 2), devant 8,6 sur 500
+        self.assertEqual(app.row_rating(saga), (8.6, 1200))
         unrated = {**saga, "id": "vide", "members": [self.film("c", "c")]}
         self.assertEqual(self.order([unrated, self.film("bas", "y", 6.9, 100)]), ["bas", "vide"])
 
