@@ -7,7 +7,7 @@ Ce qui reste ouvert. Ce qui est fait est dans `git log` et dans les pull request
 Dans l'ordre où on les prend (7 novembre 2026), un lot par PR (ou deux).
 
 - [ ] **Films manquants d'une personne : à essayer sur place.** Le lot 3 est livré (serveur et interface : `person_ids`, `POST /api/enrich/person`, bouton « Chercher ses films manquants » et cases grisées sur `#/person?n=`). Un bouton général (*Gestion* > « Films manquants (bibliothèques de films) », `POST /api/enrich/people`) le fait pour tous les réalisateurs et acteurs de premier plan des films, et un bouton par bibliothèque (« Films des personnes (TMDB) », films, séries, animations) pour une catégorie à la fois. Reste : un enrichissement réel avec ta clé TMDB (acteur, réalisateur), à la télécommande.
-- [ ] **Lot 4 : boîte de réception (téléversement).** Des comptes qui ont le droit « Envoyer » déposent films, séries, musique ou livres ; l'administrateur les range lui-même. *Retenu :*
+- [ ] **Lot 4 : boîte de réception (téléversement).** Des comptes qui ont le droit « Envoyer » déposent films, séries, musique ou livres ; l'administrateur les range lui-même. En trois PR : **4a** le serveur (migration du droit, réception en flux, limites, tests de sécurité), **4b** l'interface (page « Envoyer », onglet « Boîte de réception »), **4c** le déploiement (espace libre sous `/data`, essai Funnel). Décision : [decisions.md](decisions.md). *Retenu :*
   - dépôt dans `HUB_DATA/inbox/<compte>/`, jamais dans une bibliothèque (les volumes restent en `:ro`), et pas de bouton qui déplace un fichier dans la médiathèque ;
   - un droit global par compte (colonne dans `users`, migration qui garde l'existant, administrateur toujours autorisé) ; pas d'envoi sans compte, pas de lien d'invitation ;
   - réception en flux : morceaux de 1 Mo vers un `.part` renommé à la fin (`body_bytes` lit tout en mémoire, 10 Mo : inutilisable ici), `Content-Length` obligatoire, limite par fichier, quota par compte, contrôle d'espace libre, extensions autorisées, nom nettoyé sans écrasement, nettoyage des `.part` abandonnés ;
@@ -15,13 +15,13 @@ Dans l'ordre où on les prend (7 novembre 2026), un lot par PR (ou deux).
   - interface : page « Envoyer » (glisser-déposer, XHR avec progression, masquée sur la télé) et onglet « Boîte de réception » dans Gestion.
 
   *À essayer sur place :* un envoi de 1 à 2 Go à travers Funnel (débit et délais non configurables) et l'espace libre réel sous `/data`. La reprise d'un envoi interrompu (`Content-Range`) viendra plus tard, si le besoin se confirme.
-- [ ] **Recherche sans accents** : déjà en place, `fold()` retire accents et casse (recherche globale et filtre de bibliothèque). Si un cas échoue, noter la saisie exacte : ce serait une ligature ou un caractère que `fold` ne gère pas.
 
 ## À essayer sur place
 
 Les tests tournent dans un Chromium de bureau, pas sur la télé. Rien de tout cela ne bloque le reste.
 
 - [ ] **La liseuse en double page** (lot 6, livré) sur une tablette et sur la télé : le bouton « Double page » en paysage, le focus des boutons « Double page » et « Décaler d’une page » à la télécommande, le sens de lecture retenu par série, la couverture seule puis les couples (et « Décaler d’une page » quand un livre commence par une double page). Sur un NAS lent : une vue ne s'affiche qu'une fois ses deux images chargées, les tours de page demandés entre-temps sont rejoués ensuite.
+- [ ] **Les piles d'affiches à cache froid** sur le NAS : la première ouverture d'une bibliothèque de séries, de livres ou de BD après un vidage du cache d'images lit les affiches des premiers éléments de chaque série (`STACK_MAX = 3`). Mesurer la durée réelle de ce premier affichage, et vérifier qu'il ne ralentit pas les autres requêtes.
 - [ ] **À la télécommande**, sur la télé (Android TV, Fire TV, webOS) : les sagas, l'éditeur de sagas, le sélecteur de films, les cartes grisées, le bouton « … » des films, des sagas, des séries et des animations, les photos d'artistes, la liseuse et le lecteur.
 - [ ] **Les pop-up unifiés** ([popups.md](popups.md)) à la télécommande et au tactile : le pied de boutons est maintenant une rangée de boutons égaux (en colonne seulement pour plusieurs champs), y compris dans la file d'attente et le choix de films ; vérifier que Gauche / Droite passent d'un bouton à l'autre et que la file d'attente tient sur un téléphone étroit.
 - [ ] **Les liens d'une fiche artiste** au tactile, sur un vrai téléphone : la croix de retrait à côté de chaque lien se touche sans viser à côté, et la fenêtre « Ajouter un lien » ne se laisse pas cacher par le clavier. Sur la télé, ces contrôles sont absents (saisir une adresse à la télécommande se fait mal).
