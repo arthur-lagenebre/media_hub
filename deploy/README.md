@@ -145,6 +145,10 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 - Tout de suite, sans redéployer : `docker exec media-hub-tailscale tailscale funnel reset` (coupe le Funnel du nœud ; il revient au prochain démarrage tant que `AllowFunnel` est dans `serve.json`). Cette commande n'a pas pu être vérifiée dans la documentation de Tailscale pour cette version : si elle échoue, retire `AllowFunnel` et redémarre, ou retire l'attribut `funnel` de la politique du tailnet (le Funnel cesse aussitôt).
 - Si un compte est en cause : `docker exec -it media-hub python -m hub user passwd <nom>` (ses appareils sont déconnectés) ou `user rm <nom>`.
 
+## Image Docker (facultative)
+
+Le compose ci-dessus monte les sources dans `python:3.13-slim`. À chaque étiquette de version (`vX.Y.Z`), `.github/workflows/image.yml` publie aussi une image toute faite, `ghcr.io/arthur-lagenebre/media_hub:<version>` (et `latest`), avec media_library, ffmpeg et Pillow dedans. Elle écoute `0.0.0.0:8080`, garde ses données dans `/data` et refuse de démarrer sans `HUB_PASSWORD` tant que la base n'a pas de compte. Les bibliothèques se montent sous `/srv`. Le compose n'a pas changé : l'image est une autre manière de déployer, pas un remplacement.
+
 ## Dépannage
 
 | Symptôme | Piste |
