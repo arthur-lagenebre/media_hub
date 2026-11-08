@@ -1,0 +1,87 @@
+name: Qualité
+
+# La passe « faire bien » du skill ub-mode, à chaque PR qui touche du Python de hub/ :
+#   dryer   : aucune duplication de score 0,8 ou plus dans hub/ (une paire se compare à tout hub/, pas seulement aux fichiers modifiés) ;
+#   crapper : aucune fonction des fichiers modifiés au-dessus de CRAP 10.
+# Le mutator, plus long, se déclenche à part (étiquette « mutator », voir mutator.yml).
+on:
+  pull_request:
+    paths:
+      - "hub/**/*.py"
+      - ".github/workflows/quality.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: qualite-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DRYER_REF: 66ff6d21a42c04afcad89c78a80066176d1294b0
+  DRY_MIN: "0.8"
+  CRAP_MAX: "10"
+
+jobs:
+  dryer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: media_hub
+      - uses: actions/checkout@v4
+        with:
+          repository: unclebob/dryer
+          ref: ${{ env.DRYER_REF }}
+          path: dryer
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # dryer sort toujours 0 après un rapport : c'est la présence d'un « DUPLICATE » qui fait échouer.
+      - name: Duplication
+        working-directory: media_hub
+        shell: bash
+        run: |
+          ../dryer/dryer --threshold "$DRY_MIN" hub | tee dryer.log
+          if grep -q '^DUPLICATE' dryer.log; then
+            echo "::error title=dryer::des paires de score $DRY_MIN ou plus : à factoriser (voir le journal)"
+            exit 1
+          fi
+
+  crapper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: media_hub
+          fetch-depth: 0
+      - uses: ./media_hub/.github/actions/setup
+        with:
+          playwright: "true"      # le serveur est aussi exercé par l'interface : sans elle, la couverture serait plus basse qu'en local
+          crapper: "true"
+      - name: Fichiers Python modifiés
+        id: files
+        working-directory: media_hub
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            files=$(git diff --name-only --diff-filter=AM "$BASE"...HEAD -- 'hub/*.py' | tr '\n' ' ')
+          else
+            files=$(git ls-files 'hub/*.py' | tr '\n' ' ')
+          fi
+          echo "list=$files" >> "$GITHUB_OUTPUT"
+      - name: CRAP
+        if: steps.files.outputs.list != ''
+        working-directory: media_hub
+        env:
+          FILES: ${{ steps.files.outputs.list }}
+          # crapper lance `unittest discover` à la racine, qui importe aussi hub/scan : il lui faut `libraries` (media_library).
+          PYTHONPATH: ${{ github.workspace }}/media_library
+        shell: bash
+        run: |
+          # shellcheck disable=SC2086
+          ../crapper/crapper --threshold "$CRAP_MAX" $FILES 2>&1 | tee crapper.log

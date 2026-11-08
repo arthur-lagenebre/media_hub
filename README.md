@@ -167,7 +167,21 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1601 tests : 1363 serveur + 238 interface
+python -m unittest discover -s tests          # 1627 tests : 1389 serveur + 238 interface
 ```
 
 `tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 234 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+
+### Intégration continue (GitHub Actions)
+
+Les workflows sont dans `.github/workflows/` ; l'environnement commun (media_library à côté, ffmpeg, `.venv`) est dans l'action `.github/actions/setup`.
+
+| Workflow | Quand | Ce qu'il fait |
+| --- | --- | --- |
+| `tests.yml` | chaque PR, chaque push sur `main` | le serveur sur Python 3.13 et 3.14, l'interface dans Chromium |
+| `version.yml` | chaque PR | relit la règle de `/ship` : `__version__`, `API_VERSION`, `SCHEMA_VERSION` (échec si un numéro baisse, avertissement si la version ne suit pas `hub/`) |
+| `quality.yml` | PR qui touche du Python de `hub/` | `dryer` (aucune paire de score 0,8 ou plus) et `crapper` (CRAP 10 au plus sur les fichiers modifiés) |
+| `mutator.yml` | à la main, ou étiquette `mutator` sur une PR | la passe de mutation, sur les chemins choisis ou les fichiers Python de la PR |
+| `image.yml` | étiquette `vX.Y.Z` | construit l'image (`deploy/Dockerfile`), l'essaie, la publie sur `ghcr.io` ; l'étiquette doit être celle de `__version__` |
+
+`dependabot.yml` propose chaque semaine la mise à jour des actions et de l'image de base. Les outils `mutator`, `crapper` et `dryer` sont épinglés à un commit dans les workflows : pour les mettre à jour, change ce commit.

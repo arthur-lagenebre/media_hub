@@ -1,0 +1,52 @@
+name: Tests
+
+# Les tests de la PR, sur Linux : le serveur sur les deux Python qui comptent (3.13 : celui du conteneur du NAS, 3.14 : celui du poste),
+# l'interface dans Chromium à part, parce qu'elle est plus lente et qu'elle a besoin de Playwright.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  serveur:
+    name: Serveur (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: media_hub
+      - uses: ./media_hub/.github/actions/setup
+        with:
+          python-version: ${{ matrix.python }}
+      # Sans Playwright, les tests d'interface sont ignorés : ils passent dans l'autre job.
+      - name: Tests du serveur
+        working-directory: media_hub
+        run: .venv/bin/python -W ignore -m unittest discover -s tests
+
+  interface:
+    name: Interface (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: media_hub
+      - uses: ./media_hub/.github/actions/setup
+        with:
+          playwright: "true"
+      - name: Tests de l'interface
+        working-directory: media_hub
+        run: .venv/bin/python -W ignore -m unittest tests.test_ui tests.test_popups

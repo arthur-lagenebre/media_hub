@@ -1,0 +1,107 @@
+name: Image
+
+# Publie l'image de media_hub sur ghcr.io quand on pousse une étiquette de version (git tag v0.3.0 && git push origin v0.3.0).
+# L'étiquette doit être celle de __version__ : on ne publie pas une image qui se dit autre chose que ce qu'elle contient.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:       # construit et essaie l'image sans la publier
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: media_hub
+      - uses: actions/checkout@v4
+        with:
+          repository: arthur-lagenebre/media_library
+          path: media_library
+
+      - name: Version du code
+        id: version
+        working-directory: media_hub
+        run: echo "number=$(sed -n 's/^__version__ = \"\(.*\)\"/\1/p' hub/__init__.py)" >> "$GITHUB_OUTPUT"
+
+      - name: L'étiquette est celle de __version__
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          if [ "$TAG" != "v$NUMBER" ]; then
+            echo "::error title=Image::l'étiquette $TAG ne correspond pas à __version__ = $NUMBER"
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construire
+        uses: docker/build-push-action@v6
+        with:
+          context: media_hub
+          file: media_hub/deploy/Dockerfile
+          build-contexts: media_library=media_library
+          load: true
+          tags: media-hub:essai
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # L'image démarre-t-elle : le serveur s'importe avec media_library, ffmpeg et Pillow sont là, et sans mot de passe elle refuse de s'ouvrir.
+      - name: Essayer
+        env:
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          docker run --rm --entrypoint python media-hub:essai -c "
+          import PIL, hub
+          from hub import config
+          config.use_media_library('/app/media_library')
+          from hub.server import app
+          assert hub.__version__ == '$NUMBER', hub.__version__
+          print('media_hub', hub.__version__, 'importé')"
+          docker run --rm --entrypoint ffmpeg media-hub:essai -version | head -n 1
+          if docker run --rm media-hub:essai; then
+            echo "::error title=Image::le serveur a démarré sans HUB_PASSWORD"
+            exit 1
+          fi
+
+      - name: Connexion à ghcr.io
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Étiquettes de l'image
+        id: meta
+        if: github.ref_type == 'tag'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Publier
+        if: github.ref_type == 'tag'
+        uses: docker/build-push-action@v6
+        with:
+          context: media_hub
+          file: media_hub/deploy/Dockerfile
+          build-contexts: media_library=media_library
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
