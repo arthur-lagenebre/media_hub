@@ -184,7 +184,7 @@ class TestNavigation(UiCase):
         self.assertTrue(self.page.url.endswith("#/l/films"))
         self.assertEqual(self.focused(), title)
 
-    def test_filter_letter_menu_and_back_closes_menu_only(self):
+    def test_filter_genre_menu_and_back_closes_menu_only(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
         total = self.view(".grid .card").count()
@@ -194,18 +194,18 @@ class TestNavigation(UiCase):
         self.view("input[type=search]").fill("")
         self.page.wait_for_timeout(700)
         self.assertEqual(self.view(".grid .card").count(), total)
-        self.view(".tools .btn", ).first.click()                    # « Lettre »
+        self.view(".tools .btn", ).first.click()                    # « Genre »
         self.page.wait_for_selector(".veil .opt")
         url = self.page.url
         self.press("Escape", wait=400)
         self.assertEqual(self.page.locator(".veil").count(), 0)
         self.assertEqual(self.page.url, url)
         self.view(".tools .btn").first.click()
-        letter = self.page.locator(".veil .opt .lbl").nth(1).inner_text()
+        genre = self.page.locator(".veil .opt .lbl").nth(1).inner_text()
         self.page.locator(".veil .opt").nth(1).click()
         self.page.wait_for_timeout(600)
-        titles = self.view(".grid .card").evaluate_all("els => els.map(e => e.title)")
-        self.assertTrue(titles and all(t.upper().startswith(letter) for t in titles), (letter, titles))
+        self.assertEqual(self.view(".tools .btn.flt").first.inner_text(), "Genre : " + genre)
+        self.assertTrue(0 < self.view(".grid .card").count() <= total)
         self.assertEqual(self.page.locator(".veil").count(), 0)
 
     def test_filter_typing_keeps_focus_in_field(self):
@@ -1763,7 +1763,7 @@ class TestAnimationShortcut(UiCase):
         fixtures.write_mkv(root / "srv" / "Films" / "Coco (2017)" / "Coco (2017).mkv", fixtures.movie_blocks("Coco", "Un garçon.", "2017-10-27", "movie/354912", "Animation, Famille"), minutes=105)
 
     def genre_button(self):
-        return self.view(".tools .btn.flt").nth(1)
+        return self.view(".tools .btn.flt").first
 
     def titles(self):
         return self.view(".grid .card").evaluate_all("els => els.map(e => e.title)")
@@ -1781,10 +1781,12 @@ class TestAnimationShortcut(UiCase):
         self.press("Escape")
         self.shown("#/l/animations")                                                       # Retour revient à Animations
 
-    def test_the_link_is_reached_and_pressed_from_the_keyboard_before_the_filters(self):
+    def test_the_link_is_on_the_row_of_the_filters_pushed_to_the_right_and_pressed_from_the_keyboard(self):
         self.open("#/l/animations")
         self.view(".grid .card").first.wait_for()
-        self.assertTrue(self.view(".related a.f").evaluate("el => !!(el.compareDocumentPosition(document.querySelector('.view:not([style*=none]) .tools')) & Node.DOCUMENT_POSITION_FOLLOWING)"))
+        link, sort = self.view(".tools .related a.f").bounding_box(), self.view(".tools .btn.flt").last.bounding_box()          # le genre est caché quand la bibliothèque n'en a pas : le tri est toujours là
+        self.assertLess(abs((link["y"] + link["height"] / 2) - (sort["y"] + sort["height"] / 2)), sort["height"])          # sur la même ligne que les filtres
+        self.assertGreater(link["x"], sort["x"] + sort["width"] + 40)                                                    # et décalé : à droite d'eux, pas collé
         self.view(".related a.f").focus()
         self.press("Enter", wait=600)
         self.assertTrue(self.page.url.endswith("#/l/films?genre=Animation"))
@@ -1997,10 +1999,10 @@ class TestLibraryToolbar(UiCase):
     def test_the_name_of_each_filter_comes_first_in_bold_then_its_value_in_normal_weight(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.filters().all_inner_texts(), ["Lettre : Toutes", "Genre : Tous", "Tri : Titre"])
+        self.assertEqual(self.filters().all_inner_texts(), ["Genre : Tous", "Tri : Titre"])
         weights = self.filters().evaluate_all("els => els.map(e => [+getComputedStyle(e.querySelector('b')).fontWeight, +getComputedStyle(e.querySelector('.val')).fontWeight])")
         self.assertTrue(all(name >= 600 and value <= 500 for name, value in weights), weights)
-        self.assertEqual(self.filters().evaluate_all("els => els.map(e => e.querySelector('b').textContent)"), ["Lettre :", "Genre :", "Tri :"])
+        self.assertEqual(self.filters().evaluate_all("els => els.map(e => e.querySelector('b').textContent)"), ["Genre :", "Tri :"])
 
     def test_the_best_rated_sort_puts_the_rated_film_first_and_is_not_offered_for_books(self):
         db = self.run_.hub.db
@@ -2009,13 +2011,13 @@ class TestLibraryToolbar(UiCase):
         self.addCleanup(db.update_item_meta, inception, meta={"tmdb_rating": None})
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
-        self.filters().nth(2).click()
+        self.filters().nth(1).click()
         self.page.locator(".veil .opt", has_text="Mieux notés").click()
         self.until(lambda: self.view(".grid .card").first.get_attribute("title") == "Inception")
-        self.assertEqual(self.filters().nth(2).inner_text(), "Tri : Mieux notés")
+        self.assertEqual(self.filters().nth(1).inner_text(), "Tri : Mieux notés")
         self.open("#/l/livres")
         self.view(".grid .card").first.wait_for()
-        self.filters().nth(2).click()
+        self.filters().nth(1).click()
         self.page.wait_for_selector(".veil .opt")
         self.assertEqual(self.page.locator(".veil .opt", has_text="Mieux notés").count(), 0)
 
@@ -2023,23 +2025,23 @@ class TestLibraryToolbar(UiCase):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
         before = self.widths()
-        self.filters().nth(1).click()
+        self.filters().nth(0).click()
         self.page.locator(".veil .opt", has_text="Science-Fiction").click()
         self.page.wait_for_timeout(600)
-        self.assertEqual(self.filters().nth(1).inner_text(), "Genre : Science-Fiction")
-        self.filters().nth(0).click()
+        self.assertEqual(self.filters().nth(0).inner_text(), "Genre : Science-Fiction")
+        self.filters().nth(1).click()
         self.page.locator(".veil .opt").nth(1).click()
         self.page.wait_for_timeout(600)
-        self.assertNotEqual(self.filters().nth(0).inner_text(), "Lettre : Toutes")
+        self.assertNotEqual(self.filters().nth(1).inner_text(), "Tri : Titre")
         self.assertEqual(self.widths(), before)
 
     def test_a_value_too_long_for_its_button_is_cut_and_the_button_does_not_grow(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
         before = self.widths()
-        self.filters().nth(1).evaluate("el => { el.querySelector('.val').textContent = 'Un genre au nom vraiment très très long pour ce bouton'; }")
+        self.filters().nth(0).evaluate("el => { el.querySelector('.val').textContent = 'Un genre au nom vraiment très très long pour ce bouton'; }")
         self.assertEqual(self.widths(), before)
-        self.assertTrue(self.filters().nth(1).evaluate("el => { var l = el.querySelector('.lbl'); return l.scrollWidth > l.clientWidth && getComputedStyle(l).textOverflow === 'ellipsis'; }"))
+        self.assertTrue(self.filters().nth(0).evaluate("el => { var l = el.querySelector('.lbl'); return l.scrollWidth > l.clientWidth && getComputedStyle(l).textOverflow === 'ellipsis'; }"))
 
     def test_the_buttons_stay_readable_on_a_tv_and_on_a_phone(self):
         self.open("#/l/films")

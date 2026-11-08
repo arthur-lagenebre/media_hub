@@ -128,8 +128,9 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .library h1::before { content: ""; display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--accent); margin-right: 0.7rem; vertical-align: middle; }
 .tools { display: flex; flex-wrap: wrap; align-items: center; padding: 0.3rem var(--gut) 0.6rem; }
 .tools > * { margin: 0 0.7rem 0.6rem 0; }
-.library .related { padding: 0.2rem var(--gut) 0.3rem; }
-.library .related .chip { display: inline-block; margin: 0; text-decoration: none; }      /* un lien en pastille : « Films d'animation » */
+.tools .related { margin-left: auto; }                                                  /* le raccourci « Films d'animation » : sur la rangée des filtres, poussé à droite */
+.tools .related .chip { display: inline-block; margin: 0; text-decoration: none; }      /* un lien en pastille */
+.tools .related + .count { margin-left: 0; }
 .tools .count { margin-left: auto; color: var(--mute); font-size: 0.9rem; }
 /* Boutons de filtre « Genre : Tous » : largeur fixe (elle ne dépend pas de la valeur choisie), nom en gras, valeur en poids normal, coupée par « … » si elle est trop longue */
 .tools .btn.flt { width: 11.5rem; justify-content: flex-start; }

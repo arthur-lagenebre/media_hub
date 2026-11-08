@@ -186,13 +186,12 @@ Paramètres (tous optionnels) :
 | Paramètre | Effet |
 | --- | --- |
 | `q` | filtre sur le titre / le groupe |
-| `letter` | une lettre d'index |
 | `genre` | un genre |
 | `sort` | `title` (défaut ; par artiste en musique, par collection en livres) \| `added` \| `year` \| `year-asc` \| `part` \| `rating` (« Mieux notés » : la note TMDB montrée, voir `tmdb_rating`, de la meilleure à la moins bonne, puis le plus de votes, puis le titre ; ce qui n'a pas de note montrée vient ensuite, par titre ; une vignette de saga prend la note de son meilleur film) |
 | `filter=unseen` | seulement ce qui n'est pas entièrement vu |
 | `offset`, `limit` | pagination (`limit` : 240 par défaut, 600 au plus) |
 | `sagas=1` | films : regroupe les sagas (au moins deux films) en une vignette `type: "saga"` |
-| `view=artists` | musique : une vignette par **artiste**, sans ses albums, au lieu des albums. Chaque vignette : `id` (celui de sa fiche, `/api/artist/<lib>/<id>`), `lib`, `type: "artist"`, `title` (le nom ; « Various Artists » se dit « Artistes divers »), `n` (nombre d'albums), `letter`, `album` (son plus ancien album : sa pochette, faute de photo ; la photo est `/img/artist/<lib>/<id>`). Les filtres `letter`, `genre`, `q` (un titre d'album trouve son artiste) et la pagination s'appliquent ; les artistes sans nom connu (« Artiste inconnu », « Artistes divers ») viennent en dernier ; `letters` et `genres` comptent des artistes |
+| `view=artists` | musique : une vignette par **artiste**, sans ses albums, au lieu des albums. Chaque vignette : `id` (celui de sa fiche, `/api/artist/<lib>/<id>`), `lib`, `type: "artist"`, `title` (le nom ; « Various Artists » se dit « Artistes divers »), `n` (nombre d'albums), `letter`, `album` (son plus ancien album : sa pochette, faute de photo ; la photo est `/img/artist/<lib>/<id>`). Les filtres `genre`, `q` (un titre d'album trouve son artiste) et la pagination s'appliquent ; les artistes sans nom connu (« Artiste inconnu », « Artistes divers ») viennent en dernier ; `genres` compte des artistes |
 | `group` | films : les films d'une saga, par son nom (`grp`, ou le nom d'une saga du fichier `sagas.json`) ; désactive `sagas` |
 | `section` | livres : une section (Manga, BD…) |
 
@@ -200,10 +199,10 @@ Réponse :
 
 ```json
 {"library": {"id": "…", "label": "…", "kind": "…"}, "total": 120, "offset": 0, "items": [<élément>],
- "letters": [["A", 12], ["#", 3]], "genres": [["Action", 30]]}
+ "genres": [["Action", 30]]}
 ```
 
-- `total` : éléments après filtres (avant pagination). `letters` et `genres` sont comptés sur **toute** la bibliothèque (hors filtres de lettre / genre / texte) ; `genres` : les 60 plus fréquents, rangés **par ordre alphabétique** sans tenir compte des accents ni de la casse (c'est l'ordre du menu de l'interface).
+- `total` : éléments après filtres (avant pagination). `genres` est compté sur **toute** la bibliothèque (hors filtres de genre / texte) : les 60 plus fréquents, rangés **par ordre alphabétique** sans tenir compte des accents ni de la casse (c'est l'ordre du menu de l'interface).
 - Musique : `artists` et `albums`, le nombre d'artistes et d'albums de tout ce que les filtres laissent (pas seulement de la page). Avec `view=artists`, `artists` égale `total` et `albums` additionne les `n` des artistes ; sans, `albums` égale `total` et `artists` compte les artistes distincts de ces albums.
 - Livres : `sections` : `[["Manga", 40], …]`. Avec `sagas=1` : `sagas` (nombre de vignettes de saga) et `films` (nombre de films en tout).
 - Une vignette de **saga** : `id`, `lib`, `type: "saga"`, `title`, `year`, `years` (`[première, dernière]` ou `[]`), `grp: ""`, `n`, `letter`, `added`, `genres`, `covers` (ids des trois premiers films), **`cover_urls`** (leurs URLs), `seen` / `started` optionnels. **Elle n'a pas de `cover`** : l'identifiant d'une saga n'est pas celui d'un élément, `/img/item/<saga>` répondrait 404. Pour ses films : `GET /api/library/<id>?group=<title>&sort=part` ; la réponse porte alors `missing` (absent s'il est vide) : les films qui manquent à la saga, comme dans `sagas` de la fiche d'un film (`total` ne les compte pas). **Ambigu** : `lib` n'est présent que sur les sagas.

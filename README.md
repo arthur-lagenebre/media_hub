@@ -17,7 +17,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 | Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens manga, thèmes |
 
 - **Accueil** : « Reprendre » (films, épisodes, livres, albums en cours) et les ajouts récents de chaque bibliothèque.
-- **Bibliothèque** : recherche, index par lettre, genres, tri (titre, ajout, année, note TMDB pour les films et les séries), filtre « Non vus ».
+- **Bibliothèque** : recherche, genres, tri (titre, ajout, année, note TMDB pour les films et les séries), filtre « Non vus ».
 - **Lecture adaptée au lecteur** : le navigateur annonce ce qu'il sait lire, le serveur choisit.
   1. *direct* : le fichier tel quel (requêtes Range), aucun calcul sur le NAS ;
   2. *remux* : l'image est recopiée, seul le son (E-AC-3, DTS…) passe en AAC : presque gratuit ;
@@ -130,7 +130,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | --- | --- |
 | `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche (`results` : les titres ; `people` : 8 personnes au plus dont le nom contient le texte, avec leur nombre de titres) |
 | `GET /api/person?name=<nom>` | ce qu'une personne a réalisé ou joué (films et séries des bibliothèques que le compte voit) : `name` (graphie la plus fréquente), `roles` (`director`, `actor`), `results` (par bibliothèque, du plus récent au plus ancien). Nom comparé tel quel, sans accents ni casse (« Chris Evans » ne ramène pas « Chris Evans Jr »), inconnu : `results` vide ; absent ou de plus de 200 caractères : 400. **Homonymes** : seul le nom identifie une personne, deux personnes de même nom sont confondues |
-| `GET /api/library/<id>?q&letter&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec lettres et genres (les 60 plus fréquents, par ordre alphabétique) ; musique : `artists` et `albums`, le décompte de ce que les filtres laissent (en vue artistes, un artiste trouvé garde tous ses albums) ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
+| `GET /api/library/<id>?q&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec les genres (les 60 plus fréquents, par ordre alphabétique) ; musique : `artists` et `albums`, le décompte de ce que les filtres laissent (en vue artistes, un artiste trouvé garde tous ses albums) ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
 | `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
 | `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, sagas, casting, progression |
 | `POST /api/play/<entry>` | plan de lecture (url, pistes audio, sous-titres, reprise, suivant) |

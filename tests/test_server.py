@@ -152,7 +152,6 @@ class TestBrowse(ServerCase):
         self.assertEqual([i["title"] for i in self.items("films", q="saga dceu")["items"]], ["Man of Steel", "Batman v Superman"][::-1][::-1] if False else [i["title"] for i in self.items("films", q="saga dceu")["items"]])
         self.assertEqual(len(self.items("films", q="saga dceu")["items"]), 2)
         self.assertEqual([i["title"] for i in self.items("films", genre="Science-Fiction")["items"]], ["Inception"])
-        self.assertEqual({i["letter"] for i in self.items("films", letter="I")["items"]}, {"I"})
         page = self.items("films", limit=1, offset=1)
         self.assertEqual((len(page["items"]), page["offset"]), (1, 1))
         self.assertGreater(page["total"], 1)
@@ -165,17 +164,6 @@ class TestBrowse(ServerCase):
         self.assertEqual((broken["offset"], len(broken["items"])), (0, total))
         self.assertEqual(self.items("films", offset=total)["items"], [])                              # au-delà de la fin : une page vide, pas une erreur
 
-    def test_music_letter_is_the_artist_and_sort_is_fixed(self):
-        album = self.item_by_title("musique", "Discovery")
-        self.hub.db.execute("UPDATE items SET grp='Zebra' WHERE id=?", (album["id"],))
-        try:
-            data = self.items("musique")
-            self.assertIn(["Z", 1], data["letters"])
-            self.assertNotIn(["D", 1], data["letters"])                    # « Discovery » commence par D, mais l'artiste par Z
-            self.assertEqual([i["title"] for i in self.items("musique", letter="Z")["items"]], ["Discovery"])
-            self.assertEqual(self.items("musique", letter="D")["items"], [])
-        finally:
-            self.hub.db.execute("UPDATE items SET grp='Daft Punk' WHERE id=?", (album["id"],))
 
     def test_unknown_library_and_item_are_404(self):
         self.assertEqual(self.api.get("/api/library/nope")[0], 404)
@@ -1133,9 +1121,6 @@ class TestSagas(ServerCase):
     def test_filters_work_on_whole_sagas(self):
         self.assertEqual([i["title"] for i in self.sagas(q="course 7")["items"]], ["Saga Course"])
         self.assertEqual([i["title"] for i in self.sagas(genre="Action")["items"] if i["title"] == "Saga Course"], ["Saga Course"])
-        letters = dict(self.sagas()["letters"])
-        self.assertGreaterEqual(letters.get("S", 0), 2)
-        self.assertLessEqual({"Saga Course", "Saga DCEU"}, {i["title"] for i in self.sagas(letter="S")["items"]})
 
     def test_a_saga_is_unseen_until_every_film_is_seen(self):
         films = self.items("films", group="Saga Course", sort="part", limit=50)["items"]
@@ -3115,12 +3100,9 @@ class TestApiContract(ContractBase):
     def test_library(self):
         for lib in ("films", "series", "animations", "musique", "livres"):
             data = self.get(f"/api/library/{lib}")
-            self.has(data, {"library": dict, "total": int, "offset": int, "items": list, "letters": list, "genres": list}, f"library[{lib}]")
+            self.has(data, {"library": dict, "total": int, "offset": int, "items": list, "genres": list}, f"library[{lib}]")
             self.has(data["library"], {"id": str, "label": str, "kind": str}, f"library[{lib}].library")
             self.assertEqual(data["total"], len(data["items"]))
-            for letter, count in data["letters"]:
-                self.assertIsInstance(letter, str)
-                self.assertIsInstance(count, int)
             for genre, count in data["genres"]:
                 self.assertIsInstance(genre, str)
                 self.assertIsInstance(count, int)

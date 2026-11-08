@@ -216,11 +216,6 @@ class TestLibraryRoute(RouteCase):
             rows.append(item(f"m{n}", title=f"Film {n}", letter=("#" if n == 7 else "A" if n < 5 else "B"), grp="Saga" if n < 4 else "", year=str(2000 + n), genres=json.dumps([f"G{n}", "Commun"] if n < 3 else [f"G{n}"])))
         return rows
 
-    def test_the_letters_go_in_order_with_the_digits_last(self):
-        self.fill(self.films(), [])
-        out = self.get("/api/library/lib").json()
-        self.assertEqual(out["letters"], [["A", 4], ["B", 2], ["#", 1]])                      # par lettre, pas par effectif
-
     def test_the_sixty_most_frequent_genres_are_listed_alphabetically_without_accents_or_case(self):
         self.fill(self.films(), [])
         out = self.get("/api/library/lib").json()
@@ -893,13 +888,11 @@ class TestArtistsView(RouteCase):
         various = {a["id"]: a for a in self.artists()["items"]}["ar3"]
         self.assertEqual(various["title"], "Artistes divers")
 
-    def test_the_letters_and_the_genres_count_the_artists_not_the_albums(self):
+    def test_the_genres_count_the_artists_not_the_albums(self):
         out = self.artists()
-        self.assertEqual(dict(out["letters"]), {"A": 3, "D": 1, "Z": 1})
         self.assertEqual(dict(out["genres"]), {"Electro": 1, "House": 1, "Pop": 1})
 
     def test_the_filters_of_the_library_work_on_artists(self):
-        self.assertEqual([a["title"] for a in self.artists("&letter=D")["items"]], ["Daft Punk"])
         self.assertEqual([a["title"] for a in self.artists("&genre=Electro")["items"]], ["Daft Punk"])
         self.assertEqual([a["title"] for a in self.artists("&q=zaz")["items"]], ["Zaz"])
 

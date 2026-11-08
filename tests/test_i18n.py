@@ -253,7 +253,7 @@ class TestEnglishInTheBrowser(UiCase):
     def test_the_filter_buttons_and_the_music_counter_are_in_english(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.view(".tools .btn.flt").all_inner_texts(), ["Letter: All", "Genre: All", "Sort: Title"])      # pas d'espace avant les deux-points en anglais
+        self.assertEqual(self.view(".tools .btn.flt").all_inner_texts(), ["Genre: All", "Sort: Title"])      # pas d'espace avant les deux-points en anglais
         self.open("#/l/musique")
         self.view(".grid .card").first.wait_for()
         self.assertEqual(self.view(".count").inner_text(), "1 artist · 1 album")
