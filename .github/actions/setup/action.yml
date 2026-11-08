@@ -30,7 +30,7 @@ runs:
         ref: 6fd92c4c9bcc56efb64a2f8743d5a2993bcfd42d
         path: crapper
 
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v7
       with:
         python-version: ${{ inputs.python-version }}
 
