@@ -1,0 +1,97 @@
+name: Mutator
+
+# Passe de mutation lancée à la main (onglet Actions > Mutator > Run workflow),
+# pas à chaque PR : le premier passage exécute tous les mutants couverts.
+on:
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: "Fichiers ou dossiers à muter (séparés par des espaces)"
+        default: "hub"
+      playwright:
+        description: "Installer Chromium pour que les tests d'interface comptent dans la couverture"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Les deux outils ne sont pas versionnés : on les épingle, pour qu'un run se rejoue à l'identique.
+  MUTATOR_REF: a5a0cb803b66e0cdb8bf471b3b08af701d424a41
+  CRAPPER_REF: 6fd92c4c9bcc56efb64a2f8743d5a2993bcfd42d
+
+jobs:
+  mutator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      # Les dépôts sont côte à côte, comme en local : media_library à côté de media_hub
+      # (ses lecteurs de tags), crapper à côté de mutator (noms des fonctions).
+      - uses: actions/checkout@v4
+        with:
+          path: media_hub
+      - uses: actions/checkout@v4
+        with:
+          repository: arthur-lagenebre/media_library
+          path: media_library
+      - uses: actions/checkout@v4
+        with:
+          repository: unclebob/mutator
+          ref: ${{ env.MUTATOR_REF }}
+          path: mutator
+      - uses: actions/checkout@v4
+        with:
+          repository: unclebob/crapper
+          ref: ${{ env.CRAPPER_REF }}
+          path: crapper
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: ffmpeg (fichiers de test réels)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # Le .venv de media_hub est celui que mutator choisit pour lancer les tests
+      # (voir bugs/python-tests-run-with-mutators-virtualenv.md dans mutator).
+      - name: Environnement de media_hub
+        working-directory: media_hub
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install Pillow coverage
+          if [ "${{ inputs.playwright }}" = "true" ]; then
+            .venv/bin/pip install playwright
+            .venv/bin/playwright install --with-deps chromium
+          fi
+
+      # Les survivants et les mutants tués d'un run servent au suivant (passe différentielle).
+      - uses: actions/cache@v4
+        with:
+          path: media_hub/.metrics/mutate
+          key: mutate-${{ github.run_id }}
+          restore-keys: mutate-
+
+      - name: Mutator
+        working-directory: media_hub
+        shell: bash   # pipefail : le code de sortie de mutator (3 = un mutant survit) passe malgré tee
+        run: ../mutator/mutator ${{ inputs.paths }} 2>&1 | tee mutator.log
+
+      - name: Résumé
+        if: always()
+        working-directory: media_hub
+        run: |
+          {
+            echo '```'
+            tail -n 60 mutator.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutate
+          path: |
+            media_hub/.metrics/mutate
+            media_hub/.metrics/crap.edn
+            media_hub/mutator.log
