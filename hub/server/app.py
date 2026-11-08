@@ -49,6 +49,7 @@ from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
 from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, to_jpeg, write_atomic
+from ..scan.common import STACK_MAX
 from .jobs import Jobs
 
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
@@ -196,6 +197,8 @@ def summary(row, seen=None):
         out["artist_id"] = meta["artist_id"]
     if row["type"] == "series" and meta.get("missing"):
         out["missing"] = sum(len(m["numbers"]) for m in meta["missing"])
+    if row["type"] == "series" and meta.get("stack"):
+        out["cover_urls"] = [urls.item_cover(row["id"])] + [urls.entry_image(e) for e in meta["stack"]][:STACK_MAX - 1]
     rating = shown_rating(meta.get("tmdb_rating"))
     if rating:
         out["tmdb_rating"], out["tmdb_votes"] = rating["vote"], rating["votes"]
@@ -1148,8 +1151,8 @@ def saga_json(saga, seen):
     done = sum(1 for m in saga["members"] if film_seen(m, seen))
     started = sum(1 for m in saga["members"] if not film_seen(m, seen) and watched(m, seen)[1])
     out = {"id": saga["id"], "lib": saga["lib"], "type": "saga", "title": saga["title"], "year": saga["year"], "years": saga["years"], "grp": "", "n": saga["count"], "letter": saga["letter"],
-           "added": saga["added"], "genres": safe_json(saga["genres"], []), "covers": [m["id"] for m in saga["members"][:3]],
-           "cover_urls": [urls.item_cover(m["id"]) for m in saga["members"][:3]]}
+           "added": saga["added"], "genres": safe_json(saga["genres"], []), "covers": [m["id"] for m in saga["members"][:STACK_MAX]],
+           "cover_urls": [urls.item_cover(m["id"]) for m in saga["members"][:STACK_MAX]]}
     if done:
         out["seen"] = done
     if started:

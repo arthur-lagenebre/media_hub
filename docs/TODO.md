@@ -15,7 +15,6 @@ Dans l'ordre où on les prend (7 novembre 2026), un lot par PR (ou deux).
   - interface : page « Envoyer » (glisser-déposer, XHR avec progression, masquée sur la télé) et onglet « Boîte de réception » dans Gestion.
 
   *À essayer sur place :* un envoi de 1 à 2 Go à travers Funnel (débit et délais non configurables) et l'espace libre réel sous `/data`. La reprise d'un envoi interrompu (`Content-Range`) viendra plus tard, si le besoin se confirme.
-- [ ] **Lot 5 : fiche manga, boîte « collection ».** Comme la saga d'un film : les autres séries de la même collection, avec ce qui manque (`meta.collection`, `grp` et `missing` existent déjà). Vérifier d'abord, sur un exemple réel, que les étiquettes regroupent bien des séries. Le regroupement dans la grille, avec le badge « 3/4 » des films, ne vient qu'ensuite, si la fiche plaît.
 - [ ] **Lot 6 : manga en double page** (`reader.js`, deux images côte à côte). À trancher d'abord : le sens de lecture (japonais, de droite à gauche ; le champ `Manga` de ComicInfo peut le dire, à vérifier dans `media_library`) et la couverture seule en première page. À essayer sur une tablette.
 - [ ] **Recherche sans accents** : déjà en place, `fold()` retire accents et casse (recherche globale et filtre de bibliothèque). Si un cas échoue, noter la saisie exacte : ce serait une ligature ou un caractère que `fold` ne gère pas.
 
@@ -43,6 +42,7 @@ Si `test_admin_runs_an_update` échoue (il a échoué une fois sur une machine, 
 - [ ] Une **fiche TMDB fixée à la main** ne se retire pas, on en fait une autre. Le marqueur `{tmdb-…}` n'est pas écrit dans le nom du dossier : pour que `media_library` voie le même choix, il se tape à la main.
 - [ ] Les sous-titres **VobSub (DVD)** ne sont pas affichés : seuls les PGS (Blu-ray) le sont. ffmpeg ne sait pas les extraire tels quels (pas de muxer `.idx`/`.sub`) : il faudrait lire les paquets du `.mkv` soi-même, avec la palette de leur `CodecPrivate`. Contournement : un fichier `.srt` à côté de la vidéo.
 - [ ] Les PGS ne se **choisissent jamais d'office** à l'ouverture d'un film (l'extraction peut durer) : il faut les choisir une fois dans le menu « Sous-titres » ; la langue choisie est ensuite retenue, et un PGS de cette langue est repris s'il n'y a pas de piste texte.
+- [ ] **Un élément disparu laisse ses références** : le scan efface ses lignes `items` et `entries`, mais ses clés `kv` restent (`enrich:<bibliothèque>:<id>` avec la note TMDB, `tmdb-pin:<id>`, `poster:<id>`, `dismiss:<compte>:<id>`). Elles resservent si le dossier revient au même chemin, mais un élément renommé ou déplacé change d'identifiant et laisse les anciennes clés sans emploi. À faire : les retirer (et leurs fichiers d'affiche) pour les éléments absents depuis un certain temps, avec un délai comme `ORPHAN_PROGRESS_DAYS` pour qu'un volume démonté n'efface rien. À vérifier d'abord : `artist:<mbid>`, `artistlinks:<mbid>`, `wanted:<bibliothèque>` et les listes de lecture.
 
 ## Idées mises de côté
 

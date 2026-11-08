@@ -772,6 +772,89 @@ class TestSagasInLibrary(UiCase):
         self.assertEqual(self.view(".grid .card.saga").count(), 1)
 
 
+class TestStackedCards(UiCase):
+    """Une série de livres de 2 tomes ou plus se dessine comme une saga (pile d'affiches, titre à la couleur de la bibliothèque) mais ouvre sa fiche ; une saga de films, la page de la saga."""
+    ACCENT = {"livres": "rgb(155, 209, 107)", "films": "rgb(242, 180, 65)"}
+    TEXT = "rgb(236, 232, 225)"
+
+    @classmethod
+    def add_media(cls, root):
+        for name, count in (("Trois Tomes", 3), ("Un Seul", 1), ("Cinq Tomes", 5)):
+            for n in range(1, count + 1):
+                fixtures.write_cbz(root / "srv" / "Livres" / "Manga" / name / f"Tome {n:02d}.cbz", Series=name, Number=str(n))
+        for n in range(1, 6):
+            fixtures.write_mkv(root / "srv" / "Films" / "_Cinq" / f"{n} - Film {n}.mkv", fixtures.movie_blocks(f"Film {n}", "", f"200{n}-01-01", f"movie/9000{n}", "Action", collection="Saga Cinq", part=n), minutes=90)
+
+    def card(self, lib, title):
+        self.open("#/l/" + lib)
+        card = self.view(f'.grid .card[title="{title}"]')
+        card.wait_for()
+        return card
+
+    def colour(self, card):
+        return card.locator(".t").evaluate("el => getComputedStyle(el).color")
+
+    def test_a_series_of_three_volumes_is_a_stack_of_three_posters_in_the_accent_colour(self):
+        card = self.card("livres", "Trois Tomes")
+        self.assertIn("multi", card.get_attribute("class").split())
+        self.assertNotIn("saga", card.get_attribute("class").split())
+        self.assertEqual(card.locator(".stack").count(), 1)
+        self.assertEqual(card.locator(".stack .poster").count(), 3)
+        self.assertEqual(self.colour(card), self.ACCENT["livres"])
+        self.assertEqual(card.locator(".s").inner_text(), "3 volumes")
+
+    def test_a_series_of_one_volume_keeps_the_plain_card(self):
+        card = self.card("livres", "Un Seul")
+        self.assertNotIn("multi", card.get_attribute("class").split())
+        self.assertEqual(card.locator(".stack").count(), 0)
+        self.assertEqual(card.locator(".poster").count(), 1)
+        self.assertEqual(self.colour(card), self.TEXT)
+
+    def test_a_series_of_five_volumes_and_a_saga_of_five_films_show_three_posters(self):
+        self.assertEqual(self.card("livres", "Cinq Tomes").locator(".stack .poster").count(), 3)
+        saga = self.card("films", "Saga Cinq")
+        self.assertIn("saga", saga.get_attribute("class").split())
+        self.assertEqual(saga.locator(".stack .poster").count(), 3)
+        self.assertEqual(self.colour(saga), self.ACCENT["films"])
+
+    def test_the_series_card_opens_the_sheet_not_a_saga_page(self):
+        card = self.card("livres", "Trois Tomes")
+        item = self.item("livres", "Trois Tomes")["id"]
+        self.assertEqual(card.get_attribute("href"), "#/i/" + item)
+        card.click()
+        self.shown("#/i/" + item)
+        self.assertEqual(self.view("h1").first.inner_text(), "Trois Tomes")
+
+    def test_the_stack_zooms_as_a_block_on_focus_and_on_hover_without_moving_its_posters(self):
+        card = self.card("livres", "Trois Tomes")
+        zoom = lambda: card.locator(".stack").evaluate("el => getComputedStyle(el).transform")          # noqa: E731
+        card.focus()
+        self.until(lambda: zoom() != "none")                                                                # la pile grossit d'un bloc
+        self.assertEqual(card.locator(".stack .poster").first.evaluate("el => getComputedStyle(el).transform"), "none")        # sans que chaque affiche bouge de son côté
+        self.page.evaluate("document.activeElement.blur()")
+        self.page.mouse.move(0, 0)
+        self.until(lambda: zoom() == "none")
+        card.hover()
+        self.until(lambda: zoom() != "none")
+
+    def test_the_saga_page_shows_three_posters_of_five_films(self):
+        self.open("#/saga/films?g=Saga%20Cinq")
+        self.view(".stack-big .poster").first.wait_for()
+        self.assertEqual(self.view(".stack-big .poster").count(), 3)
+
+    def test_the_remote_reaches_the_stack_and_enter_opens_the_sheet(self):
+        self.card("livres", "Trois Tomes")
+        self.until(lambda: self.focused() != "")                                                            # le focus est posé dans le contenu
+        for _ in range(8):
+            if self.focused() == "Trois Tomes":
+                break
+            self.press("ArrowRight", wait=80)
+        self.assertEqual(self.focused(), "Trois Tomes")
+        item = self.item("livres", "Trois Tomes")["id"]
+        self.press("Enter", wait=100)
+        self.shown("#/i/" + item)
+
+
 class TestSagaEditor(UiCase):
     """L'éditeur de sagas (Gestion > Sagas) et « Ajouter à une saga » de la fiche d'un film. Inception : 27205 ; Man of Steel : 49521 ; Batman v Superman : 209112."""
 

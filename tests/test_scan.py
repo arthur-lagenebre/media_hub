@@ -97,6 +97,51 @@ class TestScanBooks(TempCase):
         self.assertEqual((counts.read, counts.reused), (2, 1))
 
 
+class TestScanBooksStack(TempCase):
+    """Une série de 2 tomes ou plus montre jusqu'à STACK_MAX couvertures empilées : sa fiche garde les entrées des tomes 2 à STACK_MAX."""
+
+    def series(self, volumes, name="Serie"):
+        for n in range(1, volumes + 1):
+            fixtures.write_cbz(self.root / "Manga" / name / f"Tome {n:02d}.cbz", Series=name, Number=str(n))
+        return config.Library("livres", "Livres", "books", self.root)
+
+    def stack(self, volumes):
+        """(la pile de la série de `volumes` tomes, les identifiants de ses tomes dans l'ordre)."""
+        lib = self.series(volumes, name=f"Serie {volumes}")
+        items, entries, _ = books.scan_books(lib, {})
+        item = next(i for i in items if i["title"] == f"Serie {volumes}")
+        return json.loads(item["meta"]).get("stack"), [e["id"] for e in sorted(entries, key=lambda e: e["number"]) if e["item_id"] == item["id"]]
+
+    def test_a_single_volume_has_nothing_to_stack(self):
+        self.assertIsNone(self.stack(1)[0])
+
+    def test_the_stack_holds_the_entries_of_volumes_two_to_the_maximum_in_order(self):
+        for volumes, kept in ((2, 1), (3, 2), (5, 2)):
+            with self.subTest(volumes=volumes):
+                stack, ids = self.stack(volumes)
+                self.assertEqual(stack, ids[1:1 + kept])
+                self.assertEqual(len(stack), kept)
+
+    def test_the_stack_follows_the_volume_numbers_not_the_order_of_the_folders(self):
+        """Des tomes 3 et 4 à la racine et des tomes 1 et 2 dans un sous-dossier : le scan range le sous-dossier après, la fiche et la pile suivent les numéros."""
+        for rel, number in (("Tome 03.cbz", "3"), ("Tome 04.cbz", "4"), ("Bonus/Tome 01.cbz", "1"), ("Bonus/Tome 02.cbz", "2")):
+            fixtures.write_cbz(self.root / "Manga" / "Mêlée" / rel, Series="Mêlée", Number=number)
+        items, entries, _ = books.scan_books(config.Library("livres", "Livres", "books", self.root), {})
+        item = next(i for i in items if i["title"] == "Mêlée")
+        by_number = [e["id"] for e in sorted(entries, key=lambda e: e["number"]) if e["item_id"] == item["id"]]
+        self.assertEqual(json.loads(item["meta"])["stack"], by_number[1:common.STACK_MAX])
+
+    def test_a_volume_added_after_a_scan_joins_the_stack_at_the_next_scan(self):
+        lib = self.series(2)
+        db = Database(self.root / "hub.db")
+        scanning.scan_library(db, lib, log=lambda _m: None)
+        before = json.loads(db.one("SELECT meta FROM items")["meta"])["stack"]
+        fixtures.write_cbz(self.root / "Manga" / "Serie" / "Tome 03.cbz", Series="Serie", Number="3")
+        scanning.scan_library(db, lib, log=lambda _m: None)
+        after = json.loads(db.one("SELECT meta FROM items")["meta"])["stack"]
+        self.assertEqual((len(before), len(after), after[:1]), (1, 2, before))
+
+
 class TestScanMusic(TempCase):
     def setUp(self):
         super().setUp()

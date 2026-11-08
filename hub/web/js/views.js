@@ -50,27 +50,37 @@
   }
   function sagaHref(libId, name) { return '#/saga/' + libId + '?g=' + encodeURIComponent(name); }
   function personHref(name) { return '#/person?n=' + encodeURIComponent(name); }
-  // Les affiches d'une saga, empilées en léger décalé : la première devant, les suivantes qui dépassent derrière.
-  H.stack = function (ids, title, width) {
-    var box = h('div', { class: 'stack n' + Math.min(3, ids.length) });
-    ids.slice(0, 3).reverse().forEach(function (id, i, list) {
+  // Les couvertures empilées d'une carte : au plus STACK_MAX (le serveur n'en envoie pas davantage, voir scan/common.py).
+  var STACK_MAX = 3;
+  // Les affiches d'une saga ou d'une série, empilées en léger décalé : la première devant, les suivantes qui dépassent derrière.
+  // `urls` : les adresses des images (le `cover_urls` du serveur) ; `width` : la largeur demandée.
+  H.stack = function (urls, title, width) {
+    var box = h('div', { class: 'stack n' + Math.min(STACK_MAX, urls.length) });
+    urls.slice(0, STACK_MAX).reverse().forEach(function (url, i, list) {
       var depth = list.length - 1 - i;       // 0 = devant
-      var pic = H.picture('/img/item/' + id + '?w=' + (width || 300), title + depth);
-      pic.setAttribute('style', 'left:' + depth * 8 + '%;top:' + (16 - depth * 5.33).toFixed(2) + '%;z-index:' + (3 - depth));
+      var pic = H.picture(url + (url.indexOf('?') < 0 ? '?' : '&') + 'w=' + (width || 300), title + depth);
+      pic.setAttribute('style', 'left:' + depth * 8 + '%;top:' + (16 - depth * 5.33).toFixed(2) + '%;z-index:' + (STACK_MAX - depth));
       box.appendChild(pic);
     });
     return box;
   };
-  function sagaCard(it) {
-    var a = h('a', { class: 'card saga f', href: sagaHref(it.lib, it.title), 'data-key': it.id, title: it.title });
-    var stack = H.stack(it.covers && it.covers.length ? it.covers : [it.id], it.title);
+  function itemCover(id) { return '/img/item/' + id; }
+  // La carte à pile d'affiches d'une saga ou d'une série de plusieurs tomes : la pile avec son badge de lecture, le titre, le sous-titre. `cls` en fait la variante (saga, multi).
+  function stackedCard(it, cls, href, covers, sub) {
+    var a = h('a', { class: 'card ' + cls + ' f', href: href, 'data-key': it.id, title: it.title });
+    var stack = H.stack(covers, it.title);
     if (it.seen >= it.n && it.seen > 0) stack.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
     else if (it.seen || it.started) stack.appendChild(h('span', { class: 'badge' }, (it.seen || 0) + '/' + it.n));
     a.appendChild(stack);
     a.appendChild(h('div', { class: 't' }, it.title));
+    a.appendChild(h('div', { class: 's' }, sub));
+    return a;
+  }
+  function sagaCard(it) {
     var years = it.years && it.years.length ? (it.years[0] === it.years[1] ? it.years[0] : it.years[0] + '–' + it.years[1]) : '';
-    a.appendChild(h('div', { class: 's' }, [H.plural(it.n, 'film'), years].filter(Boolean).join(' · ')));
-    stack.appendChild(H.actions.tools(it));
+    var covers = it.cover_urls && it.cover_urls.length ? it.cover_urls : (it.covers && it.covers.length ? it.covers : [it.id]).map(itemCover);
+    var a = stackedCard(it, 'saga', sagaHref(it.lib, it.title), covers, [H.plural(it.n, 'film'), years].filter(Boolean).join(' · '));
+    a.querySelector('.stack').appendChild(H.actions.tools(it));
     H.actions.bind(a, it);
     return a;
   }
@@ -118,6 +128,11 @@
   H.card = function (it, withGroup, withPart) {
     if (it.type === 'saga') return sagaCard(it);
     if (it.type === 'artist') return artistCard(it);
+    if (it.type === 'series' && it.cover_urls && it.cover_urls.length > 1) {         // une série de plusieurs tomes : la pile d'une saga, mais un clic ouvre sa fiche
+      var multi = stackedCard(it, 'multi', '#/i/' + it.id, it.cover_urls, itemSub(it));
+      multi.setAttribute('data-type', it.type);
+      return multi;
+    }
     var square = it.type === 'album';
     var a = h('a', { class: 'card f' + (square ? ' sq' : ''), href: '#/i/' + it.id, 'data-key': it.id, 'data-type': it.type, title: it.title });
     var pic = H.picture('/img/item/' + it.id + '?w=300', it.title, square ? 'sq' : '');
@@ -735,7 +750,7 @@
       actions.appendChild(H.button(all ? H.t('Marquer la saga non vue') : H.t('Marquer la saga vue'), all ? 'close' : 'check', { 'data-key': 'seen', onclick: function () { setSeen(!all); } }));
       info.appendChild(actions);
       el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + films[0].id + '?w=300)' }),
-        h('div', { class: 'hero-in' }, h('div', { class: 'stack-big' }, H.stack(films.map(function (f) { return f.id; }), name, 500)), info)));
+        h('div', { class: 'hero-in' }, h('div', { class: 'stack-big' }, H.stack(films.map(function (f) { return itemCover(f.id); }), name, 500)), info)));
       el.appendChild(h('div', { class: 'body' }, h('section', { class: 'sagaall' }, h('h2', null, H.t('Les films de la saga')),
         h('div', { class: 'grid' }, sagaCells(films, absent, function (f) { return H.card(f, false, true); }, H.isAdmin() ? hide : null)))));
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
