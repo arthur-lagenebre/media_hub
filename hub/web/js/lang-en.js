@@ -128,6 +128,7 @@
     'Ajouts récents': 'Recently added',
     'Plus récents': 'Newest',
     'Plus anciens': 'Oldest',
+    'Mieux notés': 'Highest rated',
     'Collection': 'Collection',
     'Filtrer': 'Filter',
     'Filtrer {name}': 'Filter {name}',

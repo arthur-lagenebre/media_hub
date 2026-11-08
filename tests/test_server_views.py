@@ -337,6 +337,36 @@ class TestLibraryOrder(unittest.TestCase):
         self.assertEqual(key(self.rows[0]), app.release_key(self.rows[0]))
 
 
+class TestRatingOrder(unittest.TestCase):
+    """« Mieux notés » : la note TMDB montrée, puis le nombre de votes, puis le titre ; ce qui n'a pas de note montrée va à la fin, par titre."""
+
+    def film(self, ident, sort, vote=None, votes=0):
+        rating = {"tmdb": 1, "vote": vote, "votes": votes, "at": 0} if vote is not None or votes else None
+        return {"id": ident, "sort": sort, "added": 0, "year": "", "grp": "", "meta": json.dumps({"tmdb_rating": rating} if rating else {})}
+
+    def order(self, rows):
+        sort, key, reverse = app.library_order("movies", {"sort": "rating"}, None)
+        self.assertEqual(sort, "rating")
+        return [r["id"] for r in sorted(rows, key=key, reverse=reverse)]
+
+    def test_the_best_rated_come_first_then_the_most_voted_then_by_title(self):
+        rows = [self.film("moyen", "m", 6.5, 900), self.film("bon-b", "b", 8.4, 100), self.film("bon-a", "a", 8.4, 100), self.film("bon-vote", "z", 8.4, 5000)]
+        self.assertEqual(self.order(rows), ["bon-vote", "bon-a", "bon-b", "moyen"])
+
+    def test_what_has_no_shown_rating_goes_last_by_title(self):
+        rows = [self.film("sans", "b"), self.film("peu", "a", 9.9, app.MIN_VOTES - 1), self.film("note", "z", 3.0, 900), self.film("ancien", "c", None, 0)]
+        rows[3]["meta"] = json.dumps({"tmdb_rating": 7.8})                  # la forme d'avant : pas une note montrée
+        self.assertEqual(self.order(rows), ["note", "peu", "sans", "ancien"])          # 3.0 sur 900 votes passe devant 9.9 sur trop peu de votes
+
+    def test_a_saga_is_rated_by_the_mean_of_its_rated_films(self):
+        saga = {"id": "s", "sort": "s", "added": 0, "year": "", "grp": "", "meta": "{}",
+                "members": [self.film("a", "a", 8.0, 900), self.film("b", "b", 6.0, 900), self.film("c", "c")]}         # moyenne 7.0 ; « c » n'a pas de note : il ne compte pas
+        rows = [saga, self.film("seul", "z", 7.5, 100), self.film("bas", "y", 6.9, 100)]
+        self.assertEqual(self.order(rows), ["seul", "s", "bas"])
+        unrated = {**saga, "id": "vide", "members": [self.film("c", "c")]}
+        self.assertEqual(self.order([unrated, self.film("bas", "y", 6.9, 100)]), ["bas", "vide"])
+
+
 class TestPageBounds(unittest.TestCase):
     def test_the_defaults(self):
         self.assertEqual(app.page_bounds({}), (0, 240))

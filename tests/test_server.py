@@ -1885,6 +1885,31 @@ class TestMissingFilms(ServerCase):
         self.assertTrue(any("clé refusée" in line for line in job["log"]))
 
 
+class TestRatingSort(ServerCase):
+    """« Mieux notés » (`sort=rating`) : les films et les sagas par note TMDB, ceux sans note montrée à la fin."""
+
+    def rate(self, title, vote, votes):
+        ident = self.item_by_title("films", title)["id"]
+        self.hub.db.update_item_meta(ident, meta={"tmdb_rating": {"tmdb": 1, "vote": vote, "votes": votes, "at": 0}})
+        self.addCleanup(self.hub.db.update_item_meta, ident, meta={"tmdb_rating": None})
+
+    def test_the_films_come_by_their_rating_and_the_unrated_last(self):
+        self.rate("Inception", 8.4, 37000)
+        self.rate("Man of Steel", 6.6, 15000)
+        self.rate("Batman v Superman", 5.9, 3)                      # trop peu de votes : comme sans note
+        titles = [i["title"] for i in self.items("films", sort="rating")["items"]]
+        self.assertEqual(titles[:2], ["Inception", "Man of Steel"])
+        by_title = [i["title"] for i in self.items("films", sort="title")["items"]]
+        self.assertEqual(titles[2:], [t for t in by_title if t not in titles[:2]])       # les autres, comme dans le tri par titre
+
+    def test_a_saga_takes_the_mean_of_its_rated_films(self):
+        self.rate("Inception", 6.0, 37000)
+        self.rate("Man of Steel", 7.0, 15000)
+        self.rate("Batman v Superman", 8.0, 9000)                   # « Saga DCEU » : 7.5, devant Inception
+        cards = [(i["type"], i["title"]) for i in self.items("films", sort="rating", sagas=1)["items"]]
+        self.assertEqual(cards[:2], [("saga", "Saga DCEU"), ("movie", "Inception")])
+
+
 class TestApiUrls(ServerCase):
     """L'API donne elle-même les URLs des images et des fichiers : relatives, sans ?w= ni jeton, et elles mènent bien quelque part."""
 

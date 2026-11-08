@@ -17,7 +17,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 | Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens manga, thèmes |
 
 - **Accueil** : « Reprendre » (films, épisodes, livres, albums en cours) et les ajouts récents de chaque bibliothèque.
-- **Bibliothèque** : recherche, index par lettre, genres, tri (titre, ajout, année), filtre « Non vus ».
+- **Bibliothèque** : recherche, index par lettre, genres, tri (titre, ajout, année, note TMDB pour les films et les séries), filtre « Non vus ».
 - **Lecture adaptée au lecteur** : le navigateur annonce ce qu'il sait lire, le serveur choisit.
   1. *direct* : le fichier tel quel (requêtes Range), aucun calcul sur le NAS ;
   2. *remux* : l'image est recopiée, seul le son (E-AC-3, DTS…) passe en AAC : presque gratuit ;
@@ -165,7 +165,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1372 tests : 1199 serveur + 173 interface
+python -m unittest discover -s tests          # 1378 tests : 1204 serveur + 174 interface
 ```
 
-`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 173 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 174 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.

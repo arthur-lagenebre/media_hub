@@ -1927,6 +1927,23 @@ class TestLibraryToolbar(UiCase):
         self.assertTrue(all(name >= 600 and value <= 500 for name, value in weights), weights)
         self.assertEqual(self.filters().evaluate_all("els => els.map(e => e.querySelector('b').textContent)"), ["Lettre :", "Genre :", "Tri :"])
 
+    def test_the_best_rated_sort_puts_the_rated_film_first_and_is_not_offered_for_books(self):
+        db = self.run_.hub.db
+        inception = self.item("films", "Inception")["id"]
+        db.update_item_meta(inception, meta={"tmdb_rating": {"tmdb": 27205, "vote": 8.4, "votes": 37000, "at": 0}})
+        self.addCleanup(db.update_item_meta, inception, meta={"tmdb_rating": None})
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+        self.filters().nth(2).click()
+        self.page.locator(".veil .opt", has_text="Mieux notés").click()
+        self.until(lambda: self.view(".grid .card").first.get_attribute("title") == "Inception")
+        self.assertEqual(self.filters().nth(2).inner_text(), "Tri : Mieux notés")
+        self.open("#/l/livres")
+        self.view(".grid .card").first.wait_for()
+        self.filters().nth(2).click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.page.locator(".veil .opt", has_text="Mieux notés").count(), 0)
+
     def test_the_buttons_keep_their_width_whatever_their_value(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
