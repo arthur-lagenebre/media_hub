@@ -6,6 +6,8 @@ L'enrichissement (enrich.enrich_sagas) interroge TMDB et garde le résultat dans
      "collections": {"<nom de la saga de l'étiquette>": {"id": <collection TMDB>, "films": [identifiants dans l'ordre de sortie], "at": <horodatage>}}}
 
 Une saga du fichier `sagas.json` n'a pas besoin de collection : sa liste dit déjà ce qu'elle contient ; l'enrichissement ne fait que décrire ses films absents.
+
+Les films qui manquent à une personne (enrich.enrich_person) sont gardés à part, sous `personinfo:<identifiant TMDB de la personne>`, avec leurs affiches au même endroit que celles des sagas (`of_person` dit lesquels on n'a pas).
 """
 
 from __future__ import annotations
@@ -42,10 +44,20 @@ def released(film, now=None):
     return bool(when) and when <= (now or today())
 
 
-def entry(ident, rank, info):
-    """Un film manquant tel que l'API le donne : son identifiant TMDB, son titre, son année, son rang dans la saga et son affiche (URL vide s'il n'en a pas)."""
-    film = info["films"][str(ident)]
+def film_entry(ident, rank, film):
+    """Un film manquant tel que l'API le donne : son identifiant TMDB, son titre, son année, son rang et son affiche (URL vide s'il n'en a pas). `film` : ce que TMDB en dit (titre, année, affiche)."""
     return {"tmdb": ident, "title": film.get("title") or "", "year": film.get("year") or "", "rank": rank, "cover": urls.missing_film(ident) if film.get("poster") else ""}
+
+
+def entry(ident, rank, info):
+    """Le film `ident` de `info["films"]` tel que l'API le donne (voir `film_entry`) ; son rang est sa place dans la saga."""
+    return film_entry(ident, rank, info["films"][str(ident)])
+
+
+def of_person(films, owned):
+    """Les films de la fiche d'une personne (`films` : voir enrich.enrich_person, du plus récent au plus ancien) que la médiathèque n'a pas (`owned` : les identifiants TMDB qu'elle a), tels que l'API les donne : comme ceux d'une saga, avec en plus `role` (« director » ou « actor ») ; le rang est la place dans la liste, de 1 à N."""
+    absent = [film for film in films if film["tmdb"] not in owned]
+    return [{**film_entry(film["tmdb"], rank, film), "role": film["role"]} for rank, film in enumerate(absent, 1)]
 
 
 def tagged(name, members, info, ignored):

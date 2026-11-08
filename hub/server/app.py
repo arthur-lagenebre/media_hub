@@ -1009,22 +1009,66 @@ def api_person(h, m, q):
     libs = h.visible_libs()
     person = people.find(hub.db, name)
     shown = people.spelling(person, [lib.id for lib in libs]) if person else None
-    roles, rows = {role: 0 for role in people.ROLES}, {}
-    if shown:
-        visible = {lib.id for lib in libs}
-        for role in people.ROLES:
-            for row in items_by_id(hub.db, person[role]):
-                if row["lib"] in visible:
-                    roles[role] += 1
-                    rows[row["id"]] = row
+    person = person if shown else None              # ce que le compte ne voit pas n'existe pas pour lui
+    roles, rows = person_rows(hub.db, person, {lib.id for lib in libs})
     seen = seen_counts(hub, h.user["id"]) if rows else {}
+    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": person_results(libs, rows, seen), **person_extras(hub, person, libs)})
+
+
+def person_rows(db, person, visible):
+    """({rôle: nombre d'éléments}, {id: ligne}) des éléments que cette personne (None : personne) a réalisés ou joués dans les bibliothèques `visible`."""
+    roles, rows = {role: 0 for role in people.ROLES}, {}
+    for role in people.ROLES:
+        for row in items_by_id(db, person[role] if person else ()):
+            if row["lib"] in visible:
+                roles[role] += 1
+                rows[row["id"]] = row
+    return roles, rows
+
+
+def person_results(libs, rows, seen):
+    """Les éléments `rows` groupés par bibliothèque (dans l'ordre de `libs`, sans les bibliothèques vides), du plus récent au plus ancien."""
     results = []
     for lib in libs:
         mine = sorted((r for r in rows.values() if r["lib"] == lib.id), key=lambda r: r["sort"])
-        mine.sort(key=lambda r: r["year"] or "", reverse=True)          # du plus récent au plus ancien ; sans année en dernier ; à égalité, par titre (le tri est stable)
+        mine.sort(key=lambda r: r["year"] or "", reverse=True)          # sans année en dernier ; à égalité, par titre (le tri est stable)
         if mine:
             results.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "items": [with_seen(r, seen) for r in mine]})
-    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": results})
+    return results
+
+
+def person_extras(hub, person, libs):
+    """`enrichable` (le bouton « films manquants » a un sens : un identifiant TMDB unique et une clé) et, quand il y en a, `missing` : les films que TMDB attribue à cette personne (voir enrich.enrich_person) et qu'aucune bibliothèque de films de `libs` n'a, comparés par identifiant TMDB du film à chaque requête."""
+    ident = people.tmdb_id(person, [lib.id for lib in libs])
+    known = hub.db.kv_get(enrich.person_key(ident)) if ident else None
+    films = known.get("films") if isinstance(known, dict) else None
+    absent = missing.of_person(films, owned_film_ids(hub, libs)) if films else []
+    return {"enrichable": bool(ident and hub.cfg.tmdb_key), **({"missing": absent} if absent else {})}
+
+
+@route("POST", r"/api/enrich/person")
+def api_enrich_person(h, m, q):
+    """Demande à TMDB les films d'une personne (`{"name": "<nom>", "force": false}`), pour que `/api/person` dise lesquels manquent. Administrateur seulement ; tâche de fond (202, `job`).
+    Le nom doit désigner une seule personne ayant un identifiant TMDB dans les étiquettes : voir people.tmdb_id."""
+    require_admin(h)
+    body = h.body_json()
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > people.MAX_NAME:
+        raise HttpError(400, 'nom attendu : {"name": "<nom>"}')
+    hub = h.hub
+    if not hub.cfg.tmdb_key:
+        raise HttpError(400, "pas de clé TMDB : renseigne TMDB_KEY sur le serveur")
+    person = people.find(hub.db, name)
+    if person is None:
+        raise HttpError(404, "personne inconnue")
+    libs = [lib.id for lib in h.visible_libs()]
+    shown = people.spelling(person, libs) or " ".join(name.split())
+    ident = people.tmdb_id(person, libs)
+    if ident is None and not people.ids_seen(person, libs):
+        raise HttpError(400, f"« {shown} » n'a pas d'identifiant TMDB : les étiquettes de ses films ne le portent pas")
+    if ident is None:
+        raise HttpError(400, f"plusieurs personnes s'appellent « {shown} » : impossible de savoir laquelle enrichir")
+    h.send_json({"job": hub.jobs.enrich_person(shown, ident, bool(body.get("force"))).public()}, 202)
 
 
 # ---------------------------------------------------------------------------
@@ -2390,13 +2434,31 @@ def book_epub(h, m, q):
 saga_call = partial(module_call, sagafile.SagaError)
 
 
-def movie_rows(hub):
-    """Les films de toutes les bibliothèques de films."""
+def movie_rows(hub, libs=None):
+    """Les films de toutes les bibliothèques de films, ou de celles de `libs` (une liste vide n'en a aucune)."""
     rows = []
-    for lib in hub.cfg.libraries:
+    for lib in hub.cfg.libraries if libs is None else libs:
         if lib.kind == "movies":
             rows += hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (lib.id,))
     return rows
+
+
+def film_of_entry(meta_text):
+    """L'identifiant TMDB du film que dit l'étiquette d'un fichier (`meta["info"]["tmdb"]` d'une entrée : « movie/<n> »), ou None : autre étiquette (« tv/… »), pas d'étiquette, `meta` illisible."""
+    meta = safe_json(meta_text, {})
+    info = meta.get("info") if isinstance(meta, dict) else None
+    tag = info.get("tmdb") if isinstance(info, dict) else None
+    return sagafile.film_id(tag) if isinstance(tag, str) and tag.startswith("movie/") else None
+
+
+def owned_film_ids(hub, libs):
+    """{identifiant TMDB} des films que ces bibliothèques `libs` ont : ceux des bibliothèques de films, et les fichiers étiquetés « movie/<n> » des bibliothèques de séries (un long-métrage rangé dans Animations y est un élément « série » : seule l'étiquette de son fichier dit que c'est un film)."""
+    owned = set(sagafile.by_tmdb(movie_rows(hub, libs)))
+    shows = [lib.id for lib in libs if lib.kind == "shows"]
+    if shows:
+        rows = hub.db.query(f"SELECT meta FROM entries WHERE lib IN ({','.join('?' * len(shows))}) AND meta LIKE ?", [*shows, '%"movie/%'])
+        owned.update(ident for ident in (film_of_entry(row["meta"]) for row in rows) if ident is not None)
+    return owned
 
 
 def saga_film(ident, row, info=None):
@@ -2497,10 +2559,10 @@ def api_sagas_ignore(h, m, q):
 
 @route("GET", r"/img/film/(\d+)")
 def film_image(h, m, q):
-    """L'affiche d'un film qui manque à une saga (HUB_DATA/tmdb, voir missing.py) ; 404 s'il n'en a pas (la page montre alors une case grisée)."""
+    """L'affiche d'un film qui manque à une saga ou à une personne (HUB_DATA/tmdb, voir missing.py) ; 404 s'il n'en a pas (la page montre alors une case grisée). Le fichier fait foi : l'enrichissement des sagas et celui des personnes le posent chacun, sans rien se dire."""
     hub = h.hub
-    film = missing.load(hub.db)["films"].get(m.group(1))
-    path = hub.cfg.data / "tmdb" / missing.poster_name(m.group(1)) if film and film.get("poster") else None
+    path = hub.cfg.data / "tmdb" / missing.poster_name(m.group(1))
+    path = path if path.is_file() else None
     try:
         width = int(q.get("w", 0))
     except ValueError:

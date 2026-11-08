@@ -76,7 +76,17 @@ def write_mkv(path, blocks=(), cover=None, minutes=95.5):
     return path
 
 
-def movie_blocks(title, synopsis="", date="", tmdb="", genres="", directors=(), actors=(), collection="", part=None):
+def credit_tags(tag, values, ids):
+    """Les tags d'une liste de personnes : chacune suivie de son tag fils `<TAG>/TMDB` (« person/1234 ») quand `ids` ({valeur du tag: identifiant}) en donne un, comme Metadata.py les écrit."""
+    out = []
+    for value in values:
+        out.append((tag, value))
+        if value in ids:
+            out.append((f"{tag}/TMDB", f"person/{ids[value]}"))
+    return out
+
+
+def movie_blocks(title, synopsis="", date="", tmdb="", genres="", directors=(), actors=(), collection="", part=None, person_ids=None):
     movie = [("TITLE", title)]
     if tmdb:
         movie.append(("TMDB", tmdb))
@@ -84,7 +94,7 @@ def movie_blocks(title, synopsis="", date="", tmdb="", genres="", directors=(), 
         movie += [("SYNOPSIS", synopsis), ("SUMMARY", synopsis)]
     if date:
         movie.append(("DATE_RELEASED", date))
-    movie += [("DIRECTOR", d) for d in directors] + [("ACTOR", a) for a in actors]
+    movie += credit_tags("DIRECTOR", directors, person_ids or {}) + credit_tags("ACTOR", actors, person_ids or {})
     if genres:
         movie.append(("GENRE", genres))
     blocks = []

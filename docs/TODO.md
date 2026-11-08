@@ -6,7 +6,7 @@ Ce qui reste ouvert. Ce qui est fait est dans `git log` et dans les pull request
 
 Dans l'ordre où on les prend (7 novembre 2026), un lot par PR (ou deux).
 
-- [ ] **Lot 3, à part : les films manquants d'une personne** (le reste du lot 3 est livré : noms cliquables, `#/person?n=`, personnes dans la recherche). Les étiquettes n'ont que le nom, pas d'identifiant TMDB de personne : il faudrait un appel TMDB et un enrichissement par personne dans `kv` (`enrich:`), donc une clé TMDB.
+- [ ] **Lot 3, à part : les films manquants d'une personne** (le reste du lot 3 est livré : noms cliquables, `#/person?n=`, personnes dans la recherche). *Côté serveur, fait :* `person_ids` dans les films, `POST /api/enrich/person`, `missing` et `enrichable` dans `GET /api/person` (voir docs/api.md). *Reste l'interface (`hub-ui`) :* sur la page d'une personne, un bouton « Chercher ses films manquants » (administrateur, quand `enrichable`) qui lance la tâche, et la liste `missing` en cases grisées sans focus ni clic (comme `.card.wanted`, règle 7 de `hub-ui`).
 - [ ] **Lot 4 : boîte de réception (téléversement).** Des comptes qui ont le droit « Envoyer » déposent films, séries, musique ou livres ; l'administrateur les range lui-même. *Retenu :*
   - dépôt dans `HUB_DATA/inbox/<compte>/`, jamais dans une bibliothèque (les volumes restent en `:ro`), et pas de bouton qui déplace un fichier dans la médiathèque ;
   - un droit global par compte (colonne dans `users`, migration qui garde l'existant, administrateur toujours autorisé) ; pas d'envoi sans compte, pas de lien d'invitation ;

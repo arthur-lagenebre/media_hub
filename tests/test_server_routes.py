@@ -640,6 +640,8 @@ class TestImageRoutes(RouteCase):
 
     def test_the_poster_of_a_missing_film_comes_from_the_data_folder(self):
         self.db.kv_set(missing.KEY, {"films": {"123": {"poster": "film-123.jpg"}, "456": {"poster": ""}}, "collections": {}})
+        (self.root / "data" / "tmdb").mkdir()
+        (self.root / "data" / "tmdb" / "film-123.jpg").write_bytes(JPEG)
         self.check_cache("/img/film/123")
         expected = self.root / "data" / "tmdb" / missing.poster_name("123")
         self.hub.images.file.assert_called_with("film:123", expected, 0)
@@ -651,6 +653,13 @@ class TestImageRoutes(RouteCase):
             self.assertEqual(self.get(f"/img/film/{ident}").json(), {"error": "pas d'affiche"}, ident)
         self.hub.images.file.return_value = None
         self.assertEqual(self.get("/img/film/123").status, 404)
+
+    def test_the_poster_of_a_film_that_only_a_person_lists_is_served_too(self):
+        """Une affiche posée par « Enrichir » sur la fiche d'une personne (voir enrich_person) : le film n'est pas dans `sagainfo`, le fichier suffit."""
+        (self.root / "data" / "tmdb").mkdir()
+        (self.root / "data" / "tmdb" / "film-77.jpg").write_bytes(JPEG)
+        self.check_cache("/img/film/77")
+        self.hub.images.file.assert_called_with("film:77", self.root / "data" / "tmdb" / "film-77.jpg", 0)
 
 
 class TestPosterRoutes(RouteCase):
@@ -1131,8 +1140,8 @@ class TestPersonRoute(unittest.TestCase):
 
     def test_what_only_a_hidden_library_knows_answers_as_an_unknown_name(self):
         cookie = self.bob()
-        self.assertEqual(self.person("seule ici", cookie), (200, {"name": "seule ici", "roles": {"director": 0, "actor": 0}, "results": []}))
-        self.assertEqual(self.person("Inconnu Total", cookie), (200, {"name": "Inconnu Total", "roles": {"director": 0, "actor": 0}, "results": []}))
+        self.assertEqual(self.person("seule ici", cookie), (200, {"name": "seule ici", "roles": {"director": 0, "actor": 0}, "results": [], "enrichable": False}))
+        self.assertEqual(self.person("Inconnu Total", cookie), (200, {"name": "Inconnu Total", "roles": {"director": 0, "actor": 0}, "results": [], "enrichable": False}))
         self.assertEqual(self.person("seule ici", self.admin)[1]["results"][0]["items"][0]["title"], "Secret")          # l'administrateur, lui, la voit
 
     def test_the_spelling_shown_comes_from_the_visible_libraries_only(self):
@@ -1141,7 +1150,7 @@ class TestPersonRoute(unittest.TestCase):
         self.assertEqual(self.person("penelope cruz", self.bob())[1]["name"], "Penélope Cruz")
 
     def test_an_unknown_name_is_a_200_with_nothing(self):
-        self.assertEqual(self.person("Personne Du Tout"), (200, {"name": "Personne Du Tout", "roles": {"director": 0, "actor": 0}, "results": []}))
+        self.assertEqual(self.person("Personne Du Tout"), (200, {"name": "Personne Du Tout", "roles": {"director": 0, "actor": 0}, "results": [], "enrichable": False}))
 
     def test_a_missing_empty_blank_or_too_long_name_is_a_400(self):
         for target in ("/api/person", "/api/person?name=", "/api/person?name=%20%20"):

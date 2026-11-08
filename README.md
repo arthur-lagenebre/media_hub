@@ -53,7 +53,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_FFMPEG` | dossier (ou fichier) de `ffmpeg` / `ffprobe` | `PATH`, puis `HUB_DATA/bin` |
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne fait perdre aucune progression de lecture, et un `.mkv` illisible n'arrête pas le scan | `0` |
-| `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting) et décrit les films qui manquent aux sagas ; lue aussi dans le `.env` de `media_library` | aucune |
+| `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting), décrit les films qui manquent aux sagas et ceux qui manquent à une personne ; lue aussi dans le `.env` de `media_library` | aucune |
 
 ## Invités d'une piste
 
@@ -129,7 +129,8 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | Route | Rôle |
 | --- | --- |
 | `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche (`results` : les titres ; `people` : 8 personnes au plus dont le nom contient le texte, avec leur nombre de titres) |
-| `GET /api/person?name=<nom>` | ce qu'une personne a réalisé ou joué (films et séries des bibliothèques que le compte voit) : `name` (graphie la plus fréquente), `roles` (`director`, `actor`), `results` (par bibliothèque, du plus récent au plus ancien). Nom comparé tel quel, sans accents ni casse (« Chris Evans » ne ramène pas « Chris Evans Jr »), inconnu : `results` vide ; absent ou de plus de 200 caractères : 400. **Homonymes** : seul le nom identifie une personne, deux personnes de même nom sont confondues |
+| `GET /api/person?name=<nom>` | ce qu'une personne a réalisé ou joué (films et séries des bibliothèques que le compte voit) : `name` (graphie la plus fréquente), `roles` (`director`, `actor`), `results` (par bibliothèque, du plus récent au plus ancien). Nom comparé tel quel, sans accents ni casse (« Chris Evans » ne ramène pas « Chris Evans Jr »), inconnu : `results` vide ; absent ou de plus de 200 caractères : 400. `enrichable` (le nom désigne une seule personne, qui a un identifiant TMDB, et il y a une clé TMDB) et `missing` (ses films, d'après TMDB, qu'aucune bibliothèque visible n'a ; absent s'il est vide). **Homonymes** : l'index se fait par le nom, deux personnes de même nom sont confondues (et ne sont pas enrichissables) |
+| `POST /api/enrich/person` | (administrateur) `{"name", "force"?}` : demande à TMDB les films d'une personne (réalisés, ou joués parmi les premiers rôles), gardés un mois ; tâche de fond. 400 sans clé TMDB ou sans identifiant unique pour ce nom, 404 nom inconnu |
 | `GET /api/library/<id>?q&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec les genres (les 60 plus fréquents, par ordre alphabétique) ; musique : `artists` et `albums`, le décompte de ce que les filtres laissent (en vue artistes, un artiste trouvé garde tous ses albums) ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
 | `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
 | `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, sagas, casting, progression |
@@ -152,7 +153,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 ## Limites connues
 
 - **Pas d'inscription publique** : seul un administrateur crée les comptes. Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques, les fiches enrichies et les albums manquants sont communs. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert (profil unique `default`).
-- **Homonymes** : `GET /api/person` retrouve une personne par son nom seul (les étiquettes ne portent pas d'identifiant) ; deux personnes qui s'appellent pareil sont confondues, un même nom écrit de deux façons (« Chris » / « Christopher ») fait deux personnes.
+- **Homonymes** : `GET /api/person` retrouve une personne par son nom ; deux personnes qui s'appellent pareil sont confondues, un même nom écrit de deux façons (« Chris » / « Christopher ») fait deux personnes. Les étiquettes des films portent l'identifiant TMDB de chaque personne : un nom n'est « enrichissable » (films manquants) que s'il n'en a qu'un ; avec deux, aucun. Les films posés avant que `media_library` écrive ces identifiants n'en ont pas, tant qu'ils ne sont pas réétiquetés.
 - Les films ne sont indexés qu'en **`.mkv`** (c'est ce que `media_library` produit : `Mp4_To_Mkv.py`, `Avi_To_Mkv.py`).
 - **Pas de carte vidéo capable d'encoder** (GT 730) : le transcodage est logiciel. Un 1080p H.264 passe sans peine sur un i3-13100F ; un 4K HEVC en transcodage est à éviter (le plan de lecture le signale). Le mieux reste la lecture directe : un Chromecast / Fire TV 4K lit H.264, HEVC et AV1 selon le modèle.
 - Google TV n'a pas Chrome : installer un navigateur compatible télécommande (TV Bro, Puffin TV, Silk sur Fire TV). Une appli Android TV native (WebView plein écran) est la suite logique si la télécommande dans un navigateur ne convient pas.
@@ -165,7 +166,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1453 tests : 1232 serveur + 221 interface
+python -m unittest discover -s tests          # 1533 tests : 1312 serveur + 221 interface
 ```
 
 `tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 221 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.

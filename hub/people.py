@@ -3,7 +3,7 @@
 L'index se lit dans `meta["directors"]` (liste de chaînes) et `meta["actors"]` (liste de {name, role}, ou de chaînes pour une fiche ancienne) des items `movie` et `show`.
 Il est construit au premier appel puis gardé en mémoire (`Database.derived`) jusqu'à la prochaine écriture des items : un scan ou un enrichissement le renouvelle.
 
-Deux personnes de même nom n'en font qu'une (aucun identifiant ne les distingue dans les étiquettes) : voir « homonymes » dans docs/api.md.
+Deux personnes de même nom n'en font qu'une : voir « homonymes » dans docs/api.md. Les étiquettes des films portent l'identifiant TMDB de chaque personne (`meta["person_ids"]`) : une personne en a un quand les étiquettes des bibliothèques qu'un compte voit n'en disent qu'un (`tmdb_id`) ; avec deux ou plus, ce sont des homonymes et elle n'en a aucun.
 """
 
 from __future__ import annotations
@@ -35,26 +35,55 @@ def names_in(meta):
     return [(role, " ".join(name.split())) for role, name in found if isinstance(name, str) and name.strip()]
 
 
+def meta_of(row):
+    """Le `meta` d'une ligne de la table items ; None s'il n'est pas lisible ou n'est pas un objet."""
+    try:
+        meta = json.loads(row["meta"])
+    except ValueError:
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def ids_in(meta):
+    """{clé: identifiant TMDB} des personnes d'un item (`meta["person_ids"]`, voir scan/video.py). Ce qui n'est pas un nombre entier positif est ignoré."""
+    listed = meta.get("person_ids")
+    return {key_of(name): ident for name, ident in (listed.items() if isinstance(listed, dict) else ())
+            if isinstance(ident, int) and not isinstance(ident, bool) and ident > 0 and key_of(name)}
+
+
+def ids_seen(person, libs):
+    """Counter(identifiant TMDB -> nombre d'items) de cette personne dans ces bibliothèques."""
+    total = Counter()
+    for lib in libs:
+        total.update(person["ids"].get(lib, ()))
+    return total
+
+
+def tmdb_id(person, libs):
+    """L'identifiant TMDB d'une personne de l'index, d'après les étiquettes des films de ces bibliothèques : celui qu'elles portent, quand elles n'en disent qu'un. None si aucune ne l'écrit, si elles en disent plusieurs (deux personnes de même nom), ou pour un nom inconnu (`person` None)."""
+    found = ids_seen(person, libs) if person else ()
+    return next(iter(found)) if len(found) == 1 else None
+
+
 def build(db):
-    """{clé: {"names": {bibliothèque: Counter(graphie -> nombre d'items)}, "titles": {bibliothèque: nombre d'items}, "director": [id d'item], "actor": [id d'item]}}.
-    Les graphies et les titres sont comptés par bibliothèque : on ne sait ainsi dire que ceux des bibliothèques qu'un compte voit."""
+    """{clé: {"names": {bibliothèque: Counter(graphie -> nombre d'items)}, "titles": {bibliothèque: nombre d'items}, "director": [id d'item], "actor": [id d'item], "ids": {bibliothèque: Counter(identifiant TMDB -> nombre d'items)}}}.
+    Les graphies, les titres et les identifiants sont comptés par bibliothèque : on ne sait ainsi dire que ceux des bibliothèques qu'un compte voit."""
     index = {}
     for row in db.query("SELECT id, lib, meta FROM items WHERE type IN (?, ?)", TYPES):
-        try:
-            meta = json.loads(row["meta"])
-        except ValueError:
+        meta = meta_of(row)
+        if meta is None:
             continue
-        if not isinstance(meta, dict):
-            continue
-        spelled, here = set(), set()
+        spelled, here, ids = set(), set(), ids_in(meta)
         for role, name in names_in(meta):
             key = key_of(name)
             if not key:
                 continue
-            person = index.setdefault(key, {"names": {}, "titles": {}, "director": [], "actor": []})
+            person = index.setdefault(key, {"names": {}, "titles": {}, "director": [], "actor": [], "ids": {}})
             if key not in here:             # un titre compte une fois pour une personne, quel que soit son rôle
                 here.add(key)
                 person["titles"][row["lib"]] = person["titles"].get(row["lib"], 0) + 1
+                if key in ids:
+                    person["ids"].setdefault(row["lib"], Counter())[ids[key]] += 1
             if row["id"] not in person[role]:           # une personne citée deux fois dans le même item n'y compte qu'une fois
                 person[role].append(row["id"])
             if (key, name) not in spelled:

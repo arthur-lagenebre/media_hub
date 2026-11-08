@@ -67,7 +67,54 @@ class TestTags(unittest.TestCase):
         self.assertEqual(video._tag_info([]), {"has_tags": True})
 
 
+class TestPersonIds(unittest.TestCase):
+    """Le tag fils `X/TMDB` (« person/1234 ») qui suit DIRECTOR, WRITTEN_BY ou ACTOR est l'identifiant TMDB de cette personne."""
+
+    def ids(self, tags):
+        return video._tag_info(tags).get("person_ids")
+
+    def test_each_child_belongs_to_the_person_before_it(self):
+        info = video._tag_info([
+            (50, "DIRECTOR", "Nolan"), (50, "DIRECTOR/TMDB", "person/525"), (50, "WRITTEN_BY", "Jonathan Nolan"), (50, "WRITTEN_BY/TMDB", "person/1"),
+            (50, "ACTOR", "Leo (Cobb)"), (50, "ACTOR/TMDB", "person/6193"), (50, "ACTOR", "Elliot"), (50, "ACTOR/TMDB", "person/12")])
+        self.assertEqual(info["person_ids"], {"Nolan": 525, "Jonathan Nolan": 1, "Leo": 6193, "Elliot": 12})          # entiers ; le rôle n'est pas dans le nom
+        self.assertEqual((info["directors"], info["writers"], info["actors"]),
+                         (["Nolan"], ["Jonathan Nolan"], [{"name": "Leo", "role": "Cobb"}, {"name": "Elliot", "role": ""}]))          # les listes ne changent pas
+
+    def test_a_person_without_a_child_has_no_id_and_does_not_take_the_next_ones(self):
+        tags = [(50, "ACTOR", "Sans"), (50, "ACTOR", "Avec"), (50, "ACTOR/TMDB", "person/7"), (50, "ACTOR", "Autre sans")]
+        self.assertEqual(self.ids(tags), {"Avec": 7})
+
+    def test_two_people_without_an_id_in_the_same_file_leave_no_ids_at_all(self):
+        info = video._tag_info([(50, "ACTOR", "Un"), (50, "ACTOR", "Deux")])
+        self.assertNotIn("person_ids", info)
+        self.assertEqual(len(info["actors"]), 2)
+
+    def test_what_is_not_a_person_id_next_to_its_father_is_ignored(self):
+        for child in ("person/abc", "movie/5", "5", "person/", "person/12/3", ""):
+            self.assertIsNone(self.ids([(50, "ACTOR", "Un"), (50, "ACTOR/TMDB", child)]), child)
+        self.assertIsNone(self.ids([(50, "DIRECTOR", "Un"), (50, "ACTOR/TMDB", "person/5")]))          # le fils d'un autre tag
+        self.assertIsNone(self.ids([(50, "ACTOR/TMDB", "person/5"), (50, "ACTOR", "Un")]))          # avant son père
+        self.assertIsNone(self.ids([(70, "ACTOR", "Un"), (70, "ACTOR/TMDB", "person/5")]))          # seul le niveau du film compte
+        for tag in ("ACTOR", "DIRECTOR"):
+            self.assertIsNone(self.ids([(50, tag, ""), (50, f"{tag}/TMDB", "person/5")]), tag)          # une personne sans nom n'a pas d'identifiant
+
+    def test_the_film_tmdb_tag_is_not_a_person(self):
+        info = video._tag_info([(50, "TMDB", "movie/27205"), (50, "DIRECTOR", "Nolan"), (50, "DIRECTOR/TMDB", "person/525")])
+        self.assertEqual((info["tmdb"], info["person_ids"]), ("movie/27205", {"Nolan": 525}))
+
+    def test_the_same_person_in_two_roles_keeps_her_id(self):
+        tags = [(50, "DIRECTOR", "Eastwood"), (50, "DIRECTOR/TMDB", "person/190"), (50, "ACTOR", "Eastwood (Kowalski)"), (50, "ACTOR/TMDB", "person/190")]
+        self.assertEqual(self.ids(tags), {"Eastwood": 190})
+
+
 class TestReadFile(TempCase):
+    def test_the_ids_of_a_real_file_are_read(self):
+        path = self.touch("a.mkv", movie_blocks("Inception", directors=["Nolan"], actors=["Leo (Cobb)", "Sans"], person_ids={"Nolan": 525, "Leo (Cobb)": 6193}))
+        info, _ = video.read_file(path)
+        self.assertEqual(info["person_ids"], {"Nolan": 525, "Leo": 6193})
+        self.assertEqual(info["actors"], [{"name": "Leo", "role": "Cobb"}, {"name": "Sans", "role": ""}])
+
     def test_a_tagged_file_gives_its_tags_and_its_duration(self):
         path = self.touch("a.mkv", movie_blocks("Inception", "Rêves.", "2010-07-21", "movie/27205", "Action", ["Nolan"], ["Leo (Cobb)"], collection="Saga", part=2), minutes=148)
         info, seconds = video.read_file(path)
@@ -177,6 +224,12 @@ class TestScanMovies(TempCase):
         items, entries, counts = video.scan_movies(self.lib, known or {}, enriched)
         return {i["title"]: i for i in items}, {e["rel"]: e for e in entries}, counts
 
+    def test_a_film_keeps_the_ids_of_its_people_and_a_film_without_any_has_none(self):
+        self.touch("Tagué (2005)/Tagué (2005).mkv", movie_blocks("Tagué", directors=["Nolan"], actors=["Leo (Cobb)"], person_ids={"Nolan": 525, "Leo (Cobb)": 6193}), mtime=5000)
+        items = self.scan()[0]
+        self.assertEqual(json.loads(items["Tagué"]["meta"])["person_ids"], {"Nolan": 525, "Leo": 6193})
+        self.assertEqual(json.loads(items["Inception"]["meta"])["person_ids"], {})          # comme `directors` : la clé est là, vide
+
     def test_the_rating_kept_by_the_enrichment_comes_back_and_nothing_else(self):
         rating = {"tmdb": 27205, "vote": 8.4, "votes": 37000, "at": 1}
         kept = {make_id("films", "Inception (2010)/Inception (2010).mkv"): {"tmdb_rating": rating, "tmdb": "movie/1", "summary": "Autre."}}
@@ -195,7 +248,7 @@ class TestScanMovies(TempCase):
         self.assertEqual((item["type"], item["year"], item["summary"], item["grp"], item["count"], item["added"]), ("movie", "2010", "Rêves.", "Nolan", 1, 1000))
         self.assertEqual(json.loads(item["genres"]), ["Science-Fiction", "Action"])
         self.assertEqual(item["id"], make_id("films", "Inception (2010)/Inception (2010).mkv"))
-        self.assertEqual(meta, {"tmdb": "movie/27205", "directors": ["Nolan"], "writers": [], "actors": [{"name": "Leo", "role": "Cobb"}], "date": "2010-07-21", "part": 2,
+        self.assertEqual(meta, {"tmdb": "movie/27205", "directors": ["Nolan"], "writers": [], "actors": [{"name": "Leo", "role": "Cobb"}], "person_ids": {}, "date": "2010-07-21", "part": 2,
                                 "image": "Inception (2010)/poster.jpg", "tagged": True, "folder": "Inception (2010)", "duration": 8880.0})
 
     def test_a_file_without_tags_keeps_the_name_of_its_folder_and_its_year(self):
@@ -294,6 +347,11 @@ class TestScanShows(TempCase):
     def scan(self, known=None, enriched=None):
         items, entries, counts = video.scan_shows(self.lib, known or {}, enriched)
         return {i["title"]: i for i in items}, [(e["rel"], e) for e in entries], counts
+
+    def test_a_show_does_not_keep_the_ids_of_the_people_of_its_episodes(self):
+        self.touch("Casting/Saison 1/01 - Un.mkv", [(70, [("TITLE", "Casting")]), (60, [("PART_NUMBER", 1)]), (50, [("TITLE", "Un"), ("PART_NUMBER", 1), ("ACTOR", "Leo (Cobb)"), ("ACTOR/TMDB", "person/6193")])])
+        item = self.scan()[0]["Casting"]
+        self.assertNotIn("person_ids", json.loads(item["meta"]))
 
     def test_a_show_is_an_item_with_what_its_episodes_say(self):
         item = self.scan()[0]["Dark"]
