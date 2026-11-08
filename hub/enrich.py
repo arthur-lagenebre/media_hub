@@ -4,6 +4,8 @@ Séries : synopsis (de la série et de chaque saison), genres, année, casting, 
 
 Sagas de films : les films qui manquent à une saga (voir missing.py) : titre, année et affiche de ceux qu'on n'a pas.
 
+Notes : la moyenne et le nombre des votes TMDB de chaque film et de chaque série (voir enrich_ratings), redemandés quand ils ont vieilli.
+
 Les épisodes portent leur propre fiche, mais pas celle de la série : rien dans un .mkv ne dit de quoi parle « Dark ». Ce passage interroge TMDB (par l'identifiant épinglé dans le nom du dossier, sinon par une recherche sur ce nom) et garde le résultat dans la base ET sur le disque (l'affiche), pour qu'un rescan ne l'efface pas.
 
 Il ne tourne que sur demande (bouton « Enrichir »), et seulement pour les séries qui n'ont pas encore été enrichies, sauf `force`. Il demande une clé TMDB (TMDB_KEY).
@@ -84,6 +86,7 @@ def tmdb_client(cfg, read=True):
 
 
 def show_key(lib, item):
+    """La fiche gardée d'un élément, que le scan reprend (voir scan.enriched_for) : tout ce que TMDB dit d'une série ; d'un film, seulement sa note (ses tags disent le reste)."""
     return f"enrich:{lib.id}:{item['id']}"
 
 
@@ -122,6 +125,7 @@ def enrich_show(tmdb, posters, db, lib, item):
         return None
     show = tmdb.series(show_id)
     data = show_facts(show, show_id)
+    data["tmdb_rating"] = rating_of(show, show_id)
     data["doubts"] = doubts_of(printed.getvalue())          # toujours écrit, même vide : `meta` se fusionne, un doute levé doit disparaître
     if show.get("poster_path"):
         name = f"{show_id}.jpg"
@@ -174,6 +178,66 @@ def enrich_shows(cfg, db, lib, log=print, force=False):
             for doubt in found[1].get("doubts", []):
                 log(f"    /!\\ {doubt} : à vérifier sur la fiche (Changer la fiche TMDB)")
     return {"enriched": done, "failed": failed}
+
+
+RATING_STALE = 30 * 24 * 3600   # au-delà, une note est redemandée : les votes continuent d'arriver
+RATED_TYPES = {"movies": ("movie", "movie/{}"), "shows": ("show", "tv/{}")}          # sorte de bibliothèque -> (type des éléments, adresse TMDB de leur fiche)
+
+
+def rating_of(sheet, tmdb_id, now=None):
+    """La note d'une fiche TMDB (film ou série) : {"tmdb", "vote", "votes", "at"}. `vote` vaut None quand personne n'a voté (TMDB dit alors 0) ; `tmdb` dit de quelle fiche elle vient, `at` quand on l'a demandée."""
+    votes = int(sheet.get("vote_count") or 0)
+    vote = sheet.get("vote_average")
+    return {"tmdb": int(tmdb_id), "vote": round(float(vote), 1) if votes and vote else None, "votes": votes, "at": int(now if now is not None else time.time())}
+
+
+def rating_is_fresh(rating, tmdb_id, now, force=False, since=None):
+    """Une note qu'on n'a pas à redemander : de la même fiche TMDB (un film réétiqueté change d'identifiant) et de moins de RATING_STALE. Avec `force`, seulement si elle date de `since` ou après (la tâche en cours vient de la demander : la fiche d'une série la donne)."""
+    if not isinstance(rating, dict) or rating.get("tmdb") != tmdb_id:
+        return False
+    at = rating.get("at") or 0
+    return (since is not None and at >= since) if force else now - at < RATING_STALE
+
+
+def keep_rating(db, lib, item, rating):
+    """Garde une note dans la fiche de l'élément (un scan la reprend) et dans l'élément lui-même (elle se voit sans attendre le scan). Rend False, sans rien écrire, si l'élément a changé de fiche TMDB pendant qu'on la demandait (« Changer la fiche TMDB » ne passe pas par les tâches) : la note serait celle d'une autre."""
+    now = db.one("SELECT * FROM items WHERE id=?", (item["id"],))
+    if now is None or sagafile.tmdb_of(now) != rating["tmdb"]:
+        return False
+    key = show_key(lib, item)
+    db.kv_set(key, {**(db.kv_get(key) or {}), "tmdb_rating": rating})
+    db.update_item_meta(item["id"], meta={"tmdb_rating": rating})
+    return True
+
+
+def enrich_ratings(cfg, db, lib, log=print, force=False, since=None):
+    """Les notes TMDB des films ou des séries d'une bibliothèque : ceux qui ont un identifiant TMDB (l'étiquette d'un film, la fiche d'une série) et pas de note fraîche (voir rating_is_fresh).
+
+    Toujours demandées à TMDB lui-même, pas au cache : c'est la fraîcheur qu'on vient chercher. Une fiche qui échoue est comptée, notée au journal et redemandée la fois suivante. `since` : le début de la tâche (voir rating_is_fresh).
+    """
+    kind, endpoint = RATED_TYPES[lib.kind]
+    tmdb, _ = tmdb_client(cfg, read=False)
+    now = int(time.time())
+    counts = {"rated": 0, "failed": 0}
+    for item in db.query("SELECT * FROM items WHERE lib=? AND type=? ORDER BY sort", (lib.id, kind)):
+        tmdb_id = sagafile.tmdb_of(item)
+        if tmdb_id is None or rating_is_fresh(json.loads(item["meta"]).get("tmdb_rating"), tmdb_id, now, force, since):
+            continue
+        try:
+            sheet = tmdb.get(endpoint.format(tmdb_id))
+        except TmdbAuthError as e:
+            raise RuntimeError(f"TMDB : {e}")
+        except TmdbError as e:
+            log(f"  {item['title']} : pas de note ({e})")
+            counts["failed"] += 1
+            continue
+        if keep_rating(db, lib, item, rating_of(sheet, tmdb_id, now)):
+            counts["rated"] += 1
+        else:
+            log(f"  {item['title']} : fiche TMDB changée pendant la passe, note laissée")
+    rated, failed = counts["rated"], counts["failed"]
+    log(f"  Notes TMDB : {rated} demandée(s), {failed} en échec" if failed else f"  Notes TMDB : {rated} demandée(s)")         # en toutes lettres : l'interface traduit ces lignes (lang-en.js)
+    return counts
 
 
 class SagaPass:

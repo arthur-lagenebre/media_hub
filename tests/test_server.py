@@ -1631,7 +1631,9 @@ class FakeTmdb:
              {"id": 1000, "title": "Film intermédiaire", "release_date": "2014-01-01", "poster_path": "/mid.jpg"},
              {"id": 2000, "title": "Film annoncé", "release_date": "2099-01-01", "poster_path": "/soon.jpg"},          # pas encore sorti
              {"id": 2001, "title": "Film en projet", "release_date": "", "poster_path": None}]                            # pas même de date
-    movies = {49521: {"id": 49521, "belongs_to_collection": {"id": 9000}}, 209112: {"id": 209112, "belongs_to_collection": {"id": 9000}},
+    movies = {49521: {"id": 49521, "belongs_to_collection": {"id": 9000}, "vote_average": 6.6, "vote_count": 3},          # trop peu de votes pour être montré
+              209112: {"id": 209112, "belongs_to_collection": {"id": 9000}},
+              27205: {"id": 27205, "vote_average": 8.369, "vote_count": 37000},
               777: {"id": 777, "title": "Film du fichier", "release_date": "2020-02-02", "poster_path": "/f.jpg"}}
 
     def __init__(self, key, language="fr-FR", **kwargs):
@@ -1851,6 +1853,15 @@ class TestMissingFilms(ServerCase):
         data = self.group()
         self.assertNotIn("missing", data)
         self.assertEqual([i["part"] for i in data["items"]], [1, 2])
+
+    def test_the_enrichment_gives_each_film_its_rating_and_a_scan_keeps_it(self):
+        self.enrich()
+        inception = self.item_by_title("films", "Inception")
+        self.assertEqual((inception["tmdb_rating"], inception["tmdb_votes"]), (8.4, 37000))
+        self.assertEqual(self.detail(inception["id"])["tmdb_rating"], 8.4)
+        self.assertNotIn("tmdb_rating", self.item_by_title("films", "Man of Steel"))                  # 3 votes : pas assez
+        self.enrich_scan()
+        self.assertEqual(self.item_by_title("films", "Inception")["tmdb_rating"], 8.4)
 
     def test_the_enrichment_logs_what_it_cannot_find(self):
         self.api.json("/api/sagas", {"sagas": [{"name": "Ma saga", "films": [209112, 4242]}]})          # 4242 n'existe pas chez TMDB

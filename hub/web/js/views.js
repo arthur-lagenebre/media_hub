@@ -103,6 +103,18 @@
     } }));
     return h('a', { class: 'card f sq', href: '#/artist/' + it.lib + '/' + it.id, 'data-key': it.id, 'data-type': 'artist', title: it.title }, pic, h('div', { class: 't' }, it.title), h('div', { class: 's' }, H.plural(it.n, 'album')));
   }
+  // La note TMDB comme TMDB la montre (« User Score ») : un disque sombre, le pourcentage au centre, un anneau qui se remplit d'autant,
+  // vert à partir de 70 %, jaune à partir de 40 %, rouge en dessous. L'anneau est un SVG (stroke-dasharray sur un cercle de périmètre 100) :
+  // conic-gradient manque aux vieux navigateurs de télé. Le serveur ne donne la note qu'au-delà de 25 votes : « votes » toujours au pluriel.
+  // Rien dans le SVG ne vient d'ailleurs que de ce nombre, borné et arrondi : il peut passer par `html`.
+  H.scoreRing = function (it, big) {
+    var pct = Math.max(0, Math.min(100, Math.round(Number(it.tmdb_rating) * 10)));
+    var tone = pct >= 70 ? 'hi' : pct >= 40 ? 'mid' : 'lo';
+    var label = H.t('Note des utilisateurs TMDB : {score} % ({votes} votes)', { score: pct, votes: H.number(it.tmdb_votes) });
+    return h('span', { class: 'score ' + tone + (big ? ' big' : '') + (pct === 100 ? ' c3' : ''), role: 'img', 'aria-label': label, title: label,
+      html: '<svg viewBox="0 0 36 36" aria-hidden="true"><circle class="tr" cx="18" cy="18" r="15.9155"/><circle class="val" cx="18" cy="18" r="15.9155" stroke-dasharray="' + pct + ' 100"/></svg>' +
+            '<span class="v" aria-hidden="true">' + pct + '<sup>%</sup></span>' });
+  };
   H.card = function (it, withGroup, withPart) {
     if (it.type === 'saga') return sagaCard(it);
     if (it.type === 'artist') return artistCard(it);
@@ -115,6 +127,7 @@
     if (square && H.music) pic.appendChild(H.music.cardTools(it));
     if (it.type === 'movie' || it.type === 'show') { pic.appendChild(H.actions.tools(it)); H.actions.bind(a, it); }
     if (withPart && it.part !== undefined && it.part !== null) pic.appendChild(h('span', { class: 'part' }, it.part));
+    if (it.tmdb_rating) pic.appendChild(H.scoreRing(it));
     a.appendChild(pic);
     a.appendChild(h('div', { class: 't' }, it.title));
     a.appendChild(h('div', { class: 's' }, (withGroup && it.grp ? H.tr(it.grp) + ' · ' : '') + itemSub(it)));
@@ -530,10 +543,17 @@
       return actions;
     }
 
-    // Le texte à droite de l'image : titre, ligne grise, genres, crédits, résumé, doutes TMDB, boutons.
+    // Sous la ligne grise, comme sur TMDB : le disque de la note, et à côté ce qu'il mesure et sur combien de votes.
+    function scoreRow(d) {
+      return h('div', { class: 'rate' }, H.scoreRing(d, true),
+        h('span', { class: 'what', 'aria-hidden': 'true' }, h('b', null, H.t('Note des utilisateurs')), h('small', null, H.t('{n} votes sur TMDB', { n: H.number(d.tmdb_votes) }))));
+    }
+
+    // Le texte à droite de l'image : titre, ligne grise, note TMDB, genres, crédits, résumé, doutes TMDB, boutons.
     function infoBlock(d, view) {
       var genres = (d.genres || []).join(', ');
       var info = h('div', { class: 'info' }, h('h1', null, d.title), h('p', { class: 'meta' }, metaLine(d)));
+      if (d.tmdb_rating) info.appendChild(scoreRow(d));
       if (genres) info.appendChild(h('p', { class: 'genres' }, genres));
       credits(d).forEach(function (node) { info.appendChild(node); });
       if (d.summary) info.appendChild(h('p', { class: 'synopsis' }, d.summary));
@@ -890,7 +910,7 @@
         libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
           h('div', { class: 'what' }, h('b', null, H.tr(l.label)), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · ' + H.t('mis à jour {when}', { when: ago(l.scanned) }) : H.t('dossier introuvable'))),
           l.kind === 'shows' ? H.button(H.t('Enrichir (TMDB)'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Enrichissement lancé : {name}', { name: H.tr(l.label) })); } }) : null,
-          l.kind === 'movies' ? H.button(H.t('Sagas (TMDB)'), null, { 'data-key': 'enrich-' + l.id, title: H.t('Cherche chez TMDB les films qui manquent à tes sagas.'), onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.tr(l.label) })); } }) : null,
+          l.kind === 'movies' ? H.button(H.t('Sagas (TMDB)'), null, { 'data-key': 'enrich-' + l.id, title: H.t('Cherche chez TMDB les films qui manquent à tes sagas, et la note de chaque film.'), onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.tr(l.label) })); } }) : null,
           l.kind === 'music' ? H.button(H.t('Fiches artistes'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Fiches artistes demandées : {name}', { name: H.tr(l.label) })); } }) : null,
           l.kind === 'movies' ? H.button(H.t('Relire les covers'), null, { 'data-key': 'covers-' + l.id, title: H.t('Vide les vignettes gardées : chacune se refait depuis folder.jpg ou la jaquette du .mkv. Les affiches choisies à la main restent.'), onclick: function () { refreshCovers(l); } }) : null,
           H.button(H.t('Mettre à jour'), 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, H.t('Mise à jour lancée : {name}', { name: H.tr(l.label) })); } })));
@@ -1000,6 +1020,9 @@
       var facts = [['Version', state.version], ['ffmpeg', state.ffmpeg ? H.t('présent') : H.t('absent : lecture directe uniquement')], ['TMDB', state.tmdb ? H.t('clé configurée') : H.t('pas de clé (TMDB_KEY)')],
         [H.t('Conversions'), H.t('{n} en cours sur {max}', { n: state.streams, max: state.max_streams })], [H.t('Accès'), state.auth ? H.t('protégé par mot de passe') : H.t('sans mot de passe')]];
       server.appendChild(h('dl', null, facts.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })));
+      // La mention et le logo de TMDB (tmdb.svg, le logo court officiel), que demandent les conditions de son API.
+      server.appendChild(h('p', { class: 'credit-tmdb' }, h('img', { src: '/tmdb.svg', alt: 'TMDB', width: '92', height: '12' }),
+        h('span', null, H.t('Ce produit utilise l’API TMDB mais n’est ni approuvé ni certifié par TMDB.'))));
       body.appendChild(server);
     }
     // Supprimer les fichiers parasites ne s'annule pas : on demande, en rappelant ce que la dernière simulation en a compté.
