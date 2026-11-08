@@ -393,11 +393,12 @@ body.has-audio #toast { bottom: 6rem; }
 .stack > .poster { position: absolute; width: 84%; padding-top: 126%; box-shadow: 0 0.3rem 0.9rem rgba(0, 0, 0, 0.45); transition: transform 0.12s; }
 .stack > .poster .ph { font-size: 2.4rem; }
 .stack .badge { z-index: 5; }
-.card.saga:focus .stack > .poster, .card.saga:hover .stack > .poster { transform: none; box-shadow: 0 0.3rem 0.9rem rgba(0, 0, 0, 0.45); }
-.card.saga:focus .stack, .card.saga:hover .stack { transform: scale(1.045); }
-body.mouse .card.saga:focus:not(:hover) .stack { transform: none; }
-.card.saga .stack { transition: transform 0.12s; }
-.card.saga .t { color: var(--accent); }
+/* Cartes à pile d'affiches : une saga (.saga) et une série de plusieurs tomes (.multi) */
+.card.saga:focus .stack > .poster, .card.saga:hover .stack > .poster, .card.multi:focus .stack > .poster, .card.multi:hover .stack > .poster { transform: none; box-shadow: 0 0.3rem 0.9rem rgba(0, 0, 0, 0.45); }
+.card.saga:focus .stack, .card.saga:hover .stack, .card.multi:focus .stack, .card.multi:hover .stack { transform: scale(1.045); }
+body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not(:hover) .stack { transform: none; }
+.card.saga .stack, .card.multi .stack { transition: transform 0.12s; }
+.card.saga .t, .card.multi .t { color: var(--accent); }
 .stack-big { width: 100%; }
 .card.wanted { cursor: default; }
 .card.wanted .poster { opacity: 0.4; filter: grayscale(1); }
@@ -493,5 +494,5 @@ html[data-device="tv"] .grid.small { --cw: 8.5rem; }
 /* Hors ordinateur : pas d'effet de survol (le toucher le laisse collé, une télécommande n'en a pas). Le focus, lui, reste. */
 html:not([data-device="pc"]) .card:hover:not(:focus) { z-index: auto; }
 html:not([data-device="pc"]) .card:hover:not(:focus) .poster { transform: none; box-shadow: none; }
-html:not([data-device="pc"]) .card.saga:hover:not(:focus) .stack { transform: none; }
+html:not([data-device="pc"]) .card.saga:hover:not(:focus) .stack, html:not([data-device="pc"]) .card.multi:hover:not(:focus) .stack { transform: none; }
 html[data-device="tv"] .card:hover:not(:focus):not(:focus-within) .qa { opacity: 0; }

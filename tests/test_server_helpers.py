@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import tempfile
 import types
@@ -134,6 +135,33 @@ class TestShownRating(unittest.TestCase):
                                 "meta": json.dumps({"tmdb_rating": rating})})
         self.assertEqual({k: v for k, v in card({"tmdb": 1, "vote": 8.4, "votes": 900}).items() if k.startswith("tmdb")}, {"tmdb_rating": 8.4, "tmdb_votes": 900})
         self.assertNotIn("tmdb_rating", card(8.4))
+
+
+class TestSeriesCard(unittest.TestCase):
+    def card(self, meta, kind="series"):
+        return app.summary({"id": "s", "type": kind, "title": "S", "year": "", "grp": "", "count": 3, "letter": "S", "added": 0, "genres": "[]", "meta": json.dumps(meta)})
+
+    def test_a_series_with_a_stack_shows_its_own_cover_then_the_covers_of_its_next_volumes(self):
+        out = self.card({"stack": ["e2", "e3"]})
+        self.assertEqual(out["cover_urls"], [urls.item_cover("s"), urls.entry_image("e2"), urls.entry_image("e3")])
+
+    def test_no_more_than_the_maximum_is_shown(self):
+        out = self.card({"stack": ["e2", "e3", "e4", "e5"]})
+        self.assertEqual(len(out["cover_urls"]), app.STACK_MAX)
+
+    def test_the_page_stacks_as_many_covers_as_the_server_sends(self):
+        script = (Path(__file__).resolve().parents[1] / "hub" / "web" / "js" / "views.js").read_text(encoding="utf-8")
+        found = re.search(r"var STACK_MAX = (\d+);", script)
+        self.assertIsNotNone(found, "views.js doit déclarer STACK_MAX")
+        self.assertEqual(int(found.group(1)), app.STACK_MAX)
+
+    def test_a_series_of_one_volume_or_scanned_before_the_stack_existed_has_no_field(self):
+        for meta in ({}, {"stack": []}):
+            with self.subTest(meta=meta):
+                self.assertNotIn("cover_urls", self.card(meta))
+
+    def test_only_a_book_series_stacks(self):
+        self.assertNotIn("cover_urls", self.card({"stack": ["e2"]}, kind="show"))
 
 
 class TestSagaJson(unittest.TestCase):

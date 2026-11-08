@@ -12,6 +12,8 @@ from libraries.music import coverfile
 
 from ..db import make_id
 
+STACK_MAX = 3          # couvertures empilées sur la carte d'une saga ou d'une série de livres : la première, puis celles des tomes suivants
+
 DIGITS = re.compile(r"\d+")
 JOINERS = "\u200c\u200d"          # liant sans chasse, liant de chasse nulle : visibles dans l'écriture de certaines langues (persan, hindi, émojis)
 
@@ -40,9 +42,13 @@ def item_row(lib, key, kind, title, *, year="", summary="", genres=(), grp="", m
     }
 
 
+def entry_id(lib, rel):
+    return make_id(lib, rel)
+
+
 def entry_row(lib, item_id, rel, kind, *, title="", summary="", season=None, disc=None, number=None, duration=0, size=0, mtime=0, meta=None):
     return {
-        "id": make_id(lib, rel), "item_id": item_id, "lib": lib, "rel": rel, "kind": kind, "season": season, "disc": disc,
+        "id": entry_id(lib, rel), "item_id": item_id, "lib": lib, "rel": rel, "kind": kind, "season": season, "disc": disc,
         "number": number, "title": clean_text(title), "summary": summary or "", "duration": float(duration or 0), "size": int(size or 0),
         "mtime": int(mtime or 0), "meta": json.dumps(meta or {}, ensure_ascii=False), "probe": None,
     }

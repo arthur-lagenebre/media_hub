@@ -9,7 +9,7 @@ import json
 
 from libraries.books import comicinfo, shelf
 
-from .common import entry_row, item_row, unchanged
+from .common import STACK_MAX, entry_id, entry_row, item_row, unchanged
 from .video import _Counts  # noqa: F401  (même forme de compte rendu)
 
 
@@ -28,6 +28,12 @@ def _read_volumes(series, known):
     return reused, read
 
 
+def _sheet_order(volume):
+    """La place d'un tome sur la fiche : son numéro (les tomes sans numéro après les autres), puis son chemin."""
+    number = comicinfo.number_value(volume.number)
+    return (number if number is not None else 1e9, volume.rel.casefold())
+
+
 def _series_item(lib, series):
     years = series.years
     missing = [{"label": label, "numbers": numbers, "total": total} for label, numbers, total in series.missing()]
@@ -36,6 +42,9 @@ def _series_item(lib, series):
         "missing": missing, "unit": shelf.unit(series.section, 1).split(" ", 1)[1], "units": shelf.unit(series.section, 2).split(" ", 1)[1], "tagged": series.tagged,
         "years": list(years) if years else [],
     }
+    if len(series.volumes) > 1:                      # la pile de couvertures de la carte : les tomes 2 à STACK_MAX, après la couverture de la série
+        numbered = sorted(series.volumes, key=_sheet_order)          # l'ordre de la fiche : par numéro, pas celui des dossiers
+        meta["stack"] = [entry_id(lib.id, volume.rel) for volume in numbered[1:STACK_MAX]]
     return item_row(lib.id, f"series:{series.id}", "series", series.name, year=years[0] if years else "", summary=series.summary[0], genres=series.genres,
                     grp=series.label, meta=meta, added=max(v.mtime for v in series.volumes), count=len(series.volumes))
 

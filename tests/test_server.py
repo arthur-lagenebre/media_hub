@@ -164,7 +164,6 @@ class TestBrowse(ServerCase):
         self.assertEqual((broken["offset"], len(broken["items"])), (0, total))
         self.assertEqual(self.items("films", offset=total)["items"], [])                              # au-delà de la fin : une page vide, pas une erreur
 
-
     def test_unknown_library_and_item_are_404(self):
         self.assertEqual(self.api.get("/api/library/nope")[0], 404)
         self.assertEqual(self.api.get("/api/item/deadbeef")[0], 404)
@@ -329,6 +328,22 @@ class TestBooks(ServerCase):
         self.assertEqual(self.api.get(f"/book/{entry}/page/0")[0], 200)
         self.assertEqual(self.api.get(f"/book/{entry}/page/9")[0], 404)
         self.assertEqual(info["next"]["id"], self.detail(self.item_by_title("livres", "Naruto")["id"])["entries"][1]["id"])
+
+    def test_a_series_of_several_volumes_shows_stacked_covers_and_a_single_one_does_not(self):
+        naruto = self.item_by_title("livres", "Naruto")
+        volumes = self.detail(naruto["id"])["entries"]
+        self.assertEqual(naruto["cover_urls"], [f"/img/item/{naruto['id']}", f"/img/entry/{volumes[1]['id']}"])
+        self.assertNotIn("cover_urls", self.item_by_title("livres", "The Art of Dune"))
+        status, headers, _ = self.api.get(naruto["cover_urls"][1])
+        self.assertEqual((status, headers["Content-Type"]), (200, "image/png"))
+
+    def test_a_volume_added_after_a_scan_is_stacked_at_the_next_scan(self):
+        fixtures.write_cbz(self.run_.libs["livres"] / "Manga" / "Naruto" / "Tome 03.cbz", Series="Naruto", Number="3")
+        self.assertEqual(self.api.json("/api/scan", {"lib": "livres"})[0], 202)
+        self.run_.wait_jobs()
+        naruto = self.item_by_title("livres", "Naruto")
+        volumes = self.detail(naruto["id"])["entries"]
+        self.assertEqual(naruto["cover_urls"][1:], [f"/img/entry/{v['id']}" for v in volumes[1:3]])
 
     def test_epub_chapters_and_isolation(self):
         entry = self.detail(self.item_by_title("livres", "Dumas")["id"])["entries"][0]["id"]
@@ -3485,6 +3500,14 @@ class TestRights(AccountsCase):
         self.assertEqual(self.alice.get(f"/api/subs/{episode}/e0.vtt")[0], 403)
         self.assertEqual(self.anon.get(f"/api/subs/{episode}/e0.vtt?token={self.alice.session['media_token']}")[0], 403)
         self.assertEqual(self.bob.json(f"/api/play/{episode}", {})[0], 200)
+
+    def test_the_stacked_covers_of_a_series_follow_view(self):
+        volume = self.volumes[1]["id"]
+        self.assertEqual(self.alice.get(f"/img/entry/{volume}")[0], 200)
+        self.grant(self.alice, {"livres": {"view": False}})
+        self.assertEqual(self.alice.get(f"/img/entry/{volume}")[0], 403)
+        self.assertEqual(self.alice.get("/api/library/livres")[0], 403)
+        self.assertIn("cover_urls", next(i for i in self.bob.json("/api/library/livres")[1]["items"] if i["title"] == "Naruto"))
 
     def test_the_artist_pages_follow_view(self):
         artist = self.admin.json(f"/api/item/{self.discovery}")[1]["artist_id"]
