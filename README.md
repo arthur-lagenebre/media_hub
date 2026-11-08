@@ -131,6 +131,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche (`results` : les titres ; `people` : 8 personnes au plus dont le nom contient le texte, avec leur nombre de titres) |
 | `GET /api/person?name=<nom>` | ce qu'une personne a réalisé ou joué (films et séries des bibliothèques que le compte voit) : `name` (graphie la plus fréquente), `roles` (`director`, `actor`), `results` (par bibliothèque, du plus récent au plus ancien). Nom comparé tel quel, sans accents ni casse (« Chris Evans » ne ramène pas « Chris Evans Jr »), inconnu : `results` vide ; absent ou de plus de 200 caractères : 400. `enrichable` (le nom désigne une seule personne, qui a un identifiant TMDB, et il y a une clé TMDB) et `missing` (ses films, d'après TMDB, qu'aucune bibliothèque visible n'a ; absent s'il est vide). **Homonymes** : l'index se fait par le nom, deux personnes de même nom sont confondues (et ne sont pas enrichissables) |
 | `POST /api/enrich/person` | (administrateur) `{"name", "force"?}` : demande à TMDB les films d'une personne (réalisés, ou joués parmi les premiers rôles), gardés un mois ; tâche de fond. 400 sans clé TMDB ou sans identifiant unique pour ce nom, 404 nom inconnu |
+| `POST /api/enrich/people` | (administrateur) `{"lib"?, "force"?}` : la même demande à TMDB pour les réalisateurs et les acteurs (réalisateurs et acteurs de premier plan, une seule personne par nom), en tâche de fond ; sans `lib` les bibliothèques de films (bouton « Films manquants (tout le monde) » dans *Paramètres* > *Gestion*), avec `lib` une catégorie : films, séries ou animations (bouton « Films des personnes (TMDB) » de chaque bibliothèque, dans « Détail par bibliothèque »). Pour les séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ». Une personne connue depuis moins d'un mois n'est pas redemandée. 400 sans clé TMDB |
 | `GET /api/library/<id>?q&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec les genres (les 60 plus fréquents, par ordre alphabétique) ; musique : `artists` et `albums`, le décompte de ce que les filtres laissent (en vue artistes, un artiste trouvé garde tous ses albums) ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
 | `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
 | `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, sagas, casting, progression |
@@ -166,7 +167,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1551 tests : 1317 serveur + 234 interface
+python -m unittest discover -s tests          # 1601 tests : 1363 serveur + 238 interface
 ```
 
 `tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 234 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.

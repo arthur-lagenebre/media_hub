@@ -1042,8 +1042,27 @@ def person_extras(hub, person, libs):
     ident = people.tmdb_id(person, [lib.id for lib in libs])
     known = hub.db.kv_get(enrich.person_key(ident)) if ident else None
     films = known.get("films") if isinstance(known, dict) else None
-    absent = missing.of_person(films, owned_film_ids(hub, libs)) if films else []
+    absent = missing.of_person(films, missing.owned_films(hub.db, libs)) if films else []
     return {"enrichable": bool(ident and hub.cfg.tmdb_key), **({"missing": absent} if absent else {})}
+
+
+@route("POST", r"/api/enrich/people")
+def api_enrich_people(h, m, q):
+    """Demande à TMDB les films des réalisateurs et acteurs (`{"lib": "<id>", "force": false}`) : les réalisateurs et les acteurs de premier plan, pour que `/api/person` dise ce qui manque à chacun. Sans `lib` : les bibliothèques de films ; avec : cette bibliothèque (films, séries ou animations), une tâche par catégorie. Administrateur seulement ; tâche de fond (202, `job`) : une heure ou plus la première fois, une personne connue depuis moins d'un mois n'est pas redemandée (sauf `force`)."""
+    require_admin(h)
+    body = h.body_json()
+    hub = h.hub
+    if not hub.cfg.tmdb_key:
+        raise HttpError(400, "pas de clé TMDB : renseigne TMDB_KEY sur le serveur")
+    libs, label = [lib for lib in hub.cfg.libraries if lib.kind == "movies"], "bibliothèques de films"
+    if "lib" in body:
+        if not isinstance(body["lib"], str):
+            raise HttpError(400, 'bibliothèque attendue : {"lib": "<identifiant>"}')
+        lib = library_or_404(hub, body["lib"])
+        if lib.kind not in ("movies", "shows"):
+            raise HttpError(400, "les films manquants des personnes ne concernent que les bibliothèques de films, de séries et d'animations")
+        libs, label = [lib], lib.label
+    h.send_json({"job": hub.jobs.enrich_people(libs, label, bool(body.get("force"))).public()}, 202)
 
 
 @route("POST", r"/api/enrich/person")
@@ -2441,24 +2460,6 @@ def movie_rows(hub, libs=None):
         if lib.kind == "movies":
             rows += hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (lib.id,))
     return rows
-
-
-def film_of_entry(meta_text):
-    """L'identifiant TMDB du film que dit l'étiquette d'un fichier (`meta["info"]["tmdb"]` d'une entrée : « movie/<n> »), ou None : autre étiquette (« tv/… »), pas d'étiquette, `meta` illisible."""
-    meta = safe_json(meta_text, {})
-    info = meta.get("info") if isinstance(meta, dict) else None
-    tag = info.get("tmdb") if isinstance(info, dict) else None
-    return sagafile.film_id(tag) if isinstance(tag, str) and tag.startswith("movie/") else None
-
-
-def owned_film_ids(hub, libs):
-    """{identifiant TMDB} des films que ces bibliothèques `libs` ont : ceux des bibliothèques de films, et les fichiers étiquetés « movie/<n> » des bibliothèques de séries (un long-métrage rangé dans Animations y est un élément « série » : seule l'étiquette de son fichier dit que c'est un film)."""
-    owned = set(sagafile.by_tmdb(movie_rows(hub, libs)))
-    shows = [lib.id for lib in libs if lib.kind == "shows"]
-    if shows:
-        rows = hub.db.query(f"SELECT meta FROM entries WHERE lib IN ({','.join('?' * len(shows))}) AND meta LIKE ?", [*shows, '%"movie/%'])
-        owned.update(ident for ident in (film_of_entry(row["meta"]) for row in rows) if ident is not None)
-    return owned
 
 
 def saga_film(ident, row, info=None):

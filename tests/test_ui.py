@@ -2431,7 +2431,8 @@ class FakePersonTmdb:
             {"id": 9301, "title": "Absent Un", "release_date": "2010-05-05", "order": 0, "vote_count": 500, "poster_path": "/a1.jpg"},
             {"id": 9302, "title": "Absent Deux", "release_date": "2005-05-05", "order": 2, "vote_count": 500, "poster_path": None},
             {"id": 9303, "title": "<b>x</b>", "release_date": "2008-08-08", "order": 3, "vote_count": 500, "poster_path": None}]},
-        "person/8100/movie_credits": {"crew": [{"id": 9101, "title": "Premier Film", "job": "Director", "release_date": "2001-01-01", "vote_count": 900, "poster_path": "/p1.jpg"}]}}
+        "person/8100/movie_credits": {"crew": [{"id": 9101, "title": "Premier Film", "job": "Director", "release_date": "2001-01-01", "vote_count": 900, "poster_path": "/p1.jpg"}]},
+        "person/8300/movie_credits": {"cast": [{"id": 9500, "title": "Film de la voix", "release_date": "2015-05-05", "order": 0, "vote_count": 400, "poster_path": None}]}}
 
     def __init__(self, key, language="fr-FR", **kwargs):
         pass
@@ -2558,6 +2559,66 @@ class TestPersonMissingUi(UiCase):
         self.person()
         self.assertEqual(self.missing_titles(), ["Réalisé ailleurs"])
         self.assertEqual(self.view(".card.wanted .s").inner_text(), "1999 · Réalisateur")
+
+    def test_the_general_button_in_management_asks_tmdb_for_everybody(self):
+        self.open("#/admin")
+        button = self.view("[data-key=enrich-people]")
+        button.wait_for()
+        self.assertTrue(button.evaluate("e => e.classList.contains('f')"))                     # atteignable à la télécommande
+        with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
+            button.click()
+            self.page.locator("#toast.on", has_text="Recherche des films manquants lancée").wait_for()
+            self.until(lambda: len(FakePersonTmdb.calls) >= 2, tries=100)
+            self.run_.wait_jobs()
+        self.assertEqual(sorted(FakePersonTmdb.calls), ["person/8100/movie_credits", "person/8200/movie_credits"])
+        self.person()                                                                          # sans cliquer sur la page : tout est déjà là
+        self.assertEqual(self.missing_titles(), ["Absent Un", "<b>x</b>", "Absent Deux"])
+        self.assertEqual(self.view("[data-key=person-enrich]").count(), 1)
+
+    def give_a_voice_to_the_show(self):
+        """La série « Vidéo Série » a un acteur dont l'enrichissement TMDB a gardé l'identifiant (8300) ; l'état d'avant est remis à la fin."""
+        db = self.run_.hub.db
+        row = db.one("SELECT id, meta FROM items WHERE lib='series' AND title='Vidéo Série'")
+        meta = json.loads(row["meta"])
+        db.update_item_meta(row["id"], meta={"actors": [{"name": "Voix Test", "role": "Narrateur"}], "person_ids": {"Voix Test": 8300}})
+        self.addCleanup(db.execute, "UPDATE items SET meta=? WHERE id=?", (row["meta"], row["id"]))
+        self.assertNotIn("person_ids", meta)
+
+    def open_libraries_detail(self):
+        self.open("#/admin")
+        self.view("[data-key=libs-toggle]").click()
+        self.view("[data-key=scan-films]").wait_for()
+
+    def test_a_category_has_its_own_button_for_the_people_of_its_series(self):
+        self.give_a_voice_to_the_show()
+        self.open_libraries_detail()
+        for lib in ("films", "series", "animations"):
+            self.assertEqual(self.view(f"[data-key=people-{lib}]").count(), 1, lib)                  # films, séries et animations : une catégorie chacune
+        self.assertEqual(self.view("[data-key=people-musique], [data-key=people-livres]").count(), 0)
+        self.assertTrue(self.view("[data-key=people-series]").evaluate("e => e.classList.contains('f')"))
+        with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
+            self.view("[data-key=people-series]").click()
+            self.page.locator("#toast.on", has_text="Recherche des films manquants lancée").wait_for()
+            self.until(lambda: FakePersonTmdb.calls, tries=100)
+            self.run_.wait_jobs()
+        self.assertEqual(FakePersonTmdb.calls, ["person/8300/movie_credits"])                      # les personnes de cette catégorie seulement, pas celles des films
+        self.open("#/person?n=Voix%20Test")
+        self.view(".shelf .card").first.wait_for()
+        self.assertEqual(self.missing_titles(), ["Film de la voix"])
+        self.assertEqual(self.view("[data-key=person-enrich]").count(), 1)                         # et la page de cette personne a son bouton
+
+    def test_the_category_buttons_need_a_tmdb_key_too(self):
+        self.run_.hub.cfg.tmdb_key = ""
+        self.open("#/admin")
+        self.view("[data-key=libs-toggle]").click()
+        self.view("[data-key=scan-films]").wait_for()
+        self.assertEqual(self.view("[data-key^=people-]").count(), 0)
+
+    def test_the_general_button_has_no_meaning_without_a_tmdb_key(self):
+        self.run_.hub.cfg.tmdb_key = ""
+        self.open("#/admin")
+        self.view("[data-key=scan-all]").wait_for()                                            # la page est là
+        self.assertEqual(self.view("[data-key=enrich-people]").count(), 0)
 
     def test_without_a_tmdb_key_there_is_no_button(self):
         self.run_.hub.cfg.tmdb_key = ""

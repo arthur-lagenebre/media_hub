@@ -12,6 +12,7 @@ Les films qui manquent à une personne (enrich.enrich_person) sont gardés à pa
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 from . import sagas as sagafile
@@ -52,6 +53,30 @@ def film_entry(ident, rank, film):
 def entry(ident, rank, info):
     """Le film `ident` de `info["films"]` tel que l'API le donne (voir `film_entry`) ; son rang est sa place dans la saga."""
     return film_entry(ident, rank, info["films"][str(ident)])
+
+
+def film_of_entry(meta_text):
+    """L'identifiant TMDB du film que dit l'étiquette d'un fichier (`meta["info"]["tmdb"]` d'une entrée : « movie/<n> »), ou None : autre étiquette (« tv/… »), pas d'étiquette, `meta` illisible."""
+    try:
+        meta = json.loads(meta_text)
+    except (ValueError, TypeError):
+        return None
+    info = meta.get("info") if isinstance(meta, dict) else None
+    tag = info.get("tmdb") if isinstance(info, dict) else None
+    return sagafile.film_id(tag) if isinstance(tag, str) and tag.startswith("movie/") else None
+
+
+def owned_films(db, libs):
+    """{identifiant TMDB} des films que ces bibliothèques `libs` (objets Library) ont : ceux des bibliothèques de films, et les fichiers étiquetés « movie/<n> » des bibliothèques de séries (un long-métrage rangé dans Animations y est un élément « série » : seule l'étiquette de son fichier dit que c'est un film)."""
+    owned = set()
+    for lib in libs:
+        if lib.kind == "movies":
+            owned.update(sagafile.by_tmdb(db.query("SELECT meta FROM items WHERE lib=? AND type='movie'", (lib.id,))))
+    shows = [lib.id for lib in libs if lib.kind == "shows"]
+    if shows:
+        rows = db.query(f"SELECT meta FROM entries WHERE lib IN ({','.join('?' * len(shows))}) AND meta LIKE ?", [*shows, '%"movie/%'])
+        owned.update(ident for ident in (film_of_entry(row["meta"]) for row in rows) if ident is not None)
+    return owned
 
 
 def of_person(films, owned):
