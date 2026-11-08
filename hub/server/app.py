@@ -967,7 +967,7 @@ def api_home(h, m, q):
 def api_search(h, m, q):
     needle = fold(q.get("q", "")).strip()
     if len(needle) < 2:
-        h.send_json({"results": []})
+        h.send_json({"results": [], "people": []})
         return
     hub = h.hub
     seen = seen_counts(hub, h.user["id"])
@@ -981,7 +981,8 @@ def api_search(h, m, q):
                     break
         if found:
             results.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "items": found})
-    h.send_json({"results": results})
+    hits = people.search(hub.db, people.key_of(needle), [lib.id for lib in h.visible_libs()])
+    h.send_json({"results": results, "people": [{"name": name, "titles": titles} for name, titles in hits]})
 
 
 def items_by_id(db, ids):

@@ -1191,5 +1191,116 @@ class TestPersonRoute(unittest.TestCase):
         self.assertEqual(self.titles(self.person("Anna Paquin")[1]), [["Une série"]])                              # un film disparu aussi
 
 
+class TestPeopleInSearch(unittest.TestCase):
+    """GET /api/search : `people`, les personnes dont le nom contient la recherche (8 au plus), avec leur nombre de titres visibles."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / "web").mkdir()
+        self.libs = [config.Library("films", "Films", "movies", self.root / "films"), config.Library("prive", "Privé", "movies", self.root / "prive")]
+        for lib in self.libs:
+            lib.path.mkdir()
+        self.hub = MiniHub(self.root, self.libs)
+        self.db = self.hub.db
+        self.db.replace_library("films", [
+            item("m1", title="Un", year="2001", lib="films", meta={"directors": ["Jean Reno"], "actors": [{"name": "Jean Reno"}, {"name": "Léa Seydoux"}, {"name": "Jean Dujardin"}]}),
+            item("m2", title="Deux", year="2002", lib="films", meta={"actors": [{"name": "Jean Reno"}, {"name": "Jean Dujardin"}]}),
+            item("m3", title="Trois", year="2003", lib="films", meta={"actors": [{"name": "Jean Dujardin"}, {"name": "Marie-Jeanne Dupont"}, {"name": "Renaud Capuçon"}]}),
+            item("m4", title="Quatre", year="2004", lib="films", meta={"actors": [{"name": "Zoé O'Brien"}]}),
+        ], [])
+        self.db.replace_library("prive", [
+            item("p1", title="Secret", lib="prive", meta={"actors": [{"name": "Seule Ici"}, {"name": "Jean Reno"}, {"name": "Léa Seydoux"}]}),
+            item("p2", title="Autre", lib="prive", meta={"actors": [{"name": "Jean Reno"}]}),
+        ], [])
+
+    def search(self, text, headers=None):
+        reply = call(self.hub, "GET", "/api/search?q=" + quote(text, safe=""), headers=headers)[1]
+        self.assertEqual(reply.status, 200)
+        return reply.json()
+
+    def names(self, text, headers=None):
+        return [(p["name"], p["titles"]) for p in self.search(text, headers)["people"]]
+
+    def bob(self):
+        """Les en-têtes d'un compte ordinaire qui ne voit pas la bibliothèque « prive »."""
+        self.admin = self.hub.cookie(accounts.create(self.db, "root", "motdepasse12"))
+        bob = accounts.create(self.db, "bob", "motdepasse12")
+        accounts.set_rights(self.db, bob["id"], {"films", "prive"}, {"prive": {"view": False}})
+        return self.hub.cookie(bob)
+
+    def only_films(self, items):
+        """Remplace le contenu des deux bibliothèques : `items` dans « films », rien dans « prive »."""
+        self.db.replace_library("films", items, [])
+        self.db.replace_library("prive", [], [])
+
+    def test_accents_and_case_do_not_matter_and_the_name_shown_keeps_them(self):
+        for asked in ("seydoux", "SEYDOUX", "léa", "lea seydoux", "  LEA   SEYDOUX "):
+            self.assertEqual(self.names(asked)[0][0], "Léa Seydoux", asked)
+        self.assertEqual(self.names("capucon"), [("Renaud Capuçon", 1)])
+        self.assertEqual(self.names("o'brien"), [("Zoé O'Brien", 1)])
+        self.assertEqual(self.names("zoe o"), [("Zoé O'Brien", 1)])
+
+    def test_the_exact_name_comes_first_then_the_names_that_start_with_it_then_the_rest(self):
+        self.only_films([
+            item("m1", title="Un", lib="films", meta={"actors": [{"name": "Reno"}, {"name": "Renoir"}, {"name": "Jean Reno"}, {"name": "Jean Renoir"}, {"name": "Brenoit"}]}),
+            item("m2", title="Deux", lib="films", meta={"actors": [{"name": "Jean Reno"}, {"name": "Jean Renoir"}, {"name": "Brenoit"}]}),
+            item("m3", title="Trois", lib="films", meta={"actors": [{"name": "Jean Reno"}, {"name": "Brenoit"}]}),
+        ])
+        # Reno : exact ; Renoir (1 titre) : commence par le texte, même avec moins de titres que les suivants ; puis le reste, du plus de titres au moins (3, 3, 2), à égalité par nom
+        self.assertEqual(self.names("reno"), [("Reno", 1), ("Renoir", 1), ("Brenoit", 3), ("Jean Reno", 3), ("Jean Renoir", 2)])
+
+    def test_the_names_that_start_with_the_text_go_by_number_of_titles_then_the_others(self):
+        self.assertEqual(self.names("jean"), [("Jean Reno", 4), ("Jean Dujardin", 3), ("Marie-Jeanne Dupont", 1)])
+        self.assertEqual(self.names("ren")[0], ("Renaud Capuçon", 1))               # commence par « ren » : avant « Jean Reno », qui le contient seulement
+
+    def test_the_same_number_of_titles_goes_by_name(self):
+        self.only_films([item("m1", title="Un", lib="films", meta={"actors": [{"name": "Bob Bb"}, {"name": "Bob Aa"}, {"name": "Bob Cc"}]}),
+                         item("m2", title="Deux", lib="films", meta={"actors": [{"name": "Bob Cc"}]})])
+        self.assertEqual(self.names("bob"), [("Bob Cc", 2), ("Bob Aa", 1), ("Bob Bb", 1)])
+
+    def test_the_titles_count_once_whatever_the_roles_and_match_the_person_route(self):
+        found = dict(self.names("jean"))
+        self.assertEqual(found["Jean Reno"], 4)             # réalisateur et acteur du même film : un titre ; plus deux titres de « Privé »
+        for name, titles in found.items():
+            person = call(self.hub, "GET", "/api/person?name=" + quote(name, safe=""))[1].json()
+            self.assertEqual(titles, sum(len(group["items"]) for group in person["results"]), name)
+
+    def test_at_most_eight_people_the_first_in_order(self):
+        self.only_films([item("m1", title="Un", lib="films", meta={"actors": [{"name": f"Martin {chr(97 + n)}"} for n in range(12)]})])
+        self.assertEqual([n for n, _ in self.names("martin")], [f"Martin {chr(97 + n)}" for n in range(8)])
+
+    def test_a_person_with_no_visible_title_is_not_listed_and_the_count_is_the_visible_one(self):
+        cookie = self.bob()
+        self.assertEqual(self.names("seule ici", cookie), [])
+        self.assertEqual(self.names("seule ici", self.admin), [("Seule Ici", 1)])
+        self.assertEqual(self.names("jean reno", cookie), [("Jean Reno", 2)])
+        self.assertEqual(self.names("jean reno", self.admin), [("Jean Reno", 4)])
+        self.assertEqual(self.names("seydoux", cookie), [("Léa Seydoux", 1)])
+        self.assertEqual(self.names("seydoux", self.admin), [("Léa Seydoux", 2)])
+        self.assertNotIn("Seule", json.dumps(self.search("seule", cookie)))
+
+    def test_a_search_that_is_too_short_has_no_people(self):
+        for text in ("", " ", "j", " j "):
+            self.assertEqual(self.search(text), {"results": [], "people": []}, repr(text))
+        self.assertTrue(self.search("je")["people"])
+
+    def test_the_results_are_unchanged_and_the_people_do_not_depend_on_them(self):
+        body = self.search("deux")
+        self.assertEqual(([g["id"] for g in body["results"]], [i["title"] for i in body["results"][0]["items"]], body["people"]), (["films"], ["Deux"], []))
+        body = self.search("seydoux")
+        self.assertEqual((body["results"], len(body["people"])), ([], 1))              # une personne trouvée sans aucun titre qui porte ce texte
+
+    def test_a_search_with_signs_is_not_injected(self):
+        body = self.search("'; DROP TABLE items; --")
+        self.assertEqual((body["results"], body["people"]), ([], []))
+        self.assertEqual(self.db.one("SELECT COUNT(*) AS n FROM items")["n"], 6)
+
+    def test_the_index_is_renewed_after_a_write(self):
+        self.assertEqual(self.names("anna"), [])
+        self.db.update_item_meta("m4", meta={"actors": [{"name": "Anna Paquin"}]})
+        self.assertEqual(self.names("anna"), [("Anna Paquin", 1)])
+
+
 if __name__ == "__main__":
     unittest.main()

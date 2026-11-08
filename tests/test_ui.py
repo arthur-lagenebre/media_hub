@@ -138,6 +138,10 @@ class UiCase(unittest.TestCase):
     def view(self, selector="", **kw):
         return self.page.locator(f"#views > .view:visible {selector}".strip(), **kw)
 
+    def shown(self, hash):
+        """Attend que la page d'adresse `hash` soit affichée. L'adresse change un instant avant que la page suive (`hashchange`) : jusque-là, `view()` désigne encore l'ancienne page, cartes et titre compris."""
+        self.page.wait_for_function("h => { var c = window.Hub.current(); return !!c && c.hash === h && c.el.style.display !== 'none'; }", arg=hash)
+
     def until(self, condition, tries=40):
         """Attend (au plus quelques secondes) que `condition()` devienne vraie : l'écran ou le serveur ne suivent pas à l'instant du clic."""
         for _ in range(tries):
@@ -1770,12 +1774,12 @@ class TestAnimationShortcut(UiCase):
         link = self.view(".related a.f")
         self.assertEqual(link.inner_text(), "Films d’animation")
         link.click()
-        self.page.wait_for_url("**/#/l/films?genre=Animation")
-        self.until(lambda: self.titles() == ["Coco"])          # la page Animations (Frieren) reste à l'écran le temps que Films réponde : attendre la grille de Films, pas une première carte
+        self.shown("#/l/films?genre=Animation")                                            # l'adresse change avant la page : sans cette attente, on lirait encore Animations
+        self.until(lambda: self.titles() == ["Coco"])          # puis la grille de Films : la page Animations (Frieren) reste à l'écran le temps que Films réponde, une première carte ne suffit pas
         self.assertEqual(self.genre_button().inner_text(), "Genre : Animation")
         self.assertEqual(self.titles(), ["Coco"])
-        self.press("Escape", wait=500)
-        self.assertTrue(self.page.url.endswith("#/l/animations"))                          # Retour revient à Animations
+        self.press("Escape")
+        self.shown("#/l/animations")                                                       # Retour revient à Animations
 
     def test_the_link_is_reached_and_pressed_from_the_keyboard_before_the_filters(self):
         self.open("#/l/animations")
@@ -1797,11 +1801,8 @@ class TestAnimationShortcut(UiCase):
         self.open("#/l/films?genre=Animation")
         self.view(".grid .card").first.wait_for()
         self.view("input[type=search]").fill("zzzz")
-        self.page.wait_for_timeout(700)
-        self.view("button", has_text="Retirer les filtres").click()
-        self.page.wait_for_timeout(700)
-        self.assertEqual(self.genre_button().inner_text(), "Genre : Tous")
-        self.assertGreater(self.view(".grid .card").count(), 1)
+        self.view("button", has_text="Retirer les filtres").click()                       # n'existe qu'une fois la liste vide relue : le clic l'attend
+        self.until(lambda: self.genre_button().inner_text() == "Genre : Tous" and self.view(".grid .card").count() > 1, tries=100)      # la liste est relue, puis les boutons repeints
 
     def test_only_the_animations_page_has_the_link_and_only_for_an_account_that_sees_the_movies(self):
         for lib in ("films", "series", "musique"):
@@ -1908,6 +1909,80 @@ class TestPersonPage(UiCase):
         self.person("%3Cb%3Ex%3C%2Fb%3E")                                              # <b>x</b>
         self.assertEqual(self.view("h1").inner_text(), "<b>x</b>")
         self.assertEqual(self.view("h1 b").count(), 0)
+
+
+class TestPeopleInSearchUi(UiCase):
+    """La recherche propose aussi les personnes : une rangée de pastilles « nom · N titres » au-dessus des résultats."""
+
+    @classmethod
+    def add_media(cls, root):
+        films = root / "srv" / "Films"
+        fixtures.write_mkv(films / "Premier Essai (2001)" / "Premier Essai (2001).mkv", fixtures.movie_blocks("Premier Essai", "Un.", "2001-01-01", "movie/9001", "Drame", ["Jane Campion"], ["Holly Hunter (Ada)", "Holly Berry (Zed)", "Zoé O'Brien (Flora)"]))
+        fixtures.write_mkv(films / "Second Essai (2003)" / "Second Essai (2003).mkv", fixtures.movie_blocks("Second Essai", "Deux.", "2003-01-01", "movie/9002", "Drame", ["Jane Campion"], ["Holly Hunter (Mère)"]))
+        fixtures.write_mkv(films / "Hunter Blues (2010)" / "Hunter Blues (2010).mkv", fixtures.movie_blocks("Hunter Blues", "Trois.", "2010-01-01", "movie/9003", "Drame"))      # un titre qui porte le même texte qu'un nom
+
+    def search(self, text):
+        self.open("#/search")
+        self.view("input[type=search]").fill(text)
+        self.view(".people .chip, .shelf .card, .results > p").first.wait_for()
+
+    def chips(self):
+        return self.view(".people .chip").evaluate_all("els => els.map(e => e.textContent)")
+
+    def test_a_search_shows_the_people_with_their_number_of_titles_most_titles_first(self):
+        self.search("holly")
+        self.assertEqual(self.view(".people h2").inner_text(), "Personnes")
+        self.assertEqual(self.chips(), ["Holly Hunter · 2 titres", "Holly Berry · 1 titre"])
+        self.assertEqual(self.view(".shelf .card").count(), 0)                         # aucun titre ne porte ce texte : pas de message « aucun résultat » non plus
+        self.assertEqual(self.view(".results > p").count(), 0)
+
+    def test_clicking_a_chip_opens_the_page_of_the_person_and_back_returns_to_the_search(self):
+        self.search("hunter")
+        self.view(".people .chip").click()
+        self.shown("#/person?n=Holly%20Hunter")                                          # l'adresse change avant la page : jusque-là, `.shelf .card` serait la recherche parquée
+        self.view(".shelf .card").first.wait_for()
+        self.assertEqual(self.view("h1").inner_text(), "Holly Hunter")
+        self.press("Escape")
+        self.shown("#/search")
+        self.assertEqual(self.chips(), ["Holly Hunter · 2 titres"])                  # la recherche est retrouvée telle quelle
+
+    def test_accents_case_and_an_apostrophe(self):
+        self.search("ZOE O'B")
+        self.assertEqual(self.chips(), ["Zoé O'Brien · 1 titre"])
+        self.view(".people .chip").click()
+        self.page.locator("#views > .view.person:visible").wait_for()                   # la page de la personne, pas encore la recherche
+        self.view(".shelf .card").first.wait_for()
+        self.assertEqual(self.view("h1").inner_text(), "Zoé O'Brien")
+
+    def test_the_remote_reaches_the_chips_first_then_moves_between_them_and_opens_one(self):
+        self.search("holly")
+        self.view("input[type=search]").focus()
+        self.press("Enter")                                                             # du champ aux résultats : la première pastille
+        self.assertEqual(self.focused(), "Holly Hunter · 2 titres")
+        self.press("ArrowRight")
+        self.assertEqual(self.focused(), "Holly Berry · 1 titre")
+        self.press("ArrowLeft", "Enter", wait=600)
+        self.assertTrue(self.page.url.endswith("#/person?n=Holly%20Hunter"))
+
+    def test_without_any_person_there_is_no_row(self):
+        self.search("essai")
+        self.assertEqual(self.view(".people").count(), 0)                               # personne ne porte ce texte : pas de rangée
+        self.assertEqual(self.view(".shelf .card").count(), 2)
+
+    def test_the_chips_come_before_the_titles_that_match(self):
+        self.search("hunter")
+        self.view(".shelf .card").first.wait_for()
+        self.assertEqual(self.chips(), ["Holly Hunter · 2 titres"])
+        self.assertEqual(self.view(".results > *").evaluate_all("els => els.map(e => e.className)"), ["people", "shelf"])
+        self.assertEqual(self.view(".shelf .card").evaluate_all("els => els.map(e => e.title)"), ["Hunter Blues"])
+
+    def test_nothing_found_says_so_and_a_short_search_asks_for_more(self):
+        self.search("zzzz")
+        self.assertEqual(self.view(".people").count(), 0)
+        self.assertEqual(self.view(".results > p").inner_text(), "Aucun résultat pour « zzzz ».")
+        self.view("input[type=search]").fill("z")
+        self.view(".results > p", has_text="Tape au moins deux lettres.").wait_for()
+        self.assertEqual(self.view(".people").count(), 0)
 
 
 class TestLibraryToolbar(UiCase):

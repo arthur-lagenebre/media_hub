@@ -102,7 +102,13 @@ Trois façons de se présenter :
 
 ### `GET /api/search?q=<texte>`
 
-`{"results": [{"id": "films", "label": "Films", "kind": "movies", "items": [<élément>]}]}` — au plus 40 éléments par bibliothèque, ceux dont le titre ou le groupe (artiste, saga…) contient le texte (sans accents ni casse). Moins de 2 caractères : `{"results": []}`.
+```json
+{"results": [{"id": "films", "label": "Films", "kind": "movies", "items": [<élément>]}], "people": [{"name": "Penélope Cruz", "titles": 6}]}
+```
+
+- `results` : au plus 40 éléments par bibliothèque, ceux dont le titre ou le groupe (artiste, saga…) contient le texte (sans accents ni casse).
+- `people` : au plus 8 personnes (réalisateurs, acteurs des films et séries) dont le nom **contient** le texte, comparé comme `results` (sans accents, casse ni espaces en trop). Ordre : le nom exact, puis ceux qui commencent par le texte, puis les autres ; à rang égal, le plus de titres d'abord, puis l'ordre alphabétique. `name` est la graphie la plus fréquente dans les bibliothèques que le compte voit, `titles` le nombre de titres distincts qu'il y voit (le même que dans `/api/person`). Une personne sans aucun titre visible n'est pas listée. Indépendant de `results` : un nom peut être trouvé sans qu'aucun titre ne porte le texte.
+- Moins de 2 caractères : `{"results": [], "people": []}`.
 
 ### `GET /api/person?name=<nom>`
 
