@@ -128,7 +128,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 
 | Route | Rôle |
 | --- | --- |
-| `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche |
+| `GET /api/home`, `/api/state`, `/api/search?q=` | accueil, bibliothèques, recherche (`results` : les titres ; `people` : 8 personnes au plus dont le nom contient le texte, avec leur nombre de titres) |
 | `GET /api/person?name=<nom>` | ce qu'une personne a réalisé ou joué (films et séries des bibliothèques que le compte voit) : `name` (graphie la plus fréquente), `roles` (`director`, `actor`), `results` (par bibliothèque, du plus récent au plus ancien). Nom comparé tel quel, sans accents ni casse (« Chris Evans » ne ramène pas « Chris Evans Jr »), inconnu : `results` vide ; absent ou de plus de 200 caractères : 400. **Homonymes** : seul le nom identifie une personne, deux personnes de même nom sont confondues |
 | `GET /api/library/<id>?q&letter&genre&sort&filter&offset&limit` | liste d'une bibliothèque, avec lettres et genres (les 60 plus fréquents, par ordre alphabétique) ; musique : `artists` et `albums`, le décompte de ce que les filtres laissent (en vue artistes, un artiste trouvé garde tous ses albums) ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
 | `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
@@ -165,7 +165,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1350 tests : 1178 serveur + 172 interface
+python -m unittest discover -s tests          # 1368 tests : 1189 serveur + 179 interface
 ```
 
-`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 172 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 179 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.

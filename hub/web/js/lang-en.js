@@ -208,6 +208,7 @@
     'Titre, artiste, collection…': 'Title, artist, collection…',
     'Tape au moins deux lettres.': 'Type at least two letters.',
     'Aucun résultat pour « {q} ».': 'No results for “{q}”.',
+    'Personnes': 'People',
 
     // --- Une personne (page) ---
     'Réalisateur': 'Director',

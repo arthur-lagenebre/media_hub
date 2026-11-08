@@ -3195,13 +3195,15 @@ class TestApiContract(ContractBase):
 
     def test_search(self):
         data = self.get("/api/search?q=dark")
-        self.has(data, {"results": list}, "search")
+        self.has(data, {"results": list, "people": list}, "search")
         self.assertEqual([r["id"] for r in data["results"]], ["series"])
+        for person in data["people"]:
+            self.has(person, {"name": str, "titles": int}, "search.people")
         for group in data["results"]:
             self.has(group, {"id": str, "label": str, "kind": str, "items": list}, "search.results")
             for item in group["items"]:
                 self.has(item, ITEM_FIELDS, f"search.items[{item['title']}]", ITEM_OPTIONAL)
-        self.assertEqual(self.get("/api/search?q=d"), {"results": []})
+        self.assertEqual(self.get("/api/search?q=d"), {"results": [], "people": []})
 
     def test_playlists(self):
         tracks = [e["id"] for e in self.detail("musique", "Discovery")["entries"]]

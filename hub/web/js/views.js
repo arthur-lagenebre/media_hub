@@ -750,6 +750,11 @@
       return h('section', { class: 'shelf', 'data-lib': g.id }, h('h2', null, h('a', { class: 'f head', href: '#/l/' + g.id }, H.tr(g.label))), h('div', { class: 'grid' + (g.kind === 'music' ? ' sq' : '') }, g.items.map(function (it) { return H.card(it, g.kind === 'music'); })));
     });
   }
+  // La rangée « Personnes » de la recherche : une pastille par personne, vers sa page.
+  function peopleRow(people) {
+    return h('section', { class: 'people' }, h('h2', null, H.t('Personnes')),
+      h('div', { class: 'chips' }, people.map(function (p) { return h('a', { class: 'chip f', href: personHref(p.name) }, p.name, h('small', null, ' · ' + H.plural(p.titles, 'titre'))); })));
+  }
   H.route(/^\/search$/, function () {
     var out = h('div', { class: 'results' }), last = '', timer = null;
     var input = h('input', { class: 'f field big', type: 'search', placeholder: H.t('Titre, artiste, collection…'), 'aria-label': H.t('Rechercher'), 'data-autofocus': '1', autocomplete: 'off',
@@ -763,7 +768,9 @@
       H.api('/api/search?q=' + encodeURIComponent(q)).then(function (res) {
         if (q !== last) return;
         H.clear(out);
-        if (!res.results.length) { out.appendChild(h('p', { class: 'muted' }, H.t('Aucun résultat pour « {q} ».', { q: q }))); return; }
+        var people = res.people || [];
+        if (people.length) out.appendChild(peopleRow(people));
+        if (!res.results.length && !people.length) { out.appendChild(h('p', { class: 'muted' }, H.t('Aucun résultat pour « {q} ».', { q: q }))); return; }
         shelves(res.results).forEach(function (sec) { out.appendChild(sec); });
       }).catch(function (e) { H.clear(out).appendChild(h('p', { class: 'muted' }, e.message)); });
     }
