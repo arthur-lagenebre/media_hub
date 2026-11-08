@@ -10,9 +10,12 @@ import io
 import json
 import re
 import shutil
+import struct
 import tempfile
 import unittest
 import urllib.request
+import zipfile
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -664,21 +667,22 @@ class TestPgsInThePlayer(UiCase):
 
 class TestReader(UiCase):
     def test_cbz_pages_keys_and_progress(self):
+        """Naruto est rangé dans « Manga » : il s'ouvre de droite à gauche, la flèche gauche avance."""
         entry = self.entries("livres", "Naruto")[0]["id"]
         self.open("#/read/" + entry)
         self.page.wait_for_function("document.querySelector('.reader .page') && document.querySelector('.reader .page').complete && document.querySelector('.reader .page').naturalWidth > 0")
         self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 1 / 3")
-        self.press("ArrowRight", wait=300)
+        self.press("ArrowLeft", wait=300)
         self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 2 / 3")
-        self.press("ArrowLeft", wait=300)
-        self.press("ArrowLeft", wait=300)
-        self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 1 / 3")
         self.press("ArrowRight", wait=300)
+        self.press("ArrowRight", wait=300)
+        self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 1 / 3")
+        self.press("ArrowLeft", wait=300)
         self.page.wait_for_timeout(2000)
         self.assertEqual(self.api("/api/book/" + entry)["position"], 1)
         self.open("#/read/" + entry)
         self.page.wait_for_function("document.querySelector('.reader .pg').textContent === 'Page 2 / 3'")      # reprend où l'on s'était arrêté
-        self.press("ArrowRight", wait=300)
+        self.press("ArrowLeft", wait=300)
         self.page.wait_for_timeout(2000)
         self.assertTrue(self.api("/api/item/" + self.item("livres", "Naruto")["id"])["entries"][0]["progress"]["done"])   # dernière page : tome lu
 
@@ -700,6 +704,427 @@ class TestReader(UiCase):
         self.open("#/read/" + entry)
         self.page.wait_for_selector(".reader .err:not([hidden])")
         self.assertIn("Télécharger", self.page.inner_text(".reader .err"))
+
+
+def solid_png(width, height):
+    """Un vrai PNG uni de cette taille : la liseuse décide du couplage des pages d'après leurs dimensions."""
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+    rows = b"".join(b"\x00" + bytes((200, 90, 60)) * width for _ in range(height))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
+def write_sized_cbz(path, sizes, **info):
+    """Un .cbz dont la page n a la taille sizes[n] (largeur, hauteur)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        for n, (width, height) in enumerate(sizes):
+            z.writestr(f"{n:03d}.png", solid_png(width, height))
+        z.writestr("ComicInfo.xml", fixtures.comicinfo_xml(**info))
+
+
+PORTRAIT, LANDSCAPE = (200, 300), (400, 200)
+
+
+class TestReaderSpreads(UiCase):
+    """La liseuse en double page : le couplage des pages, le sens de lecture, la progression, la fenêtre en portrait."""
+
+    @classmethod
+    def add_media(cls, root):
+        books = root / "srv" / "Livres"
+        write_sized_cbz(books / "BD" / "Diptyque" / "Tome 01.cbz", [PORTRAIT] * 3 + [LANDSCAPE] + [PORTRAIT] * 3, Series="Diptyque", Number="1")   # pages 0 à 6, la 3 en paysage
+        write_sized_cbz(books / "Manga" / "Droite" / "Tome 01.cbz", [PORTRAIT] * 6, Series="Droite", Number="1")
+        write_sized_cbz(books / "Manga" / "Gauche" / "Tome 01.cbz", [PORTRAIT] * 5, Series="Gauche", Number="1", Manga="Yes")
+        write_sized_cbz(books / "BD" / "Inverse" / "Tome 01.cbz", [PORTRAIT] * 4, Series="Inverse", Number="1", Manga="YesAndRightToLeft")
+
+    # --- Aides ---------------------------------------------------------------
+    def entry(self, title):
+        return self.entries("livres", title)[0]["id"]
+
+    def setUp(self):
+        super().setUp()
+        self.held, self.released = [], True
+
+    def prefs(self, double=True, **pref):
+        """Pose le mode double page et les autres réglages dans le navigateur."""
+        self.open()
+        self.page.evaluate("p => { localStorage.setItem('hub.spread', JSON.stringify(p.double)); Object.keys(p.more).forEach(k => localStorage.setItem('hub.' + k, JSON.stringify(p.more[k]))); }", {"double": double, "more": pref})
+
+    def hold(self, *numbers):
+        """Retient les images de ces pages (de tout tome) jusqu'à `release()` : la liseuse les attend, comme sur un réseau lent."""
+        self.held, self.released = [], False
+        pattern = re.compile(r".*/book/\w+/page/(%s)$" % "|".join(str(n) for n in numbers))
+        self.page.route(pattern, lambda route: route.continue_() if self.released else self.held.append(route))
+
+    def release(self):
+        self.released = True
+        for route in self.held:
+            route.continue_()
+        self.held = []
+
+    def leave(self):
+        self.page.evaluate("location.hash = '#/'")
+
+    def read(self, title, double=True, page=0, **pref):
+        """Ouvre le premier tome de la série ; le mode double page et les autres réglages sont posés dans le navigateur avant l'ouverture."""
+        entry = self.entry(title)
+        if page is not None:
+            self.api(f"/api/entry/{entry}/seen", {"done": False})     # la progression d'un test précédent ne compte pas
+        self.prefs(double, **pref)
+        target = f"#/read/{entry}" + (f"?p={page}" if page is not None else "")           # à une page donnée, ou à la reprise (`page=None`)
+        self.page.goto(self.base + "/" + target)
+        self.shown(target)
+        self.wait_pages(None)
+        return entry
+
+    def pages(self):
+        """Les numéros des pages à l'écran, de gauche à droite (celles qui sont chargées)."""
+        return self.page.evaluate("""Array.from(document.querySelectorAll('.reader .page')).map(i => ({n: +i.getAttribute('src').split('/').pop(), x: i.getBoundingClientRect().left, done: i.complete && i.naturalWidth > 0}))
+                                     .sort((a, b) => a.x - b.x).filter(i => i.done).map(i => i.n)""")
+
+    def wait_pages(self, expected):
+        """Attend que la liseuse montre ces pages (de gauche à droite), toutes chargées ; `None` : qu'elle en montre, quelles qu'elles soient."""
+        self.until(lambda: self.pages() == expected if expected is not None else bool(self.pages()))
+
+    def label(self):
+        return self.page.inner_text(".reader .pg")
+
+    def buttons(self):
+        return self.page.inner_text(".reader .rbar .btns")
+
+    def turn(self, key):
+        self.press(key, wait=250)
+
+    def tool(self, name):
+        """Appuie sur le bouton de la barre (qu'on fait apparaître d'un clic au centre si elle est masquée), puis la masque : les flèches tournent de nouveau les pages."""
+        center = {"position": {"x": 960, "y": 500}}
+        if not self.page.locator(".reader .rbar").is_visible():
+            self.page.locator(".reader .stage").click(**center)
+        self.page.locator(".reader .rbar .btn", has_text=name).click()
+        self.page.locator(".reader .stage").click(**center)
+
+    def tool_hidden(self, name):
+        """Le bouton est-il retiré de la barre ? (on regarde l'attribut : la barre elle-même se masque au bout de quelques secondes)"""
+        return self.page.evaluate("name => Array.from(document.querySelectorAll('.reader .rbar .btn')).find(b => b.textContent.indexOf(name) >= 0).hidden", name)
+
+    def test_the_double_page_shows_the_cover_alone_then_pairs_of_pages(self):
+        self.read("Diptyque")
+        self.wait_pages([0])
+        self.assertEqual(self.label(), "Page 1 / 7")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+        self.assertEqual(self.label(), "Pages 2–3 / 7")
+        self.assertEqual(len(self.page.query_selector_all(".reader .page")), 2)
+
+    def test_a_landscape_page_is_shown_alone_and_the_pairs_go_on_after_it(self):
+        self.read("Diptyque")
+        for expected in ([1, 2], [3], [4, 5], [6]):
+            self.turn("ArrowRight")
+            self.wait_pages(expected)
+        self.assertEqual(self.label(), "Page 7 / 7")
+
+    def test_going_back_gives_the_same_spreads_as_going_forward(self):
+        self.read("Diptyque")
+        for expected in ([1, 2], [3], [4, 5], [6]):
+            self.turn("ArrowRight")
+            self.wait_pages(expected)
+        for expected in ([4, 5], [3], [1, 2], [0]):
+            self.turn("ArrowLeft")
+            self.wait_pages(expected)
+
+    def test_a_page_before_a_landscape_one_goes_alone(self):
+        self.read("Diptyque", page=2)
+        self.wait_pages([2])                           # la page 3 est en paysage : la 2 reste seule
+
+    def test_the_lowest_page_is_on_the_right_when_reading_right_to_left(self):
+        self.read("Droite")
+        self.assertIn("droite → gauche", self.buttons())
+        self.turn("ArrowLeft")                          # de droite à gauche : la flèche gauche avance
+        self.wait_pages([2, 1])                         # à l'écran, de gauche à droite : la page 3 puis la page 2
+        self.assertEqual(self.label(), "Pages 2–3 / 6")
+
+    def test_the_lowest_page_is_on_the_left_when_reading_left_to_right(self):
+        self.read("Gauche")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+
+    def test_every_way_of_turning_goes_one_spread_forward(self):
+        self.read("Gauche")
+        self.turn("Space")
+        self.wait_pages([1, 2])
+        self.turn("PageDown")
+        self.wait_pages([3, 4])
+        self.turn("PageUp")
+        self.wait_pages([1, 2])
+        self.page.mouse.click(1800, 500)                # le bord droit : page suivante
+        self.wait_pages([3, 4])
+        self.page.mouse.click(100, 500)                 # le bord gauche : page précédente
+        self.wait_pages([1, 2])
+
+    def test_the_saved_position_is_the_first_page_of_the_spread(self):
+        entry = self.read("Droite")
+        self.turn("ArrowLeft")
+        self.turn("ArrowLeft")
+        self.wait_pages([4, 3])
+        self.page.wait_for_timeout(2000)
+        self.assertEqual(self.api("/api/book/" + entry)["position"], 3)
+
+    def test_a_volume_started_in_single_mode_is_resumed_where_it_stood_in_double_mode(self):
+        entry = self.read("Gauche", double=False)
+        self.turn("ArrowRight")
+        self.turn("ArrowRight")
+        self.wait_pages([2])
+        self.assertEqual(self.label(), "Page 3 / 5")
+        self.tool("Double page")
+        self.wait_pages([2, 3])
+        self.assertEqual(self.label(), "Pages 3–4 / 5")
+        self.page.wait_for_timeout(2000)
+        self.assertEqual(self.api("/api/book/" + entry)["position"], 2)
+        self.tool("Double page")                        # et inversement : on revient à la page seule
+        self.wait_pages([2])
+        self.assertEqual(self.page.evaluate("localStorage.getItem('hub.spread')"), "false")
+
+    def test_a_volume_closed_in_one_mode_is_resumed_at_the_same_place_in_the_other(self):
+        self.read("Droite", double=False)
+        self.turn("ArrowLeft")                          # de droite à gauche : la flèche gauche avance
+        self.wait_pages([1])
+        self.page.wait_for_timeout(2000)
+        self.read("Droite", double=True, page=None)
+        self.wait_pages([2, 1])                         # la page 2 (rang 1) est la première de la vue : à droite
+        self.assertEqual(self.label(), "Pages 2–3 / 6")
+        self.turn("ArrowLeft")
+        self.wait_pages([4, 3])
+        self.page.wait_for_timeout(2000)
+        self.read("Droite", double=False, page=None)
+        self.wait_pages([3])
+        self.assertEqual(self.label(), "Page 4 / 6")
+
+    def test_the_last_spread_marks_the_volume_as_read(self):
+        self.read("Gauche")
+        for _ in range(2):
+            self.turn("ArrowRight")
+        self.wait_pages([3, 4])                         # la dernière page est à l'écran
+        self.page.wait_for_timeout(2000)
+        progress = self.api("/api/item/" + self.item("livres", "Gauche")["id"])["entries"][0]["progress"]
+        self.assertEqual((progress["done"], progress["position"]), (True, 4))        # la page 5 (rang 4) : sans cela, un tome fini en double page ne serait jamais lu
+
+    def test_the_slider_jumps_to_a_page_and_shows_the_spread_from_there(self):
+        self.read("Gauche")
+        box = self.page.locator(".reader .seekbar").bounding_box()
+        self.page.mouse.click(box["x"] + box["width"] * 0.45, box["y"] + box["height"] / 2)    # 45 % de 5 pages : la page 2
+        self.wait_pages([2, 3])
+        self.assertEqual(self.page.evaluate("document.querySelector('.reader .seekbar i').style.width"), "80%")     # la dernière page vue est la 4e sur 5
+
+    def test_a_window_in_portrait_turns_the_double_page_off_and_wide_again_brings_it_back(self):
+        self.read("Gauche")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+        self.page.set_viewport_size({"width": 800, "height": 1000})
+        self.wait_pages([1])
+        self.assertTrue(self.tool_hidden("Double page"))
+        self.assertEqual(self.label(), "Page 2 / 5")
+        self.page.set_viewport_size({"width": 1920, "height": 1080})
+        self.wait_pages([1, 2])
+        self.assertFalse(self.tool_hidden("Double page"))
+
+    def test_the_window_has_to_be_a_fifth_wider_than_tall(self):
+        self.read("Gauche")
+        self.turn("ArrowRight")
+        self.page.set_viewport_size({"width": 1199, "height": 1000})
+        self.wait_pages([1])
+        self.page.set_viewport_size({"width": 1200, "height": 1000})
+        self.wait_pages([1, 2])
+
+    def test_the_double_page_button_says_its_state_and_starts_off(self):
+        self.read("Gauche", double=None)                # aucun réglage mémorisé
+        self.wait_pages([0])
+        self.assertIn("Double page : non", self.buttons())
+        self.tool("Double page")
+        self.assertIn("Double page : oui", self.buttons())
+        self.assertEqual(self.page.evaluate("localStorage.getItem('hub.spread')"), "true")
+
+    def test_the_shift_button_moves_the_pairs_by_one_page_for_this_session_only(self):
+        self.read("Gauche")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+        self.tool("Décaler d’une page")
+        self.wait_pages([0, 1])                          # la couverture se couple avec la page suivante
+        self.turn("ArrowRight")
+        self.wait_pages([2, 3])
+        self.assertIsNone(self.page.evaluate("Object.keys(localStorage).find(k => /shift/i.test(k)) || null"))
+        self.read("Gauche")                              # la liseuse rouverte : rien n'est mémorisé
+        self.wait_pages([0])
+
+    def test_the_shift_button_is_only_there_in_double_mode(self):
+        self.read("Gauche", double=False)
+        self.assertTrue(self.tool_hidden("Décaler"))
+        self.tool("Double page")
+        self.assertFalse(self.tool_hidden("Décaler"))
+
+    def test_the_fit_in_width_shows_the_two_pages_side_by_side_each_half_the_window(self):
+        self.read("Gauche", fit="width")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+        widths = self.page.evaluate("Array.from(document.querySelectorAll('.reader .page')).map(i => Math.round(i.getBoundingClientRect().width))")
+        self.assertEqual(widths, [960, 960])
+
+    def test_the_fit_in_height_keeps_each_page_within_half_the_window_and_the_whole_height(self):
+        self.read("Gauche")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+        sizes = self.page.evaluate("Array.from(document.querySelectorAll('.reader .page')).map(i => { var r = i.getBoundingClientRect(); return [r.width, r.height]; })")
+        for width, height in sizes:
+            self.assertLessEqual(width, 960.5)
+            self.assertLessEqual(height, 1080.5)
+
+    def test_the_end_of_the_volume_is_announced_before_leaving_it(self):
+        self.read("Gauche")
+        for _ in range(2):
+            self.turn("ArrowRight")
+        self.wait_pages([3, 4])
+        self.turn("ArrowRight")
+        self.page.locator("text=Fin du volume").first.wait_for()
+        self.wait_pages([3, 4])                         # on reste sur la dernière vue
+
+    def test_going_back_after_a_jump_finds_the_pairs_that_end_just_before(self):
+        self.read("Diptyque", page=5)                   # pas d'historique : le couplage est cherché d'après les dimensions des pages
+        self.wait_pages([5, 6])
+        for expected in ([4], [3], [1, 2], [0]):
+            self.turn("ArrowLeft")
+            self.wait_pages(expected)
+
+    def test_the_direction_button_turns_the_spread_on_screen_over(self):
+        self.read("Droite")
+        self.turn("ArrowLeft")
+        self.wait_pages([2, 1])
+        self.tool("Lecture")
+        self.wait_pages([1, 2])
+
+    # --- Images lentes : ce qui se passe pendant qu'une vue se charge ---------
+    def test_two_quick_turns_in_single_mode_are_both_counted(self):
+        self.hold(1, 2)
+        self.read("Gauche", double=False)
+        self.press("ArrowRight", wait=100)
+        self.press("ArrowRight", wait=100)
+        self.release()
+        self.wait_pages([2])
+        self.assertEqual(self.label(), "Page 3 / 5")
+
+    def test_a_turn_followed_at_once_by_a_turn_back_never_leaves_the_screen_empty(self):
+        self.hold(3, 4)
+        self.read("Gauche")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+        self.press("ArrowRight", wait=100)              # [3, 4] se charge...
+        self.press("ArrowLeft", wait=100)               # ...et on recule déjà
+        self.release()
+        self.page.wait_for_timeout(800)
+        self.assertEqual((self.pages(), self.label()), ([1, 2], "Pages 2–3 / 5"))
+
+    def test_turns_queued_while_loading_are_not_replayed_after_the_end_of_the_volume(self):
+        self.hold(3, 4)
+        self.read("Gauche")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+        for _ in range(4):
+            self.press("ArrowRight", wait=50)           # la dernière vue se charge, trois tours attendent derrière elle
+        self.release()
+        self.wait_pages([3, 4])
+        self.page.wait_for_timeout(500)
+        self.turn("ArrowLeft")
+        self.wait_pages([1, 2])                         # les tours en trop sont perdus, ils ne reviennent pas défaire ce retour
+        self.page.wait_for_timeout(500)
+        self.assertEqual(self.pages(), [1, 2])
+
+    def test_a_jump_on_the_slider_wins_over_a_step_back_still_looking_for_its_pairs(self):
+        self.hold(3, 4)
+        self.read("Diptyque", page=5)
+        self.wait_pages([5, 6])
+        self.press("ArrowLeft", wait=100)               # sans historique : le recul attend les pages 3 et 4
+        box = self.page.locator(".reader .seekbar").bounding_box()
+        self.page.mouse.click(box["x"] + 2, box["y"] + box["height"] / 2)           # le début de la barre : la page 0
+        self.wait_pages([0])
+        self.release()
+        self.page.wait_for_timeout(600)
+        self.assertEqual(self.pages(), [0])
+
+    def test_leaving_before_the_first_view_is_loaded_keeps_the_saved_place(self):
+        entry = self.entry("Gauche")
+        self.api("/api/progress", {"entry": entry, "position": 3, "duration": 5})
+        self.prefs()
+        self.hold(3, 4)
+        target = f"#/read/{entry}"
+        self.page.goto(self.base + "/" + target)
+        self.shown(target)
+        self.page.wait_for_selector(".reader .rbar .btn")
+        self.leave()
+        self.release()
+        self.page.wait_for_timeout(500)
+        self.assertEqual(self.api("/api/book/" + entry)["position"], 3)
+
+    def test_a_window_resized_before_the_first_view_is_loaded_still_resumes_where_it_stood(self):
+        entry = self.entry("Gauche")
+        self.api("/api/progress", {"entry": entry, "position": 3, "duration": 5})
+        self.prefs()
+        self.hold(3, 4)
+        target = f"#/read/{entry}"
+        self.page.goto(self.base + "/" + target)
+        self.shown(target)
+        self.page.wait_for_selector(".reader .rbar .btn")
+        self.page.set_viewport_size({"width": 1900, "height": 1080})
+        self.release()
+        self.wait_pages([3, 4])
+        self.assertEqual(self.label(), "Pages 4–5 / 5")
+
+    def test_a_view_still_loading_when_the_reader_is_closed_is_never_shown_nor_saved(self):
+        self.hold(3, 4)
+        self.read("Gauche")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+        self.press("ArrowRight", wait=100)              # la dernière vue se charge...
+        self.leave()                                    # ...et on quitte
+        self.release()
+        self.page.wait_for_timeout(2500)
+        progress = self.api("/api/item/" + self.item("livres", "Gauche")["id"])["entries"][0]["progress"]
+        self.assertFalse(progress["done"])              # la page 5 n'a jamais été vue
+
+    # --- Le sens de lecture, série par série ---------------------------------
+    def test_the_server_gives_the_starting_direction(self):
+        self.read("Droite")
+        self.assertIn("droite → gauche", self.buttons())            # section Manga
+        self.read("Gauche")
+        self.assertIn("gauche → droite", self.buttons())            # Manga=Yes l'emporte sur la section
+        self.read("Inverse")
+        self.assertIn("droite → gauche", self.buttons())            # Manga=YesAndRightToLeft l'emporte sur la section BD
+        self.read("Diptyque")
+        self.assertIn("gauche → droite", self.buttons())
+
+    def test_the_button_changes_the_direction_of_this_series_and_it_wins_over_the_default(self):
+        item = self.item("livres", "Droite")["id"]
+        self.read("Droite", double=False)
+        self.tool("Lecture")
+        self.assertEqual(self.page.evaluate("localStorage.getItem('hub.rtl.%s')" % item), "false")
+        self.turn("ArrowRight")
+        self.wait_pages([1])                             # gauche → droite : la flèche droite avance
+        self.read("Droite", double=False)                # on rouvre le tome : le choix est gardé
+        self.assertIn("gauche → droite", self.buttons())
+        self.turn("ArrowRight")
+        self.wait_pages([1])
+        self.read("Inverse", double=False)               # une autre série garde son départ
+        self.assertIn("droite → gauche", self.buttons())
+
+    def test_a_series_made_to_read_right_to_left_by_hand_stays_so(self):
+        item = self.item("livres", "Diptyque")["id"]
+        self.read("Diptyque", double=False, **{"rtl." + item: True})
+        self.assertIn("droite → gauche", self.buttons())
+        self.turn("ArrowLeft")
+        self.wait_pages([1])
+
+    def test_the_old_global_setting_is_no_longer_read(self):
+        self.read("Diptyque", double=False, rtl=True)
+        self.assertIn("gauche → droite", self.buttons())
+        self.turn("ArrowRight")
+        self.wait_pages([1])
 
 
 class TestSagasInLibrary(UiCase):

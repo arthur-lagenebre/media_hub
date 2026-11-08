@@ -15,8 +15,10 @@
     var msg = h('div', { class: 'err', hidden: true });
     var el = h('section', { class: 'reader' }, stage, bar, msg);
     var info = null, pos = 0, saveTimer = null, hideTimer = null, closing = false, lastSaved = -1, endArmed = false;
-    var fit = H.pref('fit') || 'height', rtl = !!H.pref('rtl'), theme = H.pref('theme') || 'night', size = H.pref('fontSize') || 100;
-    var img = null, frame = null;
+    var fit = H.pref('fit') || 'height', rtl = false, spread = !!H.pref('spread'), shifted = false, theme = H.pref('theme') || 'night', size = H.pref('fontSize') || 100;
+    var view = null, frame = null;
+    var count = 1, trail = [], cache = {}, token = 0, bSpread = null, bShift = null;      // BD : pages de la vue, débuts des vues déjà passées, pages préchargées, demande en cours
+    var want = 0, wantDouble = false, busy = false, queued = 0;                       // BD : la vue demandée (début, mode), si elle se charge encore, les tours demandés pendant ce temps
 
     function showBar(on) {
       bar.hidden = !on;
@@ -25,11 +27,16 @@
       else if (document.activeElement && bar.contains(document.activeElement)) document.activeElement.blur();
     }
     function total() { return info ? (info.format === 'cbz' ? info.pages : info.chapters.length) : 0; }
+    function savedPos() {      // la première page de la vue ; si la vue montre la dernière page, celle-ci (le tome est alors lu, comme en page seule)
+      return info.format === 'cbz' && pos + count >= info.pages ? info.pages - 1 : pos;
+    }
     function save(force) {
-      if (!info || (!force && pos === lastSaved)) return;
-      lastSaved = pos;
+      if (!info) return;
+      var at = savedPos();
+      if (!force && at === lastSaved) return;
+      lastSaved = at;
       var duration = info.format === 'cbz' ? info.pages : info.chapters.length + 1;
-      H.api('/api/progress', { entry: id, position: pos, duration: duration }, { keepalive: true }).catch(function () {});
+      H.api('/api/progress', { entry: id, position: at, duration: duration }, { keepalive: true }).catch(function () {});
     }
     function later() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 1500); }
     function fail(text) {
@@ -44,9 +51,33 @@
     }
 
     // --- BD / manga -----------------------------------------------------------------
+    // Une « vue » est une page, ou deux pages côte à côte (double page). Elle est repérée par le numéro de sa première page : c'est celui qu'on enregistre.
+    function pageUrl(n) { return '/book/' + id + '/page/' + n; }
+    function portrait() { return window.innerWidth < 1.2 * window.innerHeight; }
+    function double() { return spread && !portrait(); }
+    function preload(n) {
+      if (n < 0 || n >= info.pages || cache[n]) return;
+      var im = new Image();
+      im.src = pageUrl(n);
+      cache[n] = im;
+    }
+    function loaded(list, fn) {          // appelle fn quand ces pages sont chargées (ou en erreur : on ne reste pas bloqué)
+      var left = list.filter(function (n) { return n >= 0 && n < info.pages; }).map(function (n) { preload(n); return cache[n]; }).filter(function (im) { return !im.complete; });
+      var wait = left.length;
+      if (!wait) { fn(); return; }
+      left.forEach(function (im) {
+        var done = function () { wait -= 1; if (wait === 0) fn(); };
+        im.addEventListener('load', done); im.addEventListener('error', done);
+      });
+    }
+    function landscape(n) { var im = cache[n]; return !!im && im.complete && im.naturalWidth > im.naturalHeight; }
+    function spreadAt(n) {               // les pages de la vue qui commence en n : la couverture seule (sauf couplage décalé), une page paysage seule, sinon deux pages
+      if (n >= info.pages - 1 || landscape(n) || landscape(n + 1) || (n === 0 && !shifted)) return [n];
+      return [n, n + 1];
+    }
     function cbz() {
-      img = h('img', { class: 'page ' + fit, alt: '' });
-      stage.appendChild(img);
+      var saved = H.pref('rtl.' + info.item);               // le sens choisi pour cette série l'emporte sur celui du serveur
+      rtl = saved === null ? !!info.rtl : !!saved;
       stage.classList.add('cbz');
       stage.classList.toggle('wide', fit === 'width');
       stage.addEventListener('click', function (e) {
@@ -54,33 +85,94 @@
         if (x < 0.3) turn(rtl ? 1 : -1); else if (x > 0.7) turn(rtl ? -1 : 1); else showBar(bar.hidden);
       });
       var start = query.p !== undefined ? parseInt(query.p, 10) : info.position;
-      page(Math.min(Math.max(0, Math.floor(start || 0)), info.pages - 1));
+      pos = Math.min(Math.max(0, Math.floor(start || 0)), info.pages - 1);          // la reprise tient avant même que la première vue soit chargée
+      page(pos);
       function fitText() { return fit === 'height' ? H.t('Ajuster : hauteur') : H.t('Ajuster : largeur'); }
       function directionText() { return rtl ? H.t('Lecture : droite → gauche') : H.t('Lecture : gauche → droite'); }
+      function spreadText() { return spread ? H.t('Double page : oui') : H.t('Double page : non'); }
       tool(fitText(), null, function (b) {
-        fit = fit === 'height' ? 'width' : 'height'; H.pref('fit', fit); img.className = 'page ' + fit; stage.classList.toggle('wide', fit === 'width'); stage.scrollTop = 0; setLabel(b, fitText());
+        fit = fit === 'height' ? 'width' : 'height'; H.pref('fit', fit);
+        stage.classList.toggle('wide', fit === 'width'); stage.scrollTop = 0; setLabel(b, fitText());
+        Array.prototype.forEach.call(stage.querySelectorAll('.page'), function (im) { im.className = 'page ' + fit; });
       });
       tool(directionText(), null, function (b) {
-        rtl = !rtl; H.pref('rtl', rtl); setLabel(b, directionText());
+        rtl = !rtl; H.pref('rtl.' + info.item, rtl); setLabel(b, directionText());
+        if (view) view.classList.toggle('rtl', rtl);
       });
+      bSpread = tool(spreadText(), null, function (b) {
+        spread = !spread; H.pref('spread', spread); setLabel(b, spreadText()); syncTools(); relayout();
+      });
+      bShift = tool(H.t('Décaler d’une page'), null, shift);
       if (info.next) tool(H.t('Volume suivant'), 'next', openNext);
+      syncTools();
     }
-    function page(n) {
-      pos = n;
-      img.src = '/book/' + id + '/page/' + n;
+    function syncTools() { bSpread.hidden = portrait(); bShift.hidden = !double(); }
+    function relayout() { trail = []; queued = 0; page(want); }          // la vue demandée, sous un autre mode
+    function onResize() {
+      if (!info || info.format !== 'cbz' || !bSpread) return;
+      syncTools();
+      if (double() !== wantDouble) relayout();
+    }
+    function shift() {                  // le couplage des pages bouge d'une page (jusqu'à la fermeture de la liseuse), sans perdre la page lue
+      shifted = !shifted; trail = []; queued = 0;
+      page(want > 0 ? (shifted ? want - 1 : Math.min(want + 1, info.pages - 1)) : 0);
+    }
+    function page(n, before, from) {    // montre la vue qui commence en n ; `before` : sans aller jusqu'à cette page (retour en arrière) ; `from` : le début de la vue qu'on quitte en avançant
+      var mine = ++token, dbl = double();
+      want = n; wantDouble = dbl; busy = true;
+      for (var k = n - 3; k <= n + (dbl ? 5 : 2); k++) preload(k);
+      Object.keys(cache).forEach(function (key) { if (key < n - 6 || key > n + 7) delete cache[key]; });
+      loaded(dbl ? [n, n + 1] : [n], function () {          // une vue ne s'affiche qu'une fois ses images chargées : on connaît alors leurs dimensions
+        if (closing || mine !== token) return;
+        if (dbl !== double()) { page(n, before, from); return; }           // la fenêtre a changé de forme pendant le chargement
+        var pages = dbl ? spreadAt(n).filter(function (k) { return before === undefined || k < before; }) : [n];
+        if (!pages.length) pages = [n];
+        if (from !== undefined && from < n) trail.push(from);
+        show(n, pages);
+      });
+    }
+    function show(n, pages) {
+      pos = n; count = pages.length; busy = false;
+      var holder = h('div', { class: 'spread' + (count > 1 ? ' two' : '') + (rtl ? ' rtl' : '') });
+      pages.forEach(function (k) { holder.appendChild(h('img', { class: 'page ' + fit, alt: '', src: pageUrl(k) })); });
+      if (view) stage.replaceChild(holder, view); else stage.appendChild(holder);
+      view = holder;
       stage.scrollTop = 0;
-      [1, 2].forEach(function (k) { if (n + k < info.pages) { var pre = new Image(); pre.src = '/book/' + id + '/page/' + (n + k); } });
       paint(); later();
       endArmed = false;
+      if (queued) {          // les tours demandés pendant le chargement, un à un ; s'il n'en part aucun chargement (début ou fin du volume), le reste est caduc
+        var d = queued > 0 ? 1 : -1;
+        queued -= d; turn(d);
+        if (!busy) queued = 0;
+      }
     }
-    function turn(delta) {
-      var n = pos + delta;
+    function go(n) {
       if (n < 0) return;
       if (n >= info.pages) {
         if (!endArmed) { endArmed = true; save(true); H.toast(info.next ? H.t('Fin du volume · encore une fois pour passer au suivant') : H.t('Fin du volume')); return; }
         openNext(); return;
       }
       page(n);
+    }
+    function turn(delta) {              // delta : en vues (une touche) ; une touche maintenue saute plusieurs pages
+      if (busy) { queued = Math.max(-4, Math.min(4, queued + delta)); return; }          // une vue se charge : ce tour viendra juste après
+      if (!wantDouble) { go(pos + delta); return; }
+      if (Math.abs(delta) > 1) { trail = []; go(pos + 2 * delta); return; }
+      if (delta < 0) { back(); return; }
+      if (pos + count >= info.pages) go(pos + count); else page(pos + count, undefined, pos);
+    }
+    function back() {
+      var from = pos;
+      if (from <= 0) return;
+      while (trail.length && trail[trail.length - 1] >= from) trail.pop();
+      if (trail.length) { page(trail.pop(), from); return; }
+      var mine = ++token;
+      busy = true;
+      loaded([from - 2, from - 1], function () {          // pas d'historique (reprise, saut) : on cherche le couplage qui finit juste avant
+        if (closing || mine !== token) return;            // une demande plus récente (saut, décalage...) a pris la main
+        var before = from - 2;
+        page(before >= 0 && spreadAt(before).length === 2 ? before : from - 1, from);
+      });
     }
 
     // --- Roman ---------------------------------------------------------------------
@@ -158,9 +250,10 @@
     }
     function setLabel(b, text) { var l = b.querySelector('.lbl'); if (l) l.textContent = text; }
     function paint() {
-      var n = total(), shown = info.format === 'cbz' ? pos + 1 : Math.floor(pos) + 1;
-      label.textContent = H.t(info.format === 'cbz' ? 'Page {n} / {total}' : 'Chapitre {n} / {total}', { n: shown, total: n });
-      var ratio = n ? (info.format === 'cbz' ? (pos + 1) / n : pos / n) : 0;
+      var n = total(), last = pos + count;          // BD : `last` est le rang (à partir de 1) de la dernière page de la vue
+      if (info.format !== 'cbz') label.textContent = H.t('Chapitre {n} / {total}', { n: Math.floor(pos) + 1, total: n });
+      else label.textContent = count > 1 ? H.t('Pages {a}–{b} / {total}', { a: pos + 1, b: last, total: n }) : H.t('Page {n} / {total}', { n: pos + 1, total: n });
+      var ratio = n ? (info.format === 'cbz' ? last / n : pos / n) : 0;
       slider.querySelector('i').style.width = Math.min(100, ratio * 100) + '%';
       slider.querySelector('b').style.left = Math.min(100, ratio * 100) + '%';
     }
@@ -173,7 +266,7 @@
     });
     slider.addEventListener('click', function (e) {
       var r = slider.getBoundingClientRect(), x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      if (info.format === 'cbz') page(Math.min(info.pages - 1, Math.floor(x * info.pages))); else chapter(Math.min(info.chapters.length - 1, Math.floor(x * info.chapters.length)), 0);
+      if (info.format === 'cbz') { trail = []; queued = 0; page(Math.min(info.pages - 1, Math.floor(x * info.pages))); } else chapter(Math.min(info.chapters.length - 1, Math.floor(x * info.chapters.length)), 0);
     });
     function onKey(e) {
       if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen() || e.ctrlKey || e.metaKey || e.altKey || !info || !msg.hidden) return;
@@ -197,6 +290,7 @@
       }
     }
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', onResize);
     var onHide = function () { if (document.hidden) save(true); };
     document.addEventListener('visibilitychange', onHide);
     window.addEventListener('pagehide', onHide);
@@ -220,10 +314,11 @@
         return false;
       },
       destroy: function () {
-        closing = true;
+        closing = true; token += 1;
         clearTimeout(saveTimer); clearTimeout(hideTimer);
         save(true);
         window.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('resize', onResize);
         document.removeEventListener('visibilitychange', onHide);
         window.removeEventListener('pagehide', onHide);
       }
