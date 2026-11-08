@@ -6,7 +6,7 @@ Ce qui reste ouvert. Ce qui est fait est dans `git log` et dans les pull request
 
 Dans l'ordre où on les prend (7 novembre 2026), un lot par PR (ou deux).
 
-- [ ] **Films manquants d'une personne : à essayer sur place.** Le lot 3 est livré (serveur et interface : `person_ids`, `POST /api/enrich/person`, bouton « Chercher ses films manquants » et cases grisées sur `#/person?n=`). Reste : un enrichissement réel avec ta clé TMDB (acteur, réalisateur), à la télécommande. Une personne connue seulement par une série ou une animation n'a pas d'identifiant (les épisodes ne sont pas lus) : à reprendre si le besoin se confirme.
+- [ ] **Films manquants d'une personne : à essayer sur place.** Le lot 3 est livré (serveur et interface : `person_ids`, `POST /api/enrich/person`, bouton « Chercher ses films manquants » et cases grisées sur `#/person?n=`). Un bouton général (*Gestion* > « Films manquants (bibliothèques de films) », `POST /api/enrich/people`) le fait pour tous les réalisateurs et acteurs de premier plan des films, et un bouton par bibliothèque (« Films des personnes (TMDB) », films, séries, animations) pour une catégorie à la fois. Reste : un enrichissement réel avec ta clé TMDB (acteur, réalisateur), à la télécommande.
 - [ ] **Lot 4 : boîte de réception (téléversement).** Des comptes qui ont le droit « Envoyer » déposent films, séries, musique ou livres ; l'administrateur les range lui-même. *Retenu :*
   - dépôt dans `HUB_DATA/inbox/<compte>/`, jamais dans une bibliothèque (les volumes restent en `:ro`), et pas de bouton qui déplace un fichier dans la médiathèque ;
   - un droit global par compte (colonne dans `users`, migration qui garde l'existant, administrateur toujours autorisé) ; pas d'envoi sans compte, pas de lien d'invitation ;
