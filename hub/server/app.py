@@ -775,26 +775,25 @@ def api_user_delete(h, m, q):
     h.send_json({"ok": True}, 200, {"Set-Cookie": ended_session_cookie(secure_request(h))} if m.group(1) == h.user["id"] else None)
 
 
-@route("POST", r"/api/me/password")
-def api_me_password(h, m, q):
-    """Chacun change son mot de passe, en donnant l'actuel."""
+def change_own_session(h, change):
+    """Ce qui change les jetons du compte de la requête et demande son mot de passe actuel : `change(compte, corps)` renvoie le compte mis à jour, la réponse porte le nouveau jeton."""
     need_accounts(h)
     body = body_dict(h)
     row = check_current(h, body.get("current"))
-    row = account_call(accounts.set_password, h.hub.db, row["id"], body.get("new"))
-    out, headers = renewed_session(h, row)
+    out, headers = renewed_session(h, change(row, body))
     h.send_json(out, 200, headers)
+
+
+@route("POST", r"/api/me/password")
+def api_me_password(h, m, q):
+    """Chacun change son mot de passe, en donnant l'actuel."""
+    change_own_session(h, lambda row, body: account_call(accounts.set_password, h.hub.db, row["id"], body.get("new")))
 
 
 @route("POST", r"/api/me/signout-others")
 def api_me_signout_others(h, m, q):
     """Chacun déconnecte tous ses appareils sauf celui-ci, en donnant son mot de passe (sans lui, un jeton volé suffirait à mettre dehors son propriétaire)."""
-    need_accounts(h)
-    body = body_dict(h)
-    row = check_current(h, body.get("current"))
-    row = account_call(accounts.revoke_sessions, h.hub.db, row["id"])
-    out, headers = renewed_session(h, row)
-    h.send_json(out, 200, headers)
+    change_own_session(h, lambda row, body: account_call(accounts.revoke_sessions, h.hub.db, row["id"]))
 
 
 @route("GET", r"/api/me/settings")
