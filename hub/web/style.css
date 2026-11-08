@@ -269,7 +269,9 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .menu .formerr { margin: 0.1rem 0.6rem 0.2rem; color: #ffa595; font-weight: 600; }
 .menu .formerr:empty { display: none; }
 .menu-list { overflow-y: auto; }
-.opt { display: flex; align-items: center; width: 100%; background: transparent; border: 0; color: var(--text); text-align: left; padding: 0.7rem 0.6rem; border-radius: 0.6rem; cursor: pointer; }
+.opt { display: flex; align-items: center; width: 100%; background: var(--s2); border: 1px solid var(--line); color: var(--text); text-align: left; padding: 0.7rem 0.6rem; margin-bottom: 0.4rem; border-radius: 0.6rem; cursor: pointer; }   /* un fond et un cadre : on voit que chaque ligne est un bouton */
+.opt:last-child { margin-bottom: 0; }
+.opt:focus, .opt:hover:not(:disabled) { background: #2a343e; border-color: var(--accent); }
 .opt .mark { width: 1.7rem; color: var(--accent); }
 .opt .lbl { flex: 1; }
 .opt .det { color: var(--mute); font-size: 0.85rem; margin-left: 1rem; }
