@@ -18,12 +18,12 @@ runs:
   using: composite
   steps:
     # Les outils ne sont pas versionnés : crapper est épinglé au commit qu'on utilise en local.
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         repository: arthur-lagenebre/media_library
         path: media_library
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       if: inputs.crapper == 'true'
       with:
         repository: unclebob/crapper
