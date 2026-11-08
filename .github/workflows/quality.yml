@@ -36,7 +36,7 @@ jobs:
           repository: unclebob/dryer
           ref: ${{ env.DRYER_REF }}
           path: dryer
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       # dryer sort toujours 0 après un rapport : c'est la présence d'un « DUPLICATE » qui fait échouer.
