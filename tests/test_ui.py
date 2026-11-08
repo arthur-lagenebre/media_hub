@@ -1771,7 +1771,7 @@ class TestAnimationShortcut(UiCase):
         self.assertEqual(link.inner_text(), "Films d’animation")
         link.click()
         self.page.wait_for_url("**/#/l/films?genre=Animation")
-        self.view(".grid .card").first.wait_for()
+        self.until(lambda: self.titles() == ["Coco"])          # la page Animations (Frieren) reste à l'écran le temps que Films réponde : attendre la grille de Films, pas une première carte
         self.assertEqual(self.genre_button().inner_text(), "Genre : Animation")
         self.assertEqual(self.titles(), ["Coco"])
         self.press("Escape", wait=500)
