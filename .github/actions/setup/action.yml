@@ -1,0 +1,54 @@
+name: Environnement de media_hub
+description: >
+  Prépare un runner comme la machine de développement : media_library à côté de media_hub, Python, ffmpeg et un .venv dans media_hub
+  (Pillow, coverage, et si on le demande Playwright). Le dépôt media_hub doit déjà être récupéré dans ./media_hub.
+
+inputs:
+  python-version:
+    description: Version de Python
+    default: "3.14"
+  playwright:
+    description: Installer Playwright et Chromium (tests d'interface)
+    default: "false"
+  crapper:
+    description: Récupérer crapper à côté (CRAP)
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # Les outils ne sont pas versionnés : crapper est épinglé au commit qu'on utilise en local.
+    - uses: actions/checkout@v4
+      with:
+        repository: arthur-lagenebre/media_library
+        path: media_library
+
+    - uses: actions/checkout@v4
+      if: inputs.crapper == 'true'
+      with:
+        repository: unclebob/crapper
+        ref: 6fd92c4c9bcc56efb64a2f8743d5a2993bcfd42d
+        path: crapper
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # Les tests fabriquent de vrais fichiers avec ffmpeg, et sont ignorés s'il manque.
+    - name: ffmpeg
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+    # Le .venv de media_hub est celui que crapper et mutator choisissent pour lancer les tests.
+    - name: .venv de media_hub
+      shell: bash
+      working-directory: media_hub
+      env:
+        PLAYWRIGHT: ${{ inputs.playwright }}
+      run: |
+        python -m venv .venv
+        .venv/bin/pip install Pillow coverage
+        if [ "$PLAYWRIGHT" = "true" ]; then
+          .venv/bin/pip install playwright
+          .venv/bin/playwright install --with-deps chromium
+        fi
