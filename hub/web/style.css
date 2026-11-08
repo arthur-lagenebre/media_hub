@@ -151,6 +151,8 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 body.mouse .people .chip:focus:not(:hover) { background: var(--s2); color: var(--text); }
 .search .results > p, .person .results > p { padding: 0 var(--gut); }
 .person .roles { margin: 0; padding: 0 var(--gut); color: var(--mute); font-weight: 600; }
+.person .actions { margin: 0; padding: 0.8rem var(--gut) 0; }
+.person .btn[aria-busy="true"] { opacity: 0.6; cursor: progress; }
 .search .field { margin: 0 var(--gut); width: calc(100% - 2 * var(--gut)); max-width: 40rem; min-width: 0; }
 
 /* Fiche */
