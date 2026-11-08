@@ -1,8 +1,11 @@
 name: Mutator
 
-# Passe de mutation lancée à la main (onglet Actions > Mutator > Run workflow),
-# pas à chaque PR : le premier passage exécute tous les mutants couverts.
+# Passe de mutation, jamais automatique : le premier passage exécute tous les mutants couverts.
+#   - à la main (onglet Actions > Mutator > Run workflow), sur les chemins de son choix ;
+#   - sur une PR, quand on y pose l'étiquette « mutator » : les fichiers Python de hub/ qu'elle ajoute ou modifie.
 on:
+  pull_request:
+    types: [labeled]
   workflow_dispatch:
     inputs:
       paths:
@@ -23,6 +26,7 @@ env:
 
 jobs:
   mutator:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'mutator'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -31,6 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: media_hub
+          fetch-depth: 0          # sur une PR, les fichiers à muter viennent de la différence avec la branche de base
       - uses: actions/checkout@v4
         with:
           repository: arthur-lagenebre/media_library
@@ -72,15 +77,35 @@ jobs:
           key: mutate-${{ github.run_id }}
           restore-keys: mutate-
 
-      - name: Mutator
+      - name: Fichiers à muter
+        id: paths
         working-directory: media_hub
+        env:
+          INPUT_PATHS: ${{ inputs.paths }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            paths=$(git diff --name-only --diff-filter=AM "$BASE"...HEAD -- 'hub/*.py' | tr '\n' ' ')
+          else
+            paths="$INPUT_PATHS"
+          fi
+          echo "list=$paths" >> "$GITHUB_OUTPUT"
+
+      - name: Mutator
+        if: steps.paths.outputs.list != ''
+        working-directory: media_hub
+        env:
+          PATHS: ${{ steps.paths.outputs.list }}
+          # `unittest discover` importe aussi hub/scan, qui a besoin de `libraries` avant que les tests ne le rendent importable.
+          PYTHONPATH: ${{ github.workspace }}/media_library
         shell: bash   # pipefail : le code de sortie de mutator (3 = un mutant survit) passe malgré tee
-        run: ../mutator/mutator ${{ inputs.paths }} 2>&1 | tee mutator.log
+        run: ../mutator/mutator $PATHS 2>&1 | tee mutator.log
 
       - name: Résumé
         if: always()
         working-directory: media_hub
         run: |
+          [ -f mutator.log ] || echo "Aucun fichier Python de hub/ à muter." > mutator.log
           {
             echo '```'
             tail -n 60 mutator.log
