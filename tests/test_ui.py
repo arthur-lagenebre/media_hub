@@ -2421,6 +2421,163 @@ class TestPersonPage(UiCase):
         self.assertEqual(self.view("h1 b").count(), 0)
 
 
+class FakePersonTmdb:
+    """TMDB pour la page d'une personne : « Acteur Test » (8200) a joué deux films qu'on a (9101, 9102) et trois qu'on n'a pas ; « Réal Test » (8100) n'a réalisé que 9101."""
+    calls = []
+    credits = {
+        "person/8200/movie_credits": {"cast": [
+            {"id": 9101, "title": "Premier Film", "release_date": "2001-01-01", "order": 0, "vote_count": 900, "poster_path": "/p1.jpg"},
+            {"id": 9102, "title": "Second Film", "release_date": "2003-01-01", "order": 1, "vote_count": 900, "poster_path": None},
+            {"id": 9301, "title": "Absent Un", "release_date": "2010-05-05", "order": 0, "vote_count": 500, "poster_path": "/a1.jpg"},
+            {"id": 9302, "title": "Absent Deux", "release_date": "2005-05-05", "order": 2, "vote_count": 500, "poster_path": None},
+            {"id": 9303, "title": "<b>x</b>", "release_date": "2008-08-08", "order": 3, "vote_count": 500, "poster_path": None}]},
+        "person/8100/movie_credits": {"crew": [{"id": 9101, "title": "Premier Film", "job": "Director", "release_date": "2001-01-01", "vote_count": 900, "poster_path": "/p1.jpg"}]}}
+
+    def __init__(self, key, language="fr-FR", **kwargs):
+        pass
+
+    def get(self, endpoint):
+        from libraries.video.tmdb import TmdbError
+        FakePersonTmdb.calls.append(endpoint)
+        if endpoint not in self.credits:
+            raise TmdbError("introuvable sur TMDB (HTTP 404)")
+        return self.credits[endpoint]
+
+    def save_image(self, image_path, size, dest):
+        Path(dest).write_bytes(fixtures.PNG)
+
+
+class TestPersonMissingUi(UiCase):
+    """La page d'une personne dit aussi ses films qu'on n'a pas : un bouton pour l'administrateur qui les demande à TMDB, puis des cases grisées que la télécommande ne vise pas."""
+
+    @classmethod
+    def add_media(cls, root):
+        films = root / "srv" / "Films"
+        ids = {"Réal Test": 8100, "Acteur Test (Premier)": 8200, "Acteur Test (Second)": 8200}
+        fixtures.write_mkv(films / "Premier Film (2001)" / "Premier Film (2001).mkv", fixtures.movie_blocks("Premier Film", "Un.", "2001-01-01", "movie/9101", "Drame", ["Réal Test"], ["Acteur Test (Premier)"], person_ids=ids))
+        fixtures.write_mkv(films / "Second Film (2003)" / "Second Film (2003).mkv", fixtures.movie_blocks("Second Film", "Deux.", "2003-01-01", "movie/9102", "Drame", [], ["Acteur Test (Second)"], person_ids=ids))
+
+    def setUp(self):
+        super().setUp()
+        hub = self.run_.hub
+        FakePersonTmdb.calls = []
+        hub.cfg.tmdb_key = "fake"
+        self.addCleanup(setattr, hub.cfg, "tmdb_key", "")
+        self.addCleanup(hub.db.execute, "DELETE FROM kv WHERE key LIKE 'personinfo:%'")
+
+    def person(self, name="Acteur%20Test"):
+        self.open("#/person?n=" + name)
+        self.view(".shelf .card").first.wait_for()
+
+    def ask(self, name="Acteur%20Test"):
+        """Ouvre la page, clique « Chercher ses films manquants » (TMDB simulé) et attend que la tâche soit finie et la page rechargée."""
+        self.person(name)
+        with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
+            self.view("[data-key=person-enrich]").click()
+            self.until(lambda: FakePersonTmdb.calls, tries=100)
+            self.run_.wait_jobs()
+            self.page.locator("#toast.on", has_text="Terminé").or_(self.page.locator("#toast.on", has_text="Aucun film ne manque")).wait_for()
+
+    def missing_titles(self):
+        return self.view(".card.wanted .t").all_inner_texts()
+
+    def test_nothing_is_missing_until_tmdb_was_asked_and_the_button_is_there(self):
+        self.person()
+        self.assertEqual(self.view(".card.wanted").count(), 0)
+        self.assertEqual(self.view("[data-key=person-enrich]").inner_text().strip(), "Chercher ses films manquants")
+        self.assertTrue(self.view("[data-key=person-enrich]").evaluate("e => e.classList.contains('f')"))          # atteignable à la télécommande
+
+    def test_the_button_asks_tmdb_then_the_page_greys_out_what_is_missing_the_latest_first(self):
+        self.ask()
+        self.assertEqual(self.missing_titles(), ["Absent Un", "<b>x</b>", "Absent Deux"])          # 2010, 2008, 2005 ; les deux films qu'on a n'y sont pas
+        self.assertEqual(self.view(".card.wanted .s").all_inner_texts(), ["2010 · Acteur", "2008 · Acteur", "2005 · Acteur"])
+        self.assertEqual(self.view("section.missing h2").inner_text(), "Films qui manquent · 3")
+        self.assertEqual(self.view("section.missing .part").count(), 0)          # le rang n'a pas de sens ici : pas de pastille
+        self.assertEqual(FakePersonTmdb.calls, ["person/8200/movie_credits"])
+        self.assertEqual(self.view("section.missing b").count(), 0)          # « <b>x</b> » est un titre, pas du HTML
+
+    def test_the_greyed_films_have_nothing_to_reach_or_open(self):
+        self.ask()
+        self.assertEqual(self.view(".card.wanted.f").count(), 0)
+        self.assertEqual(self.view(".card.wanted[href], .card.wanted [data-key]").count(), 0)
+        self.view(".shelf .card.f").first.focus()
+        self.press("ArrowDown", "ArrowDown", "ArrowRight", "ArrowDown")
+        self.assertFalse(self.page.evaluate("document.activeElement.classList.contains('wanted')"))
+        self.assertEqual(self.view(".card.wanted").first.get_attribute("title"), "Absent Un (manquant)")
+
+    def test_the_remote_can_press_the_button_and_keeps_the_focus_on_it_after_the_page_is_redrawn(self):
+        self.person()
+        button = self.view("[data-key=person-enrich]")
+        button.focus()
+        with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
+            self.press("Enter", wait=200)
+            self.view(".card.wanted").first.wait_for()
+            self.run_.wait_jobs()
+        self.assertEqual(self.page.evaluate("document.activeElement && document.activeElement.getAttribute('data-key')"), "person-enrich")
+
+    def test_a_second_press_while_the_search_runs_asks_nothing_more(self):
+        self.person()
+        with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
+            self.view("[data-key=person-enrich]").dblclick()
+            self.view(".card.wanted").first.wait_for()
+            self.run_.wait_jobs()
+        self.assertEqual(FakePersonTmdb.calls, ["person/8200/movie_credits"])
+
+    def test_on_a_phone_the_page_does_not_scroll_sideways(self):
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        self.ask()
+        self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        self.assertTrue(self.view("[data-key=person-enrich]").evaluate("e => e.getBoundingClientRect().height >= 36"))          # une cible tactile assez grande
+
+    def test_a_failed_search_is_never_presented_as_nothing_missing(self):
+        with mock.patch.object(FakePersonTmdb, "credits", {}):                      # TMDB ne connaît pas cette personne : la tâche finit, comptée en échec
+            self.person()
+            with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
+                self.view("[data-key=person-enrich]").click()
+                self.page.locator("#toast.on", has_text="La recherche a échoué").wait_for(timeout=15000)
+                self.run_.wait_jobs()
+        self.assertNotIn("Aucun film ne manque", self.page.inner_text("#toast"))
+        self.assertEqual(self.view(".card.wanted").count(), 0)
+        self.until(lambda: self.view("[data-key=person-enrich]").get_attribute("aria-busy") is None)          # le bouton sert à nouveau
+
+    def test_a_refused_key_is_a_failure_too(self):
+        self.person()
+        with mock.patch("hub.enrich.Tmdb", FakePersonTmdb), mock.patch.object(FakePersonTmdb, "get", side_effect=__import__("libraries.video.tmdb", fromlist=["TmdbAuthError"]).TmdbAuthError("clé refusée")):
+            self.view("[data-key=person-enrich]").click()
+            self.page.locator("#toast.on", has_text="La recherche a échoué").wait_for(timeout=15000)
+            self.run_.wait_jobs()
+
+    def test_a_person_with_nothing_missing_is_told_so(self):
+        self.ask("R%C3%A9al%20Test")
+        self.assertIn("Aucun film ne manque", self.page.inner_text("#toast"))
+        self.assertEqual(self.view(".card.wanted").count(), 0)
+
+    def test_a_person_already_known_shows_her_missing_films_without_a_click(self):
+        self.run_.hub.db.kv_set("personinfo:8200", {"at": 1, "films": [{"tmdb": 9101, "title": "Premier Film", "year": "2001", "date": "2001-01-01", "role": "actor", "poster": ""},
+                                                                      {"tmdb": 9400, "title": "Réalisé ailleurs", "year": "1999", "date": "1999-09-09", "role": "director", "poster": ""}]})
+        self.person()
+        self.assertEqual(self.missing_titles(), ["Réalisé ailleurs"])
+        self.assertEqual(self.view(".card.wanted .s").inner_text(), "1999 · Réalisateur")
+
+    def test_without_a_tmdb_key_there_is_no_button(self):
+        self.run_.hub.cfg.tmdb_key = ""
+        self.person()
+        self.assertEqual(self.view("[data-key=person-enrich]").count(), 0)
+
+    def test_a_person_without_an_id_has_no_button(self):
+        self.open("#/person?n=Personne%20Inconnue")
+        self.view(".results > p").first.wait_for()
+        self.assertEqual(self.view("[data-key=person-enrich]").count(), 0)
+
+    def test_an_ordinary_account_sees_the_list_but_has_no_button(self):
+        self.run_.hub.db.kv_set("personinfo:8200", {"at": 1, "films": [{"tmdb": 9400, "title": "Réalisé ailleurs", "year": "1999", "date": "1999-09-09", "role": "director", "poster": ""}]})
+        self.open("#/")
+        self.page.evaluate("Hub.session.auth = true; Hub.session.user = { id: 'x', name: 'bob', role: 'user' }; location.hash = '#/person?n=Acteur%20Test';")
+        self.view(".shelf .card").first.wait_for()
+        self.assertEqual(self.missing_titles(), ["Réalisé ailleurs"])
+        self.assertEqual(self.view("[data-key=person-enrich]").count(), 0)
+
+
 class TestPeopleInSearchUi(UiCase):
     """La recherche propose aussi les personnes : une rangée de pastilles « nom · N titres » au-dessus des résultats."""
 

@@ -86,11 +86,12 @@
   }
   // Un film qui manque à une saga : son affiche grisée, rien à ouvrir ni à lire (la case n'est donc pas dans la navigation à la télécommande, comme un album manquant).
   // `hide` (administrateur, film que seule la collection TMDB compte) : un bouton « Ne pas afficher » sous la case.
+  // Sans `rank`, pas de pastille de rang (les films d'une personne ne se suivent pas) ; `note` remplace « Manquant » sous le titre (son rôle : « Acteur »).
   function missingCard(m, hide) {
     var pic = H.picture(m.cover ? m.cover + '?w=300' : '', m.title, '');
-    pic.appendChild(h('span', { class: 'part' }, m.rank));
+    if (m.rank) pic.appendChild(h('span', { class: 'part' }, m.rank));
     var state = m.coming ? H.t('pas encore sorti') : 'manquant';           // un film annoncé est grisé comme les autres, mais il ne manque à personne
-    var card = h('div', { class: 'card wanted', title: m.title + ' (' + state + ')' }, pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, m.coming ? H.t('À venir') : H.t('Manquant')].filter(Boolean).join(' · ')));
+    var card = h('div', { class: 'card wanted', title: m.title + ' (' + state + ')' }, pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, m.note || (m.coming ? H.t('À venir') : H.t('Manquant'))].filter(Boolean).join(' · ')));
     if (!hide || !m.ignorable) return card;
     return h('div', { class: 'mcell' }, card, H.button(H.t('Ne pas afficher'), 'close', { class: 'mhide', 'data-key': 'hide-' + m.tmdb, 'aria-label': H.t('Ne pas afficher {title} comme manquant', { title: m.title }), onclick: function () { hide(m); } }));
   }
@@ -811,15 +812,18 @@
   // #/person?n=<nom> : ce qu'un réalisateur ou un acteur a fait dans les bibliothèques que ce compte voit.
   H.route(/^\/person$/, function (m, query) {
     var name = (query.n || '').trim(), out = h('div', { class: 'results' });
-    var title = h('h1', null, name), roles = h('p', { class: 'roles', hidden: true });
-    var el = h('section', { class: 'person' }, title, roles, out);
+    var title = h('h1', null, name), roles = h('p', { class: 'roles', hidden: true }), actions = h('p', { class: 'actions', hidden: true });
+    var el = h('section', { class: 'person' }, title, roles, actions, out);
     var ROLE_LABELS = [['director', H.t('Réalisateur')], ['actor', H.t('Acteur')]];
+    var ROLE_NAMES = {};
+    ROLE_LABELS.forEach(function (r) { ROLE_NAMES[r[0]] = r[1]; });
+    var shown = name, asking = false, gone = false, timer = null;
     // Le focus va sur la première carte (ou sur le lien de secours d'une page vide), sauf si l'utilisateur est déjà ailleurs (l'ancien focus, sur la page cachée, ne compte pas).
     // `key` : la carte qui avait le focus avant que la page soit redessinée.
     function settle(key) {
       var active = document.activeElement;
       var free = !active || active === document.body || el.contains(active) || active.getClientRects().length === 0;
-      if (!free || !document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;
+      if (!free || active === button || !document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;          // sur le bouton « Chercher… », on y reste
       if (key && H.focus.key(out, key, true)) return;
       H.focus.set(out.querySelector('.card') || out.querySelector('.f'), true);
     }
@@ -829,20 +833,61 @@
       out.appendChild(h('p', null, h('a', { class: 'btn f', href: '#/search', 'data-autofocus': '1' }, H.t('Rechercher'))));
       settle();
     }
+    // Les films de la personne qu'on n'a pas (`missing` : voir docs/api.md) : des cases grisées, ni focus ni clic (comme un album manquant) ; son rôle sous le titre, pas de rang.
+    function missingShelf(list) {
+      var cards = list.map(function (m) { return missingCard({ tmdb: m.tmdb, title: m.title, year: m.year, cover: m.cover, note: ROLE_NAMES[m.role] || '' }); });
+      return h('section', { class: 'shelf missing' }, h('h2', null, H.t('Films qui manquent') + ' · ' + list.length), h('div', { class: 'grid' }, cards));
+    }
+    // Demande à TMDB les films de la personne (une tâche de fond), attend la fin de CETTE tâche (d'autres, un scan par exemple, peuvent passer devant), puis redessine la page. Le bouton ne fait rien tant que la demande court.
+    // `wait` rend la tâche terminée (ou null : on est parti, ou elle n'est plus dans la liste des 30 dernières).
+    function wait(id) {
+      return H.api('/api/jobs').then(function (r) {
+        var job = r.jobs.filter(function (j) { return j.id === id; })[0] || null;
+        if (gone || !job || job.status === 'done' || job.status === 'failed') return job;
+        return new Promise(function (ok) { timer = setTimeout(ok, 1500); }).then(function () { return wait(id); });
+      });
+    }
+    // Une tâche en échec (clé refusée, TMDB qui ne répond pas pour cette personne) ne se présente jamais comme « aucun film ne manque ».
+    function failed(job) { return !!job && (job.status === 'failed' || !!(job.result && job.result.failed)); }
+    function finish(job) {
+      if (gone) return null;
+      if (failed(job)) { H.toast(H.t('La recherche a échoué : voir les tâches dans Gestion.'), 5000); return null; }
+      return load().then(function (res) { if (res && !gone) H.toast(res.missing ? H.t('Terminé') : H.t('Aucun film ne manque.')); });
+    }
+    function ask() {
+      if (asking) return;
+      asking = true;
+      button.setAttribute('aria-busy', 'true');
+      H.api('/api/enrich/person', { name: shown }).then(function (r) {
+        if (!gone) H.toast(H.t('Recherche lancée : {name}', { name: shown }));
+        return wait(r.job.id);
+      }).then(finish).catch(function (e) { if (!gone) H.toast(e.message, 5000); }).then(function () { asking = false; button.removeAttribute('aria-busy'); });
+    }
+    // Le bouton est le même d'un dessin à l'autre : un redessin ne lui prend pas le focus de la télécommande. Il n'existe que pour l'administrateur, quand TMDB peut répondre pour cette personne.
+    var button = H.button(H.t('Chercher ses films manquants'), null, { 'data-key': 'person-enrich', title: H.t('Demande à TMDB les films de cette personne, pour voir ceux qui ne sont pas dans ta médiathèque.'), onclick: ask });
+    function showButton(on) {
+      if (on && !button.parentNode) actions.appendChild(button);
+      else if (!on && button.parentNode) button.parentNode.removeChild(button);
+      actions.hidden = !on;
+    }
     function show(res) {
-      var shown = res.name || name, focus = document.activeElement && out.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      if (gone) return;
+      shown = res.name || name;
+      var focus = document.activeElement && out.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
       title.textContent = shown;
+      showButton(!!res.enrichable && H.isAdmin());
       var counts = ROLE_LABELS.filter(function (r) { return res.roles && res.roles[r[0]] > 0; }).map(function (r) { return r[1] + ' · ' + H.plural(res.roles[r[0]], 'titre'); });
       roles.textContent = counts.join(' · ');
       roles.hidden = !counts.length;
       if (!res.results.length) { say(H.t('Aucun titre pour {name} dans ta médiathèque.', { name: shown })); return; }
       H.clear(out);
       shelves(res.results).forEach(function (sec) { out.appendChild(sec); });
+      if (res.missing && res.missing.length) out.appendChild(missingShelf(res.missing));
       settle(focus);
     }
-    function load() { return H.api('/api/person?name=' + encodeURIComponent(name)).then(show).catch(function (e) { say(e.message); }); }
+    function load() { return H.api('/api/person?name=' + encodeURIComponent(name)).then(function (res) { show(res); return res; }).catch(function (e) { say(e.message); }); }
     if (!name) say(H.t('Aucun nom n’est indiqué.')); else load();
-    return { el: el, nav: '#/search', refresh: name ? load : null };      // au retour d'une fiche : les pastilles « vu » ont pu changer
+    return { el: el, nav: '#/search', refresh: name ? load : null, destroy: function () { gone = true; clearTimeout(timer); } };      // au retour d'une fiche : les pastilles « vu » ont pu changer
   });
 
   // --- Gestion ---------------------------------------------------------------------
