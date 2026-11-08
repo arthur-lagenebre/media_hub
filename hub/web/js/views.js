@@ -271,8 +271,8 @@
     var libId = m[1], lib = H.lib(libId);
     var kind = lib ? lib.kind : 'movies';
     var sorts = SORTS[kind] || SORTS.movies;
-    var st = { q: '', letter: '', genre: (params && params.genre) || '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '' };
-    var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { letters: [], genres: [], sections: [] };
+    var st = { q: '', genre: (params && params.genre) || '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '' };
+    var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { genres: [], sections: [] };
     function artistMode() { return kind === 'music' && H.setting('music_view') === 'artists'; }      // le choix du compte : les albums sous leurs artistes, ou un artiste par carte
     function sagaMode() { return kind === 'movies' && H.setting('movie_view') !== 'films'; }         // le choix du compte : les films d'une saga sur une carte, ou chacun sur la sienne
     function viewMode() { return artistMode() + '/' + sagaMode(); }
@@ -283,20 +283,19 @@
     var search = h('input', { class: 'f field', type: 'search', placeholder: H.t('Filtrer {name}', { name: lib ? H.tr(lib.label).toLowerCase() : '' }), 'aria-label': H.t('Filtrer'),
       oninput: function () { clearTimeout(search.t); search.t = setTimeout(function () { st.q = search.value; reset(); }, 280); },
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
-    var bLetter = H.button('', null, { class: 'flt', onclick: pickLetter }), bGenre = H.button('', null, { class: 'flt wide', onclick: pickGenre }), bSort = H.button('', null, { class: 'flt wide', onclick: pickSort });
+    var bGenre = H.button('', null, { class: 'flt wide', onclick: pickGenre }), bSort = H.button('', null, { class: 'flt wide', onclick: pickSort });
     var bSeen = H.button(H.t('Non vus'), null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
     var bLists = H.button(H.t('Playlists'), 'queue', { onclick: function () { H.go('#/playlists'); } });
-    var tools = h('div', { class: 'tools' }, search, bLetter, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bSeen, kind === 'music' ? bLists : null, count);
+    // Les films d'animation sont dans Films, avec le genre « Animation » : un raccourci depuis la page Animations, si le compte voit Films ; il se range à droite de la rangée des filtres
+    var related = libId === 'animations' && H.lib('films') ? h('div', { class: 'related' }, h('a', { class: 'chip f', href: '#/l/films?genre=Animation' }, H.t('Films d’animation'))) : null;
+    var tools = h('div', { class: 'tools' }, search, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bSeen, kind === 'music' ? bLists : null, related, count);
     var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': H.t('Accès rapides'), hidden: true });
     var empty = h('div', { class: 'blank', hidden: true });
-    // Les films d'animation sont dans Films, avec le genre « Animation » : un raccourci depuis la page Animations, si le compte voit Films
-    var related = libId === 'animations' && H.lib('films') ? h('div', { class: 'related' }, h('a', { class: 'chip f', href: '#/l/films?genre=Animation' }, H.t('Films d’animation'))) : null;
-    var el = h('section', { class: 'library' }, h('h1', null, lib ? H.tr(lib.label) : H.t('Bibliothèque')), related, kind === 'books' ? quick : null, tools, grid, empty, sentinel);
+    var el = h('section', { class: 'library' }, h('h1', null, lib ? H.tr(lib.label) : H.t('Bibliothèque')), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
 
     // « Genre : Tous » : le nom du filtre en gras, sa valeur en poids normal ; la largeur du bouton est fixée par le CSS (.flt), la valeur trop longue est coupée
     function label(btn, name, value) { btn.title = H.t('{name} :', { name: name }) + ' ' + value; H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('b', null, H.t('{name} :', { name: name })), ' ', h('span', { class: 'val' }, value)])); }
     function paint() {
-      label(bLetter, H.t('Lettre'), st.letter || H.t('Toutes'));
       label(bGenre, H.t('Genre'), st.genre || H.t('Tous'));
       label(bSort, H.t('Tri'), (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
       bSeen.setAttribute('aria-pressed', st.unseen ? 'true' : 'false');
@@ -322,10 +321,6 @@
       });
       if (focus !== null) { var again = quick.querySelector('[data-section="' + focus.replace(/"/g, '\\"') + '"]'); if (again) H.focus.set(again, true); }
     }
-    function pickLetter() {
-      var list = [{ label: H.t('Toutes'), value: '' }].concat(facets.letters.map(function (l) { return { label: l[0], detail: String(l[1]), value: l[0] }; }));
-      H.menu(kind === 'music' ? H.t('Artiste commençant par') : H.t('Commence par'), list, st.letter, function (v) { st.letter = v; reset(); });
-    }
     function pickGenre() {
       var list = [{ label: H.t('Tous les genres'), value: '' }].concat(facets.genres.map(function (g) { return { label: g[0], detail: String(g[1]), value: g[0] }; }));
       H.menu(H.t('Genre'), list, st.genre, function (v) { st.genre = v; reset(); });
@@ -336,7 +331,6 @@
     function query(offset) {
       var q = ['offset=' + offset, 'limit=240', 'sort=' + encodeURIComponent(st.sort)];
       if (st.q) q.push('q=' + encodeURIComponent(st.q));
-      if (st.letter) q.push('letter=' + encodeURIComponent(st.letter));
       if (st.genre) q.push('genre=' + encodeURIComponent(st.genre));
       if (st.section) q.push('section=' + encodeURIComponent(st.section));
       if (st.unseen) q.push('filter=unseen');
@@ -376,11 +370,11 @@
       }).catch(function (e) { loading = false; empty.hidden = false; H.clear(empty).appendChild(h('p', null, e.message)); });
     }
     function showEmpty() {
-      var filtered = st.q || st.letter || st.genre || st.unseen || st.section;
+      var filtered = st.q || st.genre || st.unseen || st.section;
       H.clear(empty).appendChild(h('div', null,
         h('h2', null, filtered ? H.t('Rien ne correspond') : H.t('Cette bibliothèque est vide')),
         h('p', null, filtered ? H.t('Change ou retire un filtre.') : H.t('Vérifie que le dossier est bien monté, puis lance une mise à jour.')),
-        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.letter = st.genre = st.section = ''; st.unseen = false; search.value = ''; H.pref('section.' + libId, null); reset(); } }, H.t('Retirer les filtres')) : H.isAdmin() ? h('a', { class: 'btn f', href: '#/admin' }, H.t('Ouvrir la gestion')) : null));
+        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.genre = st.section = ''; st.unseen = false; search.value = ''; H.pref('section.' + libId, null); reset(); } }, H.t('Retirer les filtres')) : H.isAdmin() ? h('a', { class: 'btn f', href: '#/admin' }, H.t('Ouvrir la gestion')) : null));
     }
     function reset() {
       token++; items = []; total = 0; lastGrp = null; loading = false;

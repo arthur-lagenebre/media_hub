@@ -1157,11 +1157,6 @@ def saga_json(saga, seen):
     return out
 
 
-def letter_of(row, kind):
-    """La lettre sous laquelle une vignette se range : l'artiste pour la musique (qui se range par artiste, pas par titre d'album), le titre sinon."""
-    return initial(row["grp"]) if kind == "music" else row["letter"]
-
-
 UNKNOWN_ARTISTS = ("artiste inconnu", "various artists", "artistes divers")        # rangés en dernier : ce ne sont pas des artistes qu'on cherche par leur nom
 
 
@@ -1212,11 +1207,10 @@ def recent_music(rows, seen, limit):
 
 
 def library_counts(rows, kind):
-    """Ce que la barre latérale compte : ({lettre: n}, {genre: n}, {section: n}, {id: section}). Les sections, pour les livres seulement."""
-    letters = Counter(letter_of(row, kind) for row in rows)
+    """Ce que la barre latérale compte : ({genre: n}, {section: n}, {id: section}). Les sections, pour les livres seulement."""
     genres = Counter(genre for row in rows for genre in safe_json(row["genres"], []))
     of = {row["id"]: section_of(row) for row in rows} if kind == "books" else {}
-    return letters, genres, Counter(of.values()), of
+    return genres, Counter(of.values()), of
 
 
 def sagas_of_films(custom):
@@ -1236,10 +1230,6 @@ def group_ranks(hub, rows, custom, group, movies):
     if group in custom:
         return {film["id"]: rank for film, rank in custom[group]}, missing.listed(dict(hub.sagas.all()).get(group, []), owned, info)         # une saga du fichier : le rang est sa place dans la liste
     return missing.tagged(group, [r for r in rows if r["grp"] == group], info, set(hub.sagas.ignored()))                                       # numérotés d'après la collection TMDB
-
-
-def has_letter(row, letter, kind):
-    return letter_of(row, kind) == letter
 
 
 def in_group(row, group, ranks):
@@ -1267,13 +1257,11 @@ def is_unseen(row, seen):
 
 
 def library_filters(q, kind, ranks, of, in_custom, seen):
-    """Les conditions que la requête pose à une vignette (lettre, saga, section, genre, recherche, non vus) ; elles s'ajoutent."""
-    letter, genre, group = q.get("letter", ""), q.get("genre", ""), q.get("group", "")
+    """Les conditions que la requête pose à une vignette (saga, section, genre, recherche, non vus) ; elles s'ajoutent."""
+    genre, group = q.get("genre", ""), q.get("group", "")
     section = q.get("section", "") if kind == "books" else ""
     needle = fold(q.get("q", "")).strip()
     tests = []
-    if letter:
-        tests.append(partial(has_letter, letter=letter, kind=kind))
     if group:
         tests.append(partial(in_group, group=group, ranks=ranks))
     if section:
@@ -1362,7 +1350,7 @@ def api_library(h, m, q):
     sagas = movies and q.get("sagas") == "1" and not group
     if sagas:
         rows = collapse_sagas(rows, seen, custom)
-    letters, genres, sections, of = library_counts(rows, lib.kind)
+    genres, sections, of = library_counts(rows, lib.kind)
     ranks, absent = group_ranks(hub, rows, custom, group, movies)
     tests = library_filters(q, lib.kind, ranks, of, extra_names, seen)
     chosen = [row for row in rows if all(test(row) for test in tests)]
@@ -1372,7 +1360,7 @@ def api_library(h, m, q):
     page = chosen[offset:offset + limit]
     out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "total": len(chosen), "offset": offset,
            "items": [library_item(r, seen) for r in page],
-           "letters": sorted(letters.items(), key=lambda kv: (kv[0] == "#", kv[0])), "genres": genre_menu(genres)}
+           "genres": genre_menu(genres)}
     if group and sort == "part":
         number_films(out["items"], ranks, offset + 1)
     library_extras(out, lib.kind, sections, absent, sagas, chosen, artists)
