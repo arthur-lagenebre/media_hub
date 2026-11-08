@@ -102,6 +102,7 @@ docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt')
 Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une version ajoute une information lue dans les fichiers : les éléments déjà indexés sont relus une fois, sans migration de base. Tant qu'il n'est pas fait, les fiches se comportent comme avant.
 
 - **Musique** : les artistes de chaque piste (tag `ARTISTS`, pour les invités), le titre des disques (`DISCSUBTITLE`) et le type d'album (`RELEASETYPE`). Ces tags sont écrits par `Metadata.py --apply` de `media_library` : s'il n'est pas passé sur la musique, les intertitres restent « Disque N » et le type d'album n'apparaît pas.
+- **Films** : les identifiants TMDB des personnes (réalisateurs, scénaristes, acteurs) pour la page d'une personne et « Chercher ses films manquants ». Le premier scan après cette mise à jour **relit tous les films**, même inchangés (quelques minutes sur le NAS pour des centaines de films ; les séries ne sont pas relues) ; les suivants reprennent le résultat. Ces identifiants sont écrits par `media_library` : un film qu'elle n'a pas encore repassé n'en a pas.
 - **Photos d'artistes** (après le tout premier déploiement) : le dossier de chaque artiste n'est connu qu'après un scan.
 
 ## Sécurité

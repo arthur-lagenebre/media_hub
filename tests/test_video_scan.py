@@ -168,6 +168,27 @@ class TestReader(TempCase):
         self.assertEqual(reader(path, "a.mkv")[2:], ({"title": "Ancien"}, 42.0))
         self.assertEqual((reader.read, reader.reused), (0, 1))
 
+    def test_a_file_kept_by_an_older_reading_is_read_again_though_it_did_not_change(self):
+        """Une nouvelle lecture des tags (ici : les identifiants des personnes) ne s'applique qu'aux fichiers relus : sans la version de lecture, un fichier inchangé garderait l'ancien résultat pour toujours."""
+        path = self.touch("a.mkv", movie_blocks("Titre", directors=["Nolan"], person_ids={"Nolan": 525}))
+        reader = video.Reader("films", self.known("a.mkv", {"title": "Ancien"}), version=2)
+        self.assertEqual(reader(path, "a.mkv")[2]["person_ids"], {"Nolan": 525})
+        self.assertEqual((reader.read, reader.reused), (1, 0))
+
+    def test_a_file_kept_by_the_current_reading_is_not_read_again(self):
+        path = self.touch("a.mkv", movie_blocks("Titre"))
+        known = self.known("a.mkv", {"title": "Ancien"})
+        known["a.mkv"]["meta"] = json.dumps({"info": {"title": "Ancien"}, "read": 2})
+        reader = video.Reader("films", known, version=2)
+        self.assertEqual(reader(path, "a.mkv")[2], {"title": "Ancien"})
+        self.assertEqual((reader.read, reader.reused), (0, 1))
+
+    def test_a_reading_newer_than_ours_is_not_taken_either(self):
+        path = self.touch("a.mkv", movie_blocks("Titre"))
+        known = self.known("a.mkv", {"title": "Futur"})
+        known["a.mkv"]["meta"] = json.dumps({"info": {"title": "Futur"}, "read": 3})
+        self.assertEqual(video.Reader("films", known, version=2)(path, "a.mkv")[2]["title"], "Titre")          # retour à une ancienne version du hub : on relit
+
     def test_a_file_that_changed_is_read_again(self):
         path = self.touch("a.mkv", movie_blocks("Titre"))
         for change in ({"size": 1}, {"mtime": 1}):
@@ -224,6 +245,18 @@ class TestScanMovies(TempCase):
         items, entries, counts = video.scan_movies(self.lib, known or {}, enriched)
         return {i["title"]: i for i in items}, {e["rel"]: e for e in entries}, counts
 
+    def test_the_films_scanned_before_the_ids_were_read_are_read_again_once(self):
+        self.touch("Tagué (2005)/Tagué (2005).mkv", movie_blocks("Tagué", directors=["Nolan"], person_ids={"Nolan": 525}), mtime=5000)
+        _, entries, _ = video.scan_movies(self.lib, {})
+        old = {e["rel"]: {**e, "meta": json.dumps({"info": json.loads(e["meta"])["info"]})} for e in entries}          # ce que l'ancien scan avait gardé : l'info, sans version de lecture
+        items, entries, counts = video.scan_movies(self.lib, old)
+        self.assertEqual((counts.reused, counts.read), (0, len(entries)))                                              # tous les films sont relus, même inchangés
+        self.assertEqual(json.loads(next(i for i in items if i["title"] == "Tagué")["meta"])["person_ids"], {"Nolan": 525})
+        _, _, again = video.scan_movies(self.lib, {e["rel"]: e for e in entries})
+        self.assertEqual(again.reused + again.read, len(entries))
+        self.assertGreater(again.reused, 0)                                                                            # une fois : le scan suivant reprend le résultat
+        self.assertLess(again.read, len(entries))
+
     def test_a_film_keeps_the_ids_of_its_people_and_a_film_without_any_has_none(self):
         self.touch("Tagué (2005)/Tagué (2005).mkv", movie_blocks("Tagué", directors=["Nolan"], actors=["Leo (Cobb)"], person_ids={"Nolan": 525, "Leo (Cobb)": 6193}), mtime=5000)
         items = self.scan()[0]
@@ -276,7 +309,7 @@ class TestScanMovies(TempCase):
 
     def test_a_file_that_cannot_be_read_is_still_listed(self):
         items, entries, _ = self.scan()
-        self.assertEqual(json.loads(entries["Casse (2000)/Casse (2000).mkv"]["meta"]), {"info": {"unreadable": True}})
+        self.assertEqual(json.loads(entries["Casse (2000)/Casse (2000).mkv"]["meta"]), {"info": {"unreadable": True}, "read": video.MOVIE_READ})
         self.assertEqual(items["Casse"]["count"], 1)
 
     def test_counts_tell_what_was_read_and_what_was_reused(self):
@@ -347,6 +380,15 @@ class TestScanShows(TempCase):
     def scan(self, known=None, enriched=None):
         items, entries, counts = video.scan_shows(self.lib, known or {}, enriched)
         return {i["title"]: i for i in items}, [(e["rel"], e) for e in entries], counts
+
+    def test_the_episodes_are_not_read_again_for_the_ids_of_the_people(self):
+        """Les séries n'utilisent pas ces identifiants : relire des milliers d'épisodes pour rien ne se justifie pas."""
+        _, entries, _ = video.scan_shows(self.lib, {})
+        known = {e["rel"]: e for e in entries}
+        self.assertTrue(all("read" not in json.loads(e["meta"]) for e in entries))
+        _, _, counts = video.scan_shows(self.lib, known)
+        self.assertGreater(counts.reused, 0)
+        self.assertEqual(counts.reused + counts.read, len(entries))
 
     def test_a_show_does_not_keep_the_ids_of_the_people_of_its_episodes(self):
         self.touch("Casting/Saison 1/01 - Un.mkv", [(70, [("TITLE", "Casting")]), (60, [("PART_NUMBER", 1)]), (50, [("TITLE", "Un"), ("PART_NUMBER", 1), ("ACTOR", "Leo (Cobb)"), ("ACTOR/TMDB", "person/6193")])])

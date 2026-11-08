@@ -108,11 +108,16 @@ class _Counts:
         self.reused, self.read = reused, read
 
 
-class Reader:
-    """Lit un fichier vidéo, ou reprend ce que le scan précédent en avait lu s'il n'a pas bougé."""
+MOVIE_READ = 2          # la version de lecture des films : 2 = avec les identifiants des personnes (`person_ids`). Gardée avec chaque entrée (`meta["read"]`)
 
-    def __init__(self, lib, known):
-        self.lib, self.known, self.reused, self.read = lib, known, 0, 0
+
+class Reader:
+    """Lit un fichier vidéo, ou reprend ce que le scan précédent en avait lu s'il n'a pas bougé **et** qu'il avait été lu de la même façon (`version`).
+
+    Sans cela, un fichier inchangé garderait pour toujours ce qu'une lecture plus ancienne en avait tiré : une nouvelle information lue dans les tags (comme les identifiants des personnes) n'arriverait que par un fichier réécrit. Un changement de version relit donc une fois tous les fichiers concernés (les séries gardent la version 1 : rien ne change pour elles)."""
+
+    def __init__(self, lib, known, version=1):
+        self.lib, self.known, self.version, self.reused, self.read = lib, known, version, 0, 0
 
     def __call__(self, path, rel):
         stat = _stat(path)
@@ -122,7 +127,7 @@ class Reader:
         row = self.known.get(rel)
         if unchanged(row, size, mtime):
             meta = json.loads(row["meta"])
-            if "info" in meta and not meta["info"].get("unreadable"):          # une lecture ratée se refait
+            if "info" in meta and not meta["info"].get("unreadable") and meta.get("read", 1) == self.version:          # une lecture ratée, ou faite autrement, se refait
                 self.reused += 1
                 return size, mtime, meta["info"], row["duration"]
         self.read += 1
@@ -192,12 +197,12 @@ def _movie_item(lib, movie, parts, enriched):
 def _movie_entries(lib, item, parts):
     title = item["title"]
     return [entry_row(lib.id, item["id"], rel, "video", title=title if len(parts) == 1 else f"{title} - partie {n}", number=n,
-                      duration=duration, size=size, mtime=mtime, meta={"info": pinfo})
+                      duration=duration, size=size, mtime=mtime, meta={"info": pinfo, "read": MOVIE_READ})
             for n, (path, rel, size, mtime, pinfo, duration) in enumerate(parts, 1)]
 
 
 def scan_movies(lib, known, enriched=None):
-    reader = Reader(lib.id, known)
+    reader = Reader(lib.id, known, MOVIE_READ)
     enriched = enriched or {}
     items, entries = [], []
     for movie in naming.find_movies(lib.path):
