@@ -87,7 +87,7 @@ jobs:
       - name: Étiquettes de l'image
         id: meta
         if: github.ref_type == 'tag'
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           tags: |
