@@ -60,18 +60,21 @@ def _read_tracks(release, known):
     return reused, read
 
 
-def _album_release_types(release):
-    """Les types de sortie de l'album : ceux que la plupart des pistes portent (une piste sans type ne compte pas) ; vide quand aucune n'en porte."""
-    found = Counter(tuple(t.info.get("release_types") or ()) for t in release.tracks)
+def _most_common_list(release, key):
+    """La liste que la plupart des pistes portent sous `key` (une piste sans liste ne compte pas) ; vide quand aucune n'en porte."""
+    found = Counter(tuple(t.info.get(key) or ()) for t in release.tracks)
     found.pop((), None)
     return list(found.most_common(1)[0][0]) if found else []
+
+
+def _album_release_types(release):
+    """Les types de sortie de l'album : ceux que la plupart des pistes portent (une piste sans type ne compte pas) ; vide quand aucune n'en porte."""
+    return _most_common_list(release, "release_types")
 
 
 def _album_artist_ids(release):
     """Les identifiants MusicBrainz de l'artiste de l'album (un par artiste crédité : « A & B » en a deux), tels que la plupart des pistes les portent."""
-    found = Counter(tuple(t.info.get("albumartist_ids") or ()) for t in release.tracks)
-    found.pop((), None)
-    return list(found.most_common(1)[0][0]) if found else []
+    return _most_common_list(release, "albumartist_ids")
 
 
 REPEATED_NUMBER = r"(?:disc|disk|disque|cd)\s*0*{}"
