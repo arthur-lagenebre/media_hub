@@ -32,20 +32,20 @@ jobs:
     steps:
       # Les dépôts sont côte à côte, comme en local : media_library à côté de media_hub
       # (ses lecteurs de tags), crapper à côté de mutator (noms des fonctions).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: media_hub
           fetch-depth: 0          # sur une PR, les fichiers à muter viennent de la différence avec la branche de base
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: arthur-lagenebre/media_library
           path: media_library
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: unclebob/mutator
           ref: ${{ env.MUTATOR_REF }}
           path: mutator
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: unclebob/crapper
           ref: ${{ env.CRAPPER_REF }}

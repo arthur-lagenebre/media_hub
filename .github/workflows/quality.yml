@@ -28,10 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: media_hub
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: unclebob/dryer
           ref: ${{ env.DRYER_REF }}
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: media_hub
           fetch-depth: 0

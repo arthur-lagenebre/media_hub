@@ -21,10 +21,10 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: media_hub
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: arthur-lagenebre/media_library
           path: media_library
