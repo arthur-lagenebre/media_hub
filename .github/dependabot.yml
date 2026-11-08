@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Les versions des actions écrites dans les workflows et dans l'action composite.
+  - package-ecosystem: github-actions
+    directories:
+      - "/"
+      - "/.github/actions/setup"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "CI"
+  # L'image de base de deploy/Dockerfile.
+  - package-ecosystem: docker
+    directory: "/deploy"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "Image"
