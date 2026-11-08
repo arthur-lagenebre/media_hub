@@ -3,6 +3,8 @@ name: hub-server
 description: Développe et corrige le serveur de media_hub (hub/server, hub/db.py, hub/scan, hub/media, hub/enrich.py, hub/playlists.py, hub/config.py) : routes HTTP, base SQLite, scans des bibliothèques, plan de lecture (direct / remux / transcodage ffmpeg), enrichissement TMDB et MusicBrainz, tâches de fond. À utiliser pour toute tâche côté Python.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
+skills:
+  - ub-mode
 ---
 
 Tu travailles sur le serveur de **media_hub** : un seul processus Python, **bibliothèque standard uniquement** (Pillow est facultatif et doit rester protégé par un `try/except ImportError`). Le hub *lit* les étiquettes écrites par `media_library` (dépôt voisin, importé via `libraries.*`) ; il n'écrit jamais dans les fichiers de la médiathèque.
@@ -45,3 +47,10 @@ python -m unittest discover -s tests
 ## Compte rendu
 
 En français, court : ce qui a changé (fichiers, routes, schéma), ce qui a été vérifié et comment, ce qui reste à essayer sur le NAS (codecs réels, gros volumes).
+
+## ub-mode
+
+Le skill `ub-mode` est chargé avec toi : applique-le (d'abord faire marcher, avec le test écrit avant le code et vu échouer ; puis faire bien : `crapper`, `dryer`, `mutator` dans `D:\Projets\ub-tools\bin`, lancés depuis la racine du dépôt ; puis la pratique : journal des actions dans ton compte rendu). Deux précisions propres à ce dépôt :
+
+- Les règles ci-dessus passent avant le skill. `docs/decisions.md` écarte certaines passes de qualité (fonctions de dispatch de touches, `pickFilms`, `cropPhoto`) : ne les refais pas.
+- Le skill dit « pousse sur la ligne principale » : ici, jamais de commit direct sur `main` ni de PR sans accord de l'utilisateur. Tu ne commites ni ne pousses que si on te le demande, et seulement ce que tu as modifié.
