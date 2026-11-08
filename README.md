@@ -14,7 +14,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 | Films | `.mkv` (titre, synopsis, casting, jaquette embarqués par `Metadata.py`), sagas regroupées en une vignette (bouton « Sagas ») | vidéo, sous-titres, reprise |
 | Séries, Animations | dossiers série / saison / épisode, affiche TMDB (avec `TMDB_KEY`) | vidéo, épisode suivant |
 | Musique | `.flac`, `.mp3`, … regroupés en albums, pochette = `cover.{ext}` du dossier ; une image `1997 - OK Computer.jpg` dans le dossier de l'artiste déclare un album manquant (grisé, sur sa fiche seulement) ; la photo de l'artiste est `artist.webp` dans son dossier (voir [Photos d'artistes](#photos-dartistes)) | barre audio qui continue pendant la navigation |
-| Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens manga, thèmes |
+| Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens de lecture par série, double page, thèmes |
 
 - **Accueil** : « Reprendre » (films, épisodes, livres, albums en cours) et les ajouts récents de chaque bibliothèque.
 - **Bibliothèque** : recherche, genres, tri (titre, ajout, année, note TMDB pour les films et les séries), filtre « Non vus ».
@@ -165,7 +165,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1413 tests : 1225 serveur + 188 interface
+python -m unittest discover -s tests          # 1453 tests : 1232 serveur + 221 interface
 ```
 
-`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 188 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 221 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
