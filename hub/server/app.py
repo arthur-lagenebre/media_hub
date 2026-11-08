@@ -1033,12 +1033,27 @@ SORTS = {
     "year": (lambda r: (r["year"] or "0000", r["sort"]), True),
     "year-asc": (lambda r: (r["year"] or "9999", r["sort"]), False),
     "part": (lambda r: release_key(r), False),      # l'ordre d'une saga
+    "rating": (lambda r: rating_key(r), False),     # « Mieux notés » : la clé range elle-même du mieux au moins bien noté
 }
 # Le tri « Titre » de la musique et des livres range par artiste / collection ; chez un artiste, les albums vont du plus ancien au plus récent, puis par nom (ceux sans année en dernier)
 TITLE_SORTS = {
     "music": lambda r: (fold(r["grp"]) or "￿", r["year"] or "9999", r["sort"]),
     "books": lambda r: (fold(r["grp"]), r["sort"]),
 }
+
+
+def row_rating(row):
+    """(note, votes) d'une ligne : sa note TMDB montrée (voir shown_rating), ou pour une vignette de saga celle de son meilleur film (à égalité, le plus voté) : une saga vaut ce qu'elle a de mieux, Terminator vaut Terminator 2 ; (None, 0) sans note montrée."""
+    if isinstance(row, dict) and "members" in row:
+        return max(map(row_rating, row["members"]), key=lambda found: (found[0] is not None, found[0] or 0, found[1]), default=(None, 0))
+    rating = shown_rating(safe_json(row["meta"], {}).get("tmdb_rating"))
+    return (rating["vote"], rating["votes"]) if rating else (None, 0)
+
+
+def rating_key(row):
+    """Le tri « Mieux notés », sans inversion : d'abord ce qui a une note montrée, de la meilleure à la moins bonne, puis le plus de votes ; ensuite le reste ; à égalité, par titre."""
+    vote, votes = row_rating(row)
+    return (vote is None, -(vote or 0), -votes, row["sort"])
 
 
 def release_key(row):

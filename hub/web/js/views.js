@@ -264,7 +264,7 @@
 
   // --- Bibliothèque ----------------------------------------------------------------
   var SORTS = {
-    movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')]],
+    movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')], ['rating', H.t('Mieux notés')]],      // films et séries ; « Mieux notés » : la note TMDB
     books: [['title', H.t('Collection')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')]]
   };
   H.route(/^\/l\/([\w-]+)$/, function (m, params) {
