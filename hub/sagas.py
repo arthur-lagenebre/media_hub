@@ -276,6 +276,9 @@ class Sagas:
                         raise
                     time.sleep(0.05 * (attempt + 1))
         except OSError as e:
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:         # Linux : le dossier du fichier n'existe pas (c'est un fichier) → NotADirectoryError ; l'erreur à rapporter est celle de l'écriture
+                pass
             raise SagaError(500, f"impossible d'écrire {self.path.name} : {e.strerror or e}")
         self._read = (None, [], "", [], False)
