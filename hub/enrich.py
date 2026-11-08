@@ -240,6 +240,22 @@ def enrich_ratings(cfg, db, lib, log=print, force=False, since=None):
     return counts
 
 
+def download_poster(tmdb, posters, film, title, log, force):
+    """Le nom du fichier de l'affiche de `film` (sa fiche TMDB : `id` et `poster_path`), sous `posters`, téléchargée si elle n'y est pas (ou avec `force`) ; vide quand elle ne vient pas. Les sagas et les personnes partagent ces fichiers."""
+    name = missing.poster_name(film["id"])
+    try:
+        if force or not (posters / name).is_file():
+            partial = posters / (name + ".tmp")
+            tmdb.save_image(film["poster_path"], "w342", partial)
+            os.replace(partial, posters / name)         # d'un bloc : une écriture coupée ne laisse pas une affiche tronquée qu'on ne retélécharge plus
+        return name
+    except TmdbAuthError:
+        raise
+    except (TmdbError, OSError) as e:
+        log(f"  {title} : pas d'affiche ({e})")
+        return ""
+
+
 class SagaPass:
     """Une passe sur les sagas d'une bibliothèque de films : ce qu'elle décrit se range dans `info` (voir missing.py), qui se garde à la fin de la passe."""
 
@@ -250,18 +266,7 @@ class SagaPass:
 
     def poster(self, film, title):
         """Le nom du fichier de l'affiche d'un film, téléchargée au besoin ; vide quand elle ne vient pas."""
-        name = missing.poster_name(film["id"])
-        try:
-            if self.force or not (self.posters / name).is_file():
-                partial = self.posters / (name + ".tmp")
-                self.tmdb.save_image(film["poster_path"], "w342", partial)
-                os.replace(partial, self.posters / name)         # d'un bloc : une écriture coupée ne laisse pas une affiche tronquée qu'on ne retélécharge plus
-            return name
-        except TmdbAuthError:
-            raise
-        except (TmdbError, OSError) as e:
-            self.log(f"  {title} : pas d'affiche ({e})")
-            return ""
+        return download_poster(self.tmdb, self.posters, film, title, self.log, self.force)
 
     def keep(self, film):
         """Retient un film que TMDB décrit (titre, date, affiche)."""
@@ -365,6 +370,65 @@ def enrich_sagas(cfg, db, lib, log=print, force=False):
     finally:
         missing.save(db, run.info)
     return run.counts
+
+
+PERSON_STALE = 30 * 24 * 3600       # au-delà, la filmographie d'une personne est redemandée à TMDB (elle a peut-être tourné un film de plus, ou un film annoncé est sorti)
+MAX_ORDER = 10                      # un acteur n'est retenu que parmi les premiers rôles du casting (« order » de TMDB, à partir de 0)...
+MIN_VOTES = 100                     # ... et dans un film que au moins autant de personnes ont noté : on ne cherche pas les figurants ni les films inconnus
+MAX_FILMS = 40
+
+
+def person_key(tmdb_id):
+    """Où se garde la filmographie d'une personne (voir enrich_person). Hors du préfixe `enrich:` : le scan reprend celui-là, ce qui suit n'est pas une fiche d'élément."""
+    return f"personinfo:{tmdb_id}"
+
+
+def _credits(credits, key):
+    """Les films de la liste `key` (« cast » ou « crew ») d'une réponse de TMDB qui ont un identifiant ; le reste est écarté."""
+    listed = credits.get(key) if isinstance(credits, dict) else None
+    return [film for film in listed if isinstance(film, dict) and isinstance(film.get("id"), int)] if isinstance(listed, list) else []
+
+
+def is_top_billed(film):
+    """Un rôle d'acteur qui compte : parmi les `MAX_ORDER` premiers du casting, dans un film noté par au moins `MIN_VOTES` personnes."""
+    order, votes = film.get("order"), film.get("vote_count")
+    return isinstance(order, int) and isinstance(votes, int) and order <= MAX_ORDER and votes >= MIN_VOTES
+
+
+def person_films(credits):
+    """[{tmdb, title, year, date, role, poster_path}] des films que TMDB dit d'une personne (`person/<id>/movie_credits`), du plus récent au plus ancien, `MAX_FILMS` au plus.
+
+    Réalisateur : `job` vaut « Director ». Acteur : voir `is_top_billed`. Seulement des films sortis (voir missing.released) ; un film réalisé **et** joué n'est listé qu'une fois, comme réalisé."""
+    chosen = [(film, "director") for film in _credits(credits, "crew") if film.get("job") == "Director"] + [(film, "actor") for film in _credits(credits, "cast") if is_top_billed(film)]
+    found = {}
+    for film, role in chosen:
+        when = film.get("release_date") or ""
+        if missing.released({"date": when}):
+            found.setdefault(film["id"], {"tmdb": film["id"], "title": film.get("title") or "", "year": when[:4], "date": when, "role": role, "poster_path": film.get("poster_path") or ""})
+    return sorted(found.values(), key=lambda film: (film["date"], film["tmdb"]), reverse=True)[:MAX_FILMS]
+
+
+def enrich_person(cfg, db, person_id, log=print, force=False):
+    """Les films que TMDB attribue à la personne `person_id` (réalisés ou joués, voir `person_films`), gardés sous `personinfo:<id>` avec leurs affiches (HUB_DATA/tmdb) : `{"at", "films": [{tmdb, title, year, date, role, poster}]}`.
+
+    Les films qu'on a ne sont pas retirés ici : cela se calcule à chaque requête (voir missing.of_person), la médiathèque change plus vite que TMDB. Une personne connue depuis moins de `PERSON_STALE` n'est pas redemandée (ni même le client TMDB créé), sauf avec `force`. Un échec de TMDB laisse ce qui était gardé."""
+    known = db.kv_get(person_key(person_id))
+    now = int(time.time())
+    if known and not force and now - known.get("at", 0) < PERSON_STALE:
+        return {"films": len(known.get("films") or []), "failed": 0}
+    tmdb, posters = tmdb_client(cfg, read=not force)
+    try:
+        films = person_films(tmdb.get(f"person/{person_id}/movie_credits"))
+        kept = [{**{k: v for k, v in film.items() if k != "poster_path"},
+                 "poster": download_poster(tmdb, posters, {"id": film["tmdb"], "poster_path": film["poster_path"]}, film["title"], log, force) if film["poster_path"] else ""} for film in films]
+    except TmdbAuthError as e:
+        raise RuntimeError(f"TMDB : {e}")
+    except TmdbError as e:
+        log(f"  personne {person_id} : {e}")
+        return {"films": 0, "failed": 1}
+    db.kv_set(person_key(person_id), {"at": now, "films": kept})
+    log(f"  personne {person_id} : {len(kept)} film(s) retenu(s)")
+    return {"films": len(kept), "failed": 0}
 
 
 def artist_key(mbid):

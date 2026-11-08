@@ -102,6 +102,10 @@ class Jobs:
     def enrich_artists(self, lib, force=False):
         return self._submit(f"Fiches artistes · {lib.label}", lambda log: enrich.enrich_artists(self.cfg, self.db, lib, log, force))
 
+    def enrich_person(self, name, person_id, force=False):
+        """Les films que TMDB attribue à une personne (`person_id` : son identifiant TMDB ; `name` : pour l'intitulé de la tâche)."""
+        return self._submit(f"Films de {name}", lambda log: enrich.enrich_person(self.cfg, self.db, person_id, log, force))
+
     def cleanup(self, apply):
         def run(log):
             return clean_junk(self.cfg.libraries, apply, log)
