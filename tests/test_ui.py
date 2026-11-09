@@ -3496,6 +3496,51 @@ class TestSettings(UiCase):
         self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne finale') >= 0", timeout=10000)
         self.page.wait_for_function("(() => { var p = document.querySelector('.job pre'); return p.scrollHeight - p.scrollTop - p.clientHeight < 4; })()")
 
+    def test_the_text_selected_in_a_running_log_survives_its_updates(self):
+        import threading
+        grow, finish = threading.Event(), threading.Event()
+
+        def work(log):
+            for n in range(100):
+                log(f"ligne {n}")
+            grow.wait(20)
+            for n in range(100, 140):
+                log(f"ligne {n}")
+            finish.wait(20)          # la tâche reste en cours : sa fin referait toute la page
+        self.addCleanup(lambda: (grow.set(), finish.set(), self.run_.wait_jobs()))
+        self.run_.hub.jobs._submit("Essai sélection", work)
+        self.open("#/settings?tab=gestion")
+        job = self.view(".job", has_text="Essai sélection")
+        job.locator(".jhead").click()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 99') >= 0")
+        job.locator("pre").evaluate("el => { var r = document.createRange(); r.setStart(el.firstChild, 0); r.setEnd(el.firstChild, 7); var s = getSelection(); s.removeAllRanges(); s.addRange(r); }")
+        self.assertEqual(self.page.evaluate("getSelection().toString()"), "ligne 0")
+        grow.set()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 139') >= 0", timeout=10000)
+        self.assertEqual(self.page.evaluate("getSelection().toString()"), "ligne 0")          # copier un extrait d'une tâche en cours n'est pas interrompu par la mise à jour
+
+    def test_a_task_view_that_is_gone_stops_polling_even_when_a_reply_is_late(self):
+        import threading
+        release = threading.Event()
+        self.addCleanup(lambda: (release.set(), self.run_.wait_jobs()))
+        self.run_.hub.jobs._submit("Essai minuteur", lambda log: release.wait(30))
+        self.open("#/")
+        self.page.evaluate("location.hash = '#/settings?tab=gestion'")
+        self.shown("#/settings?tab=gestion")
+        self.view(".job", has_text="Essai minuteur").wait_for()
+        self.page.evaluate("""() => {          // les réponses de /api/jobs arrivent une seconde plus tard ; on compte les appels
+          var fetchNow = window.fetch; window.jobsCalls = 0;
+          window.fetch = function (url) {
+            if (String(url).indexOf('/api/jobs') < 0) return fetchNow.apply(this, arguments);
+            var self = this, args = arguments; window.jobsCalls += 1;
+            return new Promise(function (ok) { setTimeout(ok, 1000); }).then(function () { return fetchNow.apply(self, args); });
+          };
+        }""")
+        self.page.evaluate("() => { Hub.current().view.refresh(); history.back(); }")          # une interrogation part, puis la page est quittée (la vue est détruite) avant sa réponse
+        self.shown("#/")
+        self.page.wait_for_timeout(3500)          # la réponse arrive, puis un tour de 1,5 s s'écoulerait si le minuteur était réarmé
+        self.assertEqual(self.page.evaluate("window.jobsCalls"), 1)
+
     def test_an_open_log_keeps_its_scroll_when_another_task_arrives_or_is_unfolded(self):
         import threading
         release = threading.Event()

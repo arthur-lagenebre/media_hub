@@ -913,7 +913,7 @@
 
   // `#/admin` est l'ancienne adresse de la page : les signets et les liens déjà donnés continuent d'y mener.
   H.route(/^\/(?:admin|settings)$/, function (m, query) {
-    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, wasAdmin = null, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '', libsOpen = false, libsPanelNode = null;
+    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, wasAdmin = null, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '', libsOpen = false, libsPanelNode = null, closed = false;
     var tab = query.tab || H.pref('settings.tab') || '', openJobs = {};
     function qualityLabel(v) { return { auto: H.t('Qualité d’origine quand c’est possible'), '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': H.t('480p · 1,5 Mb/s') }[v] || v; }
     function start(path, body, text) {
@@ -1333,8 +1333,13 @@
         if (openJobs[j.id] && !!pre !== !!text) return false;
         if (pre && pre.textContent !== text) todo.push([pre, text]);
       }
-      todo.forEach(function (t) { var was = logState(t[0]); t[0].textContent = t[1]; logKeep(t[0], was); });
+      todo.forEach(function (t) { var was = logState(t[0]); grow(t[0], t[1]); logKeep(t[0], was); });
       return true;
+    }
+    function grow(pre, text) {          // un journal ne fait que s'allonger : on ajoute la fin, et ce qu'on y a sélectionné reste sélectionné (sinon le texte est remplacé)
+      var old = pre.textContent;
+      if (pre.childNodes.length === 1 && pre.firstChild.nodeType === 3 && text.slice(0, old.length) === old) pre.firstChild.appendData(text.slice(old.length));
+      else pre.textContent = text;
     }
     // Remplace le panneau des tâches sur place (la page garde son défilement), en rendant le focus à ce qui l'avait.
     function showJobs(key) {
@@ -1346,6 +1351,7 @@
       if (focus) H.focus.key(fresh, focus, true);
     }
     function poll() {
+      if (closed) return Promise.resolve();          // la vue est détruite : une réponse tardive ne réarme pas le sondage
       clearTimeout(timer);
       // Un non-administrateur n'interroge que l'état « occupé » (sans journal). Si son rôle a changé depuis le démarrage, le 403 se rattrape par un appel sans journal.
       var jobsCall = H.isAdmin() ? H.api('/api/jobs?log=1').catch(function (e) { if (e.status === 403) return H.api('/api/jobs'); throw e; }) : H.api('/api/jobs');
@@ -1355,6 +1361,7 @@
         if (!(r[0].auth && H.isAdmin())) { users = null; usersError = ''; return r; }
         return H.api('/api/users').then(function (res) { users = res.users; usersError = ''; return r; }, function (e) { users = null; usersError = e.message; return r; });
       }).then(function (r) {
+        if (closed) return;
         var page = JSON.stringify([r[0], users, usersError]), tasks = JSON.stringify(r[1].jobs);
         state = r[0]; jobs = r[1].jobs; H.libs = state.libraries;
         busy = r[1].busy;
@@ -1369,9 +1376,9 @@
         }
         lastPage = page; lastTasks = tasks;
         if (busy) timer = setTimeout(poll, 1500);
-      }).catch(function (e) { H.toast(e.message, 5000); });
+      }).catch(function (e) { if (!closed) H.toast(e.message, 5000); });
     }
     poll();
-    return { el: el, nav: '#/settings', refresh: poll, destroy: function () { clearTimeout(timer); } };
+    return { el: el, nav: '#/settings', refresh: poll, destroy: function () { closed = true; clearTimeout(timer); } };
   });
 })();
