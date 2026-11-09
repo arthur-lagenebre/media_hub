@@ -1405,7 +1405,7 @@ def watch_state(row, seen):
 
 
 def library_filters(q, kind, ranks, of, in_custom, seen):
-    """Les conditions que la requête pose à une vignette (saga, section, genre, recherche, à voir / en cours / terminés) ; elles s'ajoutent."""
+    """Les conditions que la requête pose à une vignette (saga, section, genre, recherche, à voir / en cours / terminés) ; elles s'ajoutent. Un `filter` qui n'est ni vide, ni `todo` / `progress` / `done`, ni l'ancien `unseen`, est une erreur (400) : il ne filtre plus « rien » en silence."""
     genre, group = q.get("genre", ""), q.get("group", "")
     section = q.get("section", "") if kind == "books" else ""
     needle = fold(q.get("q", "")).strip()
@@ -1418,8 +1418,11 @@ def library_filters(q, kind, ranks, of, in_custom, seen):
         tests.append(partial(has_genre, genre=genre))
     if needle:
         tests.append(partial(matches_needle, needle=needle, in_custom=in_custom))
-    state = {"unseen": "todo"}.get(q.get("filter"), q.get("filter"))
-    if state in WATCH_STATES:
+    asked = q.get("filter", "")
+    state = {"unseen": "todo"}.get(asked, asked)
+    if state and state not in WATCH_STATES:
+        raise HttpError(400, f"filtre inconnu : {asked}")
+    if state:
         tests.append(lambda row: watch_state(row, seen) == state)
     return tests
 

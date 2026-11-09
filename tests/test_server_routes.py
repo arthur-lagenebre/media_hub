@@ -228,6 +228,15 @@ class TestLibraryRoute(RouteCase):
         self.assertEqual((genres[0], genres[1], genres[-1]), (["électro", 2], ["Genre 000", 1], ["Zèbre", 3]))          # « électro » vient avant « Genre » : l'accent et la casse ne comptent pas
         self.assertEqual([g[0] for g in genres[1:-1]], [f"Genre {n:03d}" for n in range(58)])                             # la coupure garde les plus fréquents, puis les premiers par nom : Genre 058 à 064 sont écartés
 
+    def test_a_filter_nobody_knows_is_refused_in_french_and_the_old_ones_still_work(self):
+        self.fill(self.films(), [])
+        reply = self.get("/api/library/lib?filter=autre")
+        self.assertEqual((reply.status, reply.json()["error"]), (400, "filtre inconnu : autre"))
+        for state in ("", "todo", "progress", "done", "unseen"):                                       # « unseen » : l'ancien nom de « todo », encore dans des favoris
+            with self.subTest(filter=state):
+                self.assertEqual(self.get(f"/api/library/lib?filter={state}").status, 200)
+        self.assertEqual(self.get("/api/library/lib?filter=unseen").json()["total"], self.get("/api/library/lib?filter=todo").json()["total"])
+
     def test_a_page_of_the_list(self):
         self.fill(self.films(), [])
         out = self.get("/api/library/lib?offset=2&limit=3").json()
