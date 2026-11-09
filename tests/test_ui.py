@@ -63,6 +63,13 @@ def give_artist_a_sheet(db):
     return meta["artist_id"], undo
 
 
+PROSE = 70          # la largeur maximale des textes courants (--prose), en rem
+
+
+def max_width_rem(locator):
+    return locator.evaluate("el => parseFloat(getComputedStyle(el).maxWidth) / parseFloat(getComputedStyle(document.documentElement).fontSize)")
+
+
 @unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
 class UiCase(unittest.TestCase):
     @classmethod
@@ -1312,6 +1319,14 @@ class TestSagaEditor(UiCase):
         self.view("a.btn", has_text="Composer").click()
         self.page.wait_for_selector("#views > .sagaedit .line")               # l'éditeur est chargé : jusque-là, les `.line` visibles sont ceux de Gestion. `.sagaedit` est la racine de la vue : on cherche dedans
         self.assertEqual(self.view(".line b").all_inner_texts(), ["Ma saga"])
+
+    def test_the_lead_and_the_empty_page_use_the_prose_width(self):
+        self.open("#/sagas")
+        self.view(".lead").first.wait_for()
+        self.assertEqual(max_width_rem(self.view(".lead").first), PROSE)
+        self.open("#/sagas?g=Inconnue")
+        self.view(".blank").wait_for()
+        self.assertEqual(max_width_rem(self.view(".blank")), PROSE)
 
     def test_a_saga_lists_its_films_and_moves_them(self):
         self.open("#/sagas?g=Ma%20saga")
@@ -3553,6 +3568,10 @@ class InboxUiCase(unittest.TestCase):
         self.assertFalse(self.users()["bob"]["can_upload"])
 
     # --- Envoyer -------------------------------------------------------------
+    def test_the_intro_uses_the_prose_width(self):
+        page = self.upload_page()
+        self.assertEqual(max_width_rem(page.locator("#views > .view:visible .intro")), PROSE)
+
     def test_a_file_goes_through_and_keeps_the_name_the_server_gave_it(self):
         page = self.upload_page()
         self.send(page, ("Film.mkv", b"a" * 5000))
