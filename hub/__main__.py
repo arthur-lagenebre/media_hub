@@ -136,6 +136,7 @@ def main():
     announce(cfg, hub)
     hub.first_scan()
     hub.autoscan()
+    hub.inbox.keep_clean()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

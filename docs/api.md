@@ -32,9 +32,11 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 | 302 | **hors `/api/`**, une requête non authentifiée n'a pas de 401 : elle est redirigée vers `/login`. Un client natif qui lit `/media/…`, `/img/…` ou `/book/…` sans jeton reçoit donc `302`, pas `401`. |
 | 404 | identifiant inconnu, image absente, route inconnue (`introuvable`). Une route existante appelée avec la mauvaise méthode donne aussi 404. |
 | 409 | ce nom de compte est déjà pris |
-| 413 | corps trop gros |
-| 429 | trop d'essais de connexion depuis cette adresse (`/api/token`) |
-| 415 | image refusée (photo d'artiste : pas une image, ou illisible) |
+| 411 | `Content-Length obligatoire` : un envoi dans la boîte de réception sans cet en-tête, ou avec un corps en morceaux (`Transfer-Encoding`) |
+| 413 | corps trop gros ; boîte de réception : fichier plus gros que `HUB_INBOX_MAX_FILE`, ou quota du compte dépassé |
+| 429 | trop d'essais de connexion depuis cette adresse (`/api/token`) ; boîte de réception : trop d'envois en cours (`HUB_INBOX_MAX_UPLOADS`) |
+| 415 | image refusée (photo d'artiste : pas une image, ou illisible) ; boîte de réception : extension de fichier refusée |
+| 507 | boîte de réception : pas assez d'espace libre sous `HUB_DATA` (`HUB_INBOX_KEEP_FREE`), ou disque plein pendant l'écriture |
 | 416 | `Range` hors du fichier |
 | 422 | livre illisible |
 | 500 | erreur interne, ou ffprobe / ffmpeg a échoué (le message le dit) |
@@ -79,13 +81,13 @@ Trois façons de se présenter :
 
 ```json
 {"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true, "play": true, "download": true}],
- "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin"}, "settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"}, "busy": false, "streams": 0, "max_streams": 2}
+ "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin", "can_upload": true}, "settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"}, "busy": false, "streams": 0, "max_streams": 2}
 ```
 
 - `libraries[].kind` : `movies` | `shows` | `music` | `books`. `scanned` : horodatage du dernier scan, ou `null`. `exists` : le dossier est présent.
 - `ffmpeg` / `ffprobe` : disponibles sur le serveur (sans eux : lecture directe seulement).
 - `libraries` ne contient que les bibliothèques que **le compte de la requête voit** ; `libraries[].play` et `libraries[].download` disent s'il peut y lire en ligne et y télécharger (`true` pour un administrateur et sur un serveur ouvert). Un client masque ses boutons de lecture ou de téléchargement quand ils valent `false`. `continue` (accueil) ne propose rien des bibliothèques où le compte ne peut pas lire.
-- `auth` : le serveur a des comptes. `user` : **le compte de la requête** (`role` : `admin` ou `user`) ; serveur ouvert : `{"id": "default", "name": <HUB_ADMIN>, "role": "admin"}`. Un client masque les actions d'administration quand `role` n'est pas `admin`.
+- `auth` : le serveur a des comptes. `user` : **le compte de la requête** (`role` : `admin` ou `user`) ; serveur ouvert : `{"id": "default", "name": <HUB_ADMIN>, "role": "admin", "can_upload": false}`. `can_upload` : le compte peut envoyer dans la [boîte de réception](#boîte-de-réception) (`true` pour un administrateur ; `false` sur un serveur ouvert, où l'envoi est refusé). Un client masque les actions d'administration quand `role` n'est pas `admin`.
 - `settings` : les réglages d'affichage **du compte de la requête** (voir `GET /api/me/settings`), pour qu'un client n'ait pas d'appel de plus au démarrage.
 - `busy` : une tâche de fond tourne. `streams` / `max_streams` : conversions en cours / maximum.
 - **Ambigu** : la route demande l'authentification ; `api` n'est donc lisible qu'après avoir obtenu le jeton.
@@ -294,16 +296,48 @@ Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la cass
 | `GET /api/users` | | `{"users": [<compte>]}` (du plus ancien au plus récent). Chaque `<compte>` porte `rights` : `{"<bibliothèque>": {"view": bool, "play": bool, "download": bool}}` pour chaque bibliothèque configurée (tout à `true` tant que rien n'est réglé, et pour un administrateur). Administrateur seulement. |
 | `POST /api/users` | `{"name": "…", "password": "…", "role": "user"}` (`role` facultatif, `user` par défaut) | **201**, `<compte>`. 400 (nom, mot de passe ou rôle invalide), 409 `ce nom est déjà pris`. Administrateur seulement. |
 | `POST /api/user/<id>/rights` | `{"rights": {"films": {"play": true, "download": false}, "livres": {"view": false}}}` | `<compte>` avec ses droits. Seules les bibliothèques citées changent, et un droit omis ne change pas ; ce sont des booléens. Retirer `view` retire aussi `play` et `download` ; rendre `view` ne les rend pas. 400 (bibliothèque ou droit inconnu, pas un booléen, **compte administrateur** : `un administrateur a tous les droits`), 404 `compte inconnu`. Valable tout de suite, sans reconnexion. Administrateur seulement. |
+| `POST /api/user/<id>/upload` | `{"upload": true}` | `<compte>` avec son droit à jour. Donne (`true`) ou retire (`false`) le droit **Envoyer** : déposer des fichiers dans la [boîte de réception](#boîte-de-réception). Un compte neuf ne l'a pas ; les comptes d'avant la migration non plus. Valable à la requête suivante. 400 (`upload` n'est pas un booléen, **compte administrateur** : `un administrateur peut toujours envoyer`), 404 `compte inconnu`. Administrateur seulement. |
 | `POST /api/user/<id>/password` | `{"password": "…"}` ; pour **son propre** compte : `{"password": "…", "current": "…"}` | `{"ok": true}`. L'administrateur donne un nouveau mot de passe à un autre compte, sans connaître l'ancien ; les sessions de ce compte sont fermées. Pour son propre compte (`<id>` = celui de l'appelant), `current` (le mot de passe actuel) est **obligatoire** comme pour `POST /api/me/password` : 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) s'il manque ou s'il est faux, et rien n'est changé ; la réponse porte alors le nouveau jeton (`{"ok": true, "token": "…"}`, plus un `Set-Cookie`). 404 `compte inconnu`. Administrateur seulement. |
-| `POST /api/user/<id>/delete` | `{}` | `{"ok": true}`. Supprime le compte, sa progression, ses playlists et ses entrées « retirer de Reprendre ». 400 `impossible de supprimer le dernier administrateur` ; 404 `compte inconnu`. Administrateur seulement. Un administrateur peut supprimer son propre compte tant qu'il en reste un autre. **Le jeton de média est global** : le compte supprimé perd son jeton de session, mais s'il a gardé des URLs `?token=<media_token>`, elles continuent de donner la lecture des fichiers (`/media/`, `/img/`, `/book/`, `/api/subs/`) tant que le secret du serveur n'a pas changé. |
+| `POST /api/user/<id>/delete` | `{}` | `{"ok": true}`. Supprime le compte, sa progression, ses playlists et ses entrées « retirer de Reprendre ». **Ses fichiers de la [boîte de réception](#boîte-de-réception) restent** (l'administrateur les voit sous l'identifiant du compte) : à lui de les ranger ou de les supprimer. 400 `impossible de supprimer le dernier administrateur` ; 404 `compte inconnu`. Administrateur seulement. Un administrateur peut supprimer son propre compte tant qu'il en reste un autre. **Le jeton de média est global** : le compte supprimé perd son jeton de session, mais s'il a gardé des URLs `?token=<media_token>`, elles continuent de donner la lecture des fichiers (`/media/`, `/img/`, `/book/`, `/api/subs/`) tant que le secret du serveur n'a pas changé. |
 | `GET /api/me/settings` | | `{"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"}}` : les réglages d'affichage du compte de la requête, gardés sur le serveur (ils le suivent d'un appareil à l'autre). `music_view` : `albums` (par défaut) ou `artists`, la façon dont s'ouvre la bibliothèque de musique ; `movie_view` : `sagas` (par défaut : les films d'une saga sur une seule carte, c'est `sagas=1` de `GET /api/library/<id>`) ou `films` (chaque film sur sa carte) ; `home_latest` et `home_unseen` : `show` (par défaut) ou `hide`, le rayon « Nouveautés » et les rayons « Pas encore vu » (un par bibliothèque vidéo) de la page d'accueil (l'API de l'accueil rend toujours les listes : c'est l'interface qui masque) ; `home_unseen_count` : `"6"`, `"12"` (par défaut), `"18"` ou `"24"`, le nombre de cartes de chaque rayon « Pas encore vu » (le serveur en rend toujours 24 au plus ; c'est l'interface qui coupe) |
 | `POST /api/me/settings` | `{"music_view": "artists"}` (un ou plusieurs réglages) | `{"settings": {…}}` : tous les réglages. 400 pour un réglage ou une valeur inconnus, sans rien changer. Supprimer un compte supprime ses réglages |
 | `POST /api/me/signout-others` | `{"current": "…"}` | `{"ok": true, "token": "<nouveau jeton de session>"}`, avec un `Set-Cookie` qui renouvelle le cookie : tous les **autres** jetons du compte (autres appareils, autres navigateurs) répondent désormais 401, celui de l'appelant est remplacé par le nouveau. Le mot de passe ne change pas ; le jeton de média, lié à la même version du compte, est renouvelé (le client le redemande par `POST /api/token`). Tout compte. 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) s'il manque ou s'il est faux : sans lui, un jeton volé suffirait à mettre dehors son propriétaire. 400 `le serveur est ouvert…` sans compte. |
 | `POST /api/me/password` | `{"current": "…", "new": "…"}` | `{"ok": true, "token": "<nouveau jeton de session>"}`, avec un `Set-Cookie` qui renouvelle le cookie du navigateur. Tout compte. 400 `mot de passe actuel incorrect` (réponse lente, 0,4 s) ou mot de passe neuf invalide. |
 
-- `<compte>` : `{"id", "name", "role", "created"}` (`created` : horodatage Unix). Le haché du mot de passe ne sort jamais. L'`id` est opaque ; celui du premier compte est `default`.
+- `<compte>` : `{"id", "name", "role", "can_upload", "created"}` (`created` : horodatage Unix ; `can_upload` : le droit d'envoyer dans la boîte de réception, toujours `true` pour un administrateur). Le haché du mot de passe ne sort jamais. L'`id` est opaque ; celui du premier compte est `default`.
 - **Changer un mot de passe ferme toutes les sessions du compte** (le jeton est lié à une version du mot de passe) : un jeton `Bearer` ou un cookie détenu par un autre appareil répond alors 401. `POST /api/me/password` (et `POST /api/user/<son id>/password`, avec `current`) renvoie le nouveau jeton, qu'un client natif doit garder ; le jeton de média ne change pas.
 - Pas de changement de rôle par l'API pour l'instant.
+
+## Boîte de réception
+
+Des comptes qui ont le droit **Envoyer** (`can_upload`, voir `POST /api/user/<id>/upload`) déposent des fichiers (films, séries, musique, livres, sous-titres, archives) sur le serveur. **Aucun n'entre dans une bibliothèque** : ils sont rangés dans `HUB_DATA/inbox/<compte>/` et l'administrateur les range lui-même. Un fichier déposé n'est jamais analysé ni indexé. Un client natif n'a pas de jeton de média pour ces routes : seul le jeton de session les ouvre.
+
+| Route | Qui | Réponse |
+| --- | --- | --- |
+| `POST /api/inbox?name=<nom du fichier>` | un compte qui a le droit d'envoyer (l'administrateur toujours) | **201** `{"name": "Film (2).mkv", "size": 1048576, "account": "<id>"}` : `name` est le nom retenu. Le corps est **le fichier lui-même, en octets bruts** (pas de JSON, pas de `multipart`), `Content-Length` **obligatoire** |
+| `GET /api/inbox` | administrateur | `{"files": [{"account", "user", "name", "size", "date"}]}` : tous les envois, du plus récent au plus ancien ; `user` : le nom du compte (son identifiant si le compte a été supprimé), `date` : horodatage Unix de la fin de l'envoi |
+| `GET /api/inbox?mine=1` | un compte qui a le droit d'envoyer | `{"files": […], "used": 52428800, "quota": 21474836480, "max_file": 8589934592}` : ses envois seulement, l'espace qu'ils occupent et les limites (octets) |
+| `GET /api/inbox/<compte>/<nom>` | administrateur | le fichier en pièce jointe (`Content-Disposition: attachment`, `application/octet-stream`, `Range` accepté) |
+| `DELETE /api/inbox/<compte>/<nom>` | administrateur ; un compte qui a le droit, pour ses propres fichiers | `{"ok": true}`. 403 `ce fichier n'est pas à toi` pour le fichier d'un autre (qu'il existe ou non) |
+
+**Envoyer.** Exemple : `curl -X POST -H "Authorization: Bearer <jeton>" --data-binary @Film.mkv "https://hub/api/inbox?name=Film.mkv"`. Le serveur contrôle tout **avant de lire le corps** et coupe alors la connexion (le client n'a pas à finir d'envoyer) ; dans l'ordre :
+
+| Code | Cas |
+| --- | --- |
+| 401 | pas connecté |
+| 403 | serveur ouvert, sans compte (`pas d'envoi sans compte…`) ; ou compte sans le droit (`tu n'as pas le droit d'envoyer des fichiers`) |
+| 411 | `Content-Length` absent, ou corps en morceaux (`Transfer-Encoding`) |
+| 400 | `Content-Length` illisible (autre chose que des chiffres : `+10`, `1_0`, `-1`…), répété deux fois, ou nul (`fichier vide`) ; nom absent, vide ou illisible |
+| 415 | extension refusée (voir ci-dessous) |
+| 413 | fichier plus gros que `HUB_INBOX_MAX_FILE` (8 Go par défaut), ou qui dépasserait le quota du compte, `HUB_INBOX_QUOTA` (20 Go) : le quota compte les fichiers déjà envoyés et les envois en cours |
+| 507 | l'espace libre sous `HUB_DATA` tomberait sous `HUB_INBOX_KEEP_FREE` (10 Go) |
+| 429 | déjà `HUB_INBOX_MAX_UPLOADS` envois en cours (2) : c'est la seule réponse qui passe en réessayant plus tard |
+
+Puis le corps est lu par morceaux de 1 Mo dans `<nom>.part`, renommé quand la longueur reçue vaut `Content-Length`. Une coupure, un délai de lecture dépassé (celui de la connexion, 120 s), un corps plus court que `Content-Length` (400 `envoi interrompu…`) ou un disque plein (507) effacent le `.part` ; la connexion est alors fermée. Les `.part` oubliés (arrêt brutal du serveur) sont supprimés après 24 h, au démarrage puis chaque jour. Il n'y a pas de reprise d'un envoi interrompu.
+
+**Le nom** (`name`, décodé de l'URL) est nettoyé : seul le dernier élément du chemin est gardé (`/` et `\` séparent ; `../../x.mkv` donne `x.mkv`), les caractères de contrôle et `<>:"|?*` deviennent `_`, aucun point ni espace au début ou à la fin, un nom réservé de Windows (`CON`, `NUL`, `COM1`…) est précédé de `_`, au plus 200 octets en UTF-8 (l'extension est gardée). Un fichier n'en écrase jamais un autre, un envoi en cours compris : `Film.mkv` devient `Film (2).mkv`, puis `Film (3).mkv`. Extensions acceptées (la casse ne compte pas, seule la dernière compte) : `.mkv .mp4 .m4v .avi .mov .wmv .webm .mpg .mpeg .m2ts .flv .ogv` ; `.flac .mp3 .m4a .aac .ogg .opus .wav .wma .ape .wv` ; `.epub .cbz .cbr .cb7 .pdf .mobi .azw3 .fb2` ; `.srt .ass .ssa .vtt .sub .idx .sup` ; `.zip`. Tout le reste (exécutables, scripts, pages web, images) : 415.
+
+**Lire et supprimer.** `<compte>` est l'identifiant (`account`), `<nom>` le nom tel que la liste le donne, encodé dans l'URL. Un chemin qui sort du dossier du compte (`..`, séparateur, nom caché, `.part`, lien symbolique) répond 404 `fichier introuvable`. Le téléchargement et la liste complète sont réservés à l'administrateur (403 `réservé à l'administrateur`).
 
 ## Sagas composées à la main
 

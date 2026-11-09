@@ -13,19 +13,27 @@ import sqlite3
 import sys
 import threading
 import time
+from functools import partial
 from pathlib import Path
 
 ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "meta", "added", "count"}      # ce que update_item_meta peut changer
 ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
 
-def _add_play(conn):
-    """Version 4 : `rights.play`. Une table `rights` neuve (base de la version 1 ou 2) l'a déjà, celle de la version 3 non ; « lire » vaut 1 pour les lignes d'avant, qui n'avaient pas ce droit à retirer."""
-    if "play" not in [r["name"] for r in conn.execute("PRAGMA table_info(rights)")]:
-        conn.execute("ALTER TABLE rights ADD COLUMN play INTEGER NOT NULL DEFAULT 1")
+
+def _add_column(conn, table, column, definition):
+    """ALTER TABLE ... ADD COLUMN, sauf si la colonne y est déjà : une table neuve (SCHEMA) l'a d'emblée, celle d'une base plus ancienne non. Un identifiant de table ou de colonne ne se lie pas comme paramètre : ils viennent du code ci-dessous, jamais d'une donnée, et ValueError si l'un n'est pas un identifiant."""
+    if not (table.isidentifier() and column.isidentifier()):
+        raise ValueError(f"table ou colonne invalide : {table!r}, {column!r}")
+    if column not in [r["name"] for r in conn.execute("SELECT name FROM pragma_table_info(?)", (table,))]:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
-MIGRATIONS = {4: _add_play}      # {version: fonction(connexion)} : ce qui fait passer la base à `version` depuis la précédente. CREATE TABLE IF NOT EXISTS (SCHEMA) ajoute des tables, pas une colonne : toute autre évolution s'écrit ici, ex. `3: lambda conn: conn.execute("ALTER TABLE items ADD COLUMN x TEXT")`
-SCHEMA_VERSION = 4          # 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+# {version: fonction(connexion)} : ce qui fait passer la base à `version` depuis la précédente. CREATE TABLE IF NOT EXISTS (SCHEMA) ajoute des tables, pas une colonne : toute autre évolution s'écrit ici, ex. `3: lambda conn: conn.execute("ALTER TABLE items ADD COLUMN x TEXT")`
+# 4 : « lire » (`rights.play`) vaut 1 pour les lignes d'avant, qui n'avaient pas ce droit à retirer. 5 : le droit « Envoyer » (`users.can_upload`) vaut 0 pour les comptes d'avant ; l'administrateur envoie toujours, quelle que soit la colonne.
+# (Une virgule doit précéder chaque numéro : .github/scripts/check_version.py lit ces clés dans le texte.)
+MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition="INTEGER NOT NULL DEFAULT 1"),
+              5: partial(_add_column, table="users", column="can_upload", definition="INTEGER NOT NULL DEFAULT 0")}
+SCHEMA_VERSION = 5          # 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
@@ -92,7 +100,8 @@ CREATE TABLE IF NOT EXISTS users(
     pass_hash     TEXT NOT NULL,            -- voir accounts.py (scrypt ou pbkdf2, un sel par compte)
     role          TEXT NOT NULL DEFAULT 'user',   -- admin | user
     token_version INTEGER NOT NULL DEFAULT 1,     -- change à chaque nouveau mot de passe : les jetons de session de ce compte cessent de valoir
-    created       INTEGER NOT NULL
+    created       INTEGER NOT NULL,
+    can_upload    INTEGER NOT NULL DEFAULT 0      -- le droit « Envoyer » (boîte de réception) ; l'administrateur envoie toujours, sans tenir compte de cette colonne
 );
 CREATE TABLE IF NOT EXISTS rights(
     user_id  TEXT NOT NULL,                 -- users.id

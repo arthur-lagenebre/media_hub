@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import shutil
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -82,6 +83,66 @@ class TestOpening(TempCase):
         self.assertIn(f"la base est restée en version {database.SCHEMA_VERSION - 1}", message)
         self.assertEqual(self.db.kv_get("schema"), database.SCHEMA_VERSION - 1)
         self.assertIsNone(self.db.one("SELECT name FROM sqlite_master WHERE name='essai'"))                    # annulée avec le reste
+
+
+class TestUploadMigration(TempCase):
+    def old_base(self):
+        """Une base en version 4 : une table `users` sans `can_upload`, des comptes, de la progression, des droits."""
+        path = self.root / "v4.db"
+        conn = sqlite3.connect(path)
+        conn.executescript("""
+            CREATE TABLE users(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, pass_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', token_version INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL);
+            CREATE TABLE rights(user_id TEXT NOT NULL, lib TEXT NOT NULL, view INTEGER NOT NULL DEFAULT 1, play INTEGER NOT NULL DEFAULT 1, download INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(user_id, lib));
+            CREATE TABLE progress(profile TEXT NOT NULL, entry_id TEXT NOT NULL, position REAL NOT NULL DEFAULT 0, duration REAL NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL, PRIMARY KEY(profile, entry_id));
+            CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO users VALUES('default', 'boss', 'h1', 'admin', 3, 100), ('abc', 'alice', 'h2', 'user', 1, 200);
+            INSERT INTO rights VALUES('abc', 'films', 1, 0, 0);
+            INSERT INTO progress VALUES('abc', 'e1', 12.5, 100, 0, 300);
+            INSERT INTO kv VALUES('schema', '4'), ('secret', '"s"');""")
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_a_version_4_base_gets_the_column_and_keeps_every_account_and_what_they_watched(self):
+        db = Database(self.old_base())
+        self.assertEqual(db.kv_get("schema"), 5)
+        self.assertEqual([tuple(r) for r in db.query("SELECT id, name, pass_hash, role, token_version, created, can_upload FROM users ORDER BY id")],
+                         [("abc", "alice", "h2", "user", 1, 200, 0), ("default", "boss", "h1", "admin", 3, 100, 0)])
+        self.assertEqual([tuple(r) for r in db.query("SELECT profile, entry_id, position FROM progress")], [("abc", "e1", 12.5)])
+        self.assertEqual([tuple(r) for r in db.query("SELECT user_id, lib, play FROM rights")], [("abc", "films", 0)])
+        self.assertEqual(db.kv_get("secret"), "s")
+
+    def test_opening_it_again_changes_nothing(self):
+        path = self.old_base()
+        Database(path).execute("UPDATE users SET can_upload=1 WHERE id='abc'")
+        again = Database(path)
+        self.assertEqual(again.one("SELECT can_upload FROM users WHERE id='abc'")["can_upload"], 1)
+        self.assertEqual(again.kv_get("schema"), 5)
+
+    def test_a_name_that_is_not_an_identifier_is_refused_before_any_sql_runs(self):
+        conn = self.db.connection()
+        for table, column in (("users; DROP TABLE users", "x"), ("users", "x y"), ("", "x"), ("users", "x) --")):
+            with self.assertRaises(ValueError, msg=(table, column)):
+                database._add_column(conn, table, column, "INTEGER")
+        self.assertIsNotNone(self.db.one("SELECT name FROM sqlite_master WHERE name='users'"))
+
+    def test_a_new_base_has_the_column_too_and_the_version_is_5(self):
+        self.assertEqual(database.SCHEMA_VERSION, 5)
+        self.db.execute("INSERT INTO users(id, name, pass_hash, created) VALUES('x', 'x', 'h', 1)")
+        self.assertEqual(self.db.one("SELECT can_upload FROM users WHERE id='x'")["can_upload"], 0)
+
+    def test_a_base_in_version_3_reaches_5_through_the_other_migration_too(self):
+        path = self.old_base()
+        conn = sqlite3.connect(path)
+        conn.execute("UPDATE kv SET value='3' WHERE key='schema'")
+        conn.execute("DROP TABLE rights")
+        conn.execute("CREATE TABLE rights(user_id TEXT NOT NULL, lib TEXT NOT NULL, view INTEGER NOT NULL DEFAULT 1, download INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(user_id, lib))")
+        conn.commit()
+        conn.close()
+        db = Database(path)
+        self.assertEqual(db.kv_get("schema"), 5)
+        self.assertIn("can_upload", [r["name"] for r in db.query("PRAGMA table_info(users)")])
+        self.assertIn("play", [r["name"] for r in db.query("PRAGMA table_info(rights)")])
 
 
 class TestKeyValue(TempCase):

@@ -13,6 +13,10 @@ Tout a une valeur par défaut qui marche sur le NAS (dossiers montés sous /srv)
     HUB_FFMPEG     chemin de ffmpeg / ffprobe                     cherchés dans le PATH, puis HUB_DATA/bin
     HUB_MAX_STREAMS   transcodages simultanés                     2
     HUB_AUTOSCAN_HOURS  rescan périodique (0 = jamais)            0
+    HUB_INBOX_MAX_FILE   taille maximale d'un fichier envoyé, en Mo     8192
+    HUB_INBOX_QUOTA      espace d'envoi par compte, en Mo               20480
+    HUB_INBOX_KEEP_FREE  espace libre à garder sous HUB_DATA, en Mo     10240
+    HUB_INBOX_MAX_UPLOADS  envois simultanés (429 au-delà)              2
     TMDB_KEY       clé TMDB, pour enrichir les séries             (aussi lue dans le .env de HUB_REPO)
 """
 
@@ -59,6 +63,10 @@ class Config:
     max_streams: int = 2
     autoscan_hours: float = 0
     tmdb_key: str = ""
+    inbox_max_file: int = 8192 << 20      # octets (les variables HUB_INBOX_* se donnent en Mo)
+    inbox_quota: int = 20480 << 20
+    inbox_keep_free: int = 10240 << 20
+    inbox_max_uploads: int = 2
     web: Path = Path(__file__).resolve().parent / "web"
 
     def library(self, lib_id):
@@ -132,6 +140,11 @@ def _libraries(env, srv):
     return _declared_libraries(explicit) if explicit else _known_libraries(srv)
 
 
+def _megabytes(env, name, default, least):
+    """Une taille donnée en Mo dans l'environnement, rendue en octets ; jamais moins que `least` Mo."""
+    return max(least, int(env.get(name, default))) << 20
+
+
 def load(env=None):
     env = os.environ if env is None else env
     data = Path(env.get("HUB_DATA", "data")).resolve()
@@ -150,6 +163,10 @@ def load(env=None):
         max_streams=max(1, int(env.get("HUB_MAX_STREAMS", "2"))),
         autoscan_hours=float(env.get("HUB_AUTOSCAN_HOURS", "0")),
         tmdb_key=env.get("TMDB_KEY") or _read_dotenv_key(repo),
+        inbox_max_file=_megabytes(env, "HUB_INBOX_MAX_FILE", 8192, 1),
+        inbox_quota=_megabytes(env, "HUB_INBOX_QUOTA", 20480, 1),
+        inbox_keep_free=_megabytes(env, "HUB_INBOX_KEEP_FREE", 10240, 0),
+        inbox_max_uploads=max(1, int(env.get("HUB_INBOX_MAX_UPLOADS", "2"))),
     )
 
 

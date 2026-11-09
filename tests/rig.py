@@ -11,7 +11,7 @@ import types
 from unittest import mock
 
 from tests import fixtures
-from hub import accounts, config
+from hub import accounts, config, inbox
 
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
@@ -42,12 +42,14 @@ class MiniHub(app.Hub):
         self.db = Database(root / "hub.db")
         data = root / "data"
         data.mkdir(exist_ok=True)
-        self.cfg = types.SimpleNamespace(data=data, libraries=list(libraries), web=root / "web", max_streams=2, ffmpeg="", ffprobe="", tmdb_key="", repo=None, admin="", **cfg)
+        limits = {"inbox_max_file": 100 << 20, "inbox_quota": 1000 << 20, "inbox_keep_free": 0, "inbox_max_uploads": 2}
+        self.cfg = types.SimpleNamespace(data=data, libraries=list(libraries), web=root / "web", max_streams=2, ffmpeg="", ffprobe="", tmdb_key="", repo=None, admin="", **{**limits, **cfg})
         self.cfg.library = lambda ident: next((lib for lib in self.cfg.libraries if lib.id == ident), None)
         self.images, self.jobs = mock.MagicMock(), mock.MagicMock()
         self.jobs.busy.return_value = False
         self.sagas = Sagas(data / "sagas.json")
         self.throttle = accounts.Throttle()
+        self.inbox = inbox.Inbox(self.cfg)
         self.streams = threading.BoundedSemaphore(2)
         self.active = 0
         self.secret = "ab" * 32

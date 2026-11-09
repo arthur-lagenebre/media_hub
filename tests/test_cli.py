@@ -239,6 +239,7 @@ class TestMain(unittest.TestCase):
         server, hub, out = self.serve([], mock.Mock(side_effect=KeyboardInterrupt))
         hub.first_scan.assert_called_once_with()
         hub.autoscan.assert_called_once_with()
+        hub.inbox.keep_clean.assert_called_once_with()
         server.server_close.assert_called_once_with()
         self.assertIn("arrêt.", out)
         self.assertEqual(self.console.unflushed, "")

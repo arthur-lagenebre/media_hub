@@ -52,6 +52,10 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_ADMIN` | nom du compte créé par `HUB_PASSWORD` | `admin` |
 | `HUB_FFMPEG` | dossier (ou fichier) de `ffmpeg` / `ffprobe` | `PATH`, puis `HUB_DATA/bin` |
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
+| `HUB_INBOX_MAX_FILE` | taille maximale d'un fichier envoyé dans la [boîte de réception](#boîte-de-réception-les-envois), en Mo (413 au-delà) | `8192` |
+| `HUB_INBOX_QUOTA` | espace d'envoi par compte, en Mo : ce que ses fichiers déjà envoyés et l'envoi en cours occupent (413 au-delà) | `20480` |
+| `HUB_INBOX_KEEP_FREE` | espace libre à garder sous `HUB_DATA`, en Mo : un envoi qui le ferait passer en dessous est refusé (507) | `10240` |
+| `HUB_INBOX_MAX_UPLOADS` | envois simultanés (un envoi occupe un fil du serveur) ; au-delà : HTTP 429 | `2` |
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne fait perdre aucune progression de lecture, et un `.mkv` illisible n'arrête pas le scan | `0` |
 | `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting), décrit les films qui manquent aux sagas et ceux qui manquent à une personne ; lue aussi dans le `.env` de `media_library` | aucune |
 
@@ -105,7 +109,7 @@ python -m hub user passwd <nom>
 python -m hub user rm <nom>                # supprime aussi sa progression et ses playlists ; jamais le dernier administrateur
 ```
 
-Seul l'administrateur lance les mises à jour (scan, enrichissement, nettoyage), change les photos d'artistes et gère les comptes. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert à tous. Pas d'inscription publique.
+Seul l'administrateur lance les mises à jour (scan, enrichissement, nettoyage), change les photos d'artistes, gère les comptes et lit la boîte de réception. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert à tous. Pas d'inscription publique.
 
 ### Droits par bibliothèque
 
@@ -121,6 +125,18 @@ python -m hub user rights <nom> --set Livres=none --set Films=view    # all : vo
 - **Voir** : la liste, les fiches, les images ; **lire** : la lecture en ligne (vidéo, musique, livres, sous-titres) ; **télécharger** : les fichiers. Lire et télécharger supposent voir, mais ne dépendent pas l'un de l'autre. Sans le droit de lire, la fiche reste visible mais les boutons de lecture disparaissent, la lecture répond 403 et « Reprendre » ne propose plus rien de cette bibliothèque.
 - Sans le droit de télécharger, les boutons *Télécharger* disparaissent et `?download=1` répond 403. **Lire envoie le fichier au navigateur** : le droit de télécharger retire le bouton et la pièce jointe, pas la possibilité technique d'enregistrer ce qu'un lecteur reçoit. Pour qu'on ne puisse que voir la fiche, retire aussi « lire ».
 - Les droits valent à la requête suivante, sans que la personne se reconnecte. Le jeton de média (`?token=`) d'un client natif est celui de son compte : il porte les mêmes droits.
+
+## Boîte de réception (les envois)
+
+Un compte à qui l'administrateur a donné le droit **Envoyer** (`POST /api/user/<id>/upload`, `{"upload": true}` ; l'administrateur l'a toujours, un compte neuf non) dépose des fichiers sur le NAS : films, séries, musique, livres, sous-titres, archives `.zip`. **Rien n'entre dans une bibliothèque** : les fichiers vont dans `HUB_DATA/inbox/<compte>/` (le hub n'écrit pas dans la médiathèque, ses volumes restent en `:ro`) et l'administrateur les range lui-même. Un fichier déposé n'est jamais analysé (ni ffprobe ni scan) ; seul l'administrateur le télécharge, en pièce jointe.
+
+- **Pas d'envoi sans compte** : un serveur ouvert (sans compte) refuse tout envoi (403), il est visible d'Internet par Funnel.
+- **Réception** : `POST /api/inbox?name=<nom>`, le fichier en corps brut, `Content-Length` obligatoire (411 sinon ; pas de corps en morceaux). Le corps est lu par morceaux de 1 Mo dans `<nom>.part`, renommé quand tout est arrivé ; un envoi coupé ou trop court n'en laisse rien. Délai de lecture : celui de la connexion (120 s), un envoi bloqué se coupe.
+- **Limites**, vérifiées avant de lire le corps (la connexion est alors coupée) : taille du fichier (`HUB_INBOX_MAX_FILE`, 413), quota du compte (`HUB_INBOX_QUOTA`, 413), espace libre à garder (`HUB_INBOX_KEEP_FREE`, 507), envois simultanés (`HUB_INBOX_MAX_UPLOADS`, 429).
+- **Noms** : seul le dernier élément du chemin est gardé (`../x.mkv` donne `x.mkv`), les caractères de contrôle et `<>:"|?*` deviennent `_`, pas de point au début, les noms réservés de Windows sont préfixés, longueur bornée (200 octets). Extensions acceptées : vidéo (`.mkv .mp4 .avi…`), audio (`.flac .mp3 .m4a…`), livres (`.epub .cbz .pdf…`), sous-titres (`.srt .ass .vtt…`) et `.zip` ; tout le reste (exécutables, scripts, pages web) : 415. Un fichier n'en écrase jamais un autre : `Film.mkv` devient `Film (2).mkv`.
+- **Compte supprimé** : ses fichiers restent dans la boîte (l'administrateur les voit sous l'identifiant du compte).
+- **Nettoyage** : au démarrage puis chaque jour, les `.part` de plus de 24 h (un envoi abandonné par un arrêt brutal du serveur) sont supprimés.
+- **Lecture** : l'administrateur liste (`GET /api/inbox`), télécharge (`GET /api/inbox/<compte>/<nom>`) et supprime (`DELETE` du même) ; un compte qui a le droit ne voit et ne supprime que les siens (`GET /api/inbox?mine=1`).
 
 ## Interface HTTP
 
@@ -146,6 +162,8 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `POST /api/artist/<bibliothèque>/<id>/links`, `POST /api/artist/<bibliothèque>/<id>/links/remove` | liens de la fiche d'un artiste (administrateur seulement ; 404 s'il n'a pas de fiche) : ajouter `{"url", "label"?}` (adresse http ou https, 2000 caractères au plus, sans doublon ; le libellé par défaut est le nom du site ; aucune requête n'est faite vers elle), retirer `{"url"}` (n'importe lequel, Wikipédia et MusicBrainz compris). Réponse : `{"links": [...]}`, les liens à jour. Les retraits et ajouts sont gardés à part (`artistlinks:<mbid>` dans `kv`) : « Fiches artistes » les respecte. Rajouter une adresse retirée annule le retrait |
 | `GET /api/sagas`, `POST /api/sagas`, `POST /api/sagas/add`, `GET /api/sagas/films` | sagas composées à la main (`sagas.json`, administrateur seulement) : lire, tout remplacer (avec la `version` lue, pour ne pas écraser un autre), ajouter des films, cacher un film des manquants (`POST /api/sagas/ignore`), chercher des films à y mettre ; `GET /img/film/<tmdb>` : l'affiche d'un film manquant |
 | `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete\|rights` | comptes (administrateur seulement) : lister (avec leurs droits par bibliothèque), créer, régler ce qu'un compte voit et télécharge, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
+| `POST /api/user/<id>/upload` | (administrateur) `{"upload": true}` : donne ou retire le droit d'envoyer dans la boîte de réception (400 pour un administrateur, qui envoie toujours) |
+| `POST /api/inbox?name=`, `GET /api/inbox`, `GET /api/inbox/<compte>/<nom>`, `DELETE /api/inbox/<compte>/<nom>` | boîte de réception (voir [Boîte de réception](#boîte-de-réception-les-envois)) : envoyer un fichier en corps brut (`Content-Length` obligatoire), lister (`?mine=1` : seulement les siens), télécharger (administrateur) et supprimer (administrateur, ou son propre fichier) |
 | `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
 | `POST /api/me/signout-others` | chacun déconnecte ses autres appareils, sans changer de mot de passe (`{"current": "…"}`) ; la session de l'appelant est renouvelée |
 | Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session et propre au compte : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage, et ne donne que ce que ce compte peut voir. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte et révoque aussi son jeton de média |
@@ -153,6 +171,8 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 
 ## Limites connues
 
+- **Un envoi très lent occupe son emplacement** : le délai de lecture (120 s) s'applique à chaque lecture, pas à la durée totale. Un compte qui a le droit d'envoyer et n'envoie qu'un peu d'octets toutes les deux minutes garde un des `HUB_INBOX_MAX_UPLOADS` emplacements (et sa part de quota et d'espace) tant qu'il tient la connexion ; les autres envois reçoivent alors 429. Retirer son droit (`POST /api/user/<id>/upload`) ne coupe pas l'envoi en cours.
+- **Pas de reprise d'un envoi interrompu** dans la boîte de réception (pas de `Content-Range`) : un envoi coupé est à refaire entièrement. Les fichiers déposés ne sont pas rangés par le hub : l'administrateur les déplace à la main dans la médiathèque.
 - **Pas d'inscription publique** : seul un administrateur crée les comptes. Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques, les fiches enrichies et les albums manquants sont communs. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert (profil unique `default`).
 - **Homonymes** : `GET /api/person` retrouve une personne par son nom ; deux personnes qui s'appellent pareil sont confondues, un même nom écrit de deux façons (« Chris » / « Christopher ») fait deux personnes. Les étiquettes des films portent l'identifiant TMDB de chaque personne : un nom n'est « enrichissable » (films manquants) que s'il n'en a qu'un ; avec deux, aucun. Un film dont les tags n'ont pas encore ces identifiants n'en a pas, tant que `media_library` ne l'a pas réétiqueté. Après la mise à jour qui les lit, le premier scan **relit une fois tous les films**, même inchangés (les séries ne sont pas relues).
 - Les films ne sont indexés qu'en **`.mkv`** (c'est ce que `media_library` produit : `Mp4_To_Mkv.py`, `Avi_To_Mkv.py`).
@@ -167,7 +187,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1627 tests : 1389 serveur + 238 interface
+python -m unittest discover -s tests          # 1767 tests : 1529 serveur + 238 interface
 ```
 
 `tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 234 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
