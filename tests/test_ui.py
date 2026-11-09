@@ -807,6 +807,19 @@ class TestReaderSpreads(UiCase):
         """Le bouton est-il retiré de la barre ? (on regarde l'attribut : la barre elle-même se masque au bout de quelques secondes)"""
         return self.page.evaluate("name => Array.from(document.querySelectorAll('.reader .rbar .btn')).find(b => b.textContent.indexOf(name) >= 0).hidden", name)
 
+    def test_a_late_answer_of_the_home_page_does_not_take_the_focus_off_the_reader(self):
+        """L'accueil charge ses rayons en arrière-plan : si la réponse arrive quand on est déjà dans la liseuse, le focus ne doit pas aller sur sa barre (les flèches n'y tournent plus les pages)."""
+        home = []
+        self.page.route("**/api/home", lambda route: home.append(route))             # retenue : l'accueil répondra après l'ouverture de la liseuse
+        self.read("Diptyque")
+        self.assertEqual(len(home), 1)
+        for route in home:
+            route.continue_()
+        self.page.wait_for_selector(".home .greeting", state="attached")             # l'accueil a reçu sa réponse (il est masqué : la liseuse est devant)
+        self.assertFalse(self.page.evaluate("!!document.activeElement.closest('.rbar')"))
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+
     def test_the_double_page_shows_the_cover_alone_then_pairs_of_pages(self):
         self.read("Diptyque")
         self.wait_pages([0])

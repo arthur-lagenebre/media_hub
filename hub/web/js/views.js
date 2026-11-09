@@ -269,9 +269,10 @@
         (H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10))).forEach(function (shelf) {
           el.appendChild(libraryShelf('unseen', H.t('Pas encore vu'), shelf.lib, shelf.items));
         });
+        if (!document.body.contains(el) || el.style.display === 'none') return;       // une réponse tardive, la page a été quittée : `H.focus.first()` prendrait le focus de la page courante (la barre de la liseuse, dont les flèches ne tournent plus les pages)
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
-        if (!a || a === document.body || (a.closest && a.closest('#nav')) && el.style.display !== 'none') H.focus.first();
+        if (!a || a === document.body || (a.closest && a.closest('#nav'))) H.focus.first();
       }).catch(function (e) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Le serveur ne répond pas')), h('p', null, e.message), h('button', { class: 'btn f', onclick: load, 'data-autofocus': '1' }, H.t('Réessayer')))); });
     }
     load();
