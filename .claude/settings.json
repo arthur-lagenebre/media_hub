@@ -4,6 +4,16 @@
       "source": { "source": "github", "repo": "anthropics/claude-plugins-official" }
     }
   },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          { "type": "command", "command": "python .claude/hooks/confirm-night.py" }
+        ]
+      }
+    ]
+  },
   "enabledPlugins": {
     "security-guidance@claude-plugins-official": true,
     "claude-security@claude-plugins-official": true,
