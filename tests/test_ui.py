@@ -66,8 +66,9 @@ def give_artist_a_sheet(db):
 PROSE = 70          # la largeur maximale des textes courants (--prose), en rem
 
 
-def max_width_rem(locator):
-    return locator.evaluate("el => parseFloat(getComputedStyle(el).maxWidth) / parseFloat(getComputedStyle(document.documentElement).fontSize)")
+def width_rem(locator):
+    """La largeur réellement occupée par l'élément, en rem (pas son `max-width` : un parent plus étroit la réduit)."""
+    return locator.evaluate("el => el.getBoundingClientRect().width / parseFloat(getComputedStyle(document.documentElement).fontSize)")
 
 
 @unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
@@ -1413,11 +1414,10 @@ class TestSagaEditor(UiCase):
     def test_the_lead_and_the_empty_page_use_the_prose_width(self):
         self.open("#/sagas")
         self.view(".lead").first.wait_for()
-        self.assertEqual(max_width_rem(self.view(".lead").first), PROSE)
-        self.open("#/sagas?g=Inconnue")
-        self.view(".blank").wait_for()
-        self.assertEqual(max_width_rem(self.view(".blank")), PROSE)
-        self.assertEqual(max_width_rem(self.view(".blank p")), PROSE)                   # le texte de la page, pas seulement son conteneur
+        self.assertAlmostEqual(width_rem(self.view(".lead").first), PROSE, delta=0.1)
+        self.open("#/sagas?g=" + urllib.parse.quote("mot " * 120))                      # un nom assez long pour que la phrase remplisse la largeur permise
+        self.view(".blank p").wait_for()
+        self.assertAlmostEqual(width_rem(self.view(".blank p")), PROSE, delta=0.1)      # le texte lui-même, pas seulement son plafond : le conteneur ne doit pas le rétrécir
 
     def test_a_saga_lists_its_films_and_moves_them(self):
         self.open("#/sagas?g=Ma%20saga")
@@ -3717,8 +3717,8 @@ class InboxUiCase(unittest.TestCase):
 
     # --- Envoyer -------------------------------------------------------------
     def test_the_intro_uses_the_prose_width(self):
-        page = self.upload_page()
-        self.assertEqual(max_width_rem(page.locator("#views > .view:visible .intro")), PROSE)
+        page = self.upload_page(width=1920)
+        self.assertAlmostEqual(width_rem(page.locator("#views > .view:visible .intro")), PROSE, delta=0.1)
 
     def test_a_file_goes_through_and_keeps_the_name_the_server_gave_it(self):
         page = self.upload_page()
