@@ -714,8 +714,9 @@ class TestReaderGamebook(UiCase):
 
     @classmethod
     def add_media(cls, root):
-        links = {1: '<p><a href="c3.xhtml">Aller au trois</a></p><p><a href="http://example.org/dehors">Lien dehors</a></p>',
-                 2: '<div style="height:3000px"></div><h2 id="fin">La fin</h2>', 3: '<p><a href="c1.xhtml">Retour au un</a></p><p><a href="c2.xhtml#fin">Vers la fin</a></p>'}
+        links = {1: '<p><a href="c3.xhtml">Aller au trois</a></p><p><a href="http://example.org/dehors">Lien dehors</a></p><p><a href="notes.xhtml">Les notes</a></p>',
+                 2: '<div style="height:3000px"></div><h2 id="fin">La fin</h2>', 3: '<p><a href="c1.xhtml">Retour au un</a></p><p><a href="c2.xhtml#fin">Vers la fin</a></p>'
+                    '<p><a href="#bas">Aller en bas</a></p><div style="height:3000px"></div><p id="bas">En bas</p>'}
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Heros" / "Livre-jeu.epub", "Livre-jeu", "Auteur", chapters=3,
                             body=lambda n: f"<h1>Chapitre {n}</h1>{links[n]}")
 
@@ -739,22 +740,36 @@ class TestReaderGamebook(UiCase):
         self.follow("Aller au trois", "Chapitre 3 / 3")
         self.follow("Retour au un", "Chapitre 1 / 3")
         self.follow("Aller au trois", "Chapitre 3 / 3")
-        self.page.wait_for_timeout(2000)
-        self.assertEqual(self.api("/api/book/" + entry)["position"], 2)             # la progression suit le chapitre atteint par le lien
+        self.until(lambda: self.api("/api/book/" + entry)["position"] == 2)         # la progression suit le chapitre atteint par le lien
         self.page.locator(".reader .rbar button[aria-label=Retour]").click()
         self.shown("#/i/" + self.item("livres", "Heros")["id"])                     # un seul appui : on a quitté le livre
 
-    def test_a_link_to_an_anchor_in_another_chapter_and_an_external_link(self):
+    def test_a_link_to_an_anchor_in_another_chapter_and_the_links_that_lead_nowhere(self):
         entry = self.entries("livres", "Heros")[0]["id"]
         self.open("#/read/" + entry)
         self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
-        self.frame().locator("a", has_text="Lien dehors").click()                  # pas de sortie de l'iframe : toujours le chapitre 1
-        self.page.wait_for_timeout(500)
-        self.assertIn("/epub/c1.xhtml", self.page.evaluate("document.querySelector('.reader iframe').contentWindow.location.href"))
-        self.assertIn("Chapitre 1 / 3", self.chapter())
+        for text in ("Lien dehors", "Les notes"):                                  # un site extérieur, un fichier du livre qui n'est pas un chapitre : on prévient, on ne bouge pas
+            self.frame().locator("a", has_text=text).click()
+            self.page.locator("#toast.on", has_text="Ce lien ne mène pas à un chapitre du livre.").wait_for()
+            self.page.evaluate("document.getElementById('toast').classList.remove('on')")
+            self.assertIn("/epub/c1.xhtml", self.page.evaluate("document.querySelector('.reader iframe').contentWindow.location.href"))
+            self.assertIn("Chapitre 1 / 3", self.chapter())
         self.follow("Aller au trois", "Chapitre 3 / 3")
         self.follow("Vers la fin", "Chapitre 2 / 3")
         self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")                # l'ancre est suivie : le chapitre est défilé jusqu'à « La fin »
+
+    def test_a_link_to_an_anchor_of_the_same_chapter_scrolls_without_leaving_it_or_stacking_history(self):
+        entry = self.entries("livres", "Heros")[0]["id"]
+        self.open("#/i/" + self.item("livres", "Heros")["id"])
+        self.page.evaluate("location.hash = '#/read/" + entry + "'")
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.frame().locator("a", has_text="Aller en bas").click()
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")
+        self.assertIn("Chapitre 3", self.chapter())                                # le chapitre n'a pas changé
+        self.page.locator(".reader .rbar button[aria-label=Retour]").click()
+        self.shown("#/i/" + self.item("livres", "Heros")["id"])                    # l'ancre n'a rien ajouté à l'historique
+
 
 def solid_png(width, height):
     """Un vrai PNG uni de cette taille : la liseuse décide du couplage des pages d'après leurs dimensions."""
