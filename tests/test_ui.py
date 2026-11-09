@@ -1327,6 +1327,7 @@ class TestSagaEditor(UiCase):
         self.open("#/sagas?g=Inconnue")
         self.view(".blank").wait_for()
         self.assertEqual(max_width_rem(self.view(".blank")), PROSE)
+        self.assertEqual(max_width_rem(self.view(".blank p")), PROSE)                   # le texte de la page, pas seulement son conteneur
 
     def test_a_saga_lists_its_films_and_moves_them(self):
         self.open("#/sagas?g=Ma%20saga")
