@@ -133,6 +133,13 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .tools .related .chip { display: inline-block; margin: 0; text-decoration: none; }      /* un lien en pastille */
 .tools .related + .count { margin-left: 0; }
 .tools .count { margin-left: auto; color: var(--mute); font-size: 0.9rem; }
+/* Le choix Tous · À voir · En cours · Terminés : un seul actif, au fond plein ET à la coche (la coche a toujours sa place, la largeur ne bouge pas) ; les autres ont un simple contour */
+.seg { display: flex; flex-wrap: wrap; }
+.seg .chip { display: inline-flex; align-items: center; min-height: 2.5rem; margin: 0 0.4rem 0 0; box-shadow: inset 0 0 0 1px var(--line); }
+.seg .chip.on { box-shadow: none; }
+.seg .chip .mark { visibility: hidden; margin-right: 0.35em; }
+.seg .chip.on .mark { visibility: visible; }
+@media (max-width: 640px) { .tools > .seg { width: 100%; margin-right: 0; } .seg .chip { flex: 1 1 auto; justify-content: center; padding-left: 0.4rem; padding-right: 0.4rem; } }
 /* Boutons de filtre « Genre : Tous » : largeur fixe (elle ne dépend pas de la valeur choisie), nom en gras, valeur en poids normal, coupée par « … » si elle est trop longue */
 .tools .btn.flt { width: 11.5rem; justify-content: flex-start; }
 .tools .btn.flt.wide { width: 14.5rem; }

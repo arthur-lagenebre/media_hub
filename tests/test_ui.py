@@ -3015,6 +3015,92 @@ class TestTextSize(UiCase):
                 page.close()
 
 
+class TestLibraryProgressChoice(UiCase):
+    """Tous · À voir · En cours · Terminés : un choix à quatre états au-dessus de la grille ; l'actif se voit par son fond plein et sa coche (un simple contour ne se distingue pas de l'absence de contour)."""
+
+    def setUp(self):
+        super().setUp()
+        film = self.item("films", "Inception")
+        self.addCleanup(self.api, f"/api/item/{film['id']}/seen", {"done": False})
+        self.film = film
+
+    def choice(self, label):
+        return self.view(".seg .chip", has_text=label)
+
+    def active(self):
+        return self.view(".seg .chip.on").evaluate_all("els => els.map(e => e.getAttribute('data-state'))")
+
+    def titles(self):
+        return self.view(".grid .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+
+    def open_films(self):
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+
+    def test_the_four_choices_are_in_order_and_all_is_the_one_active_at_first(self):
+        self.open_films()
+        self.assertEqual(self.view(".seg .chip .lbl").all_inner_texts(), ["Tous", "À voir", "En cours", "Terminés"])
+        self.assertEqual(self.view(".seg").get_attribute("role"), "radiogroup")
+        self.assertEqual(self.view(".seg .chip").evaluate_all("els => els.map(e => e.getAttribute('aria-checked'))"), ["true", "false", "false", "false"])
+        self.assertEqual(self.active(), [""])
+
+    def test_the_active_choice_has_a_solid_background_and_a_visible_tick_the_others_have_neither(self):
+        self.open_films()
+        def look(label):
+            return self.choice(label).evaluate("e => [getComputedStyle(e).backgroundColor, getComputedStyle(e.querySelector('.mark')).visibility]")
+        (active_bg, active_tick), (other_bg, other_tick) = look("Tous"), look("À voir")
+        self.assertEqual((active_tick, other_tick), ("visible", "hidden"))
+        self.assertNotEqual(active_bg, other_bg)
+        self.choice("En cours").click()
+        self.until(lambda: look("En cours")[1] == "visible" and look("Tous")[1] == "hidden")
+        self.assertEqual(look("En cours")[0], active_bg)
+
+    def test_each_choice_shows_what_the_server_says_for_its_state(self):
+        self.api("/api/progress", {"entry": self.entries("films", "Inception")[0]["id"], "position": 600, "duration": 8880})
+        self.open_films()
+        for label, state in (("À voir", "todo"), ("En cours", "progress"), ("Terminés", "done"), ("Tous", "")):
+            self.choice(label).click()
+            self.until(lambda state=state: self.active() == [state])
+            wanted = self.api("/api/library/films?sagas=1&limit=240" + (f"&filter={state}" if state else ""))["total"]
+            self.until(lambda wanted=wanted: self.view(".grid .card").count() == wanted)
+        self.choice("En cours").click()
+        self.until(lambda: self.view(".grid .card").count() == 1)
+        self.assertIn(self.film["id"], self.titles())
+        self.choice("À voir").click()
+        self.until(lambda: self.film["id"] not in self.titles() and self.view(".grid .card").count() > 1)
+
+    def test_a_film_seen_to_the_end_moves_to_done(self):
+        self.api(f"/api/item/{self.film['id']}/seen", {"done": True})
+        self.open_films()
+        self.choice("Terminés").click()
+        self.until(lambda: self.titles() == [self.film["id"]])
+
+    def test_an_empty_choice_says_so_and_removing_the_filters_goes_back_to_all(self):
+        self.open_films()
+        total = self.view(".grid .card").count()
+        self.choice("Terminés").click()
+        self.view("button", has_text="Retirer les filtres").wait_for()                       # rien de terminé : la liste est vide
+        self.view("button", has_text="Retirer les filtres").click()
+        self.until(lambda: self.active() == [""] and self.view(".grid .card").count() == total, tries=100)
+
+    def test_the_choice_works_from_the_arrow_keys_and_enter_and_the_focus_can_be_seen(self):
+        self.open_films()
+        self.choice("Tous").focus()
+        self.press("ArrowRight")
+        self.assertEqual(self.focused(), "✓À voir")
+        outline = self.choice("À voir").evaluate("e => getComputedStyle(e).outlineStyle + ' ' + getComputedStyle(e).outlineWidth")
+        self.assertTrue(outline.startswith("solid") and outline != "solid 0px", outline)         # le focus se voit de loin
+        self.press("Enter", wait=400)
+        self.until(lambda: self.active() == ["todo"])
+        self.press("ArrowRight", "Enter", wait=400)
+        self.until(lambda: self.active() == ["progress"])
+
+    def test_the_music_library_has_no_such_choice(self):
+        self.open("#/l/musique")
+        self.view(".tools").first.wait_for()
+        self.assertEqual(self.view(".seg").count(), 0)
+
+
 class TestHome(UiCase):
     """L'accueil : un bonjour, ce qu'on reprend, puis les derniers ajouts de toutes les bibliothèques, mêlés."""
 
@@ -3098,7 +3184,7 @@ class TestHomeUnseen(UiCase):
         day = mock.patch("hub.server.app.today", return_value="2026-11-04")          # le serveur tourne dans ce processus : l'ordre du jour ne change pas pendant le test
         day.start()
         self.addCleanup(day.stop)
-        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"}))
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"}))
 
     def libraries(self):
         return self.api("/api/home")["libraries"]
@@ -3185,6 +3271,23 @@ class TestHomeUnseen(UiCase):
         self.page.locator(".menu .opt .lbl", has_text="6 cartes").click()
         self.until(lambda: self.api("/api/me/settings")["settings"]["home_unseen_count"] == "6")
         self.until(lambda: "6 cartes" in line.inner_text())
+
+    def test_the_order_of_the_shelf_is_chosen_in_the_settings_of_the_account_and_the_home_follows(self):
+        self.open("#/settings?tab=preferences")
+        line = self.view(".panel", has_text="Affichage").locator(".line").filter(has=self.page.locator("b", has_text="Pas encore vu : trier par"))
+        self.assertIn("Au hasard", line.inner_text())
+        line.locator("button", has_text="Changer").click()
+        self.assertEqual(self.page.locator(".menu .opt .lbl").all_inner_texts(), ["Au hasard", "Note TMDB", "Date d’ajout"])
+        self.page.locator(".menu .opt .lbl", has_text="Date d’ajout").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["home_unseen_sort"] == "added")
+        self.until(lambda: "Date d’ajout" in line.inner_text())
+        self.open()
+        self.view(".shelf.unseen .card").first.wait_for()
+        latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        self.assertEqual(self.shown(), [i for i in self.offered() if i not in latest][:12])                # l'ordre vient du serveur
+        added = {r["id"]: r["added"] for r in self.run_.hub.db.query("SELECT id, added FROM items WHERE lib='films'")}
+        offered = [added[i] for i in self.offered()]
+        self.assertEqual(offered, sorted(offered, reverse=True))                                          # du plus récemment ajouté au plus ancien
 
 
 class TestHomeNewArtist(UiCase):
@@ -3360,7 +3463,7 @@ class TestSettings(UiCase):
         self.assertEqual(panels.count(), 3)
         self.assertEqual(panels.nth(0).locator(".line .what b").all_inner_texts(), ["Appareil", "Taille du texte", "Langue"])
         self.assertEqual(panels.nth(1).locator(".line .what b").all_inner_texts(), ["Qualité", "Son surround 5.1"])
-        self.assertEqual(panels.nth(2).locator(".line .what b").count(), 5)
+        self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Nouveautés", "Pas encore vu", "Pas encore vu : cartes par rayon", "Pas encore vu : trier par"])
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
