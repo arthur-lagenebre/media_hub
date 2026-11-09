@@ -43,6 +43,16 @@ class TestTags(unittest.TestCase):
         self.assertEqual(video._split_actor("Tom (le grand) (Forrest)  "), ("Tom (le grand)", "Forrest"))
         self.assertEqual(video._split_actor("Tom ()"), ("Tom", ""))
 
+    def test_a_role_that_has_parentheses_of_its_own_is_kept_whole(self):
+        self.assertEqual(video._split_actor("Tom Hanks (Woody (voice))"), ("Tom Hanks", "Woody (voice)"))
+        self.assertEqual(video._split_actor('Dennis Quaid (Charlie Wessler (segment "The Pitch"))'), ("Dennis Quaid", 'Charlie Wessler (segment "The Pitch")'))
+        self.assertEqual(video._split_actor("Tom (le grand) (Woody (voice))  "), ("Tom (le grand)", "Woody (voice)"))
+
+    def test_unbalanced_parentheses_leave_the_whole_text_as_the_name(self):
+        self.assertEqual(video._split_actor("Tom (Woody"), ("Tom (Woody", ""))
+        self.assertEqual(video._split_actor("Tom Woody)"), ("Tom Woody)", ""))
+        self.assertEqual(video._split_actor("Tom (Woody))"), ("Tom (Woody))", ""))
+
     def test_a_tag_is_found_by_level_and_name_and_must_not_be_empty(self):
         tags = [(50, "TITLE", ""), (70, "TITLE", "Saga"), (50, "TITLE", "Film"), (50, "OTHER", "x"), (50, "TITLE", "Autre")]
         self.assertEqual(video._first(tags, 50, "TITLE"), "Film")
@@ -102,6 +112,12 @@ class TestPersonIds(unittest.TestCase):
     def test_the_film_tmdb_tag_is_not_a_person(self):
         info = video._tag_info([(50, "TMDB", "movie/27205"), (50, "DIRECTOR", "Nolan"), (50, "DIRECTOR/TMDB", "person/525")])
         self.assertEqual((info["tmdb"], info["person_ids"]), ("movie/27205", {"Nolan": 525}))
+
+    def test_an_actor_with_a_nested_role_is_filed_under_the_name_alone(self):
+        tags = [(50, "ACTOR", "Tom Hanks (Woody (voice))"), (50, "ACTOR/TMDB", "person/31")]
+        info = video._tag_info(tags)
+        self.assertEqual(info["person_ids"], {"Tom Hanks": 31})
+        self.assertEqual(info["actors"], [{"name": "Tom Hanks", "role": "Woody (voice)"}])
 
     def test_the_same_person_in_two_roles_keeps_her_id(self):
         tags = [(50, "DIRECTOR", "Eastwood"), (50, "DIRECTOR/TMDB", "person/190"), (50, "ACTOR", "Eastwood (Kowalski)"), (50, "ACTOR/TMDB", "person/190")]
@@ -182,6 +198,16 @@ class TestReader(TempCase):
         reader = video.Reader("films", known, version=2)
         self.assertEqual(reader(path, "a.mkv")[2], {"title": "Ancien"})
         self.assertEqual((reader.read, reader.reused), (0, 1))
+
+    def test_a_file_read_before_the_nested_roles_fix_is_read_again_by_the_current_reading(self):
+        """Les fichiers déjà scannés gardaient « Tom Hanks (Woody (voice)) » comme nom : sans changement de version, ils ne seraient corrigés que s'ils étaient réécrits."""
+        path = self.touch("a.mkv", movie_blocks("Titre", actors=["Tom Hanks (Woody (voice))"], person_ids={"Tom Hanks (Woody (voice))": 31}))
+        known = self.known("a.mkv", {"actors": [{"name": "Tom Hanks (Woody (voice))", "role": ""}]})
+        known["a.mkv"]["meta"] = json.dumps({"info": {"actors": [{"name": "Tom Hanks (Woody (voice))", "role": ""}]}, "read": 2})
+        reader = video.Reader("films", known, version=video.MOVIE_READ)
+        info = reader(path, "a.mkv")[2]
+        self.assertEqual((info["actors"], info["person_ids"]), ([{"name": "Tom Hanks", "role": "Woody (voice)"}], {"Tom Hanks": 31}))
+        self.assertEqual((reader.read, reader.reused), (1, 0))
 
     def test_a_reading_newer_than_ours_is_not_taken_either(self):
         path = self.touch("a.mkv", movie_blocks("Titre"))

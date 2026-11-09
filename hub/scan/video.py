@@ -38,9 +38,19 @@ def _number(text):
 
 
 def _split_actor(text):
-    """'Tom Hanks (Forrest)' -> ('Tom Hanks', 'Forrest')."""
-    found = re.match(r"^(.*?)\s*\(([^()]*)\)\s*$", text)
-    return (found.group(1), found.group(2)) if found else (text, "")
+    """'Tom Hanks (Forrest)' -> ('Tom Hanks', 'Forrest'). Le rôle peut avoir ses propres parenthèses : 'Tom Hanks (Woody (voice))' -> ('Tom Hanks', 'Woody (voice)'). Parenthèses déséquilibrées, ou pas de parenthèse finale : le texte entier est le nom, sans rôle."""
+    body = text.rstrip()
+    if not body.endswith(")"):
+        return text, ""
+    depth = 0
+    for i in range(len(body) - 1, -1, -1):          # de la fin vers la « ( » qui équilibre la « ) » finale
+        if body[i] == ")":
+            depth += 1
+        elif body[i] == "(":
+            depth -= 1
+            if depth == 0:
+                return body[:i].rstrip(), body[i + 1:-1]
+    return text, ""
 
 
 def _person_ids(tags):
@@ -108,7 +118,7 @@ class _Counts:
         self.reused, self.read = reused, read
 
 
-MOVIE_READ = 2          # la version de lecture des films : 2 = avec les identifiants des personnes (`person_ids`). Gardée avec chaque entrée (`meta["read"]`)
+MOVIE_READ = 3          # la version de lecture des films : 2 = avec les identifiants des personnes (`person_ids`), 3 = rôles à parenthèses imbriquées découpés comme il faut (« Tom Hanks (Woody (voice)) »). Gardée avec chaque entrée (`meta["read"]`)
 
 
 class Reader:
