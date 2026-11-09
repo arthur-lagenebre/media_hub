@@ -448,17 +448,25 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self.close_connection, sent = True, False
         if self.command in ("POST", "DELETE") and not self.body_taken:      # refus avant toute lecture (401, 404, route qui lève trop tôt) : le corps ne doit pas coller à la requête suivante
-            try:
-                self.discard_body()
-            except OSError:
-                self.close_connection = True
+            self.drop_body()
         if status == 500 or status > 501:
-            split = urlsplit(self.path)             # le jeton ne va pas dans le journal : masqué d'après les clés décodées (`?%74oken=` aussi)
-            pairs = [(k, "***" if k == "token" else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
-            shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
-            print(f"{status} {self.command} {shown} : {message}", file=sys.stderr)
+            self.log_failure(status, message)
         if sent and self.close_connection:
             self.let_the_reply_arrive()
+
+    def drop_body(self):
+        """Jette le corps d'une requête refusée sans l'avoir lue ; la connexion se coupe si le socket n'y arrive pas."""
+        try:
+            self.discard_body()
+        except OSError:
+            self.close_connection = True
+
+    def log_failure(self, status, message):
+        """Une erreur du serveur (500, 502 et plus) au journal ; le jeton n'y va pas : masqué d'après les clés décodées (`?%74oken=` aussi)."""
+        split = urlsplit(self.path)
+        pairs = [(k, "***" if k == "token" else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
+        shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
+        print(f"{status} {self.command} {shown} : {message}", file=sys.stderr)
 
     def inbox_unread(self):
         """Pour un envoi (`POST /api/inbox`) : ce que le client peut encore envoyer du corps annoncé par `Content-Length`, moins ce que la route en a lu. 0 pour toute autre requête, et quand la taille n'est pas annoncée proprement (voir announced_length)."""
