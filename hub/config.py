@@ -2,6 +2,8 @@
 
 Tout a une valeur par défaut qui marche sur le NAS (dossiers montés sous /srv) ; rien n'est obligatoire.
 
+HUB_INBOX ne se règle que dans l'environnement (le yaml qui monte le volume), jamais depuis l'interface : un chemin d'écriture ne se choisit pas depuis un navigateur. Il peut être un volume à part (un dataset dédié), hors de HUB_DATA.
+
     HUB_SRV        racine des bibliothèques                       /srv
     HUB_LIBRARIES  fichier JSON qui décrit les bibliothèques      (sinon : les dossiers connus sous HUB_SRV)
     HUB_DATA       base SQLite et cache d'images                  ./data
@@ -13,7 +15,8 @@ Tout a une valeur par défaut qui marche sur le NAS (dossiers montés sous /srv)
     HUB_FFMPEG     chemin de ffmpeg / ffprobe                     cherchés dans le PATH, puis HUB_DATA/bin
     HUB_MAX_STREAMS   transcodages simultanés                     2
     HUB_AUTOSCAN_HOURS  rescan périodique (0 = jamais)            0
-    HUB_INBOX_KEEP_FREE  espace libre à garder sous HUB_DATA, en Mo     10240
+    HUB_INBOX      dossier de la boîte de réception (envois)      HUB_DATA/inbox
+    HUB_INBOX_KEEP_FREE  espace libre à garder sur le volume de la boîte, en Mo   10240
     HUB_INBOX_MAX_UPLOADS  envois simultanés (429 au-delà)              2
     TMDB_KEY       clé TMDB, pour enrichir les séries             (aussi lue dans le .env de HUB_REPO)
 """
@@ -61,9 +64,14 @@ class Config:
     max_streams: int = 2
     autoscan_hours: float = 0
     tmdb_key: str = ""
-    inbox_keep_free: int = 10240 << 20    # octets (les variables HUB_INBOX_* se donnent en Mo)
+    inbox: Path | None = None            # la boîte de réception ; sans valeur, HUB_DATA/inbox (voir __post_init__)
+    inbox_keep_free: int = 10240 << 20    # octets, à garder libres sur le volume de la boîte (les variables HUB_INBOX_* se donnent en Mo)
     inbox_max_uploads: int = 2
     web: Path = Path(__file__).resolve().parent / "web"
+
+    def __post_init__(self):
+        if self.inbox is None:
+            self.inbox = Path(self.data) / "inbox"
 
     def library(self, lib_id):
         return next((lib for lib in self.libraries if lib.id == lib_id), None)
@@ -159,6 +167,7 @@ def load(env=None):
         max_streams=max(1, int(env.get("HUB_MAX_STREAMS", "2"))),
         autoscan_hours=float(env.get("HUB_AUTOSCAN_HOURS", "0")),
         tmdb_key=env.get("TMDB_KEY") or _read_dotenv_key(repo),
+        inbox=Path(env.get("HUB_INBOX", "").strip() or data / "inbox").resolve(),
         inbox_keep_free=_megabytes(env, "HUB_INBOX_KEEP_FREE", 10240, 0),
         inbox_max_uploads=max(1, int(env.get("HUB_INBOX_MAX_UPLOADS", "2"))),
     )
