@@ -719,6 +719,14 @@ class TestReaderGamebook(UiCase):
                     '<p><a href="#bas">Aller en bas</a></p><div style="height:3000px"></div><p id="bas">En bas</p>'}
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Heros" / "Livre-jeu.epub", "Livre-jeu", "Auteur", chapters=3,
                             body=lambda n: f"<h1>Chapitre {n}</h1>{links[n]}")
+        fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Ancres" / "Ancres.epub", "Ancres", "Auteur", chapters=1,          # une ancre nommée (sans href) couvre tout l'écran : elle n'est pas un lien
+                            body=lambda n: '<a id="nm" style="position:fixed;left:0;top:0;width:100vw;height:100vh"></a><h1>Chapitre 1</h1><div style="height:4000px"></div>')
+
+    def book(self, title):
+        """Le livre, remis au début : les tests se suivent sur le même serveur, et la liseuse reprend où l'on s'était arrêté."""
+        entry = self.entries("livres", title)[0]["id"]
+        self.api("/api/progress", {"entry": entry, "position": 0, "duration": 4})
+        return entry
 
     def frame(self):
         return self.page.frame_locator(".reader iframe")
@@ -732,7 +740,7 @@ class TestReaderGamebook(UiCase):
         self.page.wait_for_function("t => document.querySelector('.reader iframe').contentDocument.body.textContent.indexOf(t) >= 0", arg=label.split(" / ")[0])
 
     def test_internal_links_change_chapter_and_back_leaves_the_book(self):
-        entry = self.entries("livres", "Heros")[0]["id"]
+        entry = self.book("Heros")
         self.open("#/i/" + self.item("livres", "Heros")["id"])
         self.page.evaluate("location.hash = '#/read/" + entry + "'")
         self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
@@ -745,7 +753,7 @@ class TestReaderGamebook(UiCase):
         self.shown("#/i/" + self.item("livres", "Heros")["id"])                     # un seul appui : on a quitté le livre
 
     def test_a_link_to_an_anchor_in_another_chapter_and_the_links_that_lead_nowhere(self):
-        entry = self.entries("livres", "Heros")[0]["id"]
+        entry = self.book("Heros")
         self.open("#/read/" + entry)
         self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
         for text in ("Lien dehors", "Les notes"):                                  # un site extérieur, un fichier du livre qui n'est pas un chapitre : on prévient, on ne bouge pas
@@ -758,8 +766,28 @@ class TestReaderGamebook(UiCase):
         self.follow("Vers la fin", "Chapitre 2 / 3")
         self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")                # l'ancre est suivie : le chapitre est défilé jusqu'à « La fin »
 
+    def test_a_named_anchor_without_href_does_not_swallow_the_click(self):
+        entry = self.book("Ancres")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 5")
+        self.frame().locator("#nm").click(position={"x": 1750, "y": 500})          # le bord droit de l'écran : tourner la page, comme partout ailleurs sur le texte
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 100")
+
+    def test_an_anchor_survives_a_theme_change_made_while_the_chapter_loads(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.page.evaluate("""() => {          // d'un seul tour : le thème change avant que le chapitre 2 soit arrivé
+          var doc = document.querySelector('.reader iframe').contentDocument;
+          Array.from(doc.querySelectorAll('a')).find(function (a) { return a.textContent === 'Vers la fin'; }).click();
+          Array.from(document.querySelectorAll('.reader .btns button')).find(function (b) { return b.textContent.indexOf('Thème') >= 0; }).click();
+        }""")
+        self.page.wait_for_function("l => document.querySelector('.reader .pg').textContent.indexOf(l) === 0", arg="Chapitre 2 / 3")
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")          # l'ancre « La fin » est rejointe quand même
+
     def test_a_link_to_an_anchor_of_the_same_chapter_scrolls_without_leaving_it_or_stacking_history(self):
-        entry = self.entries("livres", "Heros")[0]["id"]
+        entry = self.book("Heros")
         self.open("#/i/" + self.item("livres", "Heros")["id"])
         self.page.evaluate("location.hash = '#/read/" + entry + "'")
         self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")

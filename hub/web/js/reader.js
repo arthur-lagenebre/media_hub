@@ -205,6 +205,7 @@
       for (var n = 0; n < info.chapters.length; n++) if (plain(new URL(info.chapters[n], location.href)) === plain(url)) return n;
       return -1;
     }
+    function here(doc) { return plain(new URL(doc.URL)) === plain(new URL(info.chapters[chap], location.href)); }          // `doc` est le chapitre demandé (et pas celui qu'on quitte)
     function reach(doc, name) {          // l'élément d'ancre `name` du chapitre affiché
       try { name = decodeURIComponent(name); } catch (e) { /* ancre telle quelle */ }
       var target = name && doc.getElementById(name);
@@ -215,7 +216,7 @@
       try { to = new URL(link.getAttribute('href') || link.getAttribute('xlink:href') || '', doc.URL); } catch (e) { return; }
       var n = chapterOf(to);
       if (n < 0) { H.toast(H.t('Ce lien ne mène pas à un chapitre du livre.')); return; }
-      if (n === chap) reach(doc, to.hash.slice(1)); else chapter(n, 0, to.hash.slice(1));
+      if (n === chap && here(doc)) reach(doc, to.hash.slice(1)); else chapter(n, 0, to.hash.slice(1));
     }
     function skipChapter(d) {
       var n = chap + d;
@@ -241,12 +242,16 @@
         doc.addEventListener('keydown', function (e) { onKey(e); }, true);
         doc.addEventListener('click', function (e) {
           var link = e.target.closest && e.target.closest('a');
-          if (link) { e.preventDefault(); followLink(link, doc); return; }
+          if (link && (link.hasAttribute('href') || link.hasAttribute('xlink:href'))) {          // une ancre nommée (`<a id>`) n'est pas un lien : le clic compte comme ailleurs sur le texte
+            e.preventDefault(); followLink(link, doc); return;
+          }
           var r = frame.getBoundingClientRect(), x = e.clientX / r.width; if (x < 0.25) scroll(-1); else if (x > 0.75) scroll(1); else showBar(bar.hidden); });
         win.addEventListener('scroll', progressOf, { passive: true });
       }
-      if (anchor) { reach(doc, anchor); anchor = ''; }
-      else if (wanted > 0) { var max = doc.documentElement.scrollHeight - win.innerHeight; win.scrollTo(0, Math.max(0, max * wanted)); wanted = 0; }
+      if (here(doc)) {          // sinon le chapitre demandé n'est pas encore arrivé (le thème a changé en route) : l'ancre et la reprise l'attendent
+        if (anchor) { reach(doc, anchor); anchor = ''; }
+        else if (wanted > 0) { var max = doc.documentElement.scrollHeight - win.innerHeight; win.scrollTo(0, Math.max(0, max * wanted)); wanted = 0; }
+      }
       progressOf();
     }
     function progressOf() {
