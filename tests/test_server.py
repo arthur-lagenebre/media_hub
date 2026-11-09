@@ -384,6 +384,22 @@ class TestProgress(ServerCase):
         self.api.json(f"/api/item/{dark['id']}/seen", {"done": False})
         self.assertNotIn("seen", self.item_by_title("series", "Dark"))
 
+    def test_a_started_film_is_in_progress_the_three_filters_split_the_library_and_unseen_means_to_watch(self):
+        def titles(**query):
+            return [i["title"] for i in self.items("films", **query)["items"]]
+
+        inception = self.item_by_title("films", "Inception")
+        self.addCleanup(self.api.json, f"/api/item/{inception['id']}/seen", {"done": False})
+        self.api.json("/api/progress", {"entry": self.detail(inception["id"])["entries"][0]["id"], "position": 600, "duration": 8880})
+        self.assertEqual(titles(filter="progress"), ["Inception"])
+        self.assertNotIn("Inception", titles(filter="todo"))
+        self.assertNotIn("Inception", titles(filter="done"))
+        self.assertEqual(titles(filter="unseen"), titles(filter="todo"))                                   # l'ancien nom : les mêmes films, dans le même ordre
+        self.api.json(f"/api/item/{inception['id']}/seen", {"done": True})
+        self.assertEqual((titles(filter="progress"), titles(filter="done")), ([], ["Inception"]))
+        every = titles()
+        self.assertEqual(sorted(titles(filter="todo") + titles(filter="progress") + titles(filter="done")), sorted(every))          # chaque film est dans un seul état
+
     def test_a_series_is_to_watch_then_in_progress_then_done(self):
         def where(title):
             return [state for state in ("todo", "progress", "done") if title in [i["title"] for i in self.items("series", filter=state)["items"]]]

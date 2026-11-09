@@ -363,6 +363,40 @@ class TestRatingOrder(unittest.TestCase):
         self.assertEqual(self.order([unrated, self.film("bas", "y", 6.9, 100)]), ["bas", "vide"])
 
 
+class TestUnseenRowOrder(unittest.TestCase):
+    """L'ordre du rayon « Pas encore vu », choisi par le compte, appliqué avant la coupe."""
+
+    def row(self, ident, title, vote=None, votes=0, added=0, kind="movie"):
+        return item(ident, kind, title=title, added=added, meta={"tmdb_rating": {"tmdb": 1, "vote": vote, "votes": votes, "at": 0}} if vote is not None else {})
+
+    def ids(self, rows, sort, n=24, seen=None, day="2026-11-04"):
+        return [r["id"] for r in app.unseen_row(rows, seen or {}, "p", day, n, sort)]
+
+    def test_rating_goes_from_the_best_to_the_least_then_the_most_voted_and_what_is_not_rated_comes_last_by_title(self):
+        rows = [self.row("sans-b", "b"), self.row("peu", "a", 9.9, app.MIN_VOTES - 1), self.row("moyen", "m", 6.5, 900), self.row("bon-vote", "z", 8.4, 5000),
+                self.row("bon", "y", 8.4, 100), self.row("serie", "s", 7.0, 300, kind="show"), self.row("sans-a", "c")]
+        self.assertEqual(self.ids(rows, "rating"), ["bon-vote", "bon", "serie", "moyen", "peu", "sans-b", "sans-a"])      # « peu » (a) avant « sans-b » (b) avant « sans-a » (c) : le titre, pas l'ordre de la base
+
+    def test_the_cut_comes_after_the_sort_and_the_films_already_touched_do_not_count(self):
+        rows = [self.row(f"f{n}", f"Film {n:02d}", 5 + n / 10, 100) for n in range(10)]
+        self.assertEqual(self.ids(rows, "rating", 3), ["f9", "f8", "f7"])
+        self.assertEqual(self.ids(rows, "rating", 3, seen={"f9": (1, 1)}), ["f8", "f7", "f6"])                 # un film entamé laisse la place au suivant
+
+    def test_added_goes_from_the_newest_to_the_oldest_and_ties_go_by_title(self):
+        rows = [self.row("vieux", "A", added=1), self.row("b", "B", added=5), self.row("a", "A2", added=5), self.row("neuf", "Z", added=9)]
+        self.assertEqual(self.ids(rows, "added"), ["neuf", "a", "b", "vieux"])
+        self.assertEqual(self.ids(rows, "added", 2), ["neuf", "a"])
+
+    def test_random_is_the_default_and_so_is_a_value_nobody_knows(self):
+        rows = [self.row(f"f{n}", f"Film {n}", 5 + n / 10, 100, added=n) for n in range(12)]
+        default = [r["id"] for r in app.unseen_row(rows, {}, "p", "2026-11-04")]
+        self.assertEqual(self.ids(rows, "random"), default)
+        self.assertEqual(self.ids(rows, "titre"), default)
+        self.assertNotEqual(default, self.ids(rows, "rating"))
+        self.assertNotEqual(default, self.ids(rows, "random", day="2026-11-05"))
+        self.assertEqual(sorted(default), sorted(r["id"] for r in rows))
+
+
 class TestPageBounds(unittest.TestCase):
     def test_the_defaults(self):
         self.assertEqual(app.page_bounds({}), (0, 240))
