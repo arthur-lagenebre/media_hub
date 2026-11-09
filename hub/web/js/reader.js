@@ -192,11 +192,30 @@
       tool(H.t('Chapitre précédent'), 'prev', function () { skipChapter(-1); });
       tool(H.t('Chapitre suivant'), 'next', function () { skipChapter(1); });
     }
-    var chap = 0, wanted = 0;
-    function chapter(n, fraction) {
-      chap = n; wanted = fraction || 0; pos = n + wanted;
-      frame.src = info.chapters[n];
+    var chap = 0, wanted = 0, anchor = '';
+    function chapter(n, fraction, hash) {          // `fraction` : où reprendre dans le chapitre ; `hash` : l'ancre à rejoindre (lien du livre)
+      chap = n; wanted = fraction || 0; anchor = hash || ''; pos = n + wanted;
+      var win = frame.contentWindow;
+      if (win) win.location.replace(info.chapters[n]); else frame.src = info.chapters[n];          // `replace` : un chapitre n'ajoute rien à l'historique, Retour quitte le livre
       paint();
+    }
+    function plain(url) { try { return decodeURI(url.pathname); } catch (e) { return url.pathname; } }
+    function chapterOf(url) {
+      if (url.origin !== location.origin) return -1;
+      for (var n = 0; n < info.chapters.length; n++) if (plain(new URL(info.chapters[n], location.href)) === plain(url)) return n;
+      return -1;
+    }
+    function reach(doc, name) {          // l'élément d'ancre `name` du chapitre affiché
+      try { name = decodeURIComponent(name); } catch (e) { /* ancre telle quelle */ }
+      var target = name && doc.getElementById(name);
+      if (target) target.scrollIntoView();
+    }
+    function followLink(link, doc) {          // un lien du livre se suit dans la liseuse ; ni un site extérieur ni un fichier du livre ne fait quitter la page
+      var to;
+      try { to = new URL(link.getAttribute('href') || link.getAttribute('xlink:href') || '', doc.URL); } catch (e) { return; }
+      var n = chapterOf(to);
+      if (n < 0) { H.toast(H.t('Ce lien ne mène pas à un chapitre du livre.')); return; }
+      if (n === chap) reach(doc, to.hash.slice(1)); else chapter(n, 0, to.hash.slice(1));
     }
     function skipChapter(d) {
       var n = chap + d;
@@ -220,10 +239,14 @@
       if (!doc.hubBound) {
         doc.hubBound = true;
         doc.addEventListener('keydown', function (e) { onKey(e); }, true);
-        doc.addEventListener('click', function (e) { var r = frame.getBoundingClientRect(), x = e.clientX / r.width; if (x < 0.25) scroll(-1); else if (x > 0.75) scroll(1); else showBar(bar.hidden); });
+        doc.addEventListener('click', function (e) {
+          var link = e.target.closest && e.target.closest('a');
+          if (link) { e.preventDefault(); followLink(link, doc); return; }
+          var r = frame.getBoundingClientRect(), x = e.clientX / r.width; if (x < 0.25) scroll(-1); else if (x > 0.75) scroll(1); else showBar(bar.hidden); });
         win.addEventListener('scroll', progressOf, { passive: true });
       }
-      if (wanted > 0) { var max = doc.documentElement.scrollHeight - win.innerHeight; win.scrollTo(0, Math.max(0, max * wanted)); wanted = 0; }
+      if (anchor) { reach(doc, anchor); anchor = ''; }
+      else if (wanted > 0) { var max = doc.documentElement.scrollHeight - win.innerHeight; win.scrollTo(0, Math.max(0, max * wanted)); wanted = 0; }
       progressOf();
     }
     function progressOf() {
