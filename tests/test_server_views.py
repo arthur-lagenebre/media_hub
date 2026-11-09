@@ -271,39 +271,34 @@ class TestTaggedAndCollapsed(unittest.TestCase):
 
     def test_the_films_of_a_saga_become_one_thumbnail_and_the_others_stay_alone(self):
         rows = [self.film("a", "Alpha", "2002", ["SF", "Action"], added=3), self.film("b", "Alpha", "2001", ["Action", "Épopée"], added=9), self.film("c", "", "1999")]
-        out = app.collapse_sagas(rows, {"a": (1, 0), "b": (1, 0)}, {})
+        out = app.collapse_sagas(rows, {})
         self.assertEqual([r["id"] for r in out if r["type"] != "saga"], ["c"])
         saga, = [r for r in out if r["type"] == "saga"]
         self.assertEqual((saga["id"], saga["lib"], saga["title"], saga["sort"], saga["letter"]), (make_id("lib", "saga:Alpha"), "lib", "Alpha", fold("Alpha"), initial("Alpha")))
         self.assertEqual((saga["year"], saga["years"], saga["added"], saga["count"], saga["grp"], saga["summary"], saga["meta"]), ("2001", ["2001", "2002"], 9, 2, "", "", "{}"))
-        self.assertEqual((json.loads(saga["genres"]), [m["id"] for m in saga["members"]], saga["all_seen"]), (["Action", "Épopée", "SF"], ["b", "a"], True))
+        self.assertEqual((json.loads(saga["genres"]), [m["id"] for m in saga["members"]]), (["Action", "Épopée", "SF"], ["b", "a"]))
         self.assertIn("Épopée", saga["genres"])                      # les accents restent des accents dans le texte JSON
-
-    def test_a_saga_is_not_all_seen_while_a_film_is_not(self):
-        rows = [self.film("a", "Alpha"), self.film("b", "Alpha")]
-        saga, = app.collapse_sagas(rows, {"a": (1, 0)}, {})
-        self.assertFalse(saga["all_seen"])
 
     def test_films_without_year_give_a_saga_without_years(self):
         rows = [self.film("a", "Alpha", year=""), self.film("b", "Alpha", year="")]
-        saga, = app.collapse_sagas(rows, {}, {})
+        saga, = app.collapse_sagas(rows, {})
         self.assertEqual((saga["year"], saga["years"]), ("", []))
         rows = [self.film("a", "Alpha", year=""), self.film("b", "Alpha", year="2005")]
-        saga, = app.collapse_sagas(rows, {}, {})
+        saga, = app.collapse_sagas(rows, {})
         self.assertEqual((saga["year"], saga["years"]), ("2005", ["2005", "2005"]))
 
     def test_a_saga_of_the_file_gathers_films_whatever_their_tag(self):
         rows = [self.film("a", ""), self.film("b", ""), self.film("c", "")]
         custom = {"Ma saga": [(rows[1], 1), (rows[0], 2)]}
-        out = app.collapse_sagas(rows, {}, custom)
+        out = app.collapse_sagas(rows, custom)
         self.assertEqual([r["id"] for r in out if r["type"] != "saga"], ["c"])
         saga, = [r for r in out if r["type"] == "saga"]
         self.assertEqual([m["id"] for m in saga["members"]], ["b", "a"])
 
     def test_a_saga_of_the_file_with_a_single_film_stays_a_film_unless_it_replaces_a_tagged_saga(self):
         rows = [self.film("a", ""), self.film("b", "Alpha"), self.film("c", "Alpha")]
-        self.assertEqual({r["type"] for r in app.collapse_sagas(rows, {}, {"Seule": [(rows[0], 1)]})}, {"movie", "saga"})
-        out = app.collapse_sagas(rows, {}, {"Seule": [(rows[0], 1)]})
+        self.assertEqual({r["type"] for r in app.collapse_sagas(rows, {"Seule": [(rows[0], 1)]})}, {"movie", "saga"})
+        out = app.collapse_sagas(rows, {"Seule": [(rows[0], 1)]})
         self.assertEqual(sorted(r["id"] for r in out if r["type"] == "movie"), ["a"])
 
 

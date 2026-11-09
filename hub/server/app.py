@@ -1254,7 +1254,7 @@ def tagged_groups(rows, custom):
     return {name: sorted(films, key=release_key) for name, films in tagged.items() if len(films) > 1}
 
 
-def collapse_sagas(rows, seen, custom):
+def collapse_sagas(rows, custom):
     """Les films d'une même saga (au moins deux dans la bibliothèque) deviennent une seule vignette ; les autres films restent seuls.
 
     Une vignette de saga est un dictionnaire qui a les mêmes clés qu'une ligne de la base, plus `members` : les films, dans l'ordre de la saga. Elle existe tant qu'un film au moins y est rangé : un film de deux sagas n'a qu'une vignette (voir saga_groups), mais figure dans la page de chacune.
@@ -1271,8 +1271,7 @@ def collapse_sagas(rows, seen, custom):
             genres += [g for g in safe_json(m["genres"], []) if g not in genres]
         out.append({"id": make_id(members[0]["lib"], "saga:" + name), "lib": members[0]["lib"], "type": "saga", "title": name, "sort": fold(name), "letter": initial(name),
                     "year": years[0] if years else "", "years": [years[0], years[-1]] if years else [], "summary": "", "genres": json.dumps(genres, ensure_ascii=False), "grp": "",
-                    "meta": "{}", "added": max(m["added"] for m in members), "count": len(members), "members": members,
-                    "all_seen": all(film_seen(m, seen) for m in members)})
+                    "meta": "{}", "added": max(m["added"] for m in members), "count": len(members), "members": members})
     return out
 
 
@@ -1382,14 +1381,23 @@ def matches_needle(row, needle, in_custom):
             or (row["type"] == "saga" and any(needle in fold(f["title"]) for f in row["members"])))
 
 
-def is_unseen(row, seen):
+WATCH_STATES = ("todo", "progress", "done")      # les filtres de bibliothèque `filter=` ; `unseen`, l'ancien nom de `todo`, est encore accepté pour les favoris
+
+
+def watch_state(row, seen):
+    """Où en est le compte d'une vignette : `todo` (« À voir » : aucun fichier entamé, la règle du rayon « Pas encore vu » de l'accueil), `done` (« Terminé » : tous ses fichiers vus), `progress` (« En cours » : le reste).
+
+    Un film ou une série se jugent sur leurs fichiers, d'après `seen` (voir seen_counts : fichiers vus, fichiers entamés, vus compris) : une série dont 3 épisodes sur 10 sont vus est en cours, vue en entier elle est terminée, et un seul épisode entamé la sort de « à voir ». Une vignette de saga ne compte pas pour elle-même : ses films comptent un par un, terminée si tous le sont, à voir si aucun n'est entamé, en cours sinon."""
     if row["type"] == "saga":
-        return not row["all_seen"]
-    return not film_seen(row, seen)
+        states = {watch_state(film, seen) for film in row["members"]}
+        return "done" if states == {"done"} else "todo" if states <= {"todo"} else "progress"
+    if film_seen(row, seen):
+        return "done"
+    return "progress" if row["id"] in seen else "todo"
 
 
 def library_filters(q, kind, ranks, of, in_custom, seen):
-    """Les conditions que la requête pose à une vignette (saga, section, genre, recherche, non vus) ; elles s'ajoutent."""
+    """Les conditions que la requête pose à une vignette (saga, section, genre, recherche, à voir / en cours / terminés) ; elles s'ajoutent."""
     genre, group = q.get("genre", ""), q.get("group", "")
     section = q.get("section", "") if kind == "books" else ""
     needle = fold(q.get("q", "")).strip()
@@ -1402,8 +1410,9 @@ def library_filters(q, kind, ranks, of, in_custom, seen):
         tests.append(partial(has_genre, genre=genre))
     if needle:
         tests.append(partial(matches_needle, needle=needle, in_custom=in_custom))
-    if q.get("filter") == "unseen":
-        tests.append(partial(is_unseen, seen=seen))
+    state = {"unseen": "todo"}.get(q.get("filter"), q.get("filter"))
+    if state in WATCH_STATES:
+        tests.append(lambda row: watch_state(row, seen) == state)
     return tests
 
 
@@ -1481,7 +1490,7 @@ def api_library(h, m, q):
     group = q.get("group", "")
     sagas = movies and q.get("sagas") == "1" and not group
     if sagas:
-        rows = collapse_sagas(rows, seen, custom)
+        rows = collapse_sagas(rows, custom)
     genres, sections, of = library_counts(rows, lib.kind)
     ranks, absent = group_ranks(hub, rows, custom, group, movies)
     tests = library_filters(q, lib.kind, ranks, of, extra_names, seen)

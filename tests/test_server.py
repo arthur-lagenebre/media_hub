@@ -384,6 +384,22 @@ class TestProgress(ServerCase):
         self.api.json(f"/api/item/{dark['id']}/seen", {"done": False})
         self.assertNotIn("seen", self.item_by_title("series", "Dark"))
 
+    def test_a_series_is_to_watch_then_in_progress_then_done(self):
+        def where(title):
+            return [state for state in ("todo", "progress", "done") if title in [i["title"] for i in self.items("series", filter=state)["items"]]]
+
+        dark = self.detail(self.item_by_title("series", "Dark")["id"])
+        self.assertEqual(where("Dark"), ["todo"])
+        self.api.json("/api/progress", {"entry": dark["entries"][0]["id"], "position": 600, "duration": 3000})        # un épisode entamé
+        self.assertEqual(where("Dark"), ["progress"])
+        self.assertEqual(self.items("series", filter="unseen")["total"], self.items("series")["total"] - 1)           # l'ancien nom vaut « à voir »
+        self.api.json("/api/progress", {"entry": dark["entries"][0]["id"], "position": 2850, "duration": 3000})       # un épisode vu, les autres pas
+        self.assertEqual(where("Dark"), ["progress"])
+        self.api.json(f"/api/item/{dark['id']}/seen", {"done": True})                                                  # tous vus
+        self.assertEqual(where("Dark"), ["done"])
+        self.api.json(f"/api/item/{dark['id']}/seen", {"done": False})
+        self.assertEqual(where("Dark"), ["todo"])
+
     def test_dismissed_item_leaves_continue_until_watched_again(self):
         dark = self.detail(self.item_by_title("series", "Dark")["id"])
         first = dark["entries"][0]
@@ -1140,19 +1156,33 @@ class TestSagas(ServerCase):
         self.assertEqual([i["title"] for i in self.sagas(q="course 7")["items"]], ["Saga Course"])
         self.assertEqual([i["title"] for i in self.sagas(genre="Action")["items"] if i["title"] == "Saga Course"], ["Saga Course"])
 
-    def test_a_saga_is_unseen_until_every_film_is_seen(self):
+    def states_of_course(self):
+        """Dans lequel des trois filtres (à voir, en cours, terminés) la vignette de la saga se trouve."""
+        return [state for state in ("todo", "progress", "done") if "Saga Course" in [i["title"] for i in self.sagas(filter=state)["items"]]]
+
+    def test_a_saga_is_done_only_when_every_film_is_seen_and_to_watch_only_when_none_is_started(self):
         films = self.items("films", group="Saga Course", sort="part", limit=50)["items"]
+        self.assertEqual(self.states_of_course(), ["todo"])
         for film in films[:9]:
             self.api.json(f"/api/item/{film['id']}/seen", {"done": True})
         course = next(i for i in self.sagas()["items"] if i["title"] == "Saga Course")
         self.assertEqual(course["seen"], 9)
-        self.assertIn("Saga Course", [i["title"] for i in self.sagas(filter="unseen")["items"]])
+        self.assertEqual(self.states_of_course(), ["progress"])
+        self.assertIn("Saga Course", [i["title"] for i in self.sagas(filter="progress")["items"]])
         self.api.json(f"/api/item/{films[9]['id']}/seen", {"done": True})
         course = next(i for i in self.sagas()["items"] if i["title"] == "Saga Course")
         self.assertEqual(course["seen"], 10)
-        self.assertNotIn("Saga Course", [i["title"] for i in self.sagas(filter="unseen")["items"]])
+        self.assertEqual(self.states_of_course(), ["done"])
         for film in films:
             self.api.json(f"/api/item/{film['id']}/seen", {"done": False})
+        self.assertEqual(self.states_of_course(), ["todo"])
+
+    def test_a_saga_with_one_film_started_is_in_progress(self):
+        films = self.items("films", group="Saga Course", sort="part", limit=50)["items"]
+        self.assertEqual(self.api.json("/api/progress", {"entry": self.detail(films[3]["id"])["entries"][0]["id"], "position": 600, "duration": 6000})[0], 200)
+        self.assertEqual(self.states_of_course(), ["progress"])
+        self.api.json(f"/api/item/{films[3]['id']}/seen", {"done": False})
+        self.assertEqual(self.states_of_course(), ["todo"])
 
     def test_movie_detail_gives_the_whole_saga(self):
         film = self.item_by_title("films", "Course 4")

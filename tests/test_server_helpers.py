@@ -99,24 +99,62 @@ class TestIsFinished(unittest.TestCase):
                 self.assertFalse(near_the_end and not app.is_finished("video", position, duration), (position, duration))
 
 
-class TestIsUnseen(unittest.TestCase):
-    def row(self, count, **over):
-        return {"id": "f", "type": "movie", "count": count, **over}
+class TestWatchState(unittest.TestCase):
+    """« À voir » : rien d'entamé (comme le rayon « Pas encore vu ») ; « En cours » : entamé, pas tout vu ; « Terminé » : tous les fichiers vus. `seen` : {élément: (fichiers vus, fichiers entamés)}, vus compris."""
 
-    def test_a_film_is_unseen_until_all_its_files_are_seen(self):
-        self.assertTrue(app.is_unseen(self.row(3), {"f": (2, 0)}))
-        self.assertFalse(app.is_unseen(self.row(3), {"f": (3, 0)}))
-        self.assertFalse(app.is_unseen(self.row(3), {"f": (4, 0)}))
-        self.assertTrue(app.is_unseen(self.row(3), {}))
+    def row(self, count, ident="f", **over):
+        return {"id": ident, "type": "movie", "count": count, **over}
+
+    def test_an_item_without_progress_is_to_watch(self):
+        self.assertEqual(app.watch_state(self.row(3), {}), "todo")
+        self.assertEqual(app.watch_state(self.row(3), {"autre": (3, 3)}), "todo")
+
+    def test_an_item_with_something_started_but_not_all_seen_is_in_progress(self):
+        self.assertEqual(app.watch_state(self.row(1), {"f": (0, 1)}), "progress")            # un film entamé
+        self.assertEqual(app.watch_state(self.row(10), {"f": (3, 3)}), "progress")           # une série : 3 épisodes vus sur 10
+        self.assertEqual(app.watch_state(self.row(10), {"f": (3, 5)}), "progress")           # 3 vus, 2 entamés
+        self.assertEqual(app.watch_state(self.row(10), {"f": (0, 1)}), "progress")           # un épisode entamé, aucun vu
+
+    def test_an_item_is_done_when_every_file_is_seen(self):
+        self.assertEqual(app.watch_state(self.row(3), {"f": (3, 3)}), "done")
+        self.assertEqual(app.watch_state(self.row(3), {"f": (4, 4)}), "done")                # plus de fichiers vus que dans la base : fini quand même
+        self.assertEqual(app.watch_state(self.row(1), {"f": (1, 1)}), "done")
 
     def test_an_item_without_count_needs_one_seen_file(self):
-        self.assertTrue(app.is_unseen(self.row(0), {}))
-        self.assertFalse(app.is_unseen(self.row(0), {"f": (1, 0)}))
-        self.assertTrue(app.is_unseen(self.row(0), {"f": (0, 5)}))
+        self.assertEqual(app.watch_state(self.row(0), {}), "todo")
+        self.assertEqual(app.watch_state(self.row(0), {"f": (1, 1)}), "done")
+        self.assertEqual(app.watch_state(self.row(0), {"f": (0, 5)}), "progress")
 
-    def test_a_saga_is_unseen_until_all_its_films_are(self):
-        self.assertTrue(app.is_unseen({"id": "s", "type": "saga", "count": 2, "all_seen": False}, {"s": (9, 0)}))
-        self.assertFalse(app.is_unseen({"id": "s", "type": "saga", "count": 2, "all_seen": True}, {}))
+    def saga(self, *films):
+        return {"id": "s", "type": "saga", "count": len(films), "members": [self.row(1, name) for name, _ in films]}, {name: counts for name, counts in films if counts}
+
+    def test_a_saga_counts_its_films_one_by_one(self):
+        for films, state in (((("a", (1, 1)), ("b", (1, 1))), "done"),                        # tous vus
+                             ((("a", None), ("b", None)), "todo"),                            # aucun entamé
+                             ((("a", (1, 1)), ("b", None)), "progress"),                      # un vu, un pas touché
+                             ((("a", (0, 1)), ("b", None)), "progress"),                      # un entamé
+                             ((("a", (0, 1)), ("b", (1, 1))), "progress")):
+            with self.subTest(films=films):
+                row, seen = self.saga(*films)
+                self.assertEqual(app.watch_state(row, seen), state)
+
+    def test_what_the_saga_card_holds_for_itself_does_not_count(self):
+        row, _ = self.saga(("a", None), ("b", None))
+        self.assertEqual(app.watch_state(row, {"s": (2, 2)}), "todo")                          # le décompte de la vignette elle-même n'existe pas : seuls les films comptent
+
+    def filtered(self, query, rows, seen):
+        tests = app.library_filters(query, "movies", None, {}, {}, seen)
+        return [r["id"] for r in rows if all(test(r) for test in tests)]
+
+    def test_the_library_filters_pick_one_state_and_the_old_unseen_means_to_watch(self):
+        rows = [self.row(2, "a"), self.row(2, "b"), self.row(2, "c")]
+        seen = {"b": (1, 1), "c": (2, 2)}
+        self.assertEqual(self.filtered({"filter": "todo"}, rows, seen), ["a"])
+        self.assertEqual(self.filtered({"filter": "progress"}, rows, seen), ["b"])
+        self.assertEqual(self.filtered({"filter": "done"}, rows, seen), ["c"])
+        self.assertEqual(self.filtered({"filter": "unseen"}, rows, seen), ["a"])                # ancien nom, pour les favoris
+        self.assertEqual(self.filtered({}, rows, seen), ["a", "b", "c"])
+        self.assertEqual(self.filtered({"filter": "autre"}, rows, seen), ["a", "b", "c"])       # une valeur inconnue ne filtre rien, comme avant
 
 
 class TestShownRating(unittest.TestCase):
