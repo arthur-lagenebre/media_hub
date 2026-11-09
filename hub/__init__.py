@@ -1,3 +1,3 @@
 """media_hub : le serveur de la médiathèque (films, séries, animations, musique, livres)."""
 
-__version__ = "0.5.2"
+__version__ = "0.5.4"
