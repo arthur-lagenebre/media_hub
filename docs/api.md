@@ -320,7 +320,7 @@ Des comptes qui ont le droit **Envoyer** (`can_upload`, voir `POST /api/user/<id
 | `GET /api/inbox/<compte>/<nom>` | administrateur | le fichier en pièce jointe (`Content-Disposition: attachment`, `application/octet-stream`, `Range` accepté) |
 | `DELETE /api/inbox/<compte>/<nom>` | administrateur ; un compte qui a le droit, pour ses propres fichiers | `{"ok": true}`. 403 `ce fichier n'est pas à toi` pour le fichier d'un autre (qu'il existe ou non) |
 
-**Envoyer.** Exemple : `curl -X POST -H "Authorization: Bearer <jeton>" --data-binary @Film.mkv "https://hub/api/inbox?name=Film.mkv"`. Le serveur contrôle tout **avant de lire le corps** et coupe alors la connexion (le client n'a pas à finir d'envoyer) ; dans l'ordre :
+**Envoyer.** Exemple : `curl -X POST -H "Authorization: Bearer <jeton>" --data-binary @Film.mkv "https://hub/api/inbox?name=Film.mkv"`. Le serveur contrôle tout **avant de lire le corps** et coupe alors la connexion (le client n'a pas à finir d'envoyer) ; il laisse d'abord arriver la réponse : une fois écrite, il ferme l'écriture, lit et jette ce que le client envoie encore (au plus 64 Mo et 5 secondes, puis coupe quoi qu'il arrive), pour qu'un navigateur en plein envoi lise le 403, 415, 429 ou 507 au lieu d'une erreur réseau. Dans l'ordre :
 
 | Code | Cas |
 | --- | --- |

@@ -8,6 +8,7 @@ import json
 import shutil
 import socket
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from urllib.parse import quote
 
 from tests.rig import MiniHub, Rig, call
 from hub import accounts
+from hub.server import app
 from hub.inbox import Inbox, InboxError
 from tests.test_server import AccountsCase, Client
 
@@ -94,12 +96,12 @@ class TestUpload(InboxCase):
         self.assertEqual(reply.status, 201)
         self.assertEqual(self.stored(self.boss), ["Film.mkv"])
 
-    def test_an_account_without_the_right_gets_a_403_and_nothing_is_read_or_written(self):
+    def test_an_account_without_the_right_gets_a_403_and_nothing_is_stored(self):
         handler, reply = self.send(self.bob, "Film.mkv", b"x" * 50)
         self.assertEqual((reply.status, reply.json()), (403, {"error": "tu n'as pas le droit d'envoyer des fichiers"}))
         self.assertEqual(self.everything(), [])
         self.assertTrue(handler.close_connection)
-        self.assertEqual(handler.rfile.tell(), 0)
+        self.assertEqual(handler.rfile.tell(), 50)              # le corps est jeté après la réponse (voir TestRefusalsReachTheClient), jamais rangé
 
     def test_the_right_is_read_at_each_request(self):
         self.assertEqual(self.send(self.bob, "a.mkv")[1].status, 403)
@@ -120,12 +122,12 @@ class TestUpload(InboxCase):
         self.assertTrue(handler.close_connection)
         self.assertFalse((self.root / "ouvert" / "data" / "inbox").exists())
 
-    def test_the_name_is_required_and_a_bad_one_is_refused_before_the_body_is_read(self):
+    def test_the_name_is_required_and_a_bad_one_is_refused_before_the_body_is_stored(self):
         for name, status in ((None, 400), ("", 400), ("..", 400), ("x.exe", 415), ("x", 415), ("script.sh", 415)):
             handler, reply = self.send(self.alice, name, b"x" * 50)
             self.assertEqual(reply.status, status, name)
             self.assertTrue(handler.close_connection, name)
-            self.assertEqual(handler.rfile.tell(), 0, name)
+            self.assertEqual(handler.rfile.tell(), 50, name)
         self.assertEqual(self.everything(), [])
 
     def test_a_trick_name_always_ends_up_inside_the_folder_of_the_account(self):
@@ -167,7 +169,7 @@ class TestUpload(InboxCase):
         self.assertEqual(reply.status, 507)
         self.assertIn("place", reply.json()["error"])
         self.assertNotIn(str(self.root), reply.json()["error"])
-        self.assertEqual((handler.rfile.tell(), handler.close_connection), (0, True))
+        self.assertEqual((handler.rfile.tell(), handler.close_connection), (3, True))
 
     def test_a_body_shorter_than_the_content_length_is_a_400_and_nothing_stays(self):
         handler, reply = self.send(self.alice, "Film.mkv", b"x" * 40, headers={"Content-Length": "100"})
@@ -207,7 +209,7 @@ class TestUpload(InboxCase):
             handler, reply = self.send(self.alice, "Film.mkv", b"x" * 50)
         self.assertEqual(reply.status, 500)
         self.assertTrue(handler.close_connection)
-        self.assertEqual(handler.rfile.tell(), 0)
+        self.assertEqual(handler.rfile.tell(), 50)
         self.assertEqual(self.everything(), [])
 
     def test_a_content_length_that_is_not_plain_digits_is_a_400_and_cuts_the_connection(self):
@@ -538,6 +540,140 @@ class TestOnARealServer(AccountsCase):
         self.alice.request("POST", "/api/inbox?name=a.mkv", body=b"12345")
         status, mine = self.alice.json("/api/inbox?mine=1")
         self.assertEqual((status, mine["used"], [f["name"] for f in mine["files"]]), (200, 5, ["a.mkv"]))
+
+
+class TestRefusalsReachTheClient(AccountsCase):
+    """Un envoi refusé avant la lecture du corps : le client qui envoie encore reçoit la réponse (403, 415, 507, 401), pas une coupure. Le serveur laisse arriver la réponse, jette le corps encore envoyé dans des bornes, puis coupe. Vrai serveur, vraie socket : sans cela, la fermeture d'une socket qui a des octets non lus fait partir un RST qui efface la réponse."""
+
+    BIG = 20 << 20
+
+    def setUp(self):
+        super().setUp()
+        self.alice = self.new_user("alice")
+        self.assertEqual(self.admin.json(f"/api/user/{self.alice.account['id']}/upload", {"upload": True})[0], 200)
+        self.inbox = self.hub.cfg.data / "inbox"
+
+    def upload(self, name, token=None, length=None, pause=0.0):
+        """Annonce `length` octets pour `name` et envoie le corps depuis un fil, sans attendre la réponse, comme un navigateur ; rend (statut, JSON, le fil émetteur, ses octets envoyés, ses erreurs, la connexion).
+        Le fil envoie `length` octets, ou sans fin si `length` dépasse 1 Go ; `pause` : attente entre deux morceaux (un client lent). Il s'arrête à sa première erreur."""
+        length = self.BIG if length is None else length
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        conn.putrequest("POST", "/api/inbox?name=" + quote(name, safe=""), skip_accept_encoding=True)
+        conn.putheader("Authorization", f"Bearer {token or self.alice.token}")
+        conn.putheader("Content-Length", str(length))
+        conn.endheaders()
+        sent, failed, stop = [0], [], threading.Event()
+
+        def pump():
+            chunk = b"x" * (256 * 1024)
+            try:
+                while not stop.is_set() and sent[0] < length:
+                    piece = chunk[: min(len(chunk), length - sent[0])]
+                    conn.sock.sendall(piece)
+                    sent[0] += len(piece)
+                    if pause:
+                        time.sleep(pause)
+            except OSError as e:
+                failed.append(e)
+
+        sender = threading.Thread(target=pump, daemon=True)
+        self.addCleanup(sender.join, 30)
+        self.addCleanup(stop.set)
+        sender.start()
+        response = conn.getresponse()
+        status, body = response.status, response.read()
+        return status, json.loads(body or "null"), sender, sent, failed, conn
+
+    def assert_answered(self, expected, name, token=None):
+        status, error, sender, sent, failed, conn = self.upload(name, token)
+        self.assertEqual(status, expected, error)
+        sender.join(30)
+        self.assertEqual((failed, sent[0]), ([], self.BIG))              # tout le corps est parti sans erreur : rien n'a été coupé sous les pieds du client
+        conn.sock.settimeout(10)
+        self.assertEqual(conn.sock.recv(1), b"")                           # puis le serveur a fermé
+        self.assertEqual([p.name for p in self.inbox.rglob("*") if p.is_file() and not p.name.startswith("lent.mkv")] if self.inbox.is_dir() else [], [])        # (le .part d'un envoi lent en cours, dans le test du 429, n'est pas le sujet)
+        return error
+
+    def test_a_refused_extension_answers_415_to_a_client_still_sending_20_mb(self):
+        self.assertIn("error", self.assert_answered(415, "malin.exe"))
+
+    def test_a_missing_right_answers_403_to_a_client_still_sending_20_mb(self):
+        bob = self.new_user("bob")
+        self.assert_answered(403, "a.mkv", token=bob.token)
+
+    def test_a_lack_of_space_answers_507_to_a_client_still_sending_20_mb(self):
+        self.hub.inbox.keep_free = 10**30
+        self.assertIn("place", self.assert_answered(507, "a.mkv")["error"])
+
+    def test_a_lost_session_answers_401_to_a_client_still_sending_20_mb(self):
+        self.assert_answered(401, "a.mkv", token="pas-un-jeton")
+
+    def test_too_many_uploads_answers_429_to_a_client_still_sending_20_mb(self):
+        self.hub.inbox.max_uploads = 1
+        slow = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(slow.close)
+        slow.putrequest("POST", "/api/inbox?name=lent.mkv", skip_accept_encoding=True)
+        for key, value in (("Authorization", f"Bearer {self.alice.token}"), ("Content-Length", "1000000")):
+            slow.putheader(key, value)
+        slow.endheaders()
+        slow.send(b"x" * 1000)                                                                     # un envoi en cours : l'unique place est prise
+        deadline = time.time() + 10
+        while self.hub.inbox._active == 0 and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(self.hub.inbox._active, 1)
+        self.assert_answered(429, "a.mkv")
+        self.assertEqual(self.hub.inbox._active, 1)                                                # le refus n'a pas pris, ni laissé, de place
+
+    def test_a_client_that_never_stops_sending_is_cut_at_the_byte_limit(self):
+        with mock.patch.object(app, "INBOX_DRAIN_BYTES", 1 << 20):
+            status, _, sender, sent, failed, conn = self.upload("a.exe", length=10 << 30)         # 10 Go annoncés, envoyés sans fin
+            self.assertEqual(status, 415)                                                          # la réponse est arrivée quand même
+            sender.join(30)
+        self.assertFalse(sender.is_alive())
+        self.assertEqual(len(failed), 1)                                                           # coupé : l'émetteur a fini sur une erreur, pas à la fin du corps
+        self.assertLess(sent[0], 1 << 30)
+
+    def test_a_client_that_trickles_is_cut_at_the_time_limit(self):
+        started = time.monotonic()
+        with mock.patch.object(app, "INBOX_DRAIN_SECONDS", 0.5):
+            status, _, sender, sent, failed, conn = self.upload("a.exe", length=10 << 30, pause=0.05)
+            self.assertEqual(status, 415)
+            sender.join(30)
+        self.assertFalse(sender.is_alive())
+        self.assertEqual(len(failed), 1)
+        self.assertLess(time.monotonic() - started, 10)                                            # pas un fil retenu bien au-delà de la borne
+
+    def test_the_server_serves_the_next_client_while_a_refused_upload_drains(self):
+        status, _, sender, sent, failed, conn = self.upload("a.exe", length=10 << 30, pause=0.05)
+        self.assertEqual(status, 415)
+        self.assertEqual(self.alice.json("/api/state")[0], 200)                                     # un fil par connexion : l'autre n'attend pas
+
+    def test_a_valid_upload_is_not_touched_and_keeps_its_connection(self):
+        status, _, sender, sent, failed, conn = self.upload("ok.mkv")
+        self.assertEqual(status, 201)
+        sender.join(30)
+        self.assertEqual((failed, sent[0]), ([], self.BIG))
+        self.assertEqual((self.inbox / self.alice.account["id"] / "ok.mkv").stat().st_size, self.BIG)
+        conn.request("GET", "/api/state", headers={"Authorization": f"Bearer {self.alice.token}"})
+        response = conn.getresponse()
+        response.read()
+        self.assertEqual(response.status, 200)                                                      # la connexion a servi une seconde requête
+
+    def test_another_route_that_refuses_a_big_body_is_cut_at_once(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        conn.putrequest("POST", "/api/me/password", skip_accept_encoding=True)
+        for key, value in (("Authorization", f"Bearer {self.alice.token}"), ("Content-Length", str(2 << 20))):
+            conn.putheader(key, value)
+        conn.endheaders()                                                                           # 2 Mo annoncés, rien envoyé : on ne doit pas attendre le corps
+        started = time.monotonic()
+        response = conn.getresponse()
+        self.assertEqual(response.status, 413)
+        response.read()
+        conn.sock.settimeout(10)
+        self.assertEqual(conn.sock.recv(1), b"")
+        self.assertLess(time.monotonic() - started, 3)
 
 
 if __name__ == "__main__":

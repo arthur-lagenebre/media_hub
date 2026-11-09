@@ -55,7 +55,7 @@
     var sendPanel = h('section', { class: 'panel', hidden: true }, h('h2', null, H.t('Envois')), list);
     var expired = h('div', { class: 'panel', hidden: true, role: 'alert' }, h('p', { class: 'warn' }, H.t('Ta session a expiré : les envois sont arrêtés. Reconnecte-toi, puis recommence.')),
       h('a', { class: 'btn f', href: '/login', 'data-key': 'relogin' }, H.t('Se reconnecter')));
-    var mineBox = h('div', { class: 'mine' }), space = h('div', { class: 'quota' });
+    var mineBox = h('div', { class: 'mine' }), space = h('div', { class: 'used' });
     var input = h('input', { type: 'file', multiple: true, style: 'display:none', tabindex: '-1', 'aria-hidden': 'true', onchange: function () {
       var files = Array.prototype.slice.call(input.files); input.value = ''; addFiles(files, 0);
     } });
@@ -92,8 +92,8 @@
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
       xhr.upload.onprogress = function (e) { if (e.lengthComputable) item.total = e.total; item.sent = e.loaded; paint(item); };
       xhr.onload = function () { answered(item, xhr); };
-      // Le serveur refuse un envoi avant d'en lire le corps, puis coupe la connexion : un navigateur qui n'a pas fini d'envoyer un gros fichier ne reçoit alors parfois pas la réponse (413, 415, 429, 507), seulement une erreur de réseau.
-      xhr.onerror = function () { fail(item, H.t('La connexion a été coupée pendant l’envoi : le serveur est peut-être occupé (réessaie plus tard), ou le fichier est refusé (type, taille, espace).')); };
+      // Le serveur refuse un envoi avant d'en lire le corps, puis coupe la connexion, mais laisse la réponse arriver (il lit et jette le corps encore envoyé, dans des bornes de temps et d'octets) : cette erreur n'est plus que le cas d'une vraie coupure, ou d'un refus dont le corps dépasse ces bornes.
+      xhr.onerror = function () { fail(item, H.t('La connexion a été coupée pendant l’envoi : le serveur est peut-être occupé (réessaie plus tard), ou le fichier est refusé (type, espace).')); };
       xhr.onabort = function () { item.state = 'cancel'; release(item); };
       paint(item);
       xhr.send(item.file);
@@ -196,7 +196,7 @@
     function paintMine(res) {
       H.clear(mineBox); H.clear(space);
       var files = res.files;           // le serveur les rend du plus récent au plus ancien
-      space.appendChild(h('p', { class: 'quotaline' }, H.t('Espace utilisé : {used}', { used: sizeText(res.used) })));
+      space.appendChild(h('p', { class: 'usedline' }, H.t('Espace utilisé : {used}', { used: sizeText(res.used) })));
       if (!files.length) mineBox.appendChild(h('p', { class: 'muted empty' }, H.t('Tu n’as encore rien envoyé.')));
       files.forEach(function (f, i) {
         mineBox.appendChild(h('div', { class: 'line mine-file', 'data-file': f.name },

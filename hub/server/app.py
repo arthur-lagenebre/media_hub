@@ -16,6 +16,7 @@ import mimetypes
 import os
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -55,6 +56,8 @@ from .jobs import Jobs
 
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
 CHUNK = 256 * 1024
+INBOX_DRAIN_SECONDS = 5    # un envoi refusé (POST /api/inbox) laisse au client ce temps, au plus, pour finir d'envoyer son corps avant que la connexion soit coupée
+INBOX_DRAIN_BYTES = 64 << 20    # ... et ce nombre d'octets, au plus : un client qui n'arrête jamais d'envoyer est coupé à la première borne atteinte
 SESSION_DAYS = 90
 WATCHED_AT = 0.92          # au-delà de cette part, le film est vu
 RESUME_MIN = 20            # en deçà (secondes), on ne reprend pas : on recommence
@@ -271,6 +274,7 @@ class Handler(BaseHTTPRequestHandler):
     hub: Hub = None
     user: dict = None                          # le compte de la requête en cours (voir authorized)
     granted: dict = None                       # ses droits par bibliothèque, lus à la première question (voir can)
+    body_consumed = 0                          # les octets du corps que la route a déjà lus (voir api_inbox_send)
     routes: list = []
 
     def log_message(self, fmt, *args):         # le journal ne garde que les erreurs (voir _fail)
@@ -412,6 +416,7 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(split.path)
         query = {k: v[-1] for k, v in parse_qs(split.query).items()}
         self.body_taken = False                       # le corps du POST a-t-il été lu ? sinon _fail le jette (connexion persistante)
+        self.body_consumed = 0
         try:
             if not self.authorized(path, query):
                 if path.startswith("/api/"):
@@ -437,10 +442,11 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_HEAD = do_POST = do_DELETE = dispatch
 
     def _fail(self, status, message):
+        sent = True
         try:
             self.send_json({"error": self.hub.scrub(message)}, status)
         except OSError:
-            self.close_connection = True
+            self.close_connection, sent = True, False
         if self.command in ("POST", "DELETE") and not self.body_taken:      # refus avant toute lecture (401, 404, route qui lève trop tôt) : le corps ne doit pas coller à la requête suivante
             try:
                 self.discard_body()
@@ -451,6 +457,39 @@ class Handler(BaseHTTPRequestHandler):
             pairs = [(k, "***" if k == "token" else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
             shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
             print(f"{status} {self.command} {shown} : {message}", file=sys.stderr)
+        if sent and self.close_connection:
+            self.let_the_reply_arrive()
+
+    def inbox_unread(self):
+        """Pour un envoi (`POST /api/inbox`) : ce que le client peut encore envoyer du corps annoncé par `Content-Length`, moins ce que la route en a lu. 0 pour toute autre requête, et quand la taille n'est pas annoncée proprement (voir announced_length)."""
+        if self.command != "POST" or unquote(urlsplit(self.path).path) != "/api/inbox":
+            return 0
+        values = self.headers.get_all("Content-Length") or []
+        if len(values) != 1 or self.headers.get("Transfer-Encoding") is not None or not LENGTH_RE.fullmatch(values[0].strip()):
+            return 0
+        return max(0, int(values[0]) - self.body_consumed)
+
+    def let_the_reply_arrive(self):
+        """Appelé quand la connexion va être coupée après une réponse d'erreur. Un envoi refusé de la boîte de réception, dont le client n'a pas fini d'envoyer le corps : fermer une socket qui a encore des octets non lus fait partir un RST, qui peut effacer la réponse déjà écrite (le navigateur voit une erreur réseau au lieu du 403, 415, 429 ou 507). On ferme donc l'écriture, puis on lit et on jette le corps encore envoyé, borné par INBOX_DRAIN_SECONDS et INBOX_DRAIN_BYTES ; la connexion est coupée ensuite par l'appelant.
+        Ne fait rien pour les autres routes, ni quand tout le corps a déjà été lu (ou qu'un envoi accepté n'a pas échoué) ; ce qui est déjà reçu se lit et se jette sans attendre."""
+        left = min(self.inbox_unread(), INBOX_DRAIN_BYTES)
+        if left <= 0:
+            return
+        deadline = time.monotonic() + INBOX_DRAIN_SECONDS
+        try:
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_WR)
+            while left > 0:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    break
+                self.connection.settimeout(wait)
+                chunk = self.rfile.read1(min(CHUNK, left))
+                if not chunk:                           # le client a fini ou fermé
+                    break
+                left -= len(chunk)
+        except OSError:                                 # le client est parti, ou n'envoie plus : la connexion se coupe quand même
+            pass
 
     def content_length(self):
         """La taille annoncée du corps. Illisible ou négative : 400, et la connexion est coupée (on ne sait pas où le corps finit : lire jusqu'à la fin de la connexion bloquerait un fil)."""
@@ -484,6 +523,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
         elif length:
             self.rfile.read(length)
+            self.body_consumed = length
 
     def body_bytes(self, limit):
         """Le corps de la requête tel quel (un fichier envoyé) ; 413 au-delà de `limit` octets (la connexion est alors coupée : le corps n'est pas lu)."""
@@ -2677,13 +2717,16 @@ def require_sender(h):
         raise HttpError(403, "tu n'as pas le droit d'envoyer des fichiers")
 
 
+LENGTH_RE = re.compile(r"[0-9]{1,15}")
+
+
 def announced_length(h):
     """La taille du fichier envoyé, d'après `Content-Length` : obligatoire (411 sans lui, ou avec un corps en morceaux, que ce serveur ne sait pas lire), jamais vide (400).
     Un seul en-tête, fait de chiffres et de rien d'autre (400 sinon) : `int()` accepterait `1_0`, `+10` ou des chiffres non latins, et deux valeurs que le serveur et un proxy liraient différemment laisseraient la fin du corps passer pour une requête."""
     values = h.headers.get_all("Content-Length") or []
     if not values or h.headers.get("Transfer-Encoding") is not None:
         raise HttpError(411, "Content-Length obligatoire")
-    if len(values) != 1 or not re.fullmatch(r"[0-9]{1,15}", values[0].strip()):
+    if len(values) != 1 or not LENGTH_RE.fullmatch(values[0].strip()):
         raise HttpError(400, "Content-Length illisible")
     length = int(values[0])
     if length == 0:
@@ -2691,16 +2734,30 @@ def announced_length(h):
     return length
 
 
+class CountedBody:
+    """Le corps de la requête tel qu'une route le lit : compte les octets lus, pour qu'un refus en cours de route sache ce qui reste à venir (voir Handler.let_the_reply_arrive)."""
+
+    def __init__(self, source):
+        self.source, self.count = source, 0
+
+    def read(self, size):
+        data = self.source.read(size)
+        self.count += len(data)
+        return data
+
+
 @route("POST", r"/api/inbox")
 def api_inbox_send(h, m, q):
     """Un fichier envoyé dans la boîte de réception : `?name=<nom du fichier>`, le fichier en corps brut, `Content-Length` obligatoire. Il va dans `HUB_DATA/inbox/<compte>/`, sous un nom nettoyé, sans écraser (voir inbox.py).
-    Les refus (droit, nom, extension, espace, nombre d'envois) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu. Rend 201 `{"name", "size", "account"}`."""
+    Les refus (droit, nom, extension, espace, nombre d'envois) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu, mais après avoir laissé la réponse arriver au client qui envoie encore (voir Handler.let_the_reply_arrive). Rend 201 `{"name", "size", "account"}`."""
     h.body_taken = True                     # le corps se lit par morceaux, ou pas du tout : _fail ne doit pas le jeter
+    body = CountedBody(h.rfile)
     try:
         require_sender(h)
-        stored = module_call(InboxError, h.hub.inbox.receive, h.user["id"], q.get("name"), h.rfile, announced_length(h))
+        stored = module_call(InboxError, h.hub.inbox.receive, h.user["id"], q.get("name"), body, announced_length(h))
     except Exception:                       # un refus (HttpError), mais aussi une erreur système avant la lecture : dans tous les cas le corps n'est pas lu, ou à moitié
         h.close_connection = True
+        h.body_consumed = body.count
         raise
     h.send_json({**stored, "account": h.user["id"]}, 201)
 

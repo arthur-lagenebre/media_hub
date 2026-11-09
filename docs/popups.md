@@ -5,8 +5,8 @@ Toute fenêtre qui s'ouvre par-dessus la page est un **pop-up**. Il n'en existe 
 | Déclinaison | Pour quoi | Fabrique | Exemples |
 |---|---|---|---|
 | **choice** | Choisir dans une liste ; un clic ferme. | `H.menu(titre, options, courant, onPick)` | Trier par, Genre, Langue, Audio / Sous-titres, menu `…` d'une carte ou d'une piste, Ajouter à une playlist ou à une saga, « Que faire de… » |
-| **confirm** | Une question, une action (rouge si elle détruit ou ne s'annule pas), Annuler. | `H.confirm({title, lead, ok, danger, done})` | Supprimer une saga, une playlist, un compte, les fichiers parasites ; retirer un lien |
-| **form** | Un ou plusieurs champs, ou un petit réglage, avec Valider / Annuler. | `H.form({title, lead, fields, extra, ok, submit, done})` ; `H.prompt(...)` pour un seul champ de texte | Ajouter un compte, mot de passe, droits d'un compte, nom d'une playlist, ajouter un lien |
+| **confirm** | Une question, une action (rouge si elle détruit ou ne s'annule pas), Annuler. | `H.confirm({title, lead, ok, danger, done, cancel})` | Supprimer une saga, une playlist, un compte, les fichiers parasites ; retirer un lien |
+| **form** | Un ou plusieurs champs, ou un petit réglage, avec Valider / Annuler. | `H.form({title, lead, fields, extra, ok, submit, done, cancel})` ; `H.prompt(...)` pour un seul champ de texte | Ajouter un compte, mot de passe, droits d'un compte, nom d'une playlist, ajouter un lien |
 | **wide** | Contenu libre qui demande de la place : liste à gérer, recherche, image. Un pied de boutons. | `H.box('wide <nom>', titre, …enfants)` puis `H.overlay.open(box)` | File d'attente (`wide queue`), choix de films d'une saga (`wide picker`), recadrage d'une photo (`wide crop`) |
 
 Ce qui n'est **pas** un pop-up et reste à part : le **toast** (`H.toast`, message bref sans action, qui ne prend pas le focus), le **panneau d'erreur du lecteur** (`.err`, dans le lecteur plein écran) et les **barres** (musique, lecteur, liseuse).
@@ -23,6 +23,8 @@ Une déclinaison de plus se justifie par un besoin d'interaction que les quatre 
 ## Ce que le gabarit garantit (ne pas le refaire)
 
 - **Voile, Retour, Échap** : `H.overlay` empile les fenêtres ; Retour (télécommande) ou Échap ferme celle du dessus, un clic sur le voile aussi. Le focus revient sur ce qui avait ouvert la fenêtre.
+- **Fermée sans avoir agi** : l'option `cancel` de `H.form` et de `H.confirm` est appelée une fois la fenêtre fermée sans avoir agi (Annuler, voile, Retour, Échap) ; `done` l'est quand la personne a agi.
+- **Quitter une page** : une page de `H.route` peut définir `leave()`, qui rend `{title, lead, ok, accept}` pour demander confirmation avant de la quitter (un envoi en cours), ou rien si elle peut partir ; la question est un **confirm** dont `cancel` remet l'adresse de la page.
 - **Focus** : `data-autofocus` désigne l'élément qui reçoit le focus (sinon le premier). Une fenêtre qui détruit quelque chose met le focus sur **Annuler** (Entrée ne détruit rien) ; un menu met le focus sur la valeur courante.
 - **Atteignable à la télécommande** : tout contrôle porte la classe `f`. `H.button` et `.opt` la posent. Une fenêtre qui défile suit le focus (`H.box`).
 - **Pied de boutons** : `<div class="btns">` en rangée de boutons égaux, l'action en premier ; en colonne (`stacked`) dès qu'il y a plusieurs champs. Bouton d'action : `primary`, ou `danger` si elle détruit.

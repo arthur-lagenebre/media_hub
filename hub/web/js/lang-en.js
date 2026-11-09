@@ -597,7 +597,7 @@
     'Ta session a expiré : les envois sont arrêtés. Reconnecte-toi, puis recommence.': 'Your session has expired: uploads are stopped. Sign in again, then start over.',
     'Se reconnecter': 'Sign in again',
     'Arrêté : la session a expiré.': 'Stopped: the session has expired.',
-    'La connexion a été coupée pendant l’envoi : le serveur est peut-être occupé (réessaie plus tard), ou le fichier est refusé (type, taille, espace).': 'The connection was cut during the upload: the server may be busy (try again later), or the file is refused (type, size, space).',
+    'La connexion a été coupée pendant l’envoi : le serveur est peut-être occupé (réessaie plus tard), ou le fichier est refusé (type, espace).': 'The connection was cut during the upload: the server may be busy (try again later), or the file is refused (type, space).',
     'Le serveur est occupé : nouvel essai dans quelques secondes.': 'The server is busy: trying again in a few seconds.',
     'En attente': 'Waiting',
     '{sent} sur {total}': '{sent} of {total}',

@@ -3489,7 +3489,7 @@ class InboxUiCase(unittest.TestCase):
         page = self.session(name, **kw)
         page.goto(self.base + "/#/upload")
         self.shown(page, "#/upload")
-        page.wait_for_selector("#views > .view:visible .quota .quotaline")             # la page a lu l'espace utilisé
+        page.wait_for_selector("#views > .view:visible .used .usedline")             # la page a lu l'espace utilisé
         return page
 
     def send(self, page, *files):
@@ -3566,7 +3566,7 @@ class InboxUiCase(unittest.TestCase):
         self.assertIn("Film.mkv", self.sends(page, "done").nth(1).locator(".what > span").inner_text())     # et le dit : « tu l'avais appelé… »
         page.locator("#views > .view:visible .mine-file", has_text="Film (2).mkv").wait_for()         # « Mes envois » suit
         self.assertEqual(page.locator("#views > .view:visible .mine-file").count(), 2)
-        self.assertIn("Espace utilisé", page.locator("#views > .view:visible .quotaline").inner_text())
+        self.assertIn("Espace utilisé", page.locator("#views > .view:visible .usedline").inner_text())
 
     def test_files_go_one_at_a_time(self):
         page = self.upload_page()
@@ -3814,7 +3814,7 @@ class InboxUiCase(unittest.TestCase):
         self.assertEqual(page.locator('#nav [data-nav="#/upload"]').get_attribute("aria-label"), "Upload")
         self.assertEqual(page.locator("#views > .view:visible h1").inner_text(), "Upload")
         self.assertEqual(page.locator("#views > .view:visible .drop .btn").inner_text(), "Choose files")
-        self.assertIn("Space used", page.locator("#views > .view:visible .quotaline").inner_text())
+        self.assertIn("Space used", page.locator("#views > .view:visible .usedline").inner_text())
         self.assertEqual(page.locator("#views > .view:visible .mine .empty").inner_text(), "You haven’t uploaded anything yet.")
         self.send(page, ("virus.exe", b"MZ" * 100), ("Film.mkv", b"f" * 3000))
         self.sends(page, "error").first.wait_for()
@@ -3848,7 +3848,7 @@ class InboxUiCase(unittest.TestCase):
         page = self.session("alice")
         page.locator('#nav [data-nav="#/upload"]').click()
         self.shown(page, "#/upload")
-        page.wait_for_selector("#views > .view:visible .quota .quotaline")
+        page.wait_for_selector("#views > .view:visible .used .usedline")
         self.throttle(page, 150_000)
         self.send(page, ("Long.mkv", b"x" * 600_000))
         self.sending(page)
