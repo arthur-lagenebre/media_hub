@@ -196,7 +196,7 @@ Les workflows sont dans `.github/workflows/` ; l'environnement commun (media_lib
 
 | Workflow | Quand | Ce qu'il fait |
 | --- | --- | --- |
-| `tests.yml` | chaque PR, chaque push sur `main` | le serveur sur Python 3.13 et 3.14, l'interface dans Chromium |
+| `tests.yml` | chaque PR, chaque push sur `main` | le serveur sur Python 3.13 et 3.14 (l'interface dans Chromium n'y passe plus : à lancer à la main) |
 | `version.yml` | chaque PR | relit la règle de `/ship` : `__version__`, `API_VERSION`, `SCHEMA_VERSION` (échec si un numéro baisse, avertissement si la version ne suit pas `hub/`) |
 | `quality.yml` | PR qui touche du Python de `hub/` | `dryer` (aucune paire de score 0,8 ou plus) et `crapper` (CRAP 10 au plus sur les fichiers modifiés) |
 | `mutator.yml` | à la main, ou étiquette `mutator` sur une PR | la passe de mutation, sur les chemins choisis ou les fichiers Python de la PR |
