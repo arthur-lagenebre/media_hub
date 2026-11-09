@@ -45,6 +45,7 @@ from .. import urls
 from .. import sagas as sagafile
 from ..sagas import Sagas
 from ..db import Database, make_id
+from ..inbox import Inbox, InboxError
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
@@ -94,6 +95,7 @@ class Hub:
         self.jobs = Jobs(cfg, self.db)
         self.sagas = Sagas(cfg.data / "sagas.json")
         self.throttle = accounts.Throttle()                    # les essais de connexion ratés, par adresse
+        self.inbox = Inbox(cfg)                                # les envois des comptes (voir inbox.py)
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
         self.active = 0
         self.secret = self._secret()
@@ -117,7 +119,7 @@ class Hub:
 
     def open_user(self):
         """Qui est « connecté » quand le serveur est ouvert : le profil `default`, administrateur (c'est lui que le premier compte reprendra)."""
-        return {"id": accounts.FIRST_ID, "name": self.cfg.admin, "role": "admin"}
+        return {"id": accounts.FIRST_ID, "name": self.cfg.admin, "role": "admin", "can_upload": False}        # sans compte, personne n'envoie : un envoi anonyme serait une porte ouverte sur le disque
 
     def media_token(self, row):
         """Le jeton de média du compte `row`, celui qui voyage dans les URLs (`?token=`) : il ne vaut que sur /media, /img, /book et /api/subs (sous-titres, lecture seule), nulle part ailleurs sur /api/ ;
@@ -424,14 +426,14 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc(file=sys.stderr)
             self._fail(500, f"erreur interne : {e}")
 
-    do_GET = do_HEAD = do_POST = dispatch
+    do_GET = do_HEAD = do_POST = do_DELETE = dispatch
 
     def _fail(self, status, message):
         try:
             self.send_json({"error": self.hub.scrub(message)}, status)
         except OSError:
             self.close_connection = True
-        if self.command == "POST" and not self.body_taken:      # refus avant toute lecture (401, 404, route qui lève trop tôt) : le corps ne doit pas coller à la requête suivante
+        if self.command in ("POST", "DELETE") and not self.body_taken:      # refus avant toute lecture (401, 404, route qui lève trop tôt) : le corps ne doit pas coller à la requête suivante
             try:
                 self.discard_body()
             except OSError:
@@ -746,6 +748,15 @@ def api_user_rights(h, m, q):
     need_accounts(h)
     body = body_dict(h)
     account_call(accounts.set_rights, h.hub.db, m.group(1), {lib.id for lib in h.hub.cfg.libraries}, body.get("rights"))
+    h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
+
+
+@route("POST", r"/api/user/(\w+)/upload")
+def api_user_upload(h, m, q):
+    """L'administrateur donne ou retire le droit d'envoyer dans la boîte de réception : `{"upload": bool}`. Pas pour un administrateur (400 : il envoie toujours). Rend le compte. Valable à la requête suivante."""
+    require_admin(h)
+    need_accounts(h)
+    account_call(accounts.set_can_upload, h.hub.db, m.group(1), body_dict(h).get("upload"))
     h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
 
 
@@ -2640,6 +2651,84 @@ def api_enrich(h, m, q):
 def api_cleanup(h, m, q):
     require_admin(h)
     h.send_json({"job": h.hub.jobs.cleanup(bool(h.body_json().get("apply"))).public()}, 202)
+
+
+# ---------------------------------------------------------------------------
+# Boîte de réception : les envois des comptes (voir inbox.py)
+# ---------------------------------------------------------------------------
+def require_sender(h):
+    """403 sans compte (un serveur ouvert n'a pas d'envoi) ou pour un compte à qui l'administrateur n'a pas donné le droit d'envoyer ; l'administrateur l'a toujours."""
+    if not h.hub.auth():
+        raise HttpError(403, "pas d'envoi sans compte : crée un compte sur le serveur")
+    if not h.user["can_upload"]:
+        raise HttpError(403, "tu n'as pas le droit d'envoyer des fichiers")
+
+
+def announced_length(h):
+    """La taille du fichier envoyé, d'après `Content-Length` : obligatoire (411 sans lui, ou avec un corps en morceaux, que ce serveur ne sait pas lire), jamais vide (400).
+    Un seul en-tête, fait de chiffres et de rien d'autre (400 sinon) : `int()` accepterait `1_0`, `+10` ou des chiffres non latins, et deux valeurs que le serveur et un proxy liraient différemment laisseraient la fin du corps passer pour une requête."""
+    values = h.headers.get_all("Content-Length") or []
+    if not values or h.headers.get("Transfer-Encoding") is not None:
+        raise HttpError(411, "Content-Length obligatoire")
+    if len(values) != 1 or not re.fullmatch(r"[0-9]{1,15}", values[0].strip()):
+        raise HttpError(400, "Content-Length illisible")
+    length = int(values[0])
+    if length == 0:
+        raise HttpError(400, "fichier vide")
+    return length
+
+
+@route("POST", r"/api/inbox")
+def api_inbox_send(h, m, q):
+    """Un fichier envoyé dans la boîte de réception : `?name=<nom du fichier>`, le fichier en corps brut, `Content-Length` obligatoire. Il va dans `HUB_DATA/inbox/<compte>/`, sous un nom nettoyé, sans écraser (voir inbox.py).
+    Les refus (droit, nom, taille, quota, espace, nombre d'envois) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu. Rend 201 `{"name", "size", "account"}`."""
+    h.body_taken = True                     # le corps se lit par morceaux, ou pas du tout : _fail ne doit pas le jeter
+    try:
+        require_sender(h)
+        stored = module_call(InboxError, h.hub.inbox.receive, h.user["id"], q.get("name"), h.rfile, announced_length(h))
+    except Exception:                       # un refus (HttpError), mais aussi une erreur système avant la lecture : dans tous les cas le corps n'est pas lu, ou à moitié
+        h.close_connection = True
+        raise
+    h.send_json({**stored, "account": h.user["id"]}, 201)
+
+
+def inbox_files(hub, files):
+    """Les fichiers de la boîte avec le nom du compte qui les a envoyés (`user`) ; l'identifiant d'un compte supprimé en tient lieu."""
+    names = {row["id"]: row["name"] for row in accounts.rows(hub.db)}
+    return [{**f, "user": names.get(f["account"], f["account"])} for f in files]
+
+
+@route("GET", r"/api/inbox")
+def api_inbox_list(h, m, q):
+    """L'administrateur voit tous les envois ; `?mine=1` (un compte qui a le droit d'envoyer, l'administrateur compris) ne montre que les siens, avec la place qui lui reste : `used`, `quota`, `max_file` (octets)."""
+    box = h.hub.inbox
+    if q.get("mine") != "1":
+        require_admin(h)
+        h.send_json({"files": inbox_files(h.hub, box.listing())})
+        return
+    require_sender(h)
+    h.send_json({"files": inbox_files(h.hub, box.listing(h.user["id"])), "used": box.used(h.user["id"]), "quota": box.quota, "max_file": box.max_file})
+
+
+@route("GET", r"/api/inbox/(\w+)/([^/]+)")
+def api_inbox_file(h, m, q):
+    """Un fichier de la boîte, en pièce jointe (`Range` accepté pour reprendre) : administrateur seulement. Jamais analysé ni servi autrement : type `application/octet-stream`, `nosniff`."""
+    require_admin(h)
+    path = module_call(InboxError, h.hub.inbox.path_of, m.group(1), m.group(2))
+    h.send_file(path, "application/octet-stream", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(path.name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
+
+@route("DELETE", r"/api/inbox/(\w+)/([^/]+)")
+def api_inbox_delete(h, m, q):
+    """L'administrateur supprime n'importe quel fichier de la boîte ; un compte qui a le droit d'envoyer, seulement les siens (403 pour ceux des autres, qu'ils existent ou non)."""
+    h.discard_body()
+    account, name = m.groups()
+    if h.user["role"] != "admin":
+        require_sender(h)
+        if account != h.user["id"]:
+            raise HttpError(403, "ce fichier n'est pas à toi")
+    module_call(InboxError, h.hub.inbox.remove, account, name)
+    h.send_json({"ok": True})
 
 
 # ---------------------------------------------------------------------------

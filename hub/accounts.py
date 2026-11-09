@@ -165,9 +165,14 @@ def by_name(db, name):
     return next((r for r in rows(db) if r["name"].casefold() == wanted), None) if wanted else None
 
 
+def can_upload(row):
+    """Le compte peut-il envoyer dans la boîte de réception ? Un administrateur toujours, un autre compte si l'administrateur lui en a donné le droit."""
+    return row["role"] == "admin" or bool(row["can_upload"])
+
+
 def public(row):
     """Ce que l'API dit d'un compte (jamais le haché ni la version du jeton)."""
-    return {"id": row["id"], "name": row["name"], "role": row["role"]}
+    return {"id": row["id"], "name": row["name"], "role": row["role"], "can_upload": can_upload(row)}
 
 
 def listing(row):
@@ -283,6 +288,19 @@ def _store_right(conn, uid, lib, view, play, download):
     else:
         conn.execute("INSERT INTO rights(user_id, lib, view, play, download) VALUES(?,?,?,?,?) ON CONFLICT(user_id, lib) DO UPDATE SET view=excluded.view, play=excluded.play, download=excluded.download",
                      (uid, lib, int(view), int(play), int(download)))
+
+
+def set_can_upload(db, uid, allowed):
+    """Donne ou retire le droit d'envoyer dans la boîte de réception (`allowed` : un booléen, rien d'autre). Refuse 400 un administrateur (il envoie toujours), 404 un compte inconnu. Renvoie le compte à jour ; la session ne change pas."""
+    if not isinstance(allowed, bool):
+        raise AccountError(400, "« upload » vaut vrai ou faux")
+    row = by_id(db, uid)
+    if row is None:
+        raise AccountError(404, "compte inconnu")
+    if row["role"] == "admin":
+        raise AccountError(400, "un administrateur peut toujours envoyer")
+    db.execute("UPDATE users SET can_upload=? WHERE id=?", (int(allowed), uid))
+    return by_id(db, uid)
 
 
 # ---------------------------------------------------------------------------

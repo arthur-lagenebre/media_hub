@@ -77,6 +77,43 @@ class TestCreate(unittest.TestCase):
         self.assertEqual(accounts.rows(self.db), [])
 
 
+class TestUploadRight(unittest.TestCase):
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        self.db = Database(root / "hub.db")
+        self.boss = accounts.create(self.db, "boss", "un-mot-de-passe")
+        self.alice = accounts.create(self.db, "alice", "un-mot-de-passe")
+
+    def refused(self, call, status=400):
+        with self.assertRaises(AccountError) as caught:
+            call()
+        self.assertEqual(caught.exception.status, status)
+        return caught.exception.message
+
+    def test_a_new_account_may_not_send_and_the_administrator_always_may(self):
+        self.assertEqual((accounts.public(self.alice)["can_upload"], accounts.public(self.boss)["can_upload"]), (False, True))
+        self.assertEqual(self.boss["can_upload"], 0)                    # la colonne ne dit rien de l'administrateur : le rôle suffit
+
+    def test_the_right_is_given_and_taken_back(self):
+        row = accounts.set_can_upload(self.db, self.alice["id"], True)
+        self.assertEqual((row["id"], accounts.public(row)["can_upload"], accounts.listing(row)["can_upload"]), (self.alice["id"], True, True))
+        self.assertTrue(accounts.public(accounts.by_id(self.db, self.alice["id"]))["can_upload"])
+        self.assertFalse(accounts.public(accounts.set_can_upload(self.db, self.alice["id"], False))["can_upload"])
+
+    def test_it_changes_nothing_else_and_nobody_else(self):
+        accounts.set_can_upload(self.db, self.alice["id"], True)
+        self.assertEqual(accounts.public(accounts.by_id(self.db, self.boss["id"])), {"id": "default", "name": "boss", "role": "admin", "can_upload": True})
+        self.assertEqual(accounts.by_id(self.db, self.alice["id"])["token_version"], 1)                # la session ne tombe pas
+
+    def test_an_administrator_a_stranger_and_a_value_that_is_not_a_boolean_are_refused(self):
+        self.assertEqual(self.refused(lambda: accounts.set_can_upload(self.db, self.boss["id"], False)), "un administrateur peut toujours envoyer")
+        self.assertEqual(self.refused(lambda: accounts.set_can_upload(self.db, "inconnu", True), 404), "compte inconnu")
+        for value in ("oui", 1, 0, None, [True]):
+            self.refused(lambda: accounts.set_can_upload(self.db, self.alice["id"], value))
+        self.assertFalse(accounts.public(accounts.by_id(self.db, self.alice["id"]))["can_upload"])
+
+
 class TestInterfaceKnowsTheMinimum(unittest.TestCase):
     def test_the_form_checks_and_announces_the_length_the_server_demands(self):
         """Le contrôle côté client et les libellés suivent `MIN_PASSWORD` : sinon la personne tape un mot de passe « assez long » et le serveur le refuse après l'envoi."""
