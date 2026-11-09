@@ -1012,7 +1012,7 @@ def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random"):
     if sort == "rating":
         pool.sort(key=rating_key)
     elif sort == "added":
-        pool.sort(key=lambda r: (-r["added"], r["sort"]))
+        pool.sort(key=lambda r: (-r["added"], r["sort"], r["id"]))
     else:
         pool.sort(key=lambda r: hashlib.sha1(f"{day}:{profile}:{r['id']}".encode()).hexdigest())
     return [summary(r) for r in pool[:n]]
@@ -1191,9 +1191,9 @@ def row_rating(row):
 
 
 def rating_key(row):
-    """Le tri « Mieux notés », sans inversion : d'abord ce qui a une note montrée, de la meilleure à la moins bonne, puis le plus de votes ; ensuite le reste ; à égalité, par titre."""
+    """Le tri « Mieux notés », sans inversion : d'abord ce qui a une note montrée, de la meilleure à la moins bonne, puis le plus de votes ; ensuite le reste ; à égalité, par titre, puis par identifiant : deux films de même titre, de même note et de même nombre de votes gardent le même rang, quel que soit l'ordre dans lequel la base les rend."""
     vote, votes = row_rating(row)
-    return (vote is None, -(vote or 0), -votes, row["sort"])
+    return (vote is None, -(vote or 0), -votes, row["sort"], row["id"])
 
 
 def release_key(row):
