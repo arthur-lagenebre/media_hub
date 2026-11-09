@@ -307,7 +307,7 @@
     // Où en est le compte : quatre choix dont un seul est actif (celui-ci se voit par son fond plein et sa coche, pas par un simple contour) ; la valeur est celle de `filter=` de l'API, vide pour tout montrer.
     var bState = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': H.t('Avancement') }, [['', H.t('Tous')], ['todo', H.t('À voir')], ['progress', H.t('En cours')], ['done', H.t('Terminés')]].map(function (c) {
       return h('button', { class: 'chip f', type: 'button', role: 'radio', 'aria-checked': 'false', 'data-state': c[0],
-        onclick: function () { if (st.state !== c[0]) { st.state = c[0]; reset(); } } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, c[1]));
+        onclick: function () { if (st.state !== c[0]) { st.state = c[0]; paint(); reset(); } } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, c[1]));
     }));
     var bLists = H.button(H.t('Playlists'), 'queue', { onclick: function () { H.go('#/playlists'); } });
     // Les films d'animation sont dans Films, avec le genre « Animation » : un raccourci depuis la page Animations, si le compte voit Films ; il se range à droite de la rangée des filtres

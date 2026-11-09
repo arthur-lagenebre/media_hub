@@ -3069,6 +3069,19 @@ class TestLibraryProgressChoice(UiCase):
         self.choice("À voir").click()
         self.until(lambda: self.film["id"] not in self.titles() and self.view(".grid .card").count() > 1)
 
+    def test_the_active_choice_changes_at_the_click_not_when_the_list_arrives(self):
+        self.open_films()
+        held = []
+        self.page.route("**/api/library/films*", lambda route: held.append(route))                 # la réponse du serveur est retenue (un NAS lent)
+        self.choice("En cours").click()
+        self.until(lambda: held)                                                                   # la requête est partie, la liste n'est pas là
+        self.assertEqual(self.active(), ["progress"])
+        self.assertEqual(self.choice("En cours").get_attribute("aria-checked"), "true")
+        self.assertEqual(self.choice("Tous").get_attribute("aria-checked"), "false")
+        self.page.unroute("**/api/library/films*")                                                 # on relâche : la liste arrive et le choix reste
+        self.until(lambda: self.view(".grid .card").count() == self.api("/api/library/films?sagas=1&filter=progress")["total"])
+        self.assertEqual(self.active(), ["progress"])
+
     def test_a_film_seen_to_the_end_moves_to_done(self):
         self.api(f"/api/item/{self.film['id']}/seen", {"done": True})
         self.open_films()
