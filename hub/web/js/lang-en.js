@@ -365,6 +365,7 @@
     'Page {n} / {total}': 'Page {n} / {total}',
     'Pages {a}–{b} / {total}': 'Pages {a}–{b} / {total}',
     'Chapitre {n} / {total}': 'Chapter {n} / {total}',
+    'Ce lien ne mène pas à un chapitre du livre.': 'This link doesn’t lead to a chapter of the book.',
     'Le format {format} ne se lit pas dans le navigateur.': 'The {format} format can’t be read in the browser.',
     'inconnu': 'unknown',
 
