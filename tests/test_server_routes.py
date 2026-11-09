@@ -923,7 +923,7 @@ class TestHomeUnseen(RouteCase):
 
     def setUp(self):
         super().setUp()
-        self.fill([item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n) for n in range(30)], [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(30)])
+        self.fill([item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n) for n in range(60)], [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(60)])
 
     def unseen(self, day="2026-11-04"):
         with mock.patch("hub.server.app.today", return_value=day):
@@ -933,11 +933,11 @@ class TestHomeUnseen(RouteCase):
     def test_the_films_offered_are_in_the_list_of_their_library(self):
         libs = self.get("/api/home").json()
         self.assertNotIn("unseen", libs)
-        self.assertEqual([(l["id"], len(l["unseen"])) for l in libs["libraries"]], [("lib", 24)])
+        self.assertEqual([(l["id"], len(l["unseen"])) for l in libs["libraries"]], [("lib", app.UNSEEN)])
 
-    def test_it_offers_at_most_twenty_four_films_the_account_has_not_started(self):
+    def test_it_offers_at_most_forty_eight_films_the_account_has_not_started(self):
         ids = self.unseen()
-        self.assertEqual((len(ids), len(set(ids))), (24, 24))
+        self.assertEqual((len(ids), len(set(ids))), (48, 48))                                         # de quoi remplir le rayon (24 au plus) une fois « Nouveautés » (24) retiré
         self.assertTrue(all(i.startswith("mv") for i in ids))
 
     def test_a_film_that_was_started_or_seen_is_not_offered_any_more(self):
@@ -948,30 +948,30 @@ class TestHomeUnseen(RouteCase):
         after = self.unseen()
         self.assertNotIn(started, after)
         self.assertNotIn(seen, after)
-        self.assertEqual(len(after), 24)                                                              # la place laissée est reprise par un autre film
-        self.assertEqual(after[:22], [i for i in before[2:] if i in after][:22])                      # le reste garde son ordre
+        self.assertEqual(len(after), 48)                                                              # la place laissée est reprise par un autre film
+        self.assertEqual(after[:46], [i for i in before[2:] if i in after][:46])                      # le reste garde son ordre
 
     def test_the_order_is_the_same_all_day_and_changes_from_one_day_to_the_next(self):
         self.assertEqual(self.unseen("2026-11-04"), self.unseen("2026-11-04"))
         self.assertNotEqual(self.unseen("2026-11-04"), self.unseen("2026-11-05"))
 
     def test_a_library_that_is_all_started_offers_nothing(self):
-        for n in range(30):
+        for n in range(60):
             self.post("/api/progress", {"entry": f"v{n:02d}", "position": 5, "duration": 100})
         self.assertEqual(self.unseen(), [])
 
 
 class TestHomeUnseenSort(RouteCase):
-    """Le réglage `home_unseen_sort` du compte : l'ordre du rayon « Pas encore vu » se décide sur le serveur, avant la coupe à 24 (sinon le haut du classement n'arriverait jamais au navigateur)."""
+    """Le réglage `home_unseen_sort` du compte : l'ordre du rayon « Pas encore vu » se décide sur le serveur, avant la coupe à 48 (sinon le haut du classement n'arriverait jamais au navigateur)."""
 
     def setUp(self):
         super().setUp()
         rating = lambda n, votes: {"tmdb_rating": {"tmdb": n, "vote": 5 + n / 10, "votes": votes, "at": 0}}
         films = []
-        for n in range(30):                                                                           # 0-19 : notés (n/10 + 5), 20-24 : trop peu de votes pour être montrés, 25-29 : sans note
+        for n in range(60):                                                                           # 0-19 : notés (n/10 + 5), 20-24 : trop peu de votes pour être montrés, 25-59 : sans note
             meta = rating(n, 100) if n < 20 else rating(n, app.MIN_VOTES - 1) if n < 25 else {}
-            films.append(item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n * 7 % 30, meta=meta))      # `added` ne suit ni le titre ni la note
-        self.fill(films, [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(30)])
+            films.append(item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n * 7 % 60, meta=meta))      # `added` ne suit ni le titre ni la note (7 est premier avec 60 : 60 dates distinctes)
+        self.fill(films, [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(60)])
 
     def shelf(self, sort=None, day="2026-11-04"):
         if sort:
@@ -982,18 +982,18 @@ class TestHomeUnseenSort(RouteCase):
     def test_rating_puts_the_best_rated_first_and_what_has_no_shown_rating_last(self):
         ids = self.shelf("rating")
         self.assertEqual(ids[:20], [f"mv{n:02d}" for n in range(19, -1, -1)])                         # de la meilleure note à la moins bonne
-        self.assertEqual(len(ids), 24)
+        self.assertEqual(len(ids), app.UNSEEN)
         self.assertTrue(all(int(i[2:]) >= 20 for i in ids[20:]))                                      # puis des films sans note montrée (moins de 25 votes ou aucune)
 
-    def test_the_cut_to_twenty_four_comes_after_the_sort(self):
+    def test_the_cut_comes_after_the_sort(self):
         ids = self.shelf("rating")
         self.assertIn("mv19", ids)                                                                    # le mieux noté y est, qu'il tombe ou non dans le tirage du jour
-        self.assertNotIn("mv29", ids)
+        self.assertNotIn("mv59", ids)
         self.assertEqual(self.shelf("rating", "2026-11-05"), ids)                                     # l'ordre ne dépend plus du jour
 
     def test_added_puts_the_most_recent_first(self):
-        by_added = sorted(range(30), key=lambda n: -(1000 + n * 7 % 30))
-        self.assertEqual(self.shelf("added"), [f"mv{n:02d}" for n in by_added[:24]])
+        by_added = sorted(range(60), key=lambda n: -(1000 + n * 7 % 60))
+        self.assertEqual(self.shelf("added"), [f"mv{n:02d}" for n in by_added[:app.UNSEEN]])
 
     def test_random_is_the_default_and_keeps_the_daily_order(self):
         default = self.shelf()
@@ -1005,7 +1005,7 @@ class TestHomeUnseenSort(RouteCase):
         before = self.shelf("rating")
         self.post("/api/progress", {"entry": "v19", "position": 5, "duration": 100})
         after = self.shelf()
-        self.assertEqual(after, before[1:] + ["mv24"])                                                # le premier non montré de la fin de classement
+        self.assertEqual(after, before[1:] + ["mv48"])                                                # le premier non montré de la fin de classement
 
     def test_each_account_has_its_own_order(self):
         alice, bob = accounts.create(self.db, "alice", "motdepasse12"), accounts.create(self.db, "bob", "motdepasse12")
@@ -1013,6 +1013,25 @@ class TestHomeUnseenSort(RouteCase):
         home = lambda who: [r["id"] for r in self.get("/api/home", headers=self.hub.cookie(who)).json()["libraries"][0]["unseen"]]
         self.assertEqual(home(alice)[0], "mv19")
         self.assertNotEqual(home(bob)[:3], home(alice)[:3])
+
+
+class TestHomeUnseenBesideLatest(RouteCase):
+    """Le navigateur retire du rayon « Pas encore vu » ce que « Nouveautés » montre déjà, puis coupe : si le serveur n'en offrait que 24, dans l'ordre « date d'ajout » (ou « note » quand les mieux notés sont les plus récents), le rayon serait vide."""
+
+    def setUp(self):
+        super().setUp()
+        rating = lambda n: {"tmdb_rating": {"tmdb": n, "vote": 5 + n / 20, "votes": 100, "at": 0}}               # plus un film est récent, mieux il est noté
+        self.fill([item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n, meta=rating(n)) for n in range(60)], [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(60)])
+
+    def test_what_is_left_once_the_latest_are_removed_is_enough_to_fill_the_shelf_whatever_the_order(self):
+        for sort in ("random", "added", "rating"):
+            with self.subTest(sort=sort):
+                self.assertEqual(self.post("/api/me/settings", {"home_unseen_sort": sort}).status, 200)
+                shelf = self.get("/api/home").json()["libraries"][0]
+                latest = {r["id"] for r in shelf["recent"]}
+                left = [r["id"] for r in shelf["unseen"] if r["id"] not in latest]
+                self.assertEqual(len(shelf["recent"]), 24)
+                self.assertGreaterEqual(len(left), 12)                                                              # le plus grand rayon par défaut, 12, reste plein
 
 
 class TestHomeUnseenPerLibrary(RouteCase):

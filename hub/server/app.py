@@ -1001,7 +1001,7 @@ def continue_row(hub, profile, libs=None):
 
 
 today = missing.today                       # le jour (« 2026-11-04 ») : un nom à part pour que les tests puissent le fixer
-UNSEEN = 24
+UNSEEN = 48                                 # ce que le serveur offre par bibliothèque : le navigateur en retire ce que « Nouveautés » (24) montre déjà, puis coupe à `home_unseen_count` (24 au plus) ; à 24 seulement, les tris « date d'ajout » et « note » (les mieux notés sont souvent les plus récents) vidaient le rayon
 
 
 def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random"):
