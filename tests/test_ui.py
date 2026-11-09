@@ -3362,6 +3362,29 @@ class TestSettings(UiCase):
         self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne finale') >= 0", timeout=10000)
         self.page.wait_for_function("(() => { var p = document.querySelector('.job pre'); return p.scrollHeight - p.scrollTop - p.clientHeight < 4; })()")
 
+    def test_an_open_log_keeps_its_scroll_when_another_task_arrives_or_is_unfolded(self):
+        import threading
+        release = threading.Event()
+
+        def work(log):
+            for n in range(100):
+                log(f"ligne {n}")
+            release.wait(20)
+        self.addCleanup(lambda: (release.set(), self.run_.wait_jobs()))
+        self.run_.hub.jobs._submit("Essai long", work)
+        self.open("#/settings?tab=gestion")
+        first = self.view(".job", has_text="Essai long")
+        first.locator(".jhead").click()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 99') >= 0")
+        first.locator("pre").evaluate("el => { el.scrollTop = 80; }")
+        self.run_.hub.jobs._submit("Essai court", lambda log: log("fait"))          # attend derrière la première : la liste gagne une tâche, le panneau est refait
+        second = self.view(".job", has_text="Essai court")
+        second.wait_for(timeout=10000)
+        self.assertEqual(self.view(".job", has_text="Essai long").locator("pre").evaluate("el => el.scrollTop"), 80)
+        second.locator(".jhead").click()                                          # déplier une autre tâche refait le panneau aussi
+        second.locator(".muted").wait_for()
+        self.assertEqual(self.view(".job", has_text="Essai long").locator("pre").evaluate("el => el.scrollTop"), 80)
+
     def test_every_task_of_the_history_is_listed_not_only_the_last_six(self):
         self.open("#/settings?tab=gestion")
         self.view(".job").first.wait_for()
