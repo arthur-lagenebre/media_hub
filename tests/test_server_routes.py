@@ -927,6 +927,30 @@ class TestArtistsView(RouteCase):
         self.assertEqual(self.get("/api/library/lib?view=albums").json()["items"][0]["type"], "album")
 
 
+class TestLibraryFilterOfMusic(RouteCase):
+    """« À voir », « En cours » et « Terminés » n'ont pas de sens pour la musique : on le dit au lieu de rendre toute la liste (les livres gardent le filtre)."""
+    kind = "music"
+
+    def test_the_progress_filters_do_not_exist_for_music(self):
+        self.fill([item("al1", "album", title="Un album")], [entry("a1", "al1", kind="audio", duration=100.0)])
+        for state in ("todo", "progress", "done", "unseen"):
+            with self.subTest(filter=state):
+                reply = self.get(f"/api/library/lib?filter={state}")
+                self.assertEqual((reply.status, reply.json()["error"]), (400, "ce filtre n'existe pas pour la musique"))
+        self.assertEqual(self.get("/api/library/lib?filter=").status, 200)
+        self.assertEqual(self.get("/api/library/lib").json()["total"], 1)
+        self.assertEqual(self.get("/api/library/lib?filter=autre").json()["error"], "filtre inconnu : autre")      # un nom inconnu reste inconnu, musique ou non
+
+
+
+class TestLibraryFilterOfBooks(RouteCase):
+    kind = "books"
+
+    def test_books_keep_the_filter(self):
+        self.fill([item("bk1", "book", title="Un livre")], [entry("k1", "bk1", kind="book", duration=10.0)])
+        self.assertEqual([self.get(f"/api/library/lib?filter={state}").json()["total"] for state in ("todo", "progress", "done")], [1, 0, 0])
+
+
 class TestHomeUnseen(RouteCase):
     """« Pas encore vu » à l'accueil : des films et des séries que le compte n'a pas touchés, dans un ordre qui change chaque jour."""
 

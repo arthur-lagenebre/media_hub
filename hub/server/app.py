@@ -1422,6 +1422,8 @@ def library_filters(q, kind, ranks, of, in_custom, seen):
     state = {"unseen": "todo"}.get(asked, asked)
     if state and state not in WATCH_STATES:
         raise HttpError(400, f"filtre inconnu : {asked}")
+    if state and kind == "music":
+        raise HttpError(400, "ce filtre n'existe pas pour la musique")          # on n'« a pas vu » un album : plutôt qu'une liste qui a l'air filtrée, un refus
     if state:
         tests.append(lambda row: watch_state(row, seen) == state)
     return tests
