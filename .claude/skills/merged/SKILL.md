@@ -20,8 +20,12 @@ L'utilisateur fusionne lui-même ses PR (voir `/ship`). Ce skill fait le rangeme
 5. **Nettoyer le distant** : `git fetch --prune`, puis `git branch -a`. La branche distante doit avoir disparu (GitHub la supprime à la fusion). Si elle est encore là, dis-le sans la supprimer.
 6. **Rendre compte** en peu de lignes : le commit de fusion (`git log --oneline -3`), les branches qui restent (`git branch`), l'état propre de l'arbre. Signale ce qui dépendait de cette PR : une autre branche empilée dessus qu'il faut maintenant rebaser, un point des « Limites » de la PR resté à faire, une ligne de `docs/TODO.md` à cocher. Ne le fais pas toi-même : propose-le.
 
+   **Version à étiqueter ?** Si `__version__` a changé dans cette PR (`git diff <mergeCommit>^1 <mergeCommit> -- hub/__init__.py`, avec le commit de fusion lu à l'étape 1 : `mergeCommit.oid`) et que `git tag -l v<X.Y.Z>` ne renvoie rien, ajoute après le compte rendu une ligne :
+   `Version X.Y.Z : git tag vX.Y.Z <commit de fusion> && git push origin vX.Y.Z (publie l'image sur ghcr.io, à toi de décider)`. Tu ne lances pas cette commande. Si le diff est vide ou si l'étiquette existe déjà, ne dis rien.
+
 ## Garde-fous
 
 - Pas de `--force`, pas de `-D`, pas de `git push origin --delete`, pas de réécriture d'historique.
 - Une seule branche est supprimée : celle de la PR fusionnée. Les autres branches locales ne sont pas touchées, même si elles ont l'air mortes (pour un nettoyage général, c'est « refresh branches »).
 - Tu ne fusionnes jamais une PR toi-même, même si la CI est verte.
+- Tu ne crées ni ne pousses jamais d'étiquette (`git tag`, `git push origin v…`) : tu proposes la commande, c'est l'utilisateur qui la lance.

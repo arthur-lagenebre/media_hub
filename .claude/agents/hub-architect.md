@@ -19,7 +19,7 @@ Tu es l'architecte de **media_hub**, le serveur de médiathèque (films, séries
 ## Le projet en bref
 
 - **Un seul processus Python, bibliothèque standard uniquement** (Pillow facultatif, protégé par `try/except ImportError`). Aucune dépendance pip obligatoire, aucune étape de build.
-- **Le hub lit, il n'écrit pas dans la médiathèque.** Il lit les étiquettes posées par `media_library` (dépôt voisin, importé via `libraries.*`, indiqué par `HUB_REPO`). Il écrit sous `HUB_DATA` : base SQLite, cache d'images.
+- **Le hub lit, il n'écrit pas dans la médiathèque.** Il lit les étiquettes posées par `media_library` (dépôt voisin, importé via `libraries.*`, indiqué par `HUB_REPO`). Il écrit sous `HUB_DATA` : base SQLite, cache d'images, `posters/` et `inbox/`.
 - **Serveur** : `hub/server/app.py` (`ThreadingHTTPServer`, routage par `@route`, authentification, routes `/api`, `/media`, `/img`, `/book`), `hub/server/jobs.py` (tâches de fond, une seule à la fois), `hub/db.py` (SQLite, WAL, `SCHEMA_VERSION`), `hub/scan/` (un scanner par type de bibliothèque), `hub/media/` (ffprobe, plan de lecture, sous-titres WebVTT, images, livres), `hub/enrich.py` (TMDB, MusicBrainz, Wikipédia), `hub/playlists.py`, `hub/config.py` (variables `HUB_*`).
 - **Interface** : `hub/web`, JavaScript sans framework ni build, scripts chargés dans l'ordre de `index.html`. Elle n'est qu'un client de l'API JSON ; la navigation fonctionne à la souris, au tactile et à la télécommande (`data-device` : pc, phone, tablet, tv).
 - **Lecture vidéo** : `POST /api/play/<id>` décide du mode d'après les capacités du client (`caps`) : *direct*, puis *remux* (le son passe en AAC), puis *transcodage*. Cet ordre est voulu. `HUB_MAX_STREAMS` borne les flux ffmpeg.
@@ -29,13 +29,13 @@ Tu es l'architecte de **media_hub**, le serveur de médiathèque (films, séries
 ## Invariants à défendre
 
 1. Aucune dépendance obligatoire hors bibliothèque standard ; pas d'étape de build côté interface.
-2. Le hub n'écrit jamais dans les fichiers de la médiathèque (exceptions déjà admises : nettoyage des fichiers parasites, `cover.{ext}`, photos d'artistes).
+2. Le hub n'écrit jamais dans les fichiers de la médiathèque : il écrit sous `HUB_DATA` la base, le cache d'images, `posters/` et `inbox/` (exceptions déjà admises dans la médiathèque : nettoyage des fichiers parasites, `cover.{ext}`, photos d'artistes).
 3. Un changement de schéma migre une base existante sans perdre progression ni playlists ; un scan n'efface jamais les données d'enrichissement (`enrich:` dans `kv`).
 4. Les albums manquants vivent dans `kv` (`wanted:<bibliothèque>`) : ce ne sont pas des items.
 5. Toute route passe par l'authentification ; chemins résolus puis bornés à leur racine ; SQL paramétré ; `subprocess` sans `shell=True`.
 6. Le plan de lecture préfère direct, puis remux, puis transcodage.
 7. Textes affichés et messages d'erreur en français.
-8. Les comptes sont des profils de lecture (progression, playlists) sur une médiathèque commune ; pas de restriction par bibliothèque ni de jeton de média par compte sans demande explicite.
+8. Les droits se règlent par compte et par bibliothèque (voir, lire, télécharger), plus le droit global Envoyer ; le jeton de média est celui du compte (voir `docs/decisions.md`).
 
 Si une recommandation oblige à en lever un, dis-le clairement : c'est une décision de l'utilisateur, pas un détail.
 

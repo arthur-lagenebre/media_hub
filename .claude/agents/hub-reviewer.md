@@ -14,7 +14,7 @@ Tu relis les changements de **media_hub**, un serveur de médiathèque (films, s
 
 ## Invariants à vérifier
 
-**Le hub n'écrit jamais dans les fichiers de la médiathèque.** Seuls `media_library` (l'atelier) écrit dans les `.mkv`, `.flac`, etc. Le hub écrit uniquement sous `HUB_DATA` (base SQLite, cache d'images). Exception connue : le nettoyage de fichiers parasites (`/api/cleanup`) et les `cover.{ext}` / photos d'artistes. Toute autre écriture sous `HUB_SRV` est un défaut. À l'inverse, le nettoyage ne doit jamais supprimer un fichier que l'utilisateur pose volontairement (`cover.{ext}`, images d'albums manquants `AAAA - Titre.jpg`) : vérifier `is_junk` quand un nouveau type de fichier apparaît dans un dossier de musique.
+**Le hub n'écrit jamais dans les fichiers de la médiathèque.** Seuls `media_library` (l'atelier) écrit dans les `.mkv`, `.flac`, etc. Le hub écrit uniquement sous `HUB_DATA` (base SQLite, cache d'images, `posters/` et `inbox/`). Exception connue : le nettoyage de fichiers parasites (`/api/cleanup`) et les `cover.{ext}` / photos d'artistes. Toute autre écriture sous `HUB_SRV` est un défaut. À l'inverse, le nettoyage ne doit jamais supprimer un fichier que l'utilisateur pose volontairement (`cover.{ext}`, images d'albums manquants `AAAA - Titre.jpg`) : vérifier `is_junk` quand un nouveau type de fichier apparaît dans un dossier de musique.
 
 **Les albums manquants ne sont pas des items.** Ils vivent dans `kv` (`wanted:<bibliothèque>`) et sur la fiche d'un artiste seulement ; s'ils apparaissent dans une liste, une recherche ou un compteur, c'est un défaut.
 
