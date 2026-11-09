@@ -716,6 +716,96 @@ class TestReader(UiCase):
         self.assertIn("Télécharger", self.page.inner_text(".reader .err"))
 
 
+class TestReaderGamebook(UiCase):
+    """Un livre dont vous êtes le héros : les chapitres se renvoient l'un à l'autre, et Retour quitte le livre au lieu d'y reculer."""
+
+    @classmethod
+    def add_media(cls, root):
+        links = {1: '<p><a href="c3.xhtml">Aller au trois</a></p><p><a href="http://example.org/dehors">Lien dehors</a></p><p><a href="notes.xhtml">Les notes</a></p>',
+                 2: '<div style="height:3000px"></div><h2 id="fin">La fin</h2>', 3: '<p><a href="c1.xhtml">Retour au un</a></p><p><a href="c2.xhtml#fin">Vers la fin</a></p>'
+                    '<p><a href="#bas">Aller en bas</a></p><div style="height:3000px"></div><p id="bas">En bas</p>'}
+        fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Heros" / "Livre-jeu.epub", "Livre-jeu", "Auteur", chapters=3,
+                            body=lambda n: f"<h1>Chapitre {n}</h1>{links[n]}")
+        fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Ancres" / "Ancres.epub", "Ancres", "Auteur", chapters=1,          # une ancre nommée (sans href) couvre tout l'écran : elle n'est pas un lien
+                            body=lambda n: '<a id="nm" style="position:fixed;left:0;top:0;width:100vw;height:100vh"></a><h1>Chapitre 1</h1><div style="height:4000px"></div>')
+
+    def book(self, title):
+        """Le livre, remis au début : les tests se suivent sur le même serveur, et la liseuse reprend où l'on s'était arrêté."""
+        entry = self.entries("livres", title)[0]["id"]
+        self.api("/api/progress", {"entry": entry, "position": 0, "duration": 4})
+        return entry
+
+    def frame(self):
+        return self.page.frame_locator(".reader iframe")
+
+    def chapter(self):
+        return self.page.evaluate("document.querySelector('.reader .pg').textContent")
+
+    def follow(self, text, label):
+        self.frame().locator("a", has_text=text).click()
+        self.page.wait_for_function("l => document.querySelector('.reader .pg').textContent.indexOf(l) === 0", arg=label)
+        self.page.wait_for_function("t => document.querySelector('.reader iframe').contentDocument.body.textContent.indexOf(t) >= 0", arg=label.split(" / ")[0])
+
+    def test_internal_links_change_chapter_and_back_leaves_the_book(self):
+        entry = self.book("Heros")
+        self.open("#/i/" + self.item("livres", "Heros")["id"])
+        self.page.evaluate("location.hash = '#/read/" + entry + "'")
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.assertIn("Chapitre 1 / 3", self.chapter())
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.follow("Retour au un", "Chapitre 1 / 3")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.until(lambda: self.api("/api/book/" + entry)["position"] == 2)         # la progression suit le chapitre atteint par le lien
+        self.page.locator(".reader .rbar button[aria-label=Retour]").click()
+        self.shown("#/i/" + self.item("livres", "Heros")["id"])                     # un seul appui : on a quitté le livre
+
+    def test_a_link_to_an_anchor_in_another_chapter_and_the_links_that_lead_nowhere(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        for text in ("Lien dehors", "Les notes"):                                  # un site extérieur, un fichier du livre qui n'est pas un chapitre : on prévient, on ne bouge pas
+            self.frame().locator("a", has_text=text).click()
+            self.page.locator("#toast.on", has_text="Ce lien ne mène pas à un chapitre du livre.").wait_for()
+            self.page.evaluate("document.getElementById('toast').classList.remove('on')")
+            self.assertIn("/epub/c1.xhtml", self.page.evaluate("document.querySelector('.reader iframe').contentWindow.location.href"))
+            self.assertIn("Chapitre 1 / 3", self.chapter())
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.follow("Vers la fin", "Chapitre 2 / 3")
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")                # l'ancre est suivie : le chapitre est défilé jusqu'à « La fin »
+
+    def test_a_named_anchor_without_href_does_not_swallow_the_click(self):
+        entry = self.book("Ancres")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 5")
+        self.frame().locator("#nm").click(position={"x": 1750, "y": 500})          # le bord droit de l'écran : tourner la page, comme partout ailleurs sur le texte
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 100")
+
+    def test_an_anchor_survives_a_theme_change_made_while_the_chapter_loads(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.page.evaluate("""() => {          // d'un seul tour : le thème change avant que le chapitre 2 soit arrivé
+          var doc = document.querySelector('.reader iframe').contentDocument;
+          Array.from(doc.querySelectorAll('a')).find(function (a) { return a.textContent === 'Vers la fin'; }).click();
+          Array.from(document.querySelectorAll('.reader .btns button')).find(function (b) { return b.textContent.indexOf('Thème') >= 0; }).click();
+        }""")
+        self.page.wait_for_function("l => document.querySelector('.reader .pg').textContent.indexOf(l) === 0", arg="Chapitre 2 / 3")
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")          # l'ancre « La fin » est rejointe quand même
+
+    def test_a_link_to_an_anchor_of_the_same_chapter_scrolls_without_leaving_it_or_stacking_history(self):
+        entry = self.book("Heros")
+        self.open("#/i/" + self.item("livres", "Heros")["id"])
+        self.page.evaluate("location.hash = '#/read/" + entry + "'")
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.frame().locator("a", has_text="Aller en bas").click()
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")
+        self.assertIn("Chapitre 3", self.chapter())                                # le chapitre n'a pas changé
+        self.page.locator(".reader .rbar button[aria-label=Retour]").click()
+        self.shown("#/i/" + self.item("livres", "Heros")["id"])                    # l'ancre n'a rien ajouté à l'historique
+
+
 def solid_png(width, height):
     """Un vrai PNG uni de cette taille : la liseuse décide du couplage des pages d'après leurs dimensions."""
     def chunk(tag, data):
@@ -3343,6 +3433,63 @@ class TestSettings(UiCase):
         self.assertEqual(self.view("button", has_text="Tout replier").count(), 1)
         self.view("button", has_text="Tout replier").click()
         self.assertEqual(self.view(".job .jhead[aria-expanded=true]").count(), 0)
+
+    def test_a_running_task_log_keeps_its_scroll_and_the_focus_while_it_grows(self):
+        import threading
+        grow, bottom = threading.Event(), threading.Event()
+
+        def work(log):
+            for n in range(100):
+                log(f"ligne {n}")
+            grow.wait(20)
+            for n in range(100, 140):
+                log(f"ligne {n}")
+            bottom.wait(20)
+            log("ligne finale")
+        self.addCleanup(lambda: (grow.set(), bottom.set(), self.run_.wait_jobs()))
+        self.run_.hub.jobs._submit("Essai défilement", work)
+        self.open("#/settings?tab=gestion")
+        job = self.view(".job", has_text="Essai défilement")
+        job.locator(".jhead").click()
+        pre = job.locator("pre")
+        pre.wait_for()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 99') >= 0")
+        self.assertGreater(pre.evaluate("el => el.scrollHeight - el.clientHeight"), 100)
+        head = job.locator(".jhead")
+        head.focus()
+        head.evaluate("el => { window.__head = el; }")
+        pre.evaluate("el => { el.scrollTop = 80; }")
+        grow.set()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 139') >= 0", timeout=10000)
+        self.assertEqual(pre.evaluate("el => el.scrollTop"), 80)                     # le journal n'est pas revenu en haut
+        self.assertTrue(self.page.evaluate("document.activeElement === window.__head"))   # le focus est resté sur l'en-tête (rien n'a été reconstruit)
+        pre.evaluate("el => { el.scrollTop = el.scrollHeight; }")                    # lu jusqu'en bas : on suit la fin du journal
+        bottom.set()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne finale') >= 0", timeout=10000)
+        self.page.wait_for_function("(() => { var p = document.querySelector('.job pre'); return p.scrollHeight - p.scrollTop - p.clientHeight < 4; })()")
+
+    def test_an_open_log_keeps_its_scroll_when_another_task_arrives_or_is_unfolded(self):
+        import threading
+        release = threading.Event()
+
+        def work(log):
+            for n in range(100):
+                log(f"ligne {n}")
+            release.wait(20)
+        self.addCleanup(lambda: (release.set(), self.run_.wait_jobs()))
+        self.run_.hub.jobs._submit("Essai long", work)
+        self.open("#/settings?tab=gestion")
+        first = self.view(".job", has_text="Essai long")
+        first.locator(".jhead").click()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 99') >= 0")
+        first.locator("pre").evaluate("el => { el.scrollTop = 80; }")
+        self.run_.hub.jobs._submit("Essai court", lambda log: log("fait"))          # attend derrière la première : la liste gagne une tâche, le panneau est refait
+        second = self.view(".job", has_text="Essai court")
+        second.wait_for(timeout=10000)
+        self.assertEqual(self.view(".job", has_text="Essai long").locator("pre").evaluate("el => el.scrollTop"), 80)
+        second.locator(".jhead").click()                                          # déplier une autre tâche refait le panneau aussi
+        second.locator(".muted").wait_for()
+        self.assertEqual(self.view(".job", has_text="Essai long").locator("pre").evaluate("el => el.scrollTop"), 80)
 
     def test_every_task_of_the_history_is_listed_not_only_the_last_six(self):
         self.open("#/settings?tab=gestion")

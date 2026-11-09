@@ -937,6 +937,7 @@
     }
     function render() {
       var focus = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      var kept = logStates(logPanel);
       H.clear(el);
       logPanel = null; libsPanelNode = null;
       el.appendChild(h('h1', null, H.t('Paramètres')));
@@ -948,6 +949,7 @@
       else if (active === 'preferences') preferences(body);
       else accounts(body);
       el.appendChild(body);
+      if (logPanel) logRestore(logPanel, kept);          // un journal lu à mi-chemin le reste quand la page est refaite (une tâche qui se termine)
       var on = bar.querySelector('.on');
       if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir (après le contenu : lire offsetLeft sur une page à moitié reconstruite la ramenait en haut)
       wasAdmin = H.isAdmin();
@@ -1301,19 +1303,46 @@
       if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, H.t('Aucune tâche pour l’instant.')));
       jobs.forEach(function (j) {
         var status = { waiting: H.t('en attente'), running: H.t('en cours'), done: H.t('terminée'), failed: H.t('échec') }[j.status], open = !!openJobs[j.id];
-        var node = h('div', { class: 'job ' + j.status }, h('button', { class: 'jhead f', 'aria-expanded': open ? 'true' : 'false', 'data-key': 'job-' + j.id,
+        var node = h('div', { class: 'job ' + j.status, 'data-job': j.id }, h('button', { class: 'jhead f', 'aria-expanded': open ? 'true' : 'false', 'data-key': 'job-' + j.id,
           onclick: function () { openJobs[j.id] = !open; showJobs('job-' + j.id); } }, h('span', { class: 'jt' }, h('b', null, H.tr(j.label)), h('span', null, status))));
-        if (open) node.appendChild(j.log && j.log.length ? h('pre', null, j.log.map(function (line) { return H.tr(line); }).join('\n')) : h('p', { class: 'muted' }, H.t('Rien n’a été noté.')));
+        if (open) node.appendChild(logText(j) ? h('pre', null, logText(j)) : h('p', { class: 'muted' }, H.t('Rien n’a été noté.')));
         log.appendChild(node);
       });
       return log;
     }
+    function logText(j) { return (j.log || []).map(function (line) { return H.tr(line); }).join('\n'); }
+    // Le défilement d'un journal : où il en est, et s'il était lu jusqu'en bas (alors il suit la fin).
+    function logState(pre) { return { top: pre.scrollTop, end: pre.scrollHeight - pre.scrollTop - pre.clientHeight < 4 }; }
+    function logKeep(pre, was) { pre.scrollTop = was.end ? pre.scrollHeight : was.top; }
+    function logStates(panel) {          // le défilement de chaque journal ouvert du panneau, par tâche : à rendre au panneau qui le remplace
+      var kept = {};
+      if (panel) Array.prototype.forEach.call(panel.querySelectorAll('.job pre'), function (pre) { kept[pre.parentNode.getAttribute('data-job')] = logState(pre); });
+      return kept;
+    }
+    function logRestore(panel, kept) {
+      Array.prototype.forEach.call(panel.querySelectorAll('.job pre'), function (pre) { var was = kept[pre.parentNode.getAttribute('data-job')]; if (was) logKeep(pre, was); });
+    }
+    // Les journaux grossissent toutes les 1,5 s : on ne change que le texte de ceux qui ont changé, sans toucher au reste (focus, défilement, sélection).
+    // Faux (rien n'a été modifié) si autre chose que des journaux a changé : une tâche ajoutée ou finie, un journal qui apparaît.
+    function patchLogs() {
+      var nodes = logPanel.querySelectorAll('.job'), todo = [];
+      if (nodes.length !== jobs.length) return false;
+      for (var i = 0; i < jobs.length; i++) {
+        var j = jobs[i], node = nodes[i], pre = node.querySelector('pre'), text = logText(j);
+        if (node.getAttribute('data-job') !== String(j.id) || node.className !== 'job ' + j.status) return false;
+        if (openJobs[j.id] && !!pre !== !!text) return false;
+        if (pre && pre.textContent !== text) todo.push([pre, text]);
+      }
+      todo.forEach(function (t) { var was = logState(t[0]); t[0].textContent = t[1]; logKeep(t[0], was); });
+      return true;
+    }
     // Remplace le panneau des tâches sur place (la page garde son défilement), en rendant le focus à ce qui l'avait.
     function showJobs(key) {
       var focus = key || (document.activeElement && logPanel && logPanel.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null);
-      var fresh = jobsPanel();
+      var kept = logStates(logPanel), fresh = jobsPanel();
       logPanel.parentNode.replaceChild(fresh, logPanel);
       logPanel = fresh;
+      logRestore(fresh, kept);
       if (focus) H.focus.key(fresh, focus, true);
     }
     function poll() {
@@ -1336,7 +1365,7 @@
         else {
           var mark = el.querySelector('[data-key="tab-gestion"]');          // un point sur l'onglet de gestion tant qu'il y en a une en cours
           if (mark) mark.classList.toggle('busy', !!busy);
-          if (logPanel && tasks !== lastTasks) showJobs();
+          if (logPanel && tasks !== lastTasks && !patchLogs()) showJobs();
         }
         lastPage = page; lastTasks = tasks;
         if (busy) timer = setTimeout(poll, 1500);

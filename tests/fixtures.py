@@ -152,7 +152,8 @@ def write_cbz(path, pages=3, **info):
     return path
 
 
-def write_epub(path, title="Un roman", author="Quelqu'un", chapters=2):
+def write_epub(path, title="Un roman", author="Quelqu'un", chapters=2, body=None):
+    """`body(n)` : le HTML du chapitre n (par défaut un titre et une phrase) ; il peut renvoyer vers les autres chapitres (c1.xhtml, c2.xhtml...)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     manifest = "".join(f'<item id="c{n}" href="c{n}.xhtml" media-type="application/xhtml+xml"/>' for n in range(1, chapters + 1))
     spine = "".join(f'<itemref idref="c{n}"/>' for n in range(1, chapters + 1))
@@ -164,7 +165,8 @@ def write_epub(path, title="Un roman", author="Quelqu'un", chapters=2):
         z.writestr("META-INF/container.xml", container)
         z.writestr("content.opf", opf)
         for n in range(1, chapters + 1):
-            z.writestr(f"c{n}.xhtml", f"<html xmlns='http://www.w3.org/1999/xhtml'><body><h1>Chapitre {n}</h1><p>Texte du chapitre {n}.</p></body></html>")
+            content = body(n) if body else f"<h1>Chapitre {n}</h1><p>Texte du chapitre {n}.</p>"
+            z.writestr(f"c{n}.xhtml", f"<html xmlns='http://www.w3.org/1999/xhtml'><body>{content}</body></html>")
     return path
 
 
