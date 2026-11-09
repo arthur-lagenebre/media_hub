@@ -208,7 +208,7 @@
     function here(doc) { return plain(new URL(doc.URL)) === plain(new URL(info.chapters[chap], location.href)); }          // `doc` est le chapitre demandé (et pas celui qu'on quitte)
     function reach(doc, name) {          // l'élément d'ancre `name` du chapitre affiché
       try { name = decodeURIComponent(name); } catch (e) { /* ancre telle quelle */ }
-      var target = name && doc.getElementById(name);
+      var target = name && (doc.getElementById(name) || doc.getElementsByName(name)[0]);          // `id`, ou `<a name>` des livres EPUB 2
       if (target) target.scrollIntoView();
     }
     function followLink(link, doc) {          // un lien du livre se suit dans la liseuse ; ni un site extérieur ni un fichier du livre ne fait quitter la page
@@ -216,7 +216,8 @@
       try { to = new URL(link.getAttribute('href') || link.getAttribute('xlink:href') || '', doc.URL); } catch (e) { return; }
       var n = chapterOf(to);
       if (n < 0) { H.toast(H.t('Ce lien ne mène pas à un chapitre du livre.')); return; }
-      if (n === chap && here(doc)) reach(doc, to.hash.slice(1)); else chapter(n, 0, to.hash.slice(1));
+      var hash = to.hash.slice(1);
+      if (n === chap && here(doc) && hash) reach(doc, hash); else chapter(n, 0, hash);          // le chapitre lu, sans ancre : on le reprend au début
     }
     function skipChapter(d) {
       var n = chap + d;
@@ -279,7 +280,7 @@
     function setLabel(b, text) { var l = b.querySelector('.lbl'); if (l) l.textContent = text; }
     function paint() {
       var n = total(), last = pos + count;          // BD : `last` est le rang (à partir de 1) de la dernière page de la vue
-      if (info.format !== 'cbz') label.textContent = H.t('Chapitre {n} / {total}', { n: Math.floor(pos) + 1, total: n });
+      if (info.format !== 'cbz') label.textContent = H.t('Chapitre {n} / {total}', { n: Math.min(Math.floor(pos), chap) + 1, total: n });
       else label.textContent = count > 1 ? H.t('Pages {a}–{b} / {total}', { a: pos + 1, b: last, total: n }) : H.t('Page {n} / {total}', { n: pos + 1, total: n });
       var ratio = n ? (info.format === 'cbz' ? last / n : pos / n) : 0;
       slider.querySelector('i').style.width = Math.min(100, ratio * 100) + '%';
@@ -314,8 +315,12 @@
         else if (k === 'ArrowLeft' || k === 'PageUp') { scroll(-1); eat(); }
         else if (k === 'ArrowDown') { frame.contentWindow.scrollBy(0, 90); eat(); }
         else if (k === 'ArrowUp') { frame.contentWindow.scrollBy(0, -90); eat(); }
-        else if (k === 'Enter') { showBar(true); H.focus.set(slider, true); eat(); }
+        else if (k === 'Enter') { if (!onLink()) { showBar(true); H.focus.set(slider, true); eat(); } }          // sur un lien (Tab), Entrée le suit : le navigateur envoie le clic
       }
+    }
+    function onLink() {          // le focus est sur un lien du chapitre
+      var doc = frame && frame.contentDocument, on = doc && doc.activeElement;
+      return !!on && on.localName === 'a' && (on.hasAttribute('href') || on.hasAttribute('xlink:href'));
     }
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('resize', onResize);

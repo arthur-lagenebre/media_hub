@@ -66,8 +66,9 @@ def give_artist_a_sheet(db):
 PROSE = 70          # la largeur maximale des textes courants (--prose), en rem
 
 
-def max_width_rem(locator):
-    return locator.evaluate("el => parseFloat(getComputedStyle(el).maxWidth) / parseFloat(getComputedStyle(document.documentElement).fontSize)")
+def width_rem(locator):
+    """La largeur réellement occupée par l'élément, en rem (pas son `max-width` : un parent plus étroit la réduit)."""
+    return locator.evaluate("el => el.getBoundingClientRect().width / parseFloat(getComputedStyle(document.documentElement).fontSize)")
 
 
 @unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
@@ -722,8 +723,8 @@ class TestReaderGamebook(UiCase):
     @classmethod
     def add_media(cls, root):
         links = {1: '<p><a href="c3.xhtml">Aller au trois</a></p><p><a href="http://example.org/dehors">Lien dehors</a></p><p><a href="notes.xhtml">Les notes</a></p>',
-                 2: '<div style="height:3000px"></div><h2 id="fin">La fin</h2>', 3: '<p><a href="c1.xhtml">Retour au un</a></p><p><a href="c2.xhtml#fin">Vers la fin</a></p>'
-                    '<p><a href="#bas">Aller en bas</a></p><div style="height:3000px"></div><p id="bas">En bas</p>'}
+                 2: '<div style="height:3000px"></div><h2 id="fin">La fin</h2><div style="height:3000px"></div><p><a name="vieux">Le vieil ancrage</a></p><div style="height:2000px"></div>', 3: '<p><a href="c1.xhtml">Retour au un</a></p><p><a href="c2.xhtml#fin">Vers la fin</a></p><p><a href="c2.xhtml#vieux">Vers le vieil ancrage</a></p>'
+                    '<p><a href="#bas">Aller en bas</a></p><div style="height:3000px"></div><p id="bas">En bas</p><p><a href="c3.xhtml">Au début</a></p>'}
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Heros" / "Livre-jeu.epub", "Livre-jeu", "Auteur", chapters=3,
                             body=lambda n: f"<h1>Chapitre {n}</h1>{links[n]}")
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Ancres" / "Ancres.epub", "Ancres", "Auteur", chapters=1,          # une ancre nommée (sans href) couvre tout l'écran : elle n'est pas un lien
@@ -793,6 +794,34 @@ class TestReaderGamebook(UiCase):
         self.page.wait_for_function("l => document.querySelector('.reader .pg').textContent.indexOf(l) === 0", arg="Chapitre 2 / 3")
         self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")          # l'ancre « La fin » est rejointe quand même
 
+    def test_enter_follows_the_focused_link(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.frame().locator("a", has_text="Aller au trois").focus()               # Tab amène le focus sur un lien, comme sur une page web
+        self.press("Enter")
+        self.page.wait_for_function("l => document.querySelector('.reader .pg').textContent.indexOf(l) === 0", arg="Chapitre 3 / 3")
+        self.assertFalse(self.page.evaluate("document.activeElement === document.querySelector('.reader .seekbar')"))          # Entrée a suivi le lien : elle n'a pas pris le curseur de progression
+
+    def test_a_link_to_the_chapter_already_shown_reloads_it_from_the_top(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.frame().locator("a", has_text="Aller en bas").click()
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")
+        self.frame().locator("a", has_text="Au début").click()                     # un lien vers le chapitre lu, sans ancre : on y revient au début
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY === 0")
+        self.assertIn("Chapitre 3 / 3", self.chapter())
+
+    def test_an_old_style_named_anchor_is_reached(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.follow("Vers le vieil ancrage", "Chapitre 2 / 3")                      # <a name="vieux"> (EPUB 2), pas un id
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 5000")
+
     def test_a_link_to_an_anchor_of_the_same_chapter_scrolls_without_leaving_it_or_stacking_history(self):
         entry = self.book("Heros")
         self.open("#/i/" + self.item("livres", "Heros")["id"])
@@ -801,7 +830,7 @@ class TestReaderGamebook(UiCase):
         self.follow("Aller au trois", "Chapitre 3 / 3")
         self.frame().locator("a", has_text="Aller en bas").click()
         self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")
-        self.assertIn("Chapitre 3", self.chapter())                                # le chapitre n'a pas changé
+        self.assertIn("Chapitre 3 / 3", self.chapter())                            # le chapitre n'a pas changé (en bas de page, le compteur ne passe pas au suivant)
         self.page.locator(".reader .rbar button[aria-label=Retour]").click()
         self.shown("#/i/" + self.item("livres", "Heros")["id"])                    # l'ancre n'a rien ajouté à l'historique
 
@@ -1413,11 +1442,10 @@ class TestSagaEditor(UiCase):
     def test_the_lead_and_the_empty_page_use_the_prose_width(self):
         self.open("#/sagas")
         self.view(".lead").first.wait_for()
-        self.assertEqual(max_width_rem(self.view(".lead").first), PROSE)
-        self.open("#/sagas?g=Inconnue")
-        self.view(".blank").wait_for()
-        self.assertEqual(max_width_rem(self.view(".blank")), PROSE)
-        self.assertEqual(max_width_rem(self.view(".blank p")), PROSE)                   # le texte de la page, pas seulement son conteneur
+        self.assertAlmostEqual(width_rem(self.view(".lead").first), PROSE, delta=0.1)
+        self.open("#/sagas?g=" + urllib.parse.quote("mot " * 120))                      # un nom assez long pour que la phrase remplisse la largeur permise
+        self.view(".blank p").wait_for()
+        self.assertAlmostEqual(width_rem(self.view(".blank p")), PROSE, delta=0.1)      # le texte lui-même, pas seulement son plafond : le conteneur ne doit pas le rétrécir
 
     def test_a_saga_lists_its_films_and_moves_them(self):
         self.open("#/sagas?g=Ma%20saga")
@@ -3584,6 +3612,51 @@ class TestSettings(UiCase):
         self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne finale') >= 0", timeout=10000)
         self.page.wait_for_function("(() => { var p = document.querySelector('.job pre'); return p.scrollHeight - p.scrollTop - p.clientHeight < 4; })()")
 
+    def test_the_text_selected_in_a_running_log_survives_its_updates(self):
+        import threading
+        grow, finish = threading.Event(), threading.Event()
+
+        def work(log):
+            for n in range(100):
+                log(f"ligne {n}")
+            grow.wait(20)
+            for n in range(100, 140):
+                log(f"ligne {n}")
+            finish.wait(20)          # la tâche reste en cours : sa fin referait toute la page
+        self.addCleanup(lambda: (grow.set(), finish.set(), self.run_.wait_jobs()))
+        self.run_.hub.jobs._submit("Essai sélection", work)
+        self.open("#/settings?tab=gestion")
+        job = self.view(".job", has_text="Essai sélection")
+        job.locator(".jhead").click()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 99') >= 0")
+        job.locator("pre").evaluate("el => { var r = document.createRange(); r.setStart(el.firstChild, 0); r.setEnd(el.firstChild, 7); var s = getSelection(); s.removeAllRanges(); s.addRange(r); }")
+        self.assertEqual(self.page.evaluate("getSelection().toString()"), "ligne 0")
+        grow.set()
+        self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 139') >= 0", timeout=10000)
+        self.assertEqual(self.page.evaluate("getSelection().toString()"), "ligne 0")          # copier un extrait d'une tâche en cours n'est pas interrompu par la mise à jour
+
+    def test_a_task_view_that_is_gone_stops_polling_even_when_a_reply_is_late(self):
+        import threading
+        release = threading.Event()
+        self.addCleanup(lambda: (release.set(), self.run_.wait_jobs()))
+        self.run_.hub.jobs._submit("Essai minuteur", lambda log: release.wait(30))
+        self.open("#/")
+        self.page.evaluate("location.hash = '#/settings?tab=gestion'")
+        self.shown("#/settings?tab=gestion")
+        self.view(".job", has_text="Essai minuteur").wait_for()
+        self.page.evaluate("""() => {          // les réponses de /api/jobs arrivent une seconde plus tard ; on compte les appels
+          var fetchNow = window.fetch; window.jobsCalls = 0;
+          window.fetch = function (url) {
+            if (String(url).indexOf('/api/jobs') < 0) return fetchNow.apply(this, arguments);
+            var self = this, args = arguments; window.jobsCalls += 1;
+            return new Promise(function (ok) { setTimeout(ok, 1000); }).then(function () { return fetchNow.apply(self, args); });
+          };
+        }""")
+        self.page.evaluate("() => { Hub.current().view.refresh(); history.back(); }")          # une interrogation part, puis la page est quittée (la vue est détruite) avant sa réponse
+        self.shown("#/")
+        self.page.wait_for_timeout(3500)          # la réponse arrive, puis un tour de 1,5 s s'écoulerait si le minuteur était réarmé
+        self.assertEqual(self.page.evaluate("window.jobsCalls"), 1)
+
     def test_an_open_log_keeps_its_scroll_when_another_task_arrives_or_is_unfolded(self):
         import threading
         release = threading.Event()
@@ -3833,8 +3906,8 @@ class InboxUiCase(unittest.TestCase):
 
     # --- Envoyer -------------------------------------------------------------
     def test_the_intro_uses_the_prose_width(self):
-        page = self.upload_page()
-        self.assertEqual(max_width_rem(page.locator("#views > .view:visible .intro")), PROSE)
+        page = self.upload_page(width=1920)
+        self.assertAlmostEqual(width_rem(page.locator("#views > .view:visible .intro")), PROSE, delta=0.1)
 
     def test_a_file_goes_through_and_keeps_the_name_the_server_gave_it(self):
         page = self.upload_page()
