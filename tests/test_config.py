@@ -179,16 +179,15 @@ class TestLoad(TempCase):
 
     def test_the_inbox_limits_default_to_safe_values_in_bytes(self):
         cfg = self.load()
-        self.assertEqual((cfg.inbox_max_file, cfg.inbox_quota, cfg.inbox_keep_free, cfg.inbox_max_uploads), (8192 << 20, 20480 << 20, 10240 << 20, 2))
-        self.assertLess(cfg.inbox_max_file, cfg.inbox_quota)
+        self.assertEqual((cfg.inbox_keep_free, cfg.inbox_max_uploads), (10240 << 20, 2))
 
     def test_the_inbox_limits_are_given_in_megabytes(self):
-        cfg = self.load(HUB_INBOX_MAX_FILE="100", HUB_INBOX_QUOTA="500", HUB_INBOX_KEEP_FREE="50", HUB_INBOX_MAX_UPLOADS="4")
-        self.assertEqual((cfg.inbox_max_file, cfg.inbox_quota, cfg.inbox_keep_free, cfg.inbox_max_uploads), (100 << 20, 500 << 20, 50 << 20, 4))
+        cfg = self.load(HUB_INBOX_KEEP_FREE="50", HUB_INBOX_MAX_UPLOADS="4")
+        self.assertEqual((cfg.inbox_keep_free, cfg.inbox_max_uploads), (50 << 20, 4))
 
-    def test_the_inbox_always_takes_at_least_one_megabyte_and_one_upload_and_keeps_a_non_negative_space(self):
-        cfg = self.load(HUB_INBOX_MAX_FILE="0", HUB_INBOX_QUOTA="-5", HUB_INBOX_KEEP_FREE="-1", HUB_INBOX_MAX_UPLOADS="0")
-        self.assertEqual((cfg.inbox_max_file, cfg.inbox_quota, cfg.inbox_keep_free, cfg.inbox_max_uploads), (1 << 20, 1 << 20, 0, 1))
+    def test_the_inbox_always_takes_at_least_one_upload_and_keeps_a_non_negative_space(self):
+        cfg = self.load(HUB_INBOX_KEEP_FREE="-1", HUB_INBOX_MAX_UPLOADS="0")
+        self.assertEqual((cfg.inbox_keep_free, cfg.inbox_max_uploads), (0, 1))
 
     def test_the_tmdb_key_comes_from_the_environment_before_the_dotenv_file(self):
         repo = self.tmp / "ml"

@@ -33,7 +33,7 @@ Ce document décrit ce que le serveur (`hub/server/app.py`) fait aujourd'hui, po
 | 404 | identifiant inconnu, image absente, route inconnue (`introuvable`). Une route existante appelée avec la mauvaise méthode donne aussi 404. |
 | 409 | ce nom de compte est déjà pris |
 | 411 | `Content-Length obligatoire` : un envoi dans la boîte de réception sans cet en-tête, ou avec un corps en morceaux (`Transfer-Encoding`) |
-| 413 | corps trop gros ; boîte de réception : fichier plus gros que `HUB_INBOX_MAX_FILE`, ou quota du compte dépassé |
+| 413 | corps trop gros (corps JSON de plus de 1 Mo, image ou fichier à taille limitée) ; **jamais** pour la boîte de réception, qui n'a aucune limite de taille |
 | 429 | trop d'essais de connexion depuis cette adresse (`/api/token`) ; boîte de réception : trop d'envois en cours (`HUB_INBOX_MAX_UPLOADS`) |
 | 415 | image refusée (photo d'artiste : pas une image, ou illisible) ; boîte de réception : extension de fichier refusée |
 | 507 | boîte de réception : pas assez d'espace libre sous `HUB_DATA` (`HUB_INBOX_KEEP_FREE`), ou disque plein pendant l'écriture |
@@ -316,7 +316,7 @@ Des comptes qui ont le droit **Envoyer** (`can_upload`, voir `POST /api/user/<id
 | --- | --- | --- |
 | `POST /api/inbox?name=<nom du fichier>` | un compte qui a le droit d'envoyer (l'administrateur toujours) | **201** `{"name": "Film (2).mkv", "size": 1048576, "account": "<id>"}` : `name` est le nom retenu. Le corps est **le fichier lui-même, en octets bruts** (pas de JSON, pas de `multipart`), `Content-Length` **obligatoire** |
 | `GET /api/inbox` | administrateur | `{"files": [{"account", "user", "name", "size", "date"}]}` : tous les envois, du plus récent au plus ancien ; `user` : le nom du compte (son identifiant si le compte a été supprimé), `date` : horodatage Unix de la fin de l'envoi |
-| `GET /api/inbox?mine=1` | un compte qui a le droit d'envoyer | `{"files": […], "used": 52428800, "quota": 21474836480, "max_file": 8589934592}` : ses envois seulement, l'espace qu'ils occupent et les limites (octets) |
+| `GET /api/inbox?mine=1` | un compte qui a le droit d'envoyer | `{"files": […], "used": 52428800}` : ses envois seulement et l'espace qu'ils occupent (octets) ; aucun quota ni taille maximale |
 | `GET /api/inbox/<compte>/<nom>` | administrateur | le fichier en pièce jointe (`Content-Disposition: attachment`, `application/octet-stream`, `Range` accepté) |
 | `DELETE /api/inbox/<compte>/<nom>` | administrateur ; un compte qui a le droit, pour ses propres fichiers | `{"ok": true}`. 403 `ce fichier n'est pas à toi` pour le fichier d'un autre (qu'il existe ou non) |
 
@@ -329,7 +329,6 @@ Des comptes qui ont le droit **Envoyer** (`can_upload`, voir `POST /api/user/<id
 | 411 | `Content-Length` absent, ou corps en morceaux (`Transfer-Encoding`) |
 | 400 | `Content-Length` illisible (autre chose que des chiffres : `+10`, `1_0`, `-1`…), répété deux fois, ou nul (`fichier vide`) ; nom absent, vide ou illisible |
 | 415 | extension refusée (voir ci-dessous) |
-| 413 | fichier plus gros que `HUB_INBOX_MAX_FILE` (8 Go par défaut), ou qui dépasserait le quota du compte, `HUB_INBOX_QUOTA` (20 Go) : le quota compte les fichiers déjà envoyés et les envois en cours |
 | 507 | l'espace libre sous `HUB_DATA` tomberait sous `HUB_INBOX_KEEP_FREE` (10 Go) |
 | 429 | déjà `HUB_INBOX_MAX_UPLOADS` envois en cours (2) : c'est la seule réponse qui passe en réessayant plus tard |
 
