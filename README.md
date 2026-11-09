@@ -1,5 +1,11 @@
 # media_hub
 
+[![Tests](https://github.com/arthur-lagenebre/media_hub/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/arthur-lagenebre/media_hub/actions/workflows/tests.yml)
+[![Version](https://img.shields.io/github/v/tag/arthur-lagenebre/media_hub?label=version)](https://github.com/arthur-lagenebre/media_hub/tags)
+[![Image](https://github.com/arthur-lagenebre/media_hub/actions/workflows/image.yml/badge.svg)](https://github.com/arthur-lagenebre/media_hub/actions/workflows/image.yml)
+![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue)
+![Dépendances](https://img.shields.io/badge/dépendances-aucune-brightgreen)
+
 Le serveur de la médiathèque : **films, séries, animations, musique, livres**, depuis le NAS, dans un navigateur ou sur la télé (Android TV, Google TV, Fire TV). Même idée que Plex ou Jellyfin, mais sur mesure : rien à installer côté client, aucune dépendance pip (Pillow est facultatif), un seul processus Python.
 
 ```text
@@ -192,7 +198,7 @@ python -m unittest discover -s tests          # 1803 tests : 1534 serveur + 269 
 
 ### Intégration continue (GitHub Actions)
 
-Les workflows sont dans `.github/workflows/` ; l'environnement commun (media_library à côté, ffmpeg, `.venv`) est dans l'action `.github/actions/setup`.
+Les workflows sont dans `.github/workflows/` ; l'environnement commun (media_library à côté, ffmpeg, `.venv`) est dans l'action `.github/actions/setup`. Le badge « Tests » en tête de ce fichier reflète `tests.yml` sur `main`.
 
 | Workflow | Quand | Ce qu'il fait |
 | --- | --- | --- |
