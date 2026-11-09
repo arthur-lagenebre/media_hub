@@ -1004,10 +1004,17 @@ today = missing.today                       # le jour (« 2026-11-04 ») : un no
 UNSEEN = 24
 
 
-def unseen_row(rows, seen, profile, day, n=UNSEEN):
-    """Les films ou les séries d'une bibliothèque que ce compte n'a pas encore touchés (ni vus, ni commencés : aucune progression sur aucun de leurs fichiers), dans un ordre qui ne dépend que du compte et du jour : le même toute la journée, un autre demain."""
+def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random"):
+    """Les films ou les séries d'une bibliothèque que ce compte n'a pas encore touchés (ni vus, ni commencés : aucune progression sur aucun de leurs fichiers ; c'est l'état « à voir » de watch_state), `n` au plus.
+
+    L'ordre est choisi par le réglage `home_unseen_sort` du compte, et appliqué avant la coupe à `n` : `random` (défaut) ne dépend que du compte et du jour (le même toute la journée, un autre demain) ; `rating` : la note TMDB montrée, de la meilleure à la moins bonne (comme le tri « Mieux notés » de la bibliothèque : ce qui a moins de MIN_VOTES votes ou aucune note vient à la fin) ; `added` : le plus récemment ajouté d'abord."""
     pool = [r for r in rows if r["id"] not in seen]
-    pool.sort(key=lambda r: hashlib.sha1(f"{day}:{profile}:{r['id']}".encode()).hexdigest())
+    if sort == "rating":
+        pool.sort(key=rating_key)
+    elif sort == "added":
+        pool.sort(key=lambda r: (-r["added"], r["sort"]))
+    else:
+        pool.sort(key=lambda r: hashlib.sha1(f"{day}:{profile}:{r['id']}".encode()).hexdigest())
     return [summary(r) for r in pool[:n]]
 
 
@@ -1019,6 +1026,7 @@ def api_home(h, m, q):
     hub = h.hub
     seen = seen_counts(hub, h.user["id"])
     day, rows = today(), []
+    order = prefs.load(hub.db, h.user["id"])["home_unseen_sort"]
     for lib in h.visible_libs():
         items = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
         if lib.kind == "music":
@@ -1027,7 +1035,7 @@ def api_home(h, m, q):
             recent = [with_seen(r, seen) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
         row = {"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": recent, "count": len(items)}
         if lib.kind in UNSEEN_KINDS:
-            row["unseen"] = unseen_row(items, seen, h.user["id"], day)
+            row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order)
         rows.append(row)
     h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play")), "libraries": rows})
 

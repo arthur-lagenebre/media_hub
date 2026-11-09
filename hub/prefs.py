@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 KEY = "prefs:"                                    # base de données : prefs:<id du compte> donne ses réglages
-CHOICES = {"music_view": ("albums", "artists"), "movie_view": ("sagas", "films"), "home_latest": ("show", "hide"), "home_unseen": ("show", "hide"), "home_unseen_count": ("6", "12", "18", "24")}    # chaque réglage et les valeurs qu'il accepte
-DEFAULTS = {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"}      # la musique s'ouvre sur les albums, les films regroupés en sagas, l'accueil montre « Nouveautés » et « Pas encore vu »
+CHOICES = {"music_view": ("albums", "artists"), "movie_view": ("sagas", "films"), "home_latest": ("show", "hide"), "home_unseen": ("show", "hide"), "home_unseen_count": ("6", "12", "18", "24"),
+           "home_unseen_sort": ("random", "rating", "added")}    # chaque réglage et les valeurs qu'il accepte
+DEFAULTS = {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"}      # la musique s'ouvre sur les albums, les films regroupés en sagas, l'accueil montre « Nouveautés » et « Pas encore vu », celui-ci dans un ordre qui change chaque jour
 
 
 def _kept(db, uid):
