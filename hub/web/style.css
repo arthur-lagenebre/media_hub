@@ -5,6 +5,7 @@
   --text: #ece8e1; --mute: #94a0ab; --accent: #8fb4ff; --on-accent: #10151a;
   --gut: clamp(1rem, 3.4vw, 3.6rem);
   --cw: 9.5rem;
+  --prose: 70rem;          /* largeur maximale des textes courants (chapeau, page vide, introduction) */
   color-scheme: dark;
 }
 [data-lib="films"] { --accent: #f2b441; }
@@ -140,8 +141,8 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .tools .btn.flt .val { font-weight: 400; }
 @media (max-width: 640px) { .tools .btn.flt, .tools .btn.flt.wide { width: calc(50% - 0.7rem); } }
 .sentinel { height: 1px; }
-.blank { display: flex; flex-direction: column; align-items: flex-start; padding: 4rem var(--gut); max-width: 46rem; }
-.blank p { color: var(--mute); max-width: 36rem; }
+.blank { display: flex; flex-direction: column; align-items: flex-start; padding: 4rem var(--gut); max-width: var(--prose); }
+.blank p { color: var(--mute); max-width: var(--prose); }
 .blank .btn { margin-top: 0.8rem; }
 .search .results, .person .results { padding-top: 0.6rem; }
 .people h2 { padding: 0 var(--gut); font-size: 1.25rem; margin: 1rem 0 0.7rem; }
@@ -460,7 +461,7 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
 /* Sagas composées à la main */
-.sagaedit .lead { margin: 0 var(--gut) 1rem; max-width: 46rem; line-height: 1.5; }
+.sagaedit .lead { margin: 0 var(--gut) 1rem; max-width: var(--prose); line-height: 1.5; }
 .sfilm .no { width: 2.6rem; color: var(--mute); font-variant-numeric: tabular-nums; font-weight: 700; }
 .sfilm .what { min-width: 8rem; }
 .sfilm.absent .what b { color: var(--mute); font-style: italic; }
@@ -474,7 +475,7 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 @media (max-width: 40rem) { .line .btn { margin: 0.5rem 0.6rem 0 0; } }
 /* Envoyer : la page des envois (glisser-déposer, file, progression) et le droit « Envoyer » d'un compte */
 .upload { min-height: calc(100vh - 4rem); }          /* toute la page reçoit les fichiers lâchés, pas seulement la zone */
-.upload .intro { margin: 0 var(--gut) 1rem; max-width: 46rem; line-height: 1.5; }
+.upload .intro { margin: 0 var(--gut) 1rem; max-width: var(--prose); line-height: 1.5; }
 .drop { border: 0.15rem dashed var(--line); text-align: center; padding: 1.6rem 1.2rem; }
 .drop.over { border-color: var(--accent); background: var(--s2); }
 .drop .dropline { font-size: 1.1rem; font-weight: 650; margin: 0 0 0.9rem; }
