@@ -722,8 +722,8 @@ class TestReaderGamebook(UiCase):
     @classmethod
     def add_media(cls, root):
         links = {1: '<p><a href="c3.xhtml">Aller au trois</a></p><p><a href="http://example.org/dehors">Lien dehors</a></p><p><a href="notes.xhtml">Les notes</a></p>',
-                 2: '<div style="height:3000px"></div><h2 id="fin">La fin</h2>', 3: '<p><a href="c1.xhtml">Retour au un</a></p><p><a href="c2.xhtml#fin">Vers la fin</a></p>'
-                    '<p><a href="#bas">Aller en bas</a></p><div style="height:3000px"></div><p id="bas">En bas</p>'}
+                 2: '<div style="height:3000px"></div><h2 id="fin">La fin</h2><div style="height:3000px"></div><p><a name="vieux">Le vieil ancrage</a></p><div style="height:2000px"></div>', 3: '<p><a href="c1.xhtml">Retour au un</a></p><p><a href="c2.xhtml#fin">Vers la fin</a></p><p><a href="c2.xhtml#vieux">Vers le vieil ancrage</a></p>'
+                    '<p><a href="#bas">Aller en bas</a></p><div style="height:3000px"></div><p id="bas">En bas</p><p><a href="c3.xhtml">Au début</a></p>'}
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Heros" / "Livre-jeu.epub", "Livre-jeu", "Auteur", chapters=3,
                             body=lambda n: f"<h1>Chapitre {n}</h1>{links[n]}")
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Ancres" / "Ancres.epub", "Ancres", "Auteur", chapters=1,          # une ancre nommée (sans href) couvre tout l'écran : elle n'est pas un lien
@@ -793,6 +793,34 @@ class TestReaderGamebook(UiCase):
         self.page.wait_for_function("l => document.querySelector('.reader .pg').textContent.indexOf(l) === 0", arg="Chapitre 2 / 3")
         self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")          # l'ancre « La fin » est rejointe quand même
 
+    def test_enter_follows_the_focused_link(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.frame().locator("a", has_text="Aller au trois").focus()               # Tab amène le focus sur un lien, comme sur une page web
+        self.press("Enter")
+        self.page.wait_for_function("l => document.querySelector('.reader .pg').textContent.indexOf(l) === 0", arg="Chapitre 3 / 3")
+        self.assertFalse(self.page.evaluate("document.activeElement === document.querySelector('.reader .seekbar')"))          # Entrée a suivi le lien : elle n'a pas pris le curseur de progression
+
+    def test_a_link_to_the_chapter_already_shown_reloads_it_from_the_top(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.frame().locator("a", has_text="Aller en bas").click()
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")
+        self.frame().locator("a", has_text="Au début").click()                     # un lien vers le chapitre lu, sans ancre : on y revient au début
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY === 0")
+        self.assertIn("Chapitre 3 / 3", self.chapter())
+
+    def test_an_old_style_named_anchor_is_reached(self):
+        entry = self.book("Heros")
+        self.open("#/read/" + entry)
+        self.page.wait_for_function("document.querySelector('.reader iframe') && document.querySelector('.reader iframe').contentDocument && document.querySelector('.reader iframe').contentDocument.body && document.querySelector('.reader iframe').contentDocument.body.textContent.length > 20")
+        self.follow("Aller au trois", "Chapitre 3 / 3")
+        self.follow("Vers le vieil ancrage", "Chapitre 2 / 3")                      # <a name="vieux"> (EPUB 2), pas un id
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 5000")
+
     def test_a_link_to_an_anchor_of_the_same_chapter_scrolls_without_leaving_it_or_stacking_history(self):
         entry = self.book("Heros")
         self.open("#/i/" + self.item("livres", "Heros")["id"])
@@ -801,7 +829,7 @@ class TestReaderGamebook(UiCase):
         self.follow("Aller au trois", "Chapitre 3 / 3")
         self.frame().locator("a", has_text="Aller en bas").click()
         self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")
-        self.assertIn("Chapitre 3", self.chapter())                                # le chapitre n'a pas changé
+        self.assertIn("Chapitre 3 / 3", self.chapter())                            # le chapitre n'a pas changé (en bas de page, le compteur ne passe pas au suivant)
         self.page.locator(".reader .rbar button[aria-label=Retour]").click()
         self.shown("#/i/" + self.item("livres", "Heros")["id"])                    # l'ancre n'a rien ajouté à l'historique
 
