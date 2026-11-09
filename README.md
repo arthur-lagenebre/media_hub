@@ -52,8 +52,6 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_ADMIN` | nom du compte créé par `HUB_PASSWORD` | `admin` |
 | `HUB_FFMPEG` | dossier (ou fichier) de `ffmpeg` / `ffprobe` | `PATH`, puis `HUB_DATA/bin` |
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
-| `HUB_INBOX_MAX_FILE` | taille maximale d'un fichier envoyé dans la [boîte de réception](#boîte-de-réception-les-envois), en Mo (413 au-delà) | `8192` |
-| `HUB_INBOX_QUOTA` | espace d'envoi par compte, en Mo : ce que ses fichiers déjà envoyés et l'envoi en cours occupent (413 au-delà) | `20480` |
 | `HUB_INBOX_KEEP_FREE` | espace libre à garder sous `HUB_DATA`, en Mo : un envoi qui le ferait passer en dessous est refusé (507) | `10240` |
 | `HUB_INBOX_MAX_UPLOADS` | envois simultanés (un envoi occupe un fil du serveur) ; au-delà : HTTP 429 | `2` |
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne fait perdre aucune progression de lecture, et un `.mkv` illisible n'arrête pas le scan | `0` |
@@ -132,7 +130,7 @@ Un compte à qui l'administrateur a donné le droit **Envoyer** (`POST /api/user
 
 - **Pas d'envoi sans compte** : un serveur ouvert (sans compte) refuse tout envoi (403), il est visible d'Internet par Funnel.
 - **Réception** : `POST /api/inbox?name=<nom>`, le fichier en corps brut, `Content-Length` obligatoire (411 sinon ; pas de corps en morceaux). Le corps est lu par morceaux de 1 Mo dans `<nom>.part`, renommé quand tout est arrivé ; un envoi coupé ou trop court n'en laisse rien. Délai de lecture : celui de la connexion (120 s), un envoi bloqué se coupe.
-- **Limites**, vérifiées avant de lire le corps (la connexion est alors coupée) : taille du fichier (`HUB_INBOX_MAX_FILE`, 413), quota du compte (`HUB_INBOX_QUOTA`, 413), espace libre à garder (`HUB_INBOX_KEEP_FREE`, 507), envois simultanés (`HUB_INBOX_MAX_UPLOADS`, 429).
+- **Limites**, vérifiées avant de lire le corps (la connexion est alors coupée) : espace libre à garder sous `HUB_DATA` (`HUB_INBOX_KEEP_FREE`, 507), envois simultanés (`HUB_INBOX_MAX_UPLOADS`, 429). **Aucune limite de taille**, ni par fichier ni par compte : seul l'espace à garder refuse un envoi, pour que le disque ne se remplisse pas et ne coupe pas la base.
 - **Noms** : seul le dernier élément du chemin est gardé (`../x.mkv` donne `x.mkv`), les caractères de contrôle et `<>:"|?*` deviennent `_`, pas de point au début, les noms réservés de Windows sont préfixés, longueur bornée (200 octets). Extensions acceptées : vidéo (`.mkv .mp4 .avi…`), audio (`.flac .mp3 .m4a…`), livres (`.epub .cbz .pdf…`), sous-titres (`.srt .ass .vtt…`) et `.zip` ; tout le reste (exécutables, scripts, pages web) : 415. Un fichier n'en écrase jamais un autre : `Film.mkv` devient `Film (2).mkv`.
 - **Compte supprimé** : ses fichiers restent dans la boîte (l'administrateur les voit sous l'identifiant du compte).
 - **Nettoyage** : au démarrage puis chaque jour, les `.part` de plus de 24 h (un envoi abandonné par un arrêt brutal du serveur) sont supprimés.
@@ -171,7 +169,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 
 ## Limites connues
 
-- **Un envoi très lent occupe son emplacement** : le délai de lecture (120 s) s'applique à chaque lecture, pas à la durée totale. Un compte qui a le droit d'envoyer et n'envoie qu'un peu d'octets toutes les deux minutes garde un des `HUB_INBOX_MAX_UPLOADS` emplacements (et sa part de quota et d'espace) tant qu'il tient la connexion ; les autres envois reçoivent alors 429. Retirer son droit (`POST /api/user/<id>/upload`) ne coupe pas l'envoi en cours.
+- **Un envoi très lent occupe son emplacement** : le délai de lecture (120 s) s'applique à chaque lecture, pas à la durée totale. Un compte qui a le droit d'envoyer et n'envoie qu'un peu d'octets toutes les deux minutes garde un des `HUB_INBOX_MAX_UPLOADS` emplacements (et l'espace annoncé de son fichier) tant qu'il tient la connexion ; les autres envois reçoivent alors 429. Retirer son droit (`POST /api/user/<id>/upload`) ne coupe pas l'envoi en cours.
 - **Pas de reprise d'un envoi interrompu** dans la boîte de réception (pas de `Content-Range`) : un envoi coupé est à refaire entièrement. Les fichiers déposés ne sont pas rangés par le hub : l'administrateur les déplace à la main dans la médiathèque.
 - **Pas d'inscription publique** : seul un administrateur crée les comptes. Chaque compte a sa progression, ses playlists et son « Reprendre » ; les bibliothèques, les fiches enrichies et les albums manquants sont communs. Sans compte ni `HUB_PASSWORD`, le serveur reste ouvert (profil unique `default`).
 - **Homonymes** : `GET /api/person` retrouve une personne par son nom ; deux personnes qui s'appellent pareil sont confondues, un même nom écrit de deux façons (« Chris » / « Christopher ») fait deux personnes. Les étiquettes des films portent l'identifiant TMDB de chaque personne : un nom n'est « enrichissable » (films manquants) que s'il n'en a qu'un ; avec deux, aucun. Un film dont les tags n'ont pas encore ces identifiants n'en a pas, tant que `media_library` ne l'a pas réétiqueté. Après la mise à jour qui les lit, le premier scan **relit une fois tous les films**, même inchangés (les séries ne sont pas relues).

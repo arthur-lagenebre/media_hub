@@ -64,6 +64,11 @@ services:
       HUB_ADMIN: ${HUB_ADMIN:-admin}   # nom de ce premier compte (« admin » si absent du .env)
       HUB_MAX_STREAMS: "2"             # transcodages simultanés (i3-13100F : 2 flux 1080p sans souci)
       HUB_AUTOSCAN_HOURS: "6"
+      # Boîte de réception (les envois des comptes qui ont le droit « Envoyer ») : ils vont dans /data/inbox/<compte>/, donc dans media_hub-data, jamais dans une
+      # bibliothèque. Valeurs en Mo ; ni la taille d'un fichier ni le quota d'un compte n'ont de limite : pour plafonner la boîte, une
+      # limite de dataset TrueNAS sur media_hub-data (voir « Boîte de réception » dans README.md).
+      HUB_INBOX_KEEP_FREE: "${HUB_INBOX_KEEP_FREE:-10240}"       # espace libre à garder sous /data : un envoi qui passerait en dessous est refusé
+      HUB_INBOX_MAX_UPLOADS: "${HUB_INBOX_MAX_UPLOADS:-2}"       # envois simultanés
       TMDB_KEY: ${TMDB_KEY}
     volumes:
       - ${APPS}/media_hub:/app/media_hub:ro

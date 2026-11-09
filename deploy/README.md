@@ -20,7 +20,7 @@ Sur un dataset d'applications (ici `/mnt/tank/apps/media`, adapte) :
 /mnt/tank/apps/media/
   media_hub/          le dossier media_hub de cette archive
   media_library/      le dossier media_library de cette archive
-  media_hub-data/     vide : base SQLite, cache d'images, Pillow (pylib/, installé au premier démarrage ; le supprimer pour le réinstaller)
+  media_hub-data/     vide : base SQLite, cache d'images, Pillow (pylib/, installé au premier démarrage ; le supprimer pour le réinstaller), boîte de réception (inbox/, voir plus bas)
   ffmpeg/             ffmpeg et ffprobe (étape 2)
   tailscale/          l'état Tailscale (vide au premier lancement)
   tailscale-config/   y copier deploy/serve.json
@@ -71,7 +71,7 @@ docker exec -it media-hub python -m hub user rights alice --set Livres=none --se
 
 Depuis le shell web de TrueNAS (Apps > media-hub > Shell), lance seulement `python -m hub user …`. Le serveur peut tourner pendant ce temps. Il n'y a pas d'inscription publique.
 
-**Sauvegarde.** Les comptes (noms, hachés de mots de passe), la progression et les playlists sont dans `hub.db`, sous `HUB_DATA` (ici `/mnt/tank/apps/media/media_hub-data`). Sauvegarde ce dossier (un snapshot du dataset suffit) ; sans lui, il faudrait recréer les comptes. Aucun mot de passe en clair n'y figure.
+**Sauvegarde.** Les comptes (noms, hachés de mots de passe), la progression et les playlists sont dans `hub.db`, sous `HUB_DATA` (ici `/mnt/tank/apps/media/media_hub-data`). Sauvegarde ce dossier (un snapshot du dataset suffit) ; sans lui, il faudrait recréer les comptes. Aucun mot de passe en clair n'y figure. Ce dossier contient aussi la [boîte de réception](#boîte-de-réception) (fichiers envoyés, parfois de plusieurs Go).
 
 **Hachage des mots de passe.** Le serveur utilise `scrypt` si l'OpenSSL de Python le fournit (c'est le cas de l'image `python:3.13-slim`). Vérifie-le :
 
@@ -113,7 +113,7 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 - **Tailscale Funnel est activé** (`AllowFunnel` dans `serve.json`) : le hub est **visible de tout Internet**, à l'adresse `https://nas.tail59c227.ts.net`. Rien d'autre n'est publié : Funnel n'ouvre que le port 443 du `media_hub`, et le port 8080 de la télé reste sur le réseau local. Il n'y a **pas de double authentification** : la défense se limite au compte et à son mot de passe, avec `scrypt` pour le hachage, un ralentissement croissant à chaque échec, un blocage (429) après 10 échecs en 5 minutes, compté par adresse réelle du client, et des mots de passe de 12 caractères au moins (à la création et au changement). Un mot de passe faible ou réutilisé est donc la seule chose qui sépare un inconnu de la médiathèque : voir la procédure ci-dessous.
 - Le débit d'un Funnel est limité par Tailscale (limites non configurables, sans chiffre publié) : un film lu depuis l'extérieur peut saccader ; à la maison, utilise l'adresse locale.
 - Le conteneur `media_hub` n'a pas de nouveaux privilèges (`no-new-privileges`) et ne garde que deux capacités Linux : `DAC_OVERRIDE` et `FOWNER`, que « Supprimer » les fichiers parasites et les scripts de `media_library` demandent quand les fichiers appartiennent à un autre compte que root. Après un redéploiement, essaie *Gestion* > *Entretien* > *Supprimer*, puis *Compter* dans la fenêtre, puis *Supprimer définitivement* (avec un volume sans `:ro`) : si une erreur de droits apparaît, retire `cap_drop` du compose.
-- Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data`.
+- Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data`. Un compte qui a le droit « Envoyer » peut y écrire depuis Internet (boîte de réception, plafonnée par l'espace libre à garder et par une limite de dataset) : ne donne ce droit qu'à des personnes de confiance.
 - `.env` contient des secrets : ne le publie pas.
 
 ## Ouvrir à Internet (Funnel)
@@ -145,6 +145,106 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 - Tout de suite, sans redéployer : `docker exec media-hub-tailscale tailscale funnel reset` (coupe le Funnel du nœud ; il revient au prochain démarrage tant que `AllowFunnel` est dans `serve.json`). Cette commande n'a pas pu être vérifiée dans la documentation de Tailscale pour cette version : si elle échoue, retire `AllowFunnel` et redémarre, ou retire l'attribut `funnel` de la politique du tailnet (le Funnel cesse aussitôt).
 - Si un compte est en cause : `docker exec -it media-hub python -m hub user passwd <nom>` (ses appareils sont déconnectés) ou `user rm <nom>`.
 
+## Boîte de réception
+
+Un compte à qui l'administrateur a donné le droit **Envoyer** (*Paramètres* > *Comptes*) dépose des fichiers par l'adresse Funnel, comme par l'adresse locale. **Rien n'entre dans une bibliothèque** : les volumes restent en `:ro`, aucun volume n'a été ajouté pour cela. Les fichiers vont dans le dossier de données, que le conteneur monte déjà en lecture et écriture ; c'est à toi de les ranger. Le fonctionnement du côté serveur (noms, extensions acceptées, codes d'erreur) est dans le [README principal](../README.md#boîte-de-réception-les-envois).
+
+### Où sont les fichiers
+
+```text
+/mnt/tank/apps/media/media_hub-data/inbox/<identifiant du compte>/Film.mkv
+```
+
+L'identifiant est opaque (`default` pour le premier compte, de l'hexadécimal pour les autres) : pour savoir de qui est un dossier, lis le dernier mot de chaque ligne de
+
+```bash
+docker exec -it media-hub python -m hub user list     # nom, rôle, identifiant
+```
+
+La liste de la boîte de réception dans *Paramètres* > *Gestion* donne aussi, pour chaque fichier, le compte (`user`) et son dossier (`account`) ; le dossier d'un compte supprimé garde son identifiant, et ses fichiers restent là.
+
+### Les récupérer et les ranger
+
+- **Partage SMB** : TrueNAS > Shares > SMB > *Add*, avec pour chemin `/mnt/tank/apps/media/media_hub-data/inbox` (le sous-dossier, **pas** `media_hub-data` : `hub.db` contient les hachés des mots de passe), accessible à ton seul compte. Copie ou déplace les fichiers depuis ton poste. Un fichier effacé par ce partage libère aussitôt son espace (hors snapshots).
+- **Téléchargement** : l'onglet de la boîte de réception dans *Gestion* (administrateur seulement), un fichier à la fois, ou `GET /api/inbox/<compte>/<nom>`.
+- **Ranger** à la main : déplace le fichier dans le bon dossier de `/mnt/tank/media/…` (renomme-le comme le fait `media_library`), puis *Gestion* > *Tout mettre à jour*. Le hub n'ouvre ni ne décompresse un fichier déposé, un `.zip` y compris.
+
+### L'espace
+
+Le hub ne limite ni la taille d'un fichier ni l'espace d'un compte : seul le disque limite, et le dossier de données n'a pas de limite propre : sans réglage, des envois peuvent prendre la place de la médiathèque. Deux protections se complètent, mets les deux :
+
+1. **Une limite sur le dataset `media_hub-data`** (TrueNAS > Datasets > `media_hub-data` > *Edit* > *Advanced Options* > *Quota for this dataset*). Choisis la place que la boîte peut prendre, plus `HUB_INBOX_KEEP_FREE`, plus la place des données du hub (base, cache d'images, TMDB : quelques Go, davantage avec beaucoup d'affiches). Exemple : 40 Go pour les envois, 10 Go à garder libres, 10 Go de données : **60 Go**. Une limite plus petite que `HUB_INBOX_KEEP_FREE` fait refuser tous les envois (507).
+2. **`HUB_INBOX_KEEP_FREE`** : le serveur refuse (507) un envoi qui laisserait moins de cet espace libre sous `/data`, avant d'en lire un octet. Avec le quota du dataset, c'est l'espace libre *du dataset* que le serveur voit (à vérifier, voir l'essai ci-dessous) ; sans quota, c'est celui du pool, partagé avec la médiathèque.
+
+Les snapshots gardent les fichiers effacés : si `media_hub-data` en a, l'espace d'une boîte vidée ne revient qu'à l'expiration du snapshot.
+
+### Ajuster les limites
+
+Deux variables sont dans le `.env` (en Mo, valeurs par défaut dans `.env.example`) :
+
+| Variable | Rôle | Défaut |
+| --- | --- | --- |
+| `HUB_INBOX_KEEP_FREE` | espace libre à garder sous `/data` (507) | `10240` |
+| `HUB_INBOX_MAX_UPLOADS` | envois simultanés, tous comptes confondus (429) | `2` |
+
+Il n'y a pas de réglage de taille par fichier ni par compte : la limite de dataset ci-dessus est le plafond. Le conteneur ne les relit qu'à sa création : modifie le `.env` (ou les valeurs collées dans l'éditeur YAML de TrueNAS) puis **redéploie l'application** (*Edit* > *Save*, ou `docker compose up -d`). Un simple `docker restart media-hub` garde les anciennes valeurs. Un envoi en cours est coupé par le redéploiement.
+
+### Sauvegarde
+
+La boîte est dans `media_hub-data`, avec `hub.db` : un snapshot ou une sauvegarde de ce dataset l'emporte. Ce sont des fichiers à ranger, pas des données à garder : si la boîte est grosse, exclus `inbox/` de la sauvegarde de la base (la tâche de sauvegarde accepte un sous-dossier à exclure) ou range-la avant. Les `.part` d'envois abandonnés sont effacés par le serveur au bout de 24 h.
+
+### Couper en urgence
+
+- Retire le droit « Envoyer » du compte (*Paramètres* > *Comptes*) : il vaut dès l'envoi suivant (403). Fais-le pour chaque compte pour tout couper. Un envoi déjà en cours va jusqu'au bout ; redémarre le conteneur `media-hub` pour l'interrompre.
+- Un `.part` resté après une coupure brutale peut être supprimé à la main dans `inbox/<compte>/`.
+
+### Essai à faire sur place (Funnel, 1 à 2 Go)
+
+Je n'ai pas pu lancer cet essai : il demande le NAS et Funnel. Il vérifie ce qu'on ne peut pas régler : le débit de Funnel, ses délais, et l'espace réel sous `/data`. Note chaque résultat.
+
+**Préparer** (sur ton poste, pas sur le NAS) :
+
+```bash
+head -c 1500000000 /dev/urandom > test-funnel.mkv     # 1,5 Go ; Windows : fsutil file createnew test-funnel.mkv 1500000000
+read -rs -p "Mot de passe : " PW; echo                 # un compte qui a le droit « Envoyer »
+TOKEN=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"user\":\"alice\",\"password\":\"$PW\"}" https://nas.tail59c227.ts.net/api/token | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+```
+
+(Pas de `/dev/urandom` sous Windows ? Du contenu aléatoire est préférable à des zéros : ZFS compresserait des zéros et fausserait la mesure d'espace.)
+
+**1. Espace avant** : `docker exec media-hub df -m /data` (c'est ce que le serveur lit pour `HUB_INBOX_KEEP_FREE`) et, dans TrueNAS, l'espace libre et le quota du dataset `media_hub-data`. Les deux doivent concorder ; s'ils diffèrent, note de combien.
+
+**2. Envoi en ligne de commande, par Funnel** (depuis un réseau qui n'est pas celui du NAS, par exemple en partage de connexion du téléphone) :
+
+```bash
+curl -X POST -T test-funnel.mkv -H "Authorization: Bearer $TOKEN" --progress-bar \
+  -w '\nHTTP %{http_code} : %{size_upload} octets en %{time_total} s (%{speed_upload} octets/s)\n' \
+  "https://nas.tail59c227.ts.net/api/inbox?name=test-funnel.mkv"
+```
+
+Note le débit (octets/s ÷ 1 000 000 pour des Mo/s), la durée, et si l'envoi s'interrompt (code d'erreur de curl, ou avancement figé). Le serveur coupe un envoi qui ne reçoit rien pendant 120 s ; Funnel peut couper avant, ce que les journaux de `media-hub` ne montreront pas : seul le message de curl le dit. Attendu : `HTTP 201` et le nom retenu (`{"name": "test-funnel.mkv", …}`).
+
+**3. Envoi par le navigateur** : sur la page « Envoyer », même fichier, par l'adresse Funnel. Note la même chose, et si la barre de progression avance sans saccade.
+
+**4. Pendant un envoi** (relance-le pour avoir le temps) : depuis un autre appareil, lis un film et navigue dans les bibliothèques. Rien ne doit saccader ni se bloquer : un envoi tient un fil du serveur, pas un des `HUB_MAX_STREAMS` flux de lecture. Si tu peux, lance en même temps deux lectures en transcodage : elles démarrent, la troisième seulement répond 503.
+
+**5. Espace après** : de nouveau `docker exec media-hub df -m /data` et le dataset. L'espace libre a baissé de la taille du fichier (à quelques Mo près). Puis, dans le shell du NAS :
+
+```bash
+ls -l /mnt/tank/apps/media/media_hub-data/inbox/<identifiant>/
+```
+
+Le fichier doit avoir la **taille exacte** de l'original (`wc -c test-funnel.mkv`, ici 1 500 000 000), aucun `.part` à côté. Pour être sûr du contenu : `sha256sum` des deux.
+
+**6. Envoi annulé** : relance l'envoi, interromps-le à mi-chemin (Ctrl+C, ou ferme l'onglet). Attends 3 minutes (le serveur ne voit la coupure qu'à la fin de son délai de lecture si Funnel n'a pas fermé proprement) puis relis le dossier : **aucun `.part` ne doit rester**, et l'espace libre doit être revenu. S'il en reste un, note-le : le serveur ne l'efface qu'après 24 h.
+
+**7. Refus** (sans modifier de réglage) :
+
+- Un compte **sans** le droit « Envoyer » (avec son propre jeton) lance la même commande `curl` : `HTTP 403`, en une seconde ou deux. Si curl met des minutes, le serveur lit le fichier avant de refuser : c'est un défaut à signaler.
+- Faute de place : crée un fichier creux plus gros que l'espace libre du dataset (vu à l'étape 1, plus `HUB_INBOX_KEEP_FREE` ; par exemple `truncate -s 2T gros.mkv`, qui n'occupe pas d'espace) et envoie-le avec la même commande : `HTTP 507` aussitôt, avant que le moindre octet ait été lu. curl peut afficher une erreur d'envoi en plus (la connexion est coupée) : ce qui compte est le code HTTP, quand il y en a un, et que la réponse arrive en quelques secondes. Vérifie ensuite qu'aucun fichier ni `.part` n'est apparu dans `inbox/`.
+
+Efface ensuite `test-funnel.mkv` de la boîte (téléchargement/suppression dans *Gestion*, ou `rm` sur le NAS). Si l'un de ces points échoue, mets le résultat (code, durée, journal `docker logs media-hub`) dans une issue ou au bas de `docs/TODO.md`.
+
 ## Image Docker (facultative)
 
 Le compose ci-dessus monte les sources dans `python:3.13-slim`. À chaque étiquette de version (`vX.Y.Z`), `.github/workflows/image.yml` publie aussi une image toute faite, `ghcr.io/arthur-lagenebre/media_hub:<version>` (et `latest`), avec media_library, ffmpeg et Pillow dedans. Elle écoute `0.0.0.0:8080`, garde ses données dans `/data` et refuse de démarrer sans `HUB_PASSWORD` tant que la base n'a pas de compte. Les bibliothèques se montent sous `/srv`. Le compose n'a pas changé : l'image est une autre manière de déployer, pas un remplacement.
@@ -160,4 +260,5 @@ Le compose ci-dessus monte les sources dans `python:3.13-slim`. À chaque étiqu
 | Mot de passe refusé alors que `HUB_PASSWORD` est bon | `HUB_PASSWORD` n'amorce que le premier compte ; ensuite : `docker exec -it media-hub python -m hub user passwd <nom>` |
 | `https://nas…` ne répond pas | `docker logs media-hub-tailscale` : clé expirée, HTTPS non activé dans la console Tailscale, ou **Funnel non autorisé dans la politique du tailnet** (attribut `funnel` absent pour le nœud `nas` : ça marche alors avec Tailscale, pas sans) |
 | `media-hub-tailscale` redémarre en boucle, le port 8080 refuse la connexion, et `docker logs media-hub-tailscale` dit « failed to read serve config: invalid character '{' after top-level value » | le `serve.json` copié dans `tailscale-config/` n'est pas un JSON valide (par exemple le nouveau contenu collé à la suite de l'ancien). Remplace **tout** le fichier par `deploy/serve.json`, vérifie-le avec `python3 -m json.tool <chemin>/serve.json`, puis redémarre l'application entière |
+| Un envoi est refusé : 507 / 429 | 507 : le fichier laisserait moins de `HUB_INBOX_KEEP_FREE` d'espace libre sous `/data` (range ou supprime des fichiers de la boîte, ou agrandis la limite du dataset ; des snapshots peuvent retenir l'espace) ; 429 : `HUB_INBOX_MAX_UPLOADS` envois déjà en cours, réessaie plus tard |
 | Tout le monde est bloqué (« trop d'essais ») après des échecs d'une seule personne | le serveur ne voit pas l'adresse réelle du client (tout arrive de `127.0.0.1`) : voir l'étape 4 d'« Ouvrir à Internet » ; le blocage s'efface après 5 minutes ou au redémarrage de `media-hub` |
