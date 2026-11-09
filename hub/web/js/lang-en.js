@@ -12,6 +12,7 @@
   H.dict.en = {
     // --- Mots comptés par H.plural (singulier puis pluriel) ---
     'film': 'movie', 'films': 'movies',
+    'fichier': 'file', 'fichiers': 'files',
     'saga': 'saga', 'sagas': 'sagas',
     'épisode': 'episode', 'épisodes': 'episodes',
     'saison': 'season', 'saisons': 'seasons',
@@ -578,7 +579,53 @@
     'en cours': 'running',
     'terminée': 'done',
     'échec': 'failed',
-    'Rien n’a été noté.': 'Nothing was logged.'
+    'Rien n’a été noté.': 'Nothing was logged.',
+
+    // --- Envoyer : la page des envois, la boîte de réception, le droit « Envoyer » ---
+    'Envoyer': 'Upload',
+    'Envois': 'Uploads',
+    'Mes envois': 'My uploads',
+    'Boîte de réception': 'Inbox',
+    'Dépose ici des films, séries, musique ou livres pour l’administrateur. Ils vont dans une boîte de réception : rien n’entre dans la médiathèque avant qu’il les range.': 'Drop movies, TV shows, music or books here for the administrator. They go into an inbox: nothing enters the library until the administrator files it.',
+    'Glisse des fichiers ici, ou choisis-les sur cet appareil.': 'Drag files here, or pick them on this device.',
+    'Choisis les fichiers à envoyer depuis cet appareil.': 'Pick the files to upload from this device.',
+    'Choisir des fichiers': 'Choose files',
+    'Films, séries, musique, livres, sous-titres et archives .zip. Les autres types de fichiers sont refusés.': 'Movies, TV shows, music, books, subtitles and .zip archives. Other file types are refused.',
+    'Un dossier ne s’envoie pas : choisis les fichiers qu’il contient.': 'A folder can’t be uploaded: choose the files inside it.',
+    'Envoyer des fichiers n’est pas possible sur une télévision.': 'Uploading files isn’t possible on a TV.',
+    'Tu n’as pas le droit d’envoyer des fichiers.': 'You’re not allowed to upload files.',
+    'Ta session a expiré : les envois sont arrêtés. Reconnecte-toi, puis recommence.': 'Your session has expired: uploads are stopped. Sign in again, then start over.',
+    'Se reconnecter': 'Sign in again',
+    'Arrêté : la session a expiré.': 'Stopped: the session has expired.',
+    'La connexion a été coupée pendant l’envoi : le serveur est peut-être occupé (réessaie plus tard), ou le fichier est refusé (type, taille, espace).': 'The connection was cut during the upload: the server may be busy (try again later), or the file is refused (type, size, space).',
+    'Le serveur est occupé : nouvel essai dans quelques secondes.': 'The server is busy: trying again in a few seconds.',
+    'En attente': 'Waiting',
+    '{sent} sur {total}': '{sent} of {total}',
+    'reste {time}': '{time} left',
+    'Envoyé · {size}': 'Uploaded · {size}',
+    'enregistré sous ce nom (tu l’avais appelé « {name} »)': 'saved under this name (you had called it “{name}”)',
+    'Annulé': 'Cancelled',
+    'Annuler l’envoi de {name}': 'Cancel the upload of {name}',
+    'Retirer de la liste': 'Remove from the list',
+    'Retirer {name} de la liste': 'Remove {name} from the list',
+    'Espace utilisé : {used}': 'Space used: {used}',
+    'Tu n’as encore rien envoyé.': 'You haven’t uploaded anything yet.',
+    'Supprimer {name}': 'Delete {name}',
+    'Supprimer ce fichier ?': 'Delete this file?',
+    '« {name} » sera supprimé du serveur, et cela ne s’annule pas.': '“{name}” will be deleted from the server, and this can’t be undone.',
+    '« {name} », envoyé par {user}, sera supprimé du serveur, et cela ne s’annule pas.': '“{name}”, uploaded by {user}, will be deleted from the server, and this can’t be undone.',
+    'Fichier supprimé : {name}': 'File deleted: {name}',
+    'Quitter la page ?': 'Leave this page?',
+    'Des envois sont en cours ou en attente : si tu quittes cette page, ils seront annulés.': 'Uploads are in progress or waiting: if you leave this page, they will be cancelled.',
+    'Quitter et annuler': 'Leave and cancel',
+    'Les fichiers que les comptes ont envoyés. Rien n’y est rangé dans une bibliothèque : télécharge-les, puis range-les toi-même.': 'The files the accounts have uploaded. None is filed in a library: download them, then file them yourself.',
+    'La boîte de réception est vide.': 'The inbox is empty.',
+    'Télécharger {name}': 'Download {name}',
+    'Peut envoyer des fichiers': 'Can upload files',
+    'Peut envoyer des fichiers : toujours': 'Can upload files: always',
+    'Peut envoyer des fichiers : {name}': 'Can upload files: {name}',
+    '{name} peut envoyer des fichiers': '{name} can now upload files',
+    '{name} ne peut plus envoyer de fichiers': '{name} can no longer upload files'
   };
 
   // Ce que le serveur écrit. Les libellés de bibliothèque viennent de la configuration (« Films », « Séries »…) : un nom que l'on a choisi soi-même reste tel quel.
@@ -756,6 +803,26 @@
     "impossible d'écrire {file} : {e}": 'can’t write {file}: {e}',
     'aucun réglage à changer': 'no setting to change',
     'réglage inconnu : {name}': 'unknown setting: {name}',
-    'valeur inconnue pour {name} : {value}': 'unknown value for {name}: {value}'
+    'valeur inconnue pour {name} : {value}': 'unknown value for {name}: {value}',
+
+    // --- Boîte de réception (hub/inbox.py, routes /api/inbox) ---
+    'nom du fichier attendu (?name=…)': 'file name expected (?name=…)',
+    'nom du fichier vide ou illisible': 'file name empty or unreadable',
+    'type de fichier refusé : {what}': 'file type refused: {what}',
+    "pas d'extension": 'no extension',
+    'compte invalide': 'invalid account',
+    'plus assez de place sur le serveur pour ce fichier': 'not enough room on the server for this file',
+    "trop d'envois en cours : réessaie dans un moment": 'too many uploads in progress: try again in a moment',
+    'trop de fichiers du même nom': 'too many files with the same name',
+    "un fichier de ce nom est apparu pendant l'envoi : recommence": 'a file with this name appeared during the upload: start again',
+    'écriture impossible : le disque du serveur est peut-être plein': 'can’t write: the server’s disk may be full',
+    'envoi interrompu : {got} octets reçus sur {length}': 'upload interrupted: {got} bytes received out of {length}',
+    "pas d'envoi sans compte : crée un compte sur le serveur": 'no uploads without an account: create an account on the server',
+    "tu n'as pas le droit d'envoyer des fichiers": 'you’re not allowed to upload files',
+    'Content-Length obligatoire': 'Content-Length required',
+    'fichier vide': 'empty file',
+    "ce fichier n'est pas à toi": 'this file isn’t yours',
+    'un administrateur peut toujours envoyer': 'an administrator can always upload',
+    '« upload » vaut vrai ou faux': '“upload” is true or false'
   };
 })();

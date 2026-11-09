@@ -7,6 +7,8 @@
   H.lib = function (id) { return H.libs.filter(function (l) { return l.id === id; })[0] || null; };
 
   // --- Barre du haut ----------------------------------------------------------
+  // Le compte peut déposer des fichiers dans la boîte de réception (droit « Envoyer »). Jamais sur une télévision : choisir des fichiers à la télécommande ne marche pas.
+  H.canUpload = function () { var me = H.session.user; return !!(me && me.can_upload) && H.device !== 'tv'; };
   H.nav = {
     build: function () {
       var nav = H.clear(document.getElementById('nav'));
@@ -18,6 +20,7 @@
       });
       nav.appendChild(links);
       nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': H.t('Recherche') }, H.icon('search')));
+      if (H.canUpload()) nav.appendChild(h('a', { class: 'tool f', href: '#/upload', 'data-nav': '#/upload', 'aria-label': H.t('Envoyer'), title: H.t('Envoyer') }, H.icon('upload')));
       nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': H.t('Paramètres') }, H.icon('gear')));
     },
     mark: function (hash) {
@@ -916,7 +919,7 @@
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
     }
-    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'preferences', label: H.t('Préférences') }, { id: 'comptes', label: H.t('Comptes') }];
+    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'inbox', label: H.t('Boîte de réception'), admin: true }, { id: 'preferences', label: H.t('Préférences') }, { id: 'comptes', label: H.t('Comptes') }];
     var OLD_TABS = { lecture: 'preferences', interface: 'preferences', taches: 'gestion', serveur: 'gestion' };          // les anciens onglets : les adresses et le choix mémorisé y mènent encore
     function visibleTabs() { return TABS.filter(function (t) { return !t.admin || H.isAdmin(); }); }
     function activeTab() {          // un onglet réservé à l'administrateur ne s'ouvre pas pour un autre compte : on retombe sur le premier
@@ -941,6 +944,7 @@
       el.appendChild(bar);
       var body = h('div', { class: 'tabbody' }), active = activeTab();
       if (active === 'gestion') gestion(body);
+      else if (active === 'inbox') body.appendChild(H.upload.adminPanel());
       else if (active === 'preferences') preferences(body);
       else accounts(body);
       el.appendChild(body);
@@ -1035,7 +1039,7 @@
         h('span', null, chosen === 'auto' ? H.t('Détecté : {name} — taille du texte, effets de survol, envoi de photo', { name: names[H.device] }) : H.t('Choisi : {name} — taille du texte, effets de survol, envoi de photo', { name: names[H.device] })), h('span', { class: 'ua' }, navigator.userAgent)),
         H.button(H.t('Changer'), 'quality', { 'data-key': 'device', onclick: function () {
           H.menu(H.t('Type d’appareil'), H.devices.map(function (d) { return { label: d[1], detail: d[0] === 'auto' ? H.t('Deviné d’après le navigateur ({name})', { name: names[H.detectDevice()] }) : '', value: d[0] }; }), chosen, function (v) {
-            H.pref('device', v === 'auto' ? null : v); H.applyDevice(); render(); H.focus.key(el, 'device');
+            H.pref('device', v === 'auto' ? null : v); H.applyDevice(); H.nav.build(); H.nav.mark('#/settings'); render(); H.focus.key(el, 'device');          // la barre du haut suit : pas d'entrée « Envoyer » sur une télévision
           });
         } })));
       var sizeNames = {};
@@ -1176,12 +1180,25 @@
       (users || []).forEach(function (u) {
         var mine = H.session.user && u.id === H.session.user.id;
         panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' ' + H.t('(toi)') : '')),
-          h('span', null, (ROLES[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? null : h('span', { 'data-rights': u.id }, rightsSummary(u))),
+          h('span', null, (ROLES[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
+          u.role === 'admin' ? null : uploadSwitch(u),
           u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger', { name: u.name }), onclick: function () { rightsOf(u); } }),
           H.button(H.t('Mot de passe'), 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': H.t('Changer le mot de passe de {name}', { name: u.name }), onclick: function () { passwordOf(u, mine); } }),
           H.button(H.t('Supprimer'), 'trash', { 'data-key': 'del-' + u.id, 'aria-label': H.t('Supprimer le compte de {name}', { name: u.name }), onclick: function () { deleteUser(u, mine); } })));
       });
       return panel;
+    }
+    // Le droit « Envoyer » d'un compte : un interrupteur, valable à la requête suivante. Un administrateur l'a toujours : pas d'interrupteur.
+    function uploadSwitch(u) {
+      return h('button', { class: 'chip switch f' + (u.can_upload ? ' on' : ''), type: 'button', 'aria-pressed': u.can_upload ? 'true' : 'false', 'data-key': 'upload-' + u.id,
+        'aria-label': H.t('Peut envoyer des fichiers : {name}', { name: u.name }),
+        onclick: function () {
+          var allow = !u.can_upload;
+          H.api('/api/user/' + encodeURIComponent(u.id) + '/upload', { upload: allow }).then(function () {
+            H.toast(allow ? H.t('{name} peut envoyer des fichiers', { name: u.name }) : H.t('{name} ne peut plus envoyer de fichiers', { name: u.name }));
+            refreshUsers('upload-' + u.id);
+          }).catch(function (e) { H.toast(e.message, 5000); });
+        } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, H.t('Peut envoyer des fichiers')));
     }
     function addUser() {
       var role = 'user', toggle = H.button(H.t('Rôle : {role}', { role: ROLES.user }), null, { 'data-key': 'new-role', 'aria-label': H.t('Rôle du nouveau compte, à changer'), onclick: function () {
@@ -1305,6 +1322,7 @@
       var jobsCall = H.isAdmin() ? H.api('/api/jobs?log=1').catch(function (e) { if (e.status === 403) return H.api('/api/jobs'); throw e; }) : H.api('/api/jobs');
       return Promise.all([H.api('/api/state'), jobsCall]).then(function (r) {
         H.setSession(r[0]);
+        if (H.canUpload() !== !!document.querySelector('#nav [data-nav="#/upload"]')) { H.nav.build(); H.nav.mark(location.hash || '#/'); }       // un droit « Envoyer » donné ou retiré se voit sans recharger
         if (!(r[0].auth && H.isAdmin())) { users = null; usersError = ''; return r; }
         return H.api('/api/users').then(function (res) { users = res.users; usersError = ''; return r; }, function (e) { users = null; usersError = e.message; return r; });
       }).then(function (r) {

@@ -319,7 +319,7 @@ class TestEnglishInTheBrowser(UiCase):
     def test_the_settings_page_is_in_english(self):
         self.open("#/settings")
         self.assertEqual(self.view("h1").inner_text(), "Settings")
-        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Management", "Preferences", "Accounts"])
+        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Management", "Inbox", "Preferences", "Accounts"])
         self.assertIn("Libraries", self.view(".panel h2").all_inner_texts())
 
     def test_the_language_is_chosen_in_the_settings_and_kept(self):
