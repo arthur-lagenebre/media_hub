@@ -479,8 +479,8 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .drop.over { border-color: var(--accent); background: var(--s2); }
 .drop .dropline { font-size: 1.1rem; font-weight: 650; margin: 0 0 0.9rem; }
 .drop .muted { margin: 0.9rem 0 0; font-size: 0.88rem; }
-.drop .quota { margin: 1rem auto 0; max-width: 28rem; }
-.quota .quotaline { margin: 0 0 0.35rem; font-weight: 650; }
+.drop .used { margin: 1rem auto 0; max-width: 28rem; }
+.used .usedline { margin: 0 0 0.35rem; font-weight: 650; }
 .meter { height: 0.5rem; margin-top: 0.45rem; background: var(--s2); border-radius: 0.3rem; overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--accent); transition: width 0.15s; }
 .send .what b, .mine-file .what b, .inbox-file .what b { overflow-wrap: anywhere; }
