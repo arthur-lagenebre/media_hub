@@ -8,11 +8,14 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
 import struct
 import tempfile
+import time
 import unittest
+import urllib.parse
 import urllib.request
 import zipfile
 import zlib
@@ -3177,7 +3180,7 @@ class TestSettings(UiCase):
         self.view(".panel").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Paramètres")
         self.assertEqual(self.page.locator("#nav .tool[data-nav='#/settings']").get_attribute("aria-label"), "Paramètres")
-        self.assertEqual(self.tabs(), ["Gestion", "Préférences", "Comptes"])
+        self.assertEqual(self.tabs(), ["Gestion", "Boîte de réception", "Préférences", "Comptes"])
         self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Gestion")
         self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Tâches", "Serveur"])
 
@@ -3293,7 +3296,7 @@ class TestSettings(UiCase):
         self.open("#/settings?tab=gestion")
         self.view(".tabs .tab").first.wait_for()
         self.view(".tabs .tab", has_text="Gestion").focus()
-        self.press("ArrowRight", "Enter", wait=300)
+        self.press("ArrowRight", "ArrowRight", "Enter", wait=300)          # Gestion, Boîte de réception, Préférences
         self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Préférences")
 
     def test_the_tasks_unfold_one_by_one_or_all_at_once(self):
@@ -3381,6 +3384,571 @@ class TestArtistLinksOfAnOrdinaryAccount(unittest.TestCase):
             run.stop()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class InboxUiCase(unittest.TestCase):
+    """La boîte de réception dans le navigateur : la page « Envoyer », le droit « Envoyer » d'un compte, l'onglet de l'administrateur.
+
+    Un serveur avec comptes (`admin` / `secret`, `alice` a le droit d'envoyer, `bob` non) pour toute la classe ; la boîte est vidée entre deux tests.
+    """
+    PASSWORD = "motdepasse12"
+
+    @classmethod
+    def setUpClass(cls):
+        if not sync_playwright:
+            raise unittest.SkipTest("Playwright absent")
+        cls.tmp = tempfile.mkdtemp()
+        cls.run_ = Running(cls.tmp, password="secret")
+        cls.hub = cls.run_.hub
+        cls.base = f"http://127.0.0.1:{cls.run_.port}"
+        from hub import accounts
+        cls.alice = accounts.create(cls.hub.db, "alice", cls.PASSWORD)
+        cls.bob = accounts.create(cls.hub.db, "bob", cls.PASSWORD)
+        accounts.set_can_upload(cls.hub.db, cls.alice["id"], True)
+        cls.admin_id = next(row["id"] for row in accounts.rows(cls.hub.db) if row["role"] == "admin")
+        cls.pw = sync_playwright().start()
+        cls.browser = cls.pw.chromium.launch()
+        cls.box = Path(cls.tmp) / "data" / "inbox"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        cls.pw.stop()
+        cls.run_.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        shutil.rmtree(self.box, ignore_errors=True)
+        inbox = self.hub.inbox
+        inbox.keep_free = 0                                  # le disque de la machine d'essai n'a pas à avoir 10 Go de libres
+        self.errors = []
+        self.pages = []
+
+    def tearDown(self):
+        for context in self.pages:
+            context.close()
+        self.hub.inbox.keep_free = 0
+        shutil.rmtree(self.box, ignore_errors=True)
+        self.assertEqual(self.errors, [], "erreurs JavaScript")
+
+    # --- Aides ---------------------------------------------------------------
+    def session(self, name, lang=None, device=None, width=1280):
+        """Une page connectée en tant que `name` (l'administrateur se connecte avec `secret`)."""
+        context = self.browser.new_context(viewport={"width": width, "height": 900}, accept_downloads=True)
+        self.pages.append(context)
+        if lang:
+            context.add_cookies([{"name": "hub_lang", "value": lang, "url": self.base}])
+            context.add_init_script(f"localStorage.setItem('hub.lang', JSON.stringify('{lang}'))")
+        if device:
+            context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+        page = context.new_page()
+        page.on("pageerror", lambda e: self.errors.append(str(e)))
+        page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text else None)
+        page.goto(self.base + "/login")
+        page.fill("input[name=user]", name)
+        page.fill("input[type=password]", "secret" if name == "admin" else self.PASSWORD)
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#nav .link", state="attached")
+        return page
+
+    def token(self, name):
+        req = urllib.request.Request(self.base + "/api/token", data=json.dumps({"user": name, "password": "secret" if name == "admin" else self.PASSWORD}).encode(), headers={"Content-Type": "application/json"})
+        return json.load(urllib.request.urlopen(req))["token"]
+
+    def users(self):
+        req = urllib.request.Request(self.base + "/api/users", headers={"Authorization": "Bearer " + self.token("admin")})
+        return {u["name"]: u for u in json.load(urllib.request.urlopen(req))["users"]}
+
+    def put(self, name, filename, data=b"contenu", mtime=None):
+        """Un fichier dans la boîte de `name`, par l'API."""
+        req = urllib.request.Request(self.base + "/api/inbox?name=" + urllib.parse.quote(filename), data=data, method="POST",
+                                     headers={"Authorization": "Bearer " + self.token(name), "Content-Type": "application/octet-stream"})
+        stored = json.load(urllib.request.urlopen(req))
+        if mtime:
+            account = self.alice["id"] if name == "alice" else self.admin_id
+            os.utime(self.box / account / stored["name"], (mtime, mtime))
+        return stored
+
+    def shown(self, page, hash):
+        page.wait_for_function("h => { var c = window.Hub.current(); return !!c && c.hash === h && c.el.style.display !== 'none'; }", arg=hash)
+
+    def upload_page(self, name="alice", **kw):
+        page = self.session(name, **kw)
+        page.goto(self.base + "/#/upload")
+        self.shown(page, "#/upload")
+        page.wait_for_selector("#views > .view:visible .quota .quotaline")             # la page a lu l'espace utilisé
+        return page
+
+    def send(self, page, *files):
+        """Choisit des fichiers `(nom, octets)` comme le ferait la personne avec le bouton « Choisir des fichiers »."""
+        page.set_input_files("#views > .view:visible input[type=file]", [{"name": n, "mimeType": "application/octet-stream", "buffer": b} for n, b in files])
+
+    def sends(self, page, state=""):
+        return page.locator("#views > .view:visible .send" + (f'[data-state="{state}"]' if state else ""))
+
+    def sending(self, page):
+        """Attend qu'un envoi soit en cours avec une progression visible."""
+        page.wait_for_function("(() => { var m = document.querySelector('#views > .view:not([style*=\"none\"]) .send[data-state=\"send\"] .meter'); return !!m && !m.hidden && +m.getAttribute('aria-valuenow') > 0; })()", timeout=15000)
+
+    def throttle(self, page, bytes_per_second):
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Network.enable")
+        cdp.send("Network.emulateNetworkConditions", {"offline": False, "latency": 0, "downloadThroughput": -1, "uploadThroughput": bytes_per_second})
+
+    def stored(self, account=None):
+        folder = self.box / (account or self.alice["id"])
+        return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
+
+    def wait_for(self, condition, tries=100):
+        for _ in range(tries):
+            if condition():
+                return
+            time.sleep(0.1)
+        self.fail("la condition n'est jamais devenue vraie")
+
+    # --- Le droit « Envoyer » ----------------------------------------------------
+    def test_the_entry_and_the_page_exist_only_for_those_who_may_upload(self):
+        for name, allowed in (("alice", True), ("admin", True), ("bob", False)):
+            with self.subTest(name=name):
+                page = self.session(name)
+                self.assertEqual(page.locator('#nav [data-nav="#/upload"]').count(), 1 if allowed else 0)
+                page.goto(self.base + "/#/upload")
+                if allowed:
+                    self.shown(page, "#/upload")
+                    self.assertEqual(page.locator("#views > .view:visible h1").inner_text(), "Envoyer")
+                else:
+                    page.locator("#toast", has_text="Tu n’as pas le droit d’envoyer des fichiers").wait_for()
+                    self.shown(page, "#/")                                                 # l'adresse directe retombe sur l'accueil
+                    self.assertEqual(page.locator("#views > .view:visible .upload").count(), 0)
+
+    def test_the_administrator_gives_and_withdraws_the_right(self):
+        page = self.session("admin")
+        page.goto(self.base + "/#/settings?tab=comptes")
+        switch = page.locator(f'[data-key="upload-{self.bob["id"]}"]')
+        switch.wait_for()
+        self.assertEqual(switch.get_attribute("aria-pressed"), "false")
+        self.assertEqual(page.locator(f'[data-key="upload-{self.alice["id"]}"]').get_attribute("aria-pressed"), "true")
+        self.assertEqual(page.locator(f'[data-key="upload-{self.admin_id}"]').count(), 0)                  # un administrateur envoie toujours : pas d'interrupteur
+        self.assertIn("toujours", page.locator(f'[data-upload="{self.admin_id}"]').inner_text())
+        switch.click()
+        page.locator(f'[data-key="upload-{self.bob["id"]}"][aria-pressed="true"]').wait_for()
+        self.assertTrue(self.users()["bob"]["can_upload"])
+        bob = self.session("bob")                                                                  # le droit vaut tout de suite
+        self.assertEqual(bob.locator('#nav [data-nav="#/upload"]').count(), 1)
+        page.locator(f'[data-key="upload-{self.bob["id"]}"]').click()
+        page.locator(f'[data-key="upload-{self.bob["id"]}"][aria-pressed="false"]').wait_for()
+        self.assertFalse(self.users()["bob"]["can_upload"])
+
+    # --- Envoyer -------------------------------------------------------------
+    def test_a_file_goes_through_and_keeps_the_name_the_server_gave_it(self):
+        page = self.upload_page()
+        self.send(page, ("Film.mkv", b"a" * 5000))
+        self.sends(page, "done").first.wait_for()
+        self.assertIn("Envoyé", self.sends(page).first.inner_text())
+        self.assertEqual(self.stored(), ["Film.mkv"])
+        self.send(page, ("Film.mkv", b"b" * 3000))                                        # le serveur ne l'écrase pas : il le renomme
+        self.wait_for(lambda: self.sends(page, "done").count() == 2)
+        self.assertEqual(self.stored(), ["Film (2).mkv", "Film.mkv"])
+        self.assertEqual(self.sends(page, "done").nth(1).locator("b").inner_text(), "Film (2).mkv")
+        self.assertIn("Film.mkv", self.sends(page, "done").nth(1).locator(".what > span").inner_text())     # et le dit : « tu l'avais appelé… »
+        page.locator("#views > .view:visible .mine-file", has_text="Film (2).mkv").wait_for()         # « Mes envois » suit
+        self.assertEqual(page.locator("#views > .view:visible .mine-file").count(), 2)
+        self.assertIn("Espace utilisé", page.locator("#views > .view:visible .quotaline").inner_text())
+
+    def test_files_go_one_at_a_time(self):
+        page = self.upload_page()
+        starts = []
+        page.on("request", lambda r: starts.append(r.url) if r.method == "POST" and "/api/inbox" in r.url else None)
+        self.send(page, ("Un.mkv", b"u" * 4000), ("Deux.mkv", b"d" * 4000), ("Trois.mkv", b"t" * 4000))
+        self.wait_for(lambda: self.sends(page, "done").count() == 3)
+        self.assertEqual(len(starts), 3)
+        self.assertEqual(self.stored(), ["Deux.mkv", "Trois.mkv", "Un.mkv"])
+        order = [self.sends(page).nth(i).locator("b").inner_text() for i in range(3)]
+        self.assertEqual(order, ["Un.mkv", "Deux.mkv", "Trois.mkv"])
+
+    def test_a_file_dropped_on_the_page_is_sent(self):
+        page = self.upload_page()
+        script = """(kind) => {
+            var el = document.querySelector('#views > .view.upload:not([style*="none"])');
+            var dt = new DataTransfer();
+            dt.items.add(new File(['bonjour glisser'], 'Glissé.mkv', { type: 'video/x-matroska' }));
+            el.dispatchEvent(new DragEvent(kind, { dataTransfer: dt, bubbles: true, cancelable: true }));
+            return el.querySelector('.drop').classList.contains('over');
+        }"""
+        self.assertTrue(page.evaluate(script, "dragenter"))
+        self.assertFalse(page.evaluate(script, "drop"))
+        self.sends(page, "done").first.wait_for()
+        self.assertEqual(self.stored(), ["Glissé.mkv"])
+
+    def test_the_progress_is_shown_while_the_file_goes(self):
+        page = self.upload_page()
+        self.throttle(page, 150_000)
+        self.send(page, ("Lent.mkv", b"x" * 450_000))
+        self.sending(page)
+        page.wait_for_function("(() => { var s = document.querySelector('#views > .view:not([style*=\"none\"]) .send[data-state=\"send\"] .what > span'); return !!s && /reste/.test(s.textContent) })()", timeout=15000)
+        text = self.sends(page, "send").first.locator(".what > span").inner_text()
+        self.assertRegex(text, r"^\d+ % · .+ sur .+ · .+/s · reste ")                     # pourcentage, octets envoyés, débit moyen, durée restante
+        self.assertLess(int(self.sends(page, "send").first.locator(".meter").get_attribute("aria-valuenow")), 100)
+        self.sends(page, "done").first.wait_for(timeout=30000)
+        self.assertEqual(self.stored(), ["Lent.mkv"])
+
+    def test_an_extension_the_server_refuses_shows_its_message(self):
+        page = self.upload_page()
+        self.send(page, ("virus.exe", b"MZ" * 100), ("Suite.mkv", b"s" * 3000))
+        self.sends(page, "error").first.wait_for()
+        self.assertIn("type de fichier refusé", self.sends(page, "error").first.inner_text())
+        self.wait_for(lambda: self.sends(page, "done").count() == 1)                       # un refus n'arrête pas la file
+        self.assertEqual(self.stored(), ["Suite.mkv"])
+
+    def test_a_server_without_room_refuses_with_507_and_the_message_shows(self):
+        page = self.upload_page()
+        self.hub.inbox.keep_free = 1 << 60                                                 # HUB_INBOX_KEEP_FREE très haut : l'espace libre « tomberait en dessous »
+        self.send(page, ("Plein.mkv", b"p" * 3000))
+        self.sends(page, "error").first.wait_for()
+        self.assertIn("plus assez de place sur le serveur", self.sends(page, "error").first.inner_text())
+        self.assertEqual(self.sends(page, "error").first.locator("button").inner_text(), "Retirer de la liste")
+        self.assertEqual(self.stored(), [])
+        self.hub.inbox.keep_free = 0
+        self.send(page, ("Suite.mkv", b"s" * 3000))                                        # un refus n'arrête pas la file : l'envoi suivant passe dès qu'il y a de la place
+        self.sends(page, "done").first.wait_for()
+        self.assertEqual(self.stored(), ["Suite.mkv"])
+
+    def test_a_busy_server_gets_the_file_back_in_the_queue(self):
+        page = self.upload_page()
+        page.evaluate("Hub.upload.retry = 200")
+        calls = []
+
+        def busy(route):
+            calls.append(1)
+            if len(calls) == 1:
+                route.fulfill(status=429, content_type="application/json", body=json.dumps({"error": "trop d'envois en cours : réessaie dans un moment"}))
+            else:
+                route.continue_()
+        page.route("**/api/inbox?name=*", busy)
+        self.send(page, ("Occupé.mkv", b"o" * 3000))
+        page.locator("#views > .view:visible .send[data-state=wait]", has_text="occupé").wait_for()
+        self.sends(page, "done").first.wait_for()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.stored(), ["Occupé.mkv"])
+
+    def test_an_expired_session_stops_the_queue(self):
+        page = self.upload_page()
+        page.route("**/api/inbox?name=*", lambda route: route.fulfill(status=401, content_type="application/json", body=json.dumps({"error": "connexion requise"})))
+        self.send(page, ("Un.mkv", b"1" * 3000), ("Deux.mkv", b"2" * 3000))
+        self.wait_for(lambda: self.sends(page, "error").count() == 2)
+        self.assertIn("la session a expiré", self.sends(page, "error").nth(1).inner_text())
+        self.assertTrue(page.locator("#views > .view:visible [role=alert] a[href='/login']").is_visible())
+        self.assertEqual(page.evaluate("Hub.current().hash"), "#/upload")                    # la page reste : on voit ce qui n'est pas parti
+        self.assertEqual(self.stored(), [])
+
+    def test_a_cancelled_upload_leaves_nothing_on_the_server(self):
+        page = self.upload_page()
+        self.throttle(page, 150_000)
+        self.send(page, ("Annulé.mkv", b"x" * 600_000), ("Suivant.mkv", b"y" * 2000))
+        self.sending(page)
+        self.sends(page, "send").first.locator("button", has_text="Annuler").click()
+        self.sends(page, "cancel").first.wait_for()
+        self.assertEqual(self.sends(page, "cancel").first.locator(".what > span").inner_text(), "Annulé")
+        self.assertEqual(self.sends(page).first.locator("button").inner_text(), "Retirer de la liste")
+        self.throttle(page, -1)
+        self.sends(page, "done").first.wait_for(timeout=20000)                               # le suivant part
+        self.wait_for(lambda: self.stored() == ["Suivant.mkv"])                              # le serveur a effacé le .part
+        self.sends(page, "cancel").first.locator("button").click()                           # « Retirer de la liste »
+        self.assertEqual(self.sends(page, "cancel").count(), 0)
+        self.assertEqual(self.sends(page).count(), 1)
+
+    # --- Mes envois ------------------------------------------------------------
+    def test_my_uploads_list_and_delete_with_confirmation(self):
+        self.put("alice", "Premier.mkv", b"1" * 2048, mtime=1_700_000_000)
+        self.put("alice", "Second.mkv", b"2" * 4096, mtime=1_700_100_000)
+        self.put("admin", "Pas à elle.mkv", b"3")
+        page = self.upload_page()
+        rows = page.locator("#views > .view:visible .mine-file")
+        self.assertEqual(rows.count(), 2)
+        self.assertEqual(rows.nth(0).locator("b").inner_text(), "Second.mkv")                  # le plus récent d'abord
+        self.assertIn("4 Ko", rows.nth(0).locator(".what > span").inner_text())
+        self.assertRegex(rows.nth(0).locator(".what > span").inner_text(), r"\d{2}/\d{2}/\d{4}")
+        rows.nth(0).locator("button", has_text="Supprimer").click()
+        dialog = page.locator(".menu[role=dialog]")
+        dialog.wait_for()
+        self.assertIn("Second.mkv", dialog.inner_text())
+        dialog.get_by_role("button", name="Annuler", exact=True).click()                                   # Annuler ne supprime rien
+        self.assertEqual(self.stored(), ["Premier.mkv", "Second.mkv"])
+        rows.nth(0).locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: self.stored() == ["Premier.mkv"])
+        self.wait_for(lambda: rows.count() == 1)
+        self.assertEqual(self.stored(self.admin_id), ["Pas à elle.mkv"])
+        rows.first.locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()
+        page.locator("#views > .view:visible .mine .empty").wait_for()
+        self.assertIn("rien envoyé", page.locator("#views > .view:visible .mine .empty").inner_text())
+
+    # --- Quitter la page ---------------------------------------------------------
+    def test_leaving_during_an_upload_asks_first(self):
+        page = self.upload_page()
+        posts = []
+        page.on("request", lambda r: posts.append(r.url) if r.method == "POST" and "/api/inbox" in r.url else None)
+        self.throttle(page, 150_000)
+        self.send(page, ("Long.mkv", b"x" * 600_000), ("Après.mkv", b"y" * 1000))
+        self.sending(page)
+        page.locator("#nav .brand").click()                                                    # une autre page du routeur
+        dialog = page.locator(".menu[role=dialog]")
+        dialog.wait_for()
+        self.assertEqual(dialog.locator("h3").inner_text(), "Quitter la page ?")
+        self.assertEqual(page.evaluate("Hub.current().hash"), "#/upload")                     # l'adresse n'a pas bougé
+        dialog.get_by_role("button", name="Annuler", exact=True).click()
+        dialog.wait_for(state="detached")
+        self.assertEqual(self.sends(page, "send").count(), 1)                                  # l'envoi continue
+        page.locator("#nav .brand").click()
+        page.locator(".menu .btn.danger", has_text="Quitter et annuler").click()
+        self.shown(page, "#/")
+        self.throttle(page, -1)
+        self.wait_for(lambda: self.stored() == [])                                             # rien n'est resté sur le serveur, et « Après.mkv » n'est pas parti
+        page.wait_for_timeout(300)
+        self.assertEqual(self.stored(), [])
+        self.assertEqual(len(posts), 1)                                                        # l'annulation n'a pas lancé « Après.mkv » au passage
+
+    def test_the_browser_is_asked_before_the_tab_closes_during_an_upload(self):
+        page = self.upload_page()
+        self.throttle(page, 150_000)
+        page.mouse.click(300, 400)                                                             # le navigateur ne pose la question qu'à une page où l'on a agi
+        self.send(page, ("Long.mkv", b"x" * 600_000))
+        self.sending(page)
+        kinds = []
+        page.on("dialog", lambda d: (kinds.append(d.type), d.dismiss()))
+        page.close(run_before_unload=True)
+        page.context.new_page().wait_for_timeout(500)                                           # (les rappels de Playwright ne passent que pendant un de ses appels)
+        self.assertEqual(kinds, ["beforeunload"])
+        self.assertFalse(page.is_closed())                                                     # « Rester sur la page » : elle reste, et l'envoi continue
+        self.assertEqual(self.sends(page, "send").count(), 1)
+
+    def test_leaving_without_an_upload_asks_nothing(self):
+        page = self.upload_page()
+        page.locator("#nav .brand").click()
+        self.shown(page, "#/")
+        self.assertEqual(page.locator(".menu[role=dialog]").count(), 0)
+
+    # --- L'administrateur ------------------------------------------------------------
+    def test_the_administrator_reads_downloads_and_deletes_the_inbox(self):
+        self.put("alice", "Ancien.mkv", b"ancien contenu", mtime=1_700_000_000)
+        self.put("alice", "Récent.mkv", b"recent", mtime=1_700_200_000)
+        self.put("admin", "Du patron.zip", b"zip", mtime=1_700_100_000)
+        page = self.session("admin")
+        page.goto(self.base + "/#/settings?tab=inbox")
+        rows = page.locator("#views > .view:visible .inbox-file")
+        rows.first.wait_for()
+        self.assertEqual(page.locator("#views > .view:visible .tabs .tab[aria-selected=true]").inner_text(), "Boîte de réception")
+        self.assertEqual([rows.nth(i).locator("b").inner_text() for i in range(3)], ["Récent.mkv", "Du patron.zip", "Ancien.mkv"])        # du plus récent au plus ancien
+        self.assertIn("alice", rows.nth(0).locator(".what > span").inner_text())
+        self.assertIn("admin", rows.nth(1).locator(".what > span").inner_text())
+        for i in range(3):
+            self.assertEqual(rows.nth(i).locator(".btn").all_inner_texts(), ["Télécharger", "Supprimer"])       # aucun bouton qui range dans une bibliothèque
+        with page.expect_download() as info:
+            rows.nth(2).locator("a", has_text="Télécharger").click()
+        download = info.value
+        self.assertEqual(download.suggested_filename, "Ancien.mkv")
+        self.assertEqual(Path(download.path()).read_bytes(), b"ancien contenu")
+        rows.nth(0).locator("button", has_text="Supprimer").click()
+        dialog = page.locator(".menu[role=dialog]")
+        self.assertIn("alice", dialog.inner_text())
+        dialog.get_by_role("button", name="Annuler", exact=True).click()
+        self.assertEqual(self.stored(), ["Ancien.mkv", "Récent.mkv"])
+        rows.nth(0).locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: self.stored() == ["Ancien.mkv"])
+        self.wait_for(lambda: rows.count() == 2)
+        for expected in ([], ):
+            rows.nth(1).locator("button", has_text="Supprimer").click()
+            page.locator(".menu .btn.danger").click()
+            self.wait_for(lambda: self.stored() == expected)
+        self.wait_for(lambda: rows.count() == 1)
+        rows.nth(0).locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()
+        page.locator("#views > .view:visible .inbox .empty").wait_for()
+        self.assertEqual(page.locator("#views > .view:visible .inbox .empty").inner_text(), "La boîte de réception est vide.")
+        self.assertEqual(self.stored(self.admin_id), [])
+
+    def test_only_the_administrator_has_the_inbox_tab(self):
+        page = self.session("alice")
+        page.goto(self.base + "/#/settings?tab=inbox")
+        page.wait_for_selector("#views > .view:visible .tabs .tab")
+        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Préférences", "Comptes"])
+        self.assertEqual(page.context.request.get(self.base + "/api/inbox").status, 403)
+
+    # --- Télévision, anglais -------------------------------------------------------------
+    def test_a_television_has_neither_the_entry_nor_the_page(self):
+        page = self.session("alice", device="tv", width=1920)
+        self.assertEqual(page.evaluate("Hub.device"), "tv")
+        self.assertEqual(page.locator('#nav [data-nav="#/upload"]').count(), 0)
+        page.goto(self.base + "/#/upload")
+        page.locator("#toast", has_text="télévision").wait_for()
+        self.shown(page, "#/")
+        self.assertEqual(page.locator("#views > .view:visible .upload").count(), 0)
+        self.assertEqual(page.locator("#views > .view:visible input[type=file]").count(), 0)
+
+    def test_changing_the_device_in_the_settings_moves_the_entry(self):
+        page = self.session("alice")
+        page.goto(self.base + "/#/settings?tab=preferences")
+        page.locator('[data-key="device"]').wait_for()
+        self.assertEqual(page.locator('#nav [data-nav="#/upload"]').count(), 1)
+        page.locator('[data-key="device"]').click()
+        page.locator(".menu .opt", has_text="Télévision").click()
+        page.wait_for_function("document.querySelectorAll('#nav [data-nav=\"#/upload\"]').length === 0")
+
+    def test_the_upload_page_is_in_english(self):
+        page = self.upload_page(lang="en")
+        self.assertEqual(page.locator('#nav [data-nav="#/upload"]').get_attribute("aria-label"), "Upload")
+        self.assertEqual(page.locator("#views > .view:visible h1").inner_text(), "Upload")
+        self.assertEqual(page.locator("#views > .view:visible .drop .btn").inner_text(), "Choose files")
+        self.assertIn("Space used", page.locator("#views > .view:visible .quotaline").inner_text())
+        self.assertEqual(page.locator("#views > .view:visible .mine .empty").inner_text(), "You haven’t uploaded anything yet.")
+        self.send(page, ("virus.exe", b"MZ" * 100), ("Film.mkv", b"f" * 3000))
+        self.sends(page, "error").first.wait_for()
+        self.assertEqual(self.sends(page, "error").first.locator(".what > span").inner_text(), "file type refused: « .exe »")      # le message du serveur, traduit
+        self.wait_for(lambda: self.sends(page, "done").count() == 1)
+        self.assertIn("Uploaded", self.sends(page, "done").first.inner_text())
+        self.assertEqual(self.sends(page, "error").first.locator("button").inner_text(), "Remove from the list")
+        page.locator("#views > .view:visible .mine-file").wait_for()
+        self.assertIn("2.9 KB", page.locator("#views > .view:visible .mine-file .what > span").inner_text())                         # les tailles suivent la langue
+        self.hub.inbox.keep_free = 1 << 60
+        self.send(page, ("Plein.mkv", b"p" * 3000))
+        page.locator("#views > .view:visible .send[data-state=error]", has_text="not enough room on the server").wait_for()
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    def test_the_inbox_tab_and_the_switch_are_in_english(self):
+        self.put("alice", "Film.mkv", b"f" * 2000)
+        page = self.session("admin", lang="en")
+        page.goto(self.base + "/#/settings?tab=inbox")
+        page.locator("#views > .view:visible .inbox-file").wait_for()
+        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Management", "Inbox", "Preferences", "Accounts"])
+        self.assertEqual(page.locator("#views > .view:visible .inbox-file .btn").all_inner_texts(), ["Download", "Delete"])
+        self.assertEqual(page.locator("#views > .view:visible .inbox .total").inner_text(), "1 file · 2 KB")
+        page.goto(self.base + "/#/settings?tab=comptes")
+        page.locator(f'[data-key="upload-{self.bob["id"]}"]').wait_for()
+        self.assertEqual(page.locator(f'[data-key="upload-{self.bob["id"]}"]').inner_text().strip("✓ \n"), "Can upload files")
+        self.assertIn("always", page.locator(f'[data-upload="{self.admin_id}"]').inner_text())
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    # --- Retours de la relecture : historique, noms de fichiers, cas limites ------------------
+    def start_upload_from_home(self):
+        page = self.session("alice")
+        page.locator('#nav [data-nav="#/upload"]').click()
+        self.shown(page, "#/upload")
+        page.wait_for_selector("#views > .view:visible .quota .quotaline")
+        self.throttle(page, 150_000)
+        self.send(page, ("Long.mkv", b"x" * 600_000))
+        self.sending(page)
+        return page
+
+    def test_the_back_button_asks_and_staying_keeps_the_page_and_its_address(self):
+        page = self.start_upload_from_home()
+        page.go_back()                                                                         # Retour du navigateur (ou de la télécommande)
+        dialog = page.locator(".menu[role=dialog]")
+        dialog.wait_for()
+        dialog.get_by_role("button", name="Annuler", exact=True).click()
+        dialog.wait_for(state="detached")
+        page.wait_for_function("location.hash === '#/upload'")                                 # on reste sur la page, adresse comprise
+        self.assertEqual(self.sends(page, "send").count(), 1)                                  # et l'envoi continue
+        self.throttle(page, -1)
+        self.sends(page, "done").first.wait_for(timeout=20000)
+
+    def test_the_back_button_then_leaving_cancels_the_upload(self):
+        page = self.start_upload_from_home()
+        page.go_back()
+        page.locator(".menu .btn.danger", has_text="Quitter et annuler").click()
+        self.shown(page, "#/")
+        self.assertIn(page.evaluate("location.hash"), ("", "#/"))                              # l'accueil d'où l'on venait
+        self.assertEqual(page.locator(".menu[role=dialog]").count(), 0)
+        self.throttle(page, -1)
+        page.wait_for_timeout(300)
+        self.assertEqual(self.stored(), [])
+
+    def test_after_leaving_by_a_link_one_back_returns_to_the_page(self):
+        page = self.upload_page()
+        self.throttle(page, 150_000)
+        self.send(page, ("Long.mkv", b"x" * 600_000))
+        self.sending(page)
+        page.locator('#nav [data-nav="#/search"]').click()
+        page.locator(".menu .btn.danger", has_text="Quitter et annuler").click()
+        self.shown(page, "#/search")
+        page.go_back()                                                                         # un seul Retour, pas deux : l'historique n'a pas de doublon
+        self.shown(page, "#/upload")
+        self.throttle(page, -1)
+
+    def test_a_name_with_html_and_url_characters_is_text_and_survives_the_links(self):
+        page = self.upload_page()
+        nasty = "<img src=x onerror=window.pwned=1> a#b%41&c é'x.mkv"
+        self.send(page, (nasty, b"n" * 2000))
+        self.sends(page, "done").first.wait_for()
+        kept = self.stored()[0]
+        self.assertIn("#", kept)
+        self.assertIn("%41", kept)
+        self.assertEqual(self.sends(page, "done").first.locator("b").inner_text(), kept)
+        self.assertEqual(self.sends(page).locator("img").count(), 0)                           # du texte, jamais du HTML
+        self.assertIsNone(page.evaluate("window.pwned"))
+        admin = self.session("admin")
+        admin.goto(self.base + "/#/settings?tab=inbox")
+        row = admin.locator("#views > .view:visible .inbox-file")
+        row.first.wait_for()
+        self.assertEqual(row.locator("b").inner_text(), kept)
+        with admin.expect_download() as info:
+            row.locator("a", has_text="Télécharger").click()
+        self.assertEqual(Path(info.value.path()).read_bytes(), b"n" * 2000)                    # le nom est bien encodé dans l'adresse
+        row.locator("button", has_text="Supprimer").click()
+        admin.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: self.stored() == [])                                             # et dans celle de la suppression
+
+    def test_a_file_waiting_for_a_new_try_can_be_cancelled(self):
+        page = self.upload_page()
+        page.evaluate("Hub.upload.retry = 60000")
+        calls = []
+
+        def busy(route):
+            calls.append(1)
+            route.fulfill(status=429, content_type="application/json", body=json.dumps({"error": "trop d'envois en cours : réessaie dans un moment"}))
+        page.route("**/api/inbox?name=*", busy)
+        self.send(page, ("Occupé.mkv", b"o" * 3000))
+        page.locator("#views > .view:visible .send[data-state=wait]", has_text="occupé").wait_for()
+        self.sends(page, "wait").first.locator("button", has_text="Annuler").click()
+        self.sends(page, "cancel").first.wait_for()
+        page.wait_for_timeout(300)
+        self.assertEqual(len(calls), 1)                                                        # plus d'essai
+        self.assertEqual(page.evaluate("document.querySelectorAll('#views > .view .send[data-state=wait]').length"), 0)
+
+    def test_after_the_session_expires_a_new_file_is_not_left_waiting(self):
+        page = self.upload_page()
+        page.route("**/api/inbox?name=*", lambda route: route.fulfill(status=401, content_type="application/json", body=json.dumps({"error": "connexion requise"})))
+        self.send(page, ("Un.mkv", b"1" * 3000))
+        self.sends(page, "error").first.wait_for()
+        self.send(page, ("Deux.mkv", b"2" * 3000))
+        self.wait_for(lambda: self.sends(page, "error").count() == 2)
+        self.assertIn("la session a expiré", self.sends(page, "error").nth(1).inner_text())
+        self.assertEqual(self.sends(page, "wait").count(), 0)
+        page.locator("#nav .brand").click()                                                    # rien n'est en cours : on part sans question
+        self.shown(page, "#/")
+        self.assertEqual(page.locator(".menu[role=dialog]").count(), 0)
+
+    def test_a_connection_cut_without_an_answer_says_so(self):
+        page = self.upload_page()
+        page.route("**/api/inbox?name=*", lambda route: route.abort("connectionreset"))
+        self.send(page, ("Coupé.mkv", b"c" * 3000))
+        self.sends(page, "error").first.wait_for()
+        self.assertIn("connexion a été coupée", self.sends(page, "error").first.inner_text())
+        self.assertIn("occupé", self.sends(page, "error").first.inner_text())
+
+    def test_the_focus_goes_back_to_the_page_when_a_line_is_removed(self):
+        page = self.upload_page()
+        self.send(page, ("virus.exe", b"MZ" * 100))
+        self.sends(page, "error").first.wait_for()
+        page.locator("#views > .view:visible .send button").focus()
+        page.keyboard.press("Enter")                                                           # « Retirer de la liste » à la télécommande
+        self.assertEqual(self.sends(page).count(), 0)
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), "choose")
+
+    def test_a_phone_gets_no_drag_and_drop_wording(self):
+        page = self.upload_page(device="phone", width=390)
+        self.assertEqual(page.locator("#views > .view:visible .dropline").inner_text(), "Choisis les fichiers à envoyer depuis cet appareil.")
 
 
 if __name__ == "__main__":
