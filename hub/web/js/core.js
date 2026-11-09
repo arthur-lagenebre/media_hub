@@ -48,7 +48,7 @@
     queue: 'M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z',
     plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
     more: 'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
-    download: 'M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z', up: 'M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z', down: 'M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z',
+    download: 'M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z', upload: 'M5 20h14v-2H5v2zM9 16h6v-6h4l-7-7-7 7h4v6z', up: 'M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z', down: 'M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z',
     trash: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
     edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'
   };
@@ -74,6 +74,7 @@
       init.body = JSON.stringify(body);
     }
     if (opts && opts.keepalive) init.keepalive = true;
+    if (opts && opts.method) init.method = opts.method;          // DELETE : supprimer un envoi de la boîte de réception
     return fetch(path, init).then(function (r) {
       if (r.status === 401) { location.href = '/login'; throw new Error('connexion requise'); }
       return r.text().then(function (t) {
@@ -180,9 +181,11 @@
   // Chaque fenêtre ouverte ajoute une entrée à l'historique : le bouton Retour de la télécommande la ferme sans quitter la page.
   var overlays = [], skipPops = 0, afterPop = null;
   H.overlay = {
-    open: function (el, onClose) {
+    // `onCancel` : appelé une fois la fenêtre refermée sans qu'une action l'ait fait (Annuler, voile, Retour, Échap).
+    open: function (el, onClose, onCancel) {
       var back = h('div', { class: 'veil', onclick: function (e) { if (e.target === back) H.overlay.close(); } }, el);
       back.hubClose = onClose;
+      back.hubCancel = onCancel;
       back.opener = document.activeElement;
       document.body.appendChild(back);
       overlays.push(back);
@@ -194,6 +197,7 @@
       var top = overlays.pop();
       if (!top) { if (then) then(); return; }
       cleanup(top);
+      then = then || top.hubCancel;
       if (history.state && history.state.ov) { skipPops++; afterPop = then || null; history.back(); } else if (then) then();
     },
     closeAll: function () { while (overlays.length) cleanup(overlays.pop()); },
@@ -212,7 +216,7 @@
       if (then) then();
       return;
     }
-    if (overlays.length) cleanup(overlays.pop());
+    if (overlays.length) { var gone = overlays.pop(); cleanup(gone); if (gone.hubCancel) gone.hubCancel(); }
   });
 
   // --- Pop-up : un gabarit (`.menu`), quatre déclinaisons, pas une de plus (voir docs/popups.md) ---------------
@@ -246,7 +250,7 @@
 
   // form : une fenêtre à champs, ou à contenu propre : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password', auto, maxlength}], extra: [éléments sous les champs],
   // ok: libellé du bouton, danger, kind (« form » par défaut s'il y a des champs), cls (modificateur), submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse,
-  // done(résultat) une fois la fenêtre fermée}. Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
+  // done(résultat) une fois la fenêtre fermée, cancel() une fois fermée sans avoir agi}. Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
   H.form = function (o) {
     var fields = o.fields || [], inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
     var box = H.box((o.kind || (fields.length ? 'form' : 'confirm')) + (fields.length > 1 ? ' stacked' : '') + (o.cls ? ' ' + o.cls : ''), o.title);
@@ -277,7 +281,7 @@
     box.appendChild(err);
     ok = H.button(o.ok || H.t('Valider'), o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: send });
     box.appendChild(h('div', { class: 'btns' }, ok, H.button(H.t('Annuler'), null, { 'data-autofocus': fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));   // sans champ, le focus part sur Annuler : Entrée ne détruit rien
-    H.overlay.open(box);
+    H.overlay.open(box, null, o.cancel);
     if (fields.length) setTimeout(function () { try { list[0].focus(); } catch (e) { /* tant pis */ } }, 30);
   };
 
@@ -430,7 +434,7 @@
 
   // --- Pile de pages ----------------------------------------------------------------
   // Chaque page ouverte garde son DOM (filtres, défilement, focus) tant qu'elle est dans la pile : Retour la retrouve telle qu'elle était.
-  var routes = [], stack = [], MAX = 10;
+  var routes = [], stack = [], MAX = 10, leaving = false;
   H.route = function (pattern, factory) { routes.push({ pattern: pattern, factory: factory }); };
   H.routed = 0;
   H.replaceNext = false;
@@ -484,6 +488,17 @@
     var hash = location.hash || '#/';
     var top = stack[stack.length - 1];
     if (top && top.hash === hash) return;
+    // Une page qui ne doit pas être quittée sans l'accord de la personne (des envois en cours) le dit par `leave()` : {title, lead, ok, accept}, ou rien si elle peut partir.
+    // La question se pose sans toucher à l'historique : si la personne accepte, la navigation reprend telle quelle ; sinon on remet l'adresse de la page.
+    var ask = !leaving && top && top.view.leave ? top.view.leave() : null;
+    leaving = false;
+    if (ask) {
+      H.confirm({ title: ask.title, lead: ask.lead, ok: ask.ok, danger: true,
+        submit: function () { if (ask.accept) ask.accept(); return Promise.resolve(); },
+        done: function () { leaving = true; onRoute(); },
+        cancel: function () { H.replaceNext = false; location.replace(top.hash); } });
+      return;
+    }
     H.routed++;
     var back = -1;
     for (var i = stack.length - 2; i >= 0; i--) if (stack[i].hash === hash) { back = i; break; }
