@@ -811,8 +811,6 @@
     'type de fichier refusé : {what}': 'file type refused: {what}',
     "pas d'extension": 'no extension',
     'compte invalide': 'invalid account',
-    'fichier trop gros : {size} (au plus {max} par fichier)': 'file too large: {size} ({max} at most per file)',
-    'quota dépassé : il reste {left} sur {quota}': 'quota exceeded: {left} left of {quota}',
     'plus assez de place sur le serveur pour ce fichier': 'not enough room on the server for this file',
     "trop d'envois en cours : réessaie dans un moment": 'too many uploads in progress: try again in a moment',
     'trop de fichiers du même nom': 'too many files with the same name',
