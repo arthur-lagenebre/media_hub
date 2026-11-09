@@ -838,18 +838,18 @@ class TestSettingsRoutes(RouteCase):
         return self.hub.cookie(who)
 
     def test_the_settings_of_an_account_start_at_the_defaults(self):
-        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"}})
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"}})
 
     def test_a_choice_is_kept_for_the_account_that_made_it(self):
         reply = self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"}}))
+        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"}}))
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "artists")
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.alice)).json()["settings"]["music_view"], "albums")
 
     def test_the_state_carries_the_settings_so_the_page_needs_no_second_call(self):
         self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"})
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"})
 
     def test_a_wrong_setting_is_a_400_with_the_reason(self):
         for body, reason in (({"couleur": "rouge"}, "réglage inconnu"), ({"music_view": "mosaique"}, "valeur inconnue"), ({}, "aucun réglage")):
@@ -959,6 +959,60 @@ class TestHomeUnseen(RouteCase):
         for n in range(30):
             self.post("/api/progress", {"entry": f"v{n:02d}", "position": 5, "duration": 100})
         self.assertEqual(self.unseen(), [])
+
+
+class TestHomeUnseenSort(RouteCase):
+    """Le réglage `home_unseen_sort` du compte : l'ordre du rayon « Pas encore vu » se décide sur le serveur, avant la coupe à 24 (sinon le haut du classement n'arriverait jamais au navigateur)."""
+
+    def setUp(self):
+        super().setUp()
+        rating = lambda n, votes: {"tmdb_rating": {"tmdb": n, "vote": 5 + n / 10, "votes": votes, "at": 0}}
+        films = []
+        for n in range(30):                                                                           # 0-19 : notés (n/10 + 5), 20-24 : trop peu de votes pour être montrés, 25-29 : sans note
+            meta = rating(n, 100) if n < 20 else rating(n, app.MIN_VOTES - 1) if n < 25 else {}
+            films.append(item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n * 7 % 30, meta=meta))      # `added` ne suit ni le titre ni la note
+        self.fill(films, [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(30)])
+
+    def shelf(self, sort=None, day="2026-11-04"):
+        if sort:
+            self.assertEqual(self.post("/api/me/settings", {"home_unseen_sort": sort}).status, 200)
+        with mock.patch("hub.server.app.today", return_value=day):
+            return [r["id"] for r in self.get("/api/home").json()["libraries"][0]["unseen"]]
+
+    def test_rating_puts_the_best_rated_first_and_what_has_no_shown_rating_last(self):
+        ids = self.shelf("rating")
+        self.assertEqual(ids[:20], [f"mv{n:02d}" for n in range(19, -1, -1)])                         # de la meilleure note à la moins bonne
+        self.assertEqual(len(ids), 24)
+        self.assertTrue(all(int(i[2:]) >= 20 for i in ids[20:]))                                      # puis des films sans note montrée (moins de 25 votes ou aucune)
+
+    def test_the_cut_to_twenty_four_comes_after_the_sort(self):
+        ids = self.shelf("rating")
+        self.assertIn("mv19", ids)                                                                    # le mieux noté y est, qu'il tombe ou non dans le tirage du jour
+        self.assertNotIn("mv29", ids)
+        self.assertEqual(self.shelf("rating", "2026-11-05"), ids)                                     # l'ordre ne dépend plus du jour
+
+    def test_added_puts_the_most_recent_first(self):
+        by_added = sorted(range(30), key=lambda n: -(1000 + n * 7 % 30))
+        self.assertEqual(self.shelf("added"), [f"mv{n:02d}" for n in by_added[:24]])
+
+    def test_random_is_the_default_and_keeps_the_daily_order(self):
+        default = self.shelf()
+        self.assertEqual(self.shelf("random"), default)
+        self.assertNotEqual(self.shelf(day="2026-11-05"), default)
+        self.assertNotEqual(default, self.shelf("rating"))
+
+    def test_a_film_started_leaves_the_sorted_shelf_and_the_next_one_takes_its_place(self):
+        before = self.shelf("rating")
+        self.post("/api/progress", {"entry": "v19", "position": 5, "duration": 100})
+        after = self.shelf()
+        self.assertEqual(after, before[1:] + ["mv24"])                                                # le premier non montré de la fin de classement
+
+    def test_each_account_has_its_own_order(self):
+        alice, bob = accounts.create(self.db, "alice", "motdepasse12"), accounts.create(self.db, "bob", "motdepasse12")
+        self.post("/api/me/settings", {"home_unseen_sort": "rating"}, headers=self.hub.cookie(alice))
+        home = lambda who: [r["id"] for r in self.get("/api/home", headers=self.hub.cookie(who)).json()["libraries"][0]["unseen"]]
+        self.assertEqual(home(alice)[0], "mv19")
+        self.assertNotEqual(home(bob)[:3], home(alice)[:3])
 
 
 class TestHomeUnseenPerLibrary(RouteCase):

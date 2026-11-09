@@ -291,7 +291,7 @@
     var libId = m[1], lib = H.lib(libId);
     var kind = lib ? lib.kind : 'movies';
     var sorts = SORTS[kind] || SORTS.movies;
-    var st = { q: '', genre: (params && params.genre) || '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), unseen: false, section: kind === 'books' ? (H.pref('section.' + libId) || '') : '' };
+    var st = { q: '', genre: (params && params.genre) || '', sort: kind === 'music' ? 'title' : (H.pref('sort.' + libId) || 'title'), state: '', section: kind === 'books' ? (H.pref('section.' + libId) || '') : '' };
     var items = [], total = 0, loading = false, token = 0, lastGrp = null, facets = { genres: [], sections: [] };
     function artistMode() { return kind === 'music' && H.setting('music_view') === 'artists'; }      // le choix du compte : les albums sous leurs artistes, ou un artiste par carte
     function sagaMode() { return kind === 'movies' && H.setting('movie_view') !== 'films'; }         // le choix du compte : les films d'une saga sur une carte, ou chacun sur la sienne
@@ -304,11 +304,15 @@
       oninput: function () { clearTimeout(search.t); search.t = setTimeout(function () { st.q = search.value; reset(); }, 280); },
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
     var bGenre = H.button('', null, { class: 'flt wide', onclick: pickGenre }), bSort = H.button('', null, { class: 'flt wide', onclick: pickSort });
-    var bSeen = H.button(H.t('Non vus'), null, { onclick: function () { st.unseen = !st.unseen; reset(); }, 'aria-pressed': 'false' });
+    // Où en est le compte : quatre choix dont un seul est actif (celui-ci se voit par son fond plein et sa coche, pas par un simple contour) ; la valeur est celle de `filter=` de l'API, vide pour tout montrer.
+    var bState = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': H.t('Avancement') }, [['', H.t('Tous')], ['todo', H.t('À voir')], ['progress', H.t('En cours')], ['done', H.t('Terminés')]].map(function (c) {
+      return h('button', { class: 'chip f', type: 'button', role: 'radio', 'aria-checked': 'false', 'data-state': c[0],
+        onclick: function () { if (st.state !== c[0]) { st.state = c[0]; paint(); reset(); } } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, c[1]));
+    }));
     var bLists = H.button(H.t('Playlists'), 'queue', { onclick: function () { H.go('#/playlists'); } });
     // Les films d'animation sont dans Films, avec le genre « Animation » : un raccourci depuis la page Animations, si le compte voit Films ; il se range à droite de la rangée des filtres
     var related = libId === 'animations' && H.lib('films') ? h('div', { class: 'related' }, h('a', { class: 'chip f', href: '#/l/films?genre=Animation' }, H.t('Films d’animation'))) : null;
-    var tools = h('div', { class: 'tools' }, search, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bSeen, kind === 'music' ? bLists : null, related, count);
+    var tools = h('div', { class: 'tools' }, search, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bState, kind === 'music' ? bLists : null, related, count);
     var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': H.t('Accès rapides'), hidden: true });
     var empty = h('div', { class: 'blank', hidden: true });
     var el = h('section', { class: 'library' }, h('h1', null, lib ? H.tr(lib.label) : H.t('Bibliothèque')), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
@@ -318,8 +322,11 @@
     function paint() {
       label(bGenre, H.t('Genre'), st.genre || H.t('Tous'));
       label(bSort, H.t('Tri'), (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
-      bSeen.setAttribute('aria-pressed', st.unseen ? 'true' : 'false');
-      bSeen.classList.toggle('on', st.unseen);
+      Array.prototype.forEach.call(bState.children, function (b) {
+        var on = b.getAttribute('data-state') === st.state;
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+        b.classList.toggle('on', on);
+      });
       bGenre.hidden = !facets.genres.length;
       var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
       var music = kind === 'music' && typeof facets.albums === 'number';          // la musique compte toujours les artistes et les albums de ce que les filtres laissent, quelle que soit la vue
@@ -353,7 +360,7 @@
       if (st.q) q.push('q=' + encodeURIComponent(st.q));
       if (st.genre) q.push('genre=' + encodeURIComponent(st.genre));
       if (st.section) q.push('section=' + encodeURIComponent(st.section));
-      if (st.unseen) q.push('filter=unseen');
+      if (st.state) q.push('filter=' + st.state);
       if (sagaMode()) q.push('sagas=1');
       if (artistMode()) q.push('view=artists');
       return '/api/library/' + libId + '?' + q.join('&');
@@ -385,16 +392,16 @@
         paint();
         empty.hidden = items.length > 0;
         if (!items.length) showEmpty();
-        if (first && !H.overlay.isOpen() && document.body.contains(el) && el.style.display !== 'none' && document.activeElement !== search && (document.activeElement === document.body || el.contains(document.activeElement))) H.focus.set(grid.querySelector('.card') || search, true);
+        if (first && !H.overlay.isOpen() && document.body.contains(el) && el.style.display !== 'none' && document.activeElement !== search && !bState.contains(document.activeElement) && (document.activeElement === document.body || el.contains(document.activeElement))) H.focus.set(grid.querySelector('.card') || search, true);
         if (items.length < total && sentinel.getBoundingClientRect().top < window.innerHeight + 600) fetchMore(false);
       }).catch(function (e) { loading = false; empty.hidden = false; H.clear(empty).appendChild(h('p', null, e.message)); });
     }
     function showEmpty() {
-      var filtered = st.q || st.genre || st.unseen || st.section;
+      var filtered = st.q || st.genre || st.state || st.section;
       H.clear(empty).appendChild(h('div', null,
         h('h2', null, filtered ? H.t('Rien ne correspond') : H.t('Cette bibliothèque est vide')),
         h('p', null, filtered ? H.t('Change ou retire un filtre.') : H.t('Vérifie que le dossier est bien monté, puis lance une mise à jour.')),
-        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.genre = st.section = ''; st.unseen = false; search.value = ''; H.pref('section.' + libId, null); reset(); } }, H.t('Retirer les filtres')) : H.isAdmin() ? h('a', { class: 'btn f', href: '#/admin' }, H.t('Ouvrir la gestion')) : null));
+        filtered ? h('button', { class: 'btn f', onclick: function () { st.q = st.genre = st.section = st.state = ''; search.value = ''; H.pref('section.' + libId, null); reset(); } }, H.t('Retirer les filtres')) : H.isAdmin() ? h('a', { class: 'btn f', href: '#/admin' }, H.t('Ouvrir la gestion')) : null));
     }
     function reset() {
       token++; items = []; total = 0; lastGrp = null; loading = false;
@@ -1069,7 +1076,10 @@
       { key: 'home_latest', title: H.t('Nouveautés'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
       { key: 'home_unseen', title: H.t('Pas encore vu'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
       { key: 'home_unseen_count', title: H.t('Pas encore vu : cartes par rayon'), note: H.t('Sur la page d’accueil'),
-        choices: [['6', H.t('Peu')], ['12', H.t('Habituel')], ['18', H.t('Beaucoup')], ['24', H.t('Le maximum')]].map(function (c) { return { label: H.t('{n} cartes', { n: c[0] }), detail: c[1], value: c[0] }; }) }];
+        choices: [['6', H.t('Peu')], ['12', H.t('Habituel')], ['18', H.t('Beaucoup')], ['24', H.t('Le maximum')]].map(function (c) { return { label: H.t('{n} cartes', { n: c[0] }), detail: c[1], value: c[0] }; }) },
+      { key: 'home_unseen_sort', title: H.t('Pas encore vu : trier par'), note: H.t('Sur la page d’accueil'),
+        choices: [{ label: H.t('Au hasard'), detail: H.t('Un ordre qui change chaque jour'), value: 'random' }, { label: H.t('Note TMDB'), detail: H.t('Les mieux notés d’abord, ceux sans note à la fin'), value: 'rating' },
+          { label: H.t('Date d’ajout'), detail: H.t('Les plus récemment ajoutés d’abord'), value: 'added' }] }];
     function displayPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Affichage')));
       DISPLAY.forEach(function (setting) {

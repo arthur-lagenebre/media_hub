@@ -271,39 +271,34 @@ class TestTaggedAndCollapsed(unittest.TestCase):
 
     def test_the_films_of_a_saga_become_one_thumbnail_and_the_others_stay_alone(self):
         rows = [self.film("a", "Alpha", "2002", ["SF", "Action"], added=3), self.film("b", "Alpha", "2001", ["Action", "Épopée"], added=9), self.film("c", "", "1999")]
-        out = app.collapse_sagas(rows, {"a": (1, 0), "b": (1, 0)}, {})
+        out = app.collapse_sagas(rows, {})
         self.assertEqual([r["id"] for r in out if r["type"] != "saga"], ["c"])
         saga, = [r for r in out if r["type"] == "saga"]
         self.assertEqual((saga["id"], saga["lib"], saga["title"], saga["sort"], saga["letter"]), (make_id("lib", "saga:Alpha"), "lib", "Alpha", fold("Alpha"), initial("Alpha")))
         self.assertEqual((saga["year"], saga["years"], saga["added"], saga["count"], saga["grp"], saga["summary"], saga["meta"]), ("2001", ["2001", "2002"], 9, 2, "", "", "{}"))
-        self.assertEqual((json.loads(saga["genres"]), [m["id"] for m in saga["members"]], saga["all_seen"]), (["Action", "Épopée", "SF"], ["b", "a"], True))
+        self.assertEqual((json.loads(saga["genres"]), [m["id"] for m in saga["members"]]), (["Action", "Épopée", "SF"], ["b", "a"]))
         self.assertIn("Épopée", saga["genres"])                      # les accents restent des accents dans le texte JSON
-
-    def test_a_saga_is_not_all_seen_while_a_film_is_not(self):
-        rows = [self.film("a", "Alpha"), self.film("b", "Alpha")]
-        saga, = app.collapse_sagas(rows, {"a": (1, 0)}, {})
-        self.assertFalse(saga["all_seen"])
 
     def test_films_without_year_give_a_saga_without_years(self):
         rows = [self.film("a", "Alpha", year=""), self.film("b", "Alpha", year="")]
-        saga, = app.collapse_sagas(rows, {}, {})
+        saga, = app.collapse_sagas(rows, {})
         self.assertEqual((saga["year"], saga["years"]), ("", []))
         rows = [self.film("a", "Alpha", year=""), self.film("b", "Alpha", year="2005")]
-        saga, = app.collapse_sagas(rows, {}, {})
+        saga, = app.collapse_sagas(rows, {})
         self.assertEqual((saga["year"], saga["years"]), ("2005", ["2005", "2005"]))
 
     def test_a_saga_of_the_file_gathers_films_whatever_their_tag(self):
         rows = [self.film("a", ""), self.film("b", ""), self.film("c", "")]
         custom = {"Ma saga": [(rows[1], 1), (rows[0], 2)]}
-        out = app.collapse_sagas(rows, {}, custom)
+        out = app.collapse_sagas(rows, custom)
         self.assertEqual([r["id"] for r in out if r["type"] != "saga"], ["c"])
         saga, = [r for r in out if r["type"] == "saga"]
         self.assertEqual([m["id"] for m in saga["members"]], ["b", "a"])
 
     def test_a_saga_of_the_file_with_a_single_film_stays_a_film_unless_it_replaces_a_tagged_saga(self):
         rows = [self.film("a", ""), self.film("b", "Alpha"), self.film("c", "Alpha")]
-        self.assertEqual({r["type"] for r in app.collapse_sagas(rows, {}, {"Seule": [(rows[0], 1)]})}, {"movie", "saga"})
-        out = app.collapse_sagas(rows, {}, {"Seule": [(rows[0], 1)]})
+        self.assertEqual({r["type"] for r in app.collapse_sagas(rows, {"Seule": [(rows[0], 1)]})}, {"movie", "saga"})
+        out = app.collapse_sagas(rows, {"Seule": [(rows[0], 1)]})
         self.assertEqual(sorted(r["id"] for r in out if r["type"] == "movie"), ["a"])
 
 
@@ -366,6 +361,40 @@ class TestRatingOrder(unittest.TestCase):
         self.assertEqual(app.row_rating(saga), (8.6, 1200))
         unrated = {**saga, "id": "vide", "members": [self.film("c", "c")]}
         self.assertEqual(self.order([unrated, self.film("bas", "y", 6.9, 100)]), ["bas", "vide"])
+
+
+class TestUnseenRowOrder(unittest.TestCase):
+    """L'ordre du rayon « Pas encore vu », choisi par le compte, appliqué avant la coupe."""
+
+    def row(self, ident, title, vote=None, votes=0, added=0, kind="movie"):
+        return item(ident, kind, title=title, added=added, meta={"tmdb_rating": {"tmdb": 1, "vote": vote, "votes": votes, "at": 0}} if vote is not None else {})
+
+    def ids(self, rows, sort, n=24, seen=None, day="2026-11-04"):
+        return [r["id"] for r in app.unseen_row(rows, seen or {}, "p", day, n, sort)]
+
+    def test_rating_goes_from_the_best_to_the_least_then_the_most_voted_and_what_is_not_rated_comes_last_by_title(self):
+        rows = [self.row("sans-b", "b"), self.row("peu", "a", 9.9, app.MIN_VOTES - 1), self.row("moyen", "m", 6.5, 900), self.row("bon-vote", "z", 8.4, 5000),
+                self.row("bon", "y", 8.4, 100), self.row("serie", "s", 7.0, 300, kind="show"), self.row("sans-a", "c")]
+        self.assertEqual(self.ids(rows, "rating"), ["bon-vote", "bon", "serie", "moyen", "peu", "sans-b", "sans-a"])      # « peu » (a) avant « sans-b » (b) avant « sans-a » (c) : le titre, pas l'ordre de la base
+
+    def test_the_cut_comes_after_the_sort_and_the_films_already_touched_do_not_count(self):
+        rows = [self.row(f"f{n}", f"Film {n:02d}", 5 + n / 10, 100) for n in range(10)]
+        self.assertEqual(self.ids(rows, "rating", 3), ["f9", "f8", "f7"])
+        self.assertEqual(self.ids(rows, "rating", 3, seen={"f9": (1, 1)}), ["f8", "f7", "f6"])                 # un film entamé laisse la place au suivant
+
+    def test_added_goes_from_the_newest_to_the_oldest_and_ties_go_by_title(self):
+        rows = [self.row("vieux", "A", added=1), self.row("b", "B", added=5), self.row("a", "A2", added=5), self.row("neuf", "Z", added=9)]
+        self.assertEqual(self.ids(rows, "added"), ["neuf", "a", "b", "vieux"])
+        self.assertEqual(self.ids(rows, "added", 2), ["neuf", "a"])
+
+    def test_random_is_the_default_and_so_is_a_value_nobody_knows(self):
+        rows = [self.row(f"f{n}", f"Film {n}", 5 + n / 10, 100, added=n) for n in range(12)]
+        default = [r["id"] for r in app.unseen_row(rows, {}, "p", "2026-11-04")]
+        self.assertEqual(self.ids(rows, "random"), default)
+        self.assertEqual(self.ids(rows, "titre"), default)
+        self.assertNotEqual(default, self.ids(rows, "rating"))
+        self.assertNotEqual(default, self.ids(rows, "random", day="2026-11-05"))
+        self.assertEqual(sorted(default), sorted(r["id"] for r in rows))
 
 
 class TestPageBounds(unittest.TestCase):
