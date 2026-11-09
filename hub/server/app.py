@@ -189,18 +189,26 @@ def shown_rating(rating):
     return None
 
 
+def typed_summary(row, meta):
+    """Ce que seul un genre d'élément porte : la durée et l'artiste d'un album, les épisodes manquants et la pile d'affiches d'une série."""
+    out = {}
+    if row["type"] == "album":
+        if meta.get("duration"):
+            out["duration"] = meta["duration"]
+        if meta.get("artist_id"):
+            out["artist_id"] = meta["artist_id"]
+    if row["type"] == "series":
+        if meta.get("missing"):
+            out["missing"] = sum(len(m["numbers"]) for m in meta["missing"])
+        if meta.get("stack"):
+            out["cover_urls"] = [urls.item_cover(row["id"])] + [urls.entry_image(e) for e in meta["stack"]][:STACK_MAX - 1]
+    return out
+
+
 def summary(row, seen=None):
     meta = safe_json(row["meta"], {})
     out = {"id": row["id"], "type": row["type"], "title": row["title"], "year": row["year"], "grp": row["grp"], "n": row["count"], "letter": row["letter"],
-           "added": row["added"], "genres": safe_json(row["genres"], []), "cover": urls.item_cover(row["id"])}
-    if row["type"] == "album" and meta.get("duration"):
-        out["duration"] = meta["duration"]
-    if row["type"] == "album" and meta.get("artist_id"):
-        out["artist_id"] = meta["artist_id"]
-    if row["type"] == "series" and meta.get("missing"):
-        out["missing"] = sum(len(m["numbers"]) for m in meta["missing"])
-    if row["type"] == "series" and meta.get("stack"):
-        out["cover_urls"] = [urls.item_cover(row["id"])] + [urls.entry_image(e) for e in meta["stack"]][:STACK_MAX - 1]
+           "added": row["added"], "genres": safe_json(row["genres"], []), "cover": urls.item_cover(row["id"]), **typed_summary(row, meta)}
     rating = shown_rating(meta.get("tmdb_rating"))
     if rating:
         out["tmdb_rating"], out["tmdb_votes"] = rating["vote"], rating["votes"]
@@ -1711,6 +1719,16 @@ def api_artist(h, m, q):
     h.send_json(out)
 
 
+def artist_link_label(label, url):
+    """Le libellé d'un lien : celui qu'on donne (espaces compactés), sinon le nom du site ; 400 s'il n'est pas un texte ou s'il est trop long."""
+    if label is not None and not isinstance(label, str):
+        raise HttpError(400, "libellé du lien invalide")
+    label = " ".join((label or "").split()) or artistinfo.host_label(url)
+    if len(label) > LINK_LABEL_MAX:
+        raise HttpError(400, f"libellé trop long ({LINK_LABEL_MAX} caractères au plus)")
+    return label
+
+
 @route("POST", r"/api/artist/([\w-]+)/(\w+)/links")
 def api_artist_link_add(h, m, q):
     """Ajoute un lien à la fiche d'un artiste : corps `{"url", "label"?}` (adresse http ou https ; sans libellé, le nom du site). Ajouter une adresse retirée plus tôt annule le retrait. Aucune requête n'est faite vers l'adresse. Rend `{"links": [...]}`, les liens de la fiche à jour. 404 si l'artiste n'a pas de fiche. Administrateur seulement."""
@@ -1719,12 +1737,7 @@ def api_artist_link_add(h, m, q):
     mbid, kept = artist_link_target(hub, m)
     body = h.body_json()
     url = artist_link_url(body.get("url"))
-    label = body.get("label")
-    if label is not None and not isinstance(label, str):
-        raise HttpError(400, "libellé du lien invalide")
-    label = " ".join((label or "").split()) or artistinfo.host_label(url)
-    if len(label) > LINK_LABEL_MAX:
-        raise HttpError(400, f"libellé trop long ({LINK_LABEL_MAX} caractères au plus)")
+    label = artist_link_label(body.get("label"), url)
     with LINKS_LOCK:
         edits = artist_link_edits(hub, mbid)
         was_removed = url in edits["removed"]
