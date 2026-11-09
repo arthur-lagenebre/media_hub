@@ -287,7 +287,7 @@
       body.appendChild(h('p', { class: 'muted total' }, H.plural(files.length, 'fichier') + ' · ' + sizeText(total)));
       files.forEach(function (f, i) {
         body.appendChild(h('div', { class: 'line inbox-file', 'data-file': f.name, 'data-account': f.account },
-          h('div', { class: 'what' }, h('b', null, f.name), h('span', null, f.user + ' · ' + sizeText(f.size) + ' · ' + when(f.date))),
+          h('div', { class: 'what' }, h('b', null, f.name), h('span', null, (f.deleted ? f.user + ' ' + H.t('(compte supprimé)') : f.user) + ' · ' + sizeText(f.size) + ' · ' + when(f.date))),
           h('a', { class: 'btn f', href: fileUrl(f), 'data-key': 'inbox-get-' + i, 'aria-label': H.t('Télécharger {name}', { name: f.name }) }, H.icon('download'), h('span', { class: 'lbl' }, H.t('Télécharger'))),
           H.button(H.t('Supprimer'), 'trash', { 'data-key': 'inbox-del-' + i, 'aria-label': H.t('Supprimer {name}', { name: f.name }), onclick: function () { remove(f, i); } })));
       });

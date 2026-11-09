@@ -15,21 +15,30 @@ from pathlib import Path
 from unittest import mock
 
 from hub import inbox
+from hub.db import Database
 from hub.inbox import Inbox, InboxError
 
 MB = 1 << 20
 
 
-def make(root, **over):
-    cfg = {"data": Path(root), "inbox_keep_free": 0, "inbox_max_uploads": 2, **over}
-    return Inbox(types.SimpleNamespace(**cfg))
+def make(root, db, **over):
+    cfg = {"inbox": Path(root) / "inbox", "inbox_keep_free": 0, "inbox_max_uploads": 2, **over}
+    return Inbox(types.SimpleNamespace(**cfg), db)
+
+
+def add_user(db, uid, name=None, inbox_dir=None, role="user"):
+    """Un compte sans mot de passe utilisable : de quoi lier un dossier à un identifiant."""
+    db.execute("INSERT INTO users(id, name, pass_hash, role, token_version, created, inbox_dir) VALUES(?,?,?,?,1,0,?)", (uid, name or uid, "x", role, inbox_dir))
 
 
 class TempCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.inbox = make(self.tmp)
+        self.db = Database(self.tmp / "hub.db")
+        for uid in ("alice", "bob", "carol"):
+            add_user(self.db, uid)                   # le nom du compte est son identifiant : le dossier a le même nom
+        self.inbox = make(self.tmp, self.db)
 
     def files(self, account="alice"):
         folder = self.tmp / "inbox" / account
@@ -134,7 +143,7 @@ class TestSmallHelpers(TempCase):
 class TestReceive(TempCase):
     def test_a_file_is_stored_under_its_account_with_its_bytes_and_no_part_left(self):
         out = self.put("Film.mkv", b"0123456789")
-        self.assertEqual(out, {"name": "Film.mkv", "size": 10})
+        self.assertEqual(out, {"name": "Film.mkv", "size": 10, "account": "alice"})
         self.assertEqual((self.tmp / "inbox" / "alice" / "Film.mkv").read_bytes(), b"0123456789")
         self.assertEqual(self.files(), ["Film.mkv"])
 
@@ -214,11 +223,12 @@ class TestReceive(TempCase):
         self.assertEqual(caught.exception.status, 507)
         self.assertNotIn(str(self.tmp), caught.exception.message)
 
-    def test_an_account_that_is_not_a_plain_identifier_is_refused(self):
-        for account in ("..", "a/b", "a\\b", "", "é", "x" * 65, ".", "a b"):
-            with self.assertRaises(InboxError, msg=account):
+    def test_an_unknown_account_is_a_400_and_nothing_is_created(self):
+        for account in ("..", "a/b", "a\b", "", "é", "x" * 65, ".", "a b", None, "dave"):
+            with self.assertRaises(InboxError, msg=account) as caught:
                 self.put("x.mkv", account=account)
-        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), [])
+            self.assertEqual(caught.exception.status, 400, account)
+        self.assertFalse((self.tmp / "inbox").exists())
 
 
 class TestSameName(TempCase):
@@ -261,7 +271,7 @@ class TestSameName(TempCase):
         self.assertEqual((folder / "Film.mkv.part").read_bytes(), b"un autre envoi en cours")
 
     def test_many_uploads_of_the_same_name_at_once_all_keep_their_own_file(self):
-        many = make(self.tmp, inbox_max_uploads=64)
+        many = make(self.tmp, self.db, inbox_max_uploads=64)
         for round_ in range(3):
             names, errors, start = [], [], threading.Barrier(16)
 
@@ -286,19 +296,19 @@ class TestSameName(TempCase):
 
 class TestLimits(TempCase):
     def test_the_folders_above_the_inbox_are_created_when_they_are_missing(self):
-        fresh = make(self.tmp / "pas" / "encore" / "la")
+        fresh = make(self.tmp / "pas" / "encore" / "la", self.db)
         self.assertEqual(fresh.receive("alice", "a.mkv", io.BytesIO(b"abc"), 3)["name"], "a.mkv")
         self.assertEqual((self.tmp / "pas" / "encore" / "la" / "inbox" / "alice" / "a.mkv").read_bytes(), b"abc")
 
     def test_an_unexpected_system_error_before_reading_gives_the_slot_back(self):
-        one = make(self.tmp, inbox_max_uploads=1)
+        one = make(self.tmp, self.db, inbox_max_uploads=1)
         with mock.patch.object(Inbox, "_open_part", side_effect=OSError(24, "Too many open files")), self.assertRaises(OSError):
             one.receive("alice", "x.mkv", io.BytesIO(b"abc"), 3)
         self.assertEqual(self.put("y.mkv", inbox_=one)["name"], "y.mkv")
         self.assertEqual(self.files(), ["y.mkv"])
 
     def test_the_free_space_to_keep_is_respected(self):
-        keep = make(self.tmp, inbox_keep_free=1000)
+        keep = make(self.tmp, self.db, inbox_keep_free=1000)
         usage = types.SimpleNamespace(total=10**9, used=0, free=1010)
         with mock.patch.object(inbox.shutil, "disk_usage", return_value=usage):
             with self.assertRaises(InboxError) as caught:
@@ -309,14 +319,14 @@ class TestLimits(TempCase):
         self.assertEqual(self.files(), ["b.mkv"])
 
     def test_the_free_space_is_measured_where_the_files_go(self):
-        keep = make(self.tmp)
+        keep = make(self.tmp, self.db)
         usage = types.SimpleNamespace(total=1, used=0, free=10**9)
         with mock.patch.object(inbox.shutil, "disk_usage", return_value=usage) as measured:
             self.put("a.mkv", inbox_=keep)
         self.assertEqual(Path(measured.call_args.args[0]), self.tmp / "inbox")
 
     def test_uploads_in_flight_count_against_the_free_space(self):
-        keep = make(self.tmp, inbox_keep_free=0)
+        keep = make(self.tmp, self.db, inbox_keep_free=0)
         usage = types.SimpleNamespace(total=10**9, used=0, free=100)
         with mock.patch.object(inbox.shutil, "disk_usage", return_value=usage):
             with keep.admit("alice", 70):
@@ -337,13 +347,13 @@ class TestLimits(TempCase):
             pass
 
     def test_a_slot_comes_back_when_an_upload_fails(self):
-        one = make(self.tmp, inbox_max_uploads=1)
+        one = make(self.tmp, self.db, inbox_max_uploads=1)
         with self.assertRaises(InboxError):
             one.receive("alice", "x.mkv", io.BytesIO(b"ab"), 5)
         self.assertEqual(self.put("y.mkv", inbox_=one)["name"], "y.mkv")
 
     def test_the_no_space_answer_comes_before_the_busy_one_so_that_a_retry_is_not_pointless(self):
-        one = make(self.tmp, inbox_max_uploads=1)
+        one = make(self.tmp, self.db, inbox_max_uploads=1)
         usage = types.SimpleNamespace(total=10**9, used=0, free=100)
         with mock.patch.object(inbox.shutil, "disk_usage", return_value=usage), one.admit("alice", 1):
             with self.assertRaises(InboxError) as caught:

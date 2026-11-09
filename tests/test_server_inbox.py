@@ -69,7 +69,7 @@ class InboxCase(unittest.TestCase):
         return call(hub or self.hub, "POST", target, body, {**(self.cookie(row) if row else {}), **(headers or {})}, rig)
 
     def stored(self, row):
-        folder = self.inbox / row["id"]
+        folder = self.inbox / row["name"]
         return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
 
     def everything(self):
@@ -86,9 +86,9 @@ class InboxCase(unittest.TestCase):
 class TestUpload(InboxCase):
     def test_an_account_with_the_right_sends_a_file_into_its_own_folder(self):
         handler, reply = self.send(self.alice, "Film.mkv", b"0123456789")
-        self.assertEqual((reply.status, reply.json()), (201, {"name": "Film.mkv", "size": 10, "account": self.alice["id"]}))
-        self.assertEqual((self.inbox / self.alice["id"] / "Film.mkv").read_bytes(), b"0123456789")
-        self.assertEqual(self.everything(), [f"{self.alice['id']}/Film.mkv"])
+        self.assertEqual((reply.status, reply.json()), (201, {"name": "Film.mkv", "size": 10, "account": "alice"}))
+        self.assertEqual((self.inbox / "alice" / "Film.mkv").read_bytes(), b"0123456789")
+        self.assertEqual(self.everything(), [f"{self.alice['name']}/Film.mkv"])
         self.assertFalse(handler.close_connection)
 
     def test_an_administrator_may_always_send(self):
@@ -141,7 +141,7 @@ class TestUpload(InboxCase):
             self.assertLessEqual(len(reply.json()["name"].encode()), 210)
         files = self.everything()
         self.assertEqual(len(files), len(names))
-        self.assertTrue(all(f.startswith(self.alice["id"] + "/") and f.count("/") == 1 for f in files), files)
+        self.assertTrue(all(f.startswith("alice/") and f.count("/") == 1 for f in files), files)
         stray = [p for p in self.root.rglob("*") if p.is_file() and p.suffix in (".mkv", ".srt")]
         self.assertEqual(len(stray), len(names))
         self.assertTrue(all(self.inbox in p.parents for p in stray), stray)
@@ -179,7 +179,7 @@ class TestUpload(InboxCase):
         self.assertEqual(self.everything(), [])
 
     def test_a_client_that_disappears_mid_upload_leaves_no_part(self):
-        folder = self.inbox / self.alice["id"]
+        folder = self.inbox / "alice"
         handler, reply = self.send(self.alice, "Film.mkv", b"x" * 100, rig=Breaks)
         self.assertIsNone(reply)
         self.assertTrue(handler.close_connection)
@@ -234,10 +234,10 @@ class TestUpload(InboxCase):
     def test_an_existing_file_is_not_overwritten(self):
         self.assertEqual(self.send(self.alice, "Film.mkv", b"un")[1].json()["name"], "Film.mkv")
         self.assertEqual(self.send(self.alice, "Film.mkv", b"deux")[1].json()["name"], "Film (2).mkv")
-        self.assertEqual((self.inbox / self.alice["id"] / "Film.mkv").read_bytes(), b"un")
+        self.assertEqual((self.inbox / "alice" / "Film.mkv").read_bytes(), b"un")
 
     def test_too_many_uploads_at_once_is_a_429(self):
-        with self.hub.inbox.admit("x", 1), self.hub.inbox.admit("y", 1):
+        with self.hub.inbox.admit(self.boss["id"], 1), self.hub.inbox.admit(self.bob["id"], 1):
             handler, reply = self.send(self.alice, "Film.mkv")
             self.assertEqual(reply.status, 429)
             self.assertTrue(handler.close_connection)
@@ -307,15 +307,15 @@ class TestRead(InboxCase):
         files = reply.json()["files"]
         self.assertEqual(reply.status, 200)
         self.assertEqual(sorted((f["user"], f["account"], f["name"], f["size"]) for f in files),
-                         sorted([("alice", self.alice["id"], "Film.mkv", 10), ("bob", self.bob["id"], "Chanson é.flac", 7), ("boss", self.boss["id"], "Livre.epub", 5)]))
+                         sorted([("alice", "alice", "Film.mkv", 10), ("bob", "bob", "Chanson é.flac", 7), ("boss", "boss", "Livre.epub", 5)]))
         self.assertTrue(all(isinstance(f["date"], int) and f["date"] > 0 for f in files))
 
-    def test_the_files_of_a_deleted_account_stay_for_the_administrator_under_its_identifier(self):
+    def test_the_files_of_a_deleted_account_stay_for_the_administrator_under_the_name_of_its_folder(self):
         accounts.delete(self.hub.db, self.alice["id"])
         _, reply = self.get(self.boss, "/api/inbox")
-        mine = [f for f in reply.json()["files"] if f["account"] == self.alice["id"]]
-        self.assertEqual([(f["user"], f["name"]) for f in mine], [(self.alice["id"], "Film.mkv")])
-        self.assertEqual(self.get(self.boss, f"/api/inbox/{self.alice['id']}/Film.mkv")[1].body, b"0123456789")
+        mine = [f for f in reply.json()["files"] if f["account"] == "alice"]
+        self.assertEqual([(f["user"], f["name"], f["deleted"]) for f in mine], [("alice", "Film.mkv", True)])
+        self.assertEqual(self.get(self.boss, f"/api/inbox/{self.alice['name']}/Film.mkv")[1].body, b"0123456789")
 
     def test_a_user_may_not_list_everything(self):
         for row in (self.alice, self.bob):
@@ -342,50 +342,50 @@ class TestRead(InboxCase):
         self.assertEqual(reply.json()["files"], [])
 
     def test_the_administrator_downloads_a_file_as_an_attachment(self):
-        _, reply = self.get(self.boss, f"/api/inbox/{self.bob['id']}/{quote('Chanson é.flac')}")
+        _, reply = self.get(self.boss, f"/api/inbox/{self.bob['name']}/{quote('Chanson é.flac')}")
         self.assertEqual((reply.status, reply.body), (200, b"musique"))
         self.assertEqual(reply.headers["content-disposition"], "attachment; filename*=UTF-8''" + quote("Chanson é.flac"))
         self.assertEqual(reply.headers["content-type"], "application/octet-stream")
         self.assertEqual(reply.headers["x-content-type-options"], "nosniff")
 
     def test_the_range_requests_of_a_resumed_download_work(self):
-        _, reply = call(self.hub, "GET", f"/api/inbox/{self.alice['id']}/Film.mkv", headers={**self.cookie(self.boss), "Range": "bytes=2-5"})
+        _, reply = call(self.hub, "GET", f"/api/inbox/{self.alice['name']}/Film.mkv", headers={**self.cookie(self.boss), "Range": "bytes=2-5"})
         self.assertEqual((reply.status, reply.body), (206, b"2345"))
 
     def test_nobody_but_the_administrator_downloads(self):
         for row in (self.alice, self.bob):
             for account in (self.alice, self.bob):
-                _, reply = self.get(row, f"/api/inbox/{account['id']}/Film.mkv")
+                _, reply = self.get(row, f"/api/inbox/{account['name']}/Film.mkv")
                 self.assertEqual(reply.status, 403, (row["name"], account["name"]))
                 self.assertNotIn(b"0123456789", reply.body)
 
     def test_a_download_without_a_session_is_a_401(self):
-        self.assertEqual(call(self.hub, "GET", f"/api/inbox/{self.alice['id']}/Film.mkv")[1].status, 401)
+        self.assertEqual(call(self.hub, "GET", f"/api/inbox/{self.alice['name']}/Film.mkv")[1].status, 401)
         self.assertEqual(call(self.hub, "GET", "/api/inbox")[1].status, 401)
 
     def test_the_media_token_does_not_open_the_inbox(self):
         token = self.hub.media_token(accounts.by_id(self.hub.db, self.boss["id"]))
-        self.assertEqual(call(self.hub, "GET", f"/api/inbox/{self.alice['id']}/Film.mkv?token={token}")[1].status, 401)
+        self.assertEqual(call(self.hub, "GET", f"/api/inbox/{self.alice['name']}/Film.mkv?token={token}")[1].status, 401)
 
     def test_a_path_that_leaves_the_inbox_is_a_404(self):
         secret = self.root / "data" / "secret.txt"
         secret.write_bytes(b"secret")
         (self.root / "hub.db").write_bytes(b"secret")
-        alice = self.alice["id"]
+        alice = self.alice["name"]
         for target in (f"/api/inbox/{alice}/..", f"/api/inbox/{alice}/.", f"/api/inbox/{alice}/..%2f..%2fsecret.txt", f"/api/inbox/{alice}/%2e%2e%2f%2e%2e%2fhub.db",
                        f"/api/inbox/{alice}/..%5c..%5chub.db", f"/api/inbox/{alice}/../../hub.db", "/api/inbox/../../hub.db", "/api/inbox/..%2fhub.db", f"/api/inbox/{alice}/Film.mkv%00.txt",
-                       f"/api/inbox/{alice}/Film.mkv.part", f"/api/inbox/{alice}/", f"/api/inbox/{alice}", f"/api/inbox/%2e%2e/Film.mkv", f"/api/inbox/{alice}%2f..%2f{self.bob['id']}/Film.mkv"):
+                       f"/api/inbox/{alice}/Film.mkv.part", f"/api/inbox/{alice}/", f"/api/inbox/{alice}", f"/api/inbox/%2e%2e/Film.mkv", f"/api/inbox/{alice}%2f..%2f{self.bob['name']}/Film.mkv"):
             _, reply = self.get(self.boss, target)
             self.assertEqual(reply.status, 404, target)
             self.assertNotIn(b"secret", reply.body, target)
 
     def test_a_file_that_does_not_exist_is_a_404_with_a_message(self):
-        _, reply = self.get(self.boss, f"/api/inbox/{self.alice['id']}/absent.mkv")
+        _, reply = self.get(self.boss, f"/api/inbox/{self.alice['name']}/absent.mkv")
         self.assertEqual((reply.status, reply.json()), (404, {"error": "fichier introuvable"}))
 
     def test_the_inbox_is_never_probed_or_scanned(self):
         self.get(self.boss, "/api/inbox")
-        self.get(self.boss, f"/api/inbox/{self.alice['id']}/Film.mkv")
+        self.get(self.boss, f"/api/inbox/{self.alice['name']}/Film.mkv")
         self.assertFalse([c for c in self.hub.jobs.method_calls if c[0] != "busy"])
         self.assertEqual(self.hub.images.method_calls, [])
 
@@ -398,47 +398,47 @@ class TestDelete(InboxCase):
         self.send(self.bob, "Autre.mkv", b"autre")
 
     def test_the_administrator_deletes_any_file(self):
-        _, reply = self.delete(self.boss, f"/api/inbox/{self.alice['id']}/Film.mkv")
+        _, reply = self.delete(self.boss, f"/api/inbox/{self.alice['name']}/Film.mkv")
         self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
         self.assertEqual((self.stored(self.alice), self.stored(self.bob)), ([], ["Autre.mkv"]))
 
     def test_an_account_deletes_its_own_files_and_only_those(self):
-        _, reply = self.delete(self.alice, f"/api/inbox/{self.bob['id']}/Autre.mkv")
+        _, reply = self.delete(self.alice, f"/api/inbox/{self.bob['name']}/Autre.mkv")
         self.assertEqual((reply.status, reply.json()), (403, {"error": "ce fichier n'est pas à toi"}))
         self.assertEqual(self.stored(self.bob), ["Autre.mkv"])
-        _, reply = self.delete(self.alice, f"/api/inbox/{self.alice['id']}/Film.mkv")
+        _, reply = self.delete(self.alice, f"/api/inbox/{self.alice['name']}/Film.mkv")
         self.assertEqual(reply.status, 200)
         self.assertEqual(self.stored(self.alice), [])
 
     def test_an_account_that_lost_the_right_deletes_nothing(self):
         accounts.set_can_upload(self.hub.db, self.alice["id"], False)
-        self.assertEqual(self.delete(self.alice, f"/api/inbox/{self.alice['id']}/Film.mkv")[1].status, 403)
+        self.assertEqual(self.delete(self.alice, f"/api/inbox/{self.alice['name']}/Film.mkv")[1].status, 403)
         self.assertEqual(self.stored(self.alice), ["Film.mkv"])
 
     def test_a_missing_file_is_a_404_and_a_second_delete_too(self):
-        target = f"/api/inbox/{self.alice['id']}/Film.mkv"
+        target = f"/api/inbox/{self.alice['name']}/Film.mkv"
         self.assertEqual(self.delete(self.boss, target)[1].status, 200)
         self.assertEqual(self.delete(self.boss, target)[1].status, 404)
 
     def test_a_path_that_leaves_the_inbox_deletes_nothing(self):
         (self.root / "hub.db").write_bytes(b"secret")
-        alice = self.alice["id"]
+        alice = self.alice["name"]
         for target in (f"/api/inbox/{alice}/..", f"/api/inbox/{alice}/..%2f..%2f..%2fhub.db", f"/api/inbox/../../hub.db", f"/api/inbox/{alice}/Film.mkv%00",
-                       f"/api/inbox/{self.bob['id']}%2f..%2f{alice}/Film.mkv"):
+                       f"/api/inbox/{self.bob['name']}%2f..%2f{alice}/Film.mkv"):
             for row in (self.boss, self.alice):
                 self.assertEqual(self.delete(row, target)[1].status, 404, (row["name"], target))
-        self.assertEqual(sorted(self.everything()), sorted([f"{alice}/Film.mkv", f"{self.bob['id']}/Autre.mkv"]))
+        self.assertEqual(sorted(self.everything()), sorted([f"{alice}/Film.mkv", f"{self.bob['name']}/Autre.mkv"]))
         self.assertTrue((self.root / "hub.db").exists())
 
     def test_without_a_session_it_is_a_401(self):
-        self.assertEqual(call(self.hub, "DELETE", f"/api/inbox/{self.alice['id']}/Film.mkv")[1].status, 401)
+        self.assertEqual(call(self.hub, "DELETE", f"/api/inbox/{self.alice['name']}/Film.mkv")[1].status, 401)
         self.assertEqual(self.stored(self.alice), ["Film.mkv"])
 
     def test_a_body_sent_with_the_delete_is_thrown_away_so_the_connection_stays_clean(self):
-        handler, reply = self.delete(self.alice, f"/api/inbox/{self.bob['id']}/Autre.mkv", b"x" * 20)
+        handler, reply = self.delete(self.alice, f"/api/inbox/{self.bob['name']}/Autre.mkv", b"x" * 20)
         self.assertEqual(reply.status, 403)
         self.assertEqual(handler.rfile.tell(), 20)
-        handler, reply = self.delete(self.boss, f"/api/inbox/{self.alice['id']}/Film.mkv", b"x" * 20)
+        handler, reply = self.delete(self.boss, f"/api/inbox/{self.alice['name']}/Film.mkv", b"x" * 20)
         self.assertEqual((reply.status, handler.rfile.tell()), (200, 20))
 
     def test_the_handler_answers_the_delete_method(self):
@@ -474,7 +474,7 @@ class TestOnARealServer(AccountsCase):
         return answer
 
     def folder(self):
-        return self.inbox / self.alice.account["id"]
+        return self.inbox / self.alice.account["name"]
 
     def test_a_file_goes_in_comes_out_for_the_administrator_and_goes_away(self):
         data = bytes(range(256)) * 4096                                     # 1 Mo
@@ -483,9 +483,9 @@ class TestOnARealServer(AccountsCase):
         self.assertEqual((self.folder() / "Un Film été.mkv").read_bytes(), data)
         status, listing = self.admin.json("/api/inbox")
         self.assertEqual([(f["user"], f["name"], f["size"]) for f in listing["files"]], [("alice", "Un Film été.mkv", len(data))])
-        status, headers, body = self.admin.get(f"/api/inbox/{self.alice.account['id']}/Un%20Film%20%C3%A9t%C3%A9.mkv")
+        status, headers, body = self.admin.get(f"/api/inbox/{self.alice.account['name']}/Un%20Film%20%C3%A9t%C3%A9.mkv")
         self.assertEqual((status, body, headers["Content-Disposition"].startswith("attachment;")), (200, data, True))
-        self.assertEqual(self.alice.request("DELETE", f"/api/inbox/{self.alice.account['id']}/Un%20Film%20%C3%A9t%C3%A9.mkv")[0], 200)
+        self.assertEqual(self.alice.request("DELETE", f"/api/inbox/{self.alice.account['name']}/Un%20Film%20%C3%A9t%C3%A9.mkv")[0], 200)
         self.assertEqual(self.admin.json("/api/inbox")[1]["files"], [])
         self.assertEqual(sorted(p.name for p in self.folder().iterdir()), [])
 
@@ -654,7 +654,7 @@ class TestRefusalsReachTheClient(AccountsCase):
         self.assertEqual(status, 201)
         sender.join(30)
         self.assertEqual((failed, sent[0]), ([], self.BIG))
-        self.assertEqual((self.inbox / self.alice.account["id"] / "ok.mkv").stat().st_size, self.BIG)
+        self.assertEqual((self.inbox / self.alice.account["name"] / "ok.mkv").stat().st_size, self.BIG)
         conn.request("GET", "/api/state", headers={"Authorization": f"Bearer {self.alice.token}"})
         response = conn.getresponse()
         response.read()

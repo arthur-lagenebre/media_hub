@@ -183,10 +183,11 @@ class TestAnnounce(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
-    def said(self, cfg, auth=True):
+    def said(self, cfg, auth=True, inbox_problem=None):
         out, err = Console(), io.StringIO()
+        hub = types.SimpleNamespace(auth=lambda: auth, inbox=types.SimpleNamespace(check=lambda: inbox_problem))
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            cli.announce(cfg, types.SimpleNamespace(auth=lambda: auth))
+            cli.announce(cfg, hub)
         self.console = out
         return out.getvalue(), err.getvalue()
 
@@ -212,6 +213,10 @@ class TestAnnounce(unittest.TestCase):
         self.assertIn("aucune bibliothèque", err)
         self.assertIn("ffmpeg introuvable", err)
 
+    def test_an_inbox_that_cannot_be_written_is_said_at_startup(self):
+        err = self.said(fake_config(self.tmp), inbox_problem="la boîte de réception (/x) n'est pas utilisable : refusé")[1]
+        self.assertIn("ATTENTION : la boîte de réception (/x) n'est pas utilisable", err)
+
     def test_a_short_hub_password_is_warned_a_long_one_is_not(self):
         self.assertIn("HUB_PASSWORD fait moins de 12 caractères", self.said(fake_config(self.tmp, password="court"))[1])
         self.assertNotIn("HUB_PASSWORD", self.said(fake_config(self.tmp, password="x" * accounts.MIN_PASSWORD))[1])
@@ -229,6 +234,7 @@ class TestMain(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         hub = mock.Mock()
         hub.auth.return_value = True
+        hub.inbox.check.return_value = None
         server = mock.Mock(hub=hub, serve_forever=serve_forever)
         out = self.console = Console()
         with mock.patch.object(sys, "argv", ["hub", *argv]), mock.patch.object(cli.config, "load", return_value=fake_config(tmp)),                 mock.patch.object(cli.config, "use_media_library"), mock.patch.dict(sys.modules, {"hub.server.app": types.SimpleNamespace(make_server=lambda cfg: server)}), contextlib.redirect_stdout(out):
@@ -240,6 +246,9 @@ class TestMain(unittest.TestCase):
         hub.first_scan.assert_called_once_with()
         hub.autoscan.assert_called_once_with()
         hub.inbox.keep_clean.assert_called_once_with()
+        hub.inbox.migrate.assert_called_once_with()
+        calls = [name for name, *_ in hub.inbox.method_calls]
+        self.assertLess(calls.index("migrate"), calls.index("keep_clean"))                  # les dossiers sont renommés avant le premier nettoyage
         server.server_close.assert_called_once_with()
         self.assertIn("arrêt.", out)
         self.assertEqual(self.console.unflushed, "")

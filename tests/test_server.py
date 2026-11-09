@@ -3424,7 +3424,7 @@ class TestDocumentedRoutes(unittest.TestCase):
         for expected in (("GET", "/api/state"), ("GET", "/api/search"), ("POST", "/api/playlists"), ("GET", "/api/playlists"), ("POST", "/api/playlist/<id>/rename"),
                          ("GET", "/api/subs/<entry>/<e|s><n>.<vtt|sup>"), ("GET", "/media/<entry>/stream"), ("POST", "/api/entry/<id>/seen"), ("GET", "/book/<id>/epub/<chemin>"),
                          ("GET", "/img/entry/<id>"), ("POST", "/api/token"), ("GET", "/api/jobs"), ("POST", "/api/cleanup"),
-                         ("POST", "/api/inbox"), ("GET", "/api/inbox"), ("GET", "/api/inbox/<compte>/<nom>"), ("DELETE", "/api/inbox/<compte>/<nom>"), ("POST", "/api/user/<id>/upload")):
+                         ("POST", "/api/inbox"), ("GET", "/api/inbox"), ("GET", "/api/inbox/<dossier>/<nom>"), ("DELETE", "/api/inbox/<dossier>/<nom>"), ("POST", "/api/user/<id>/upload")):
             self.assertIn(expected, routes)
 
 

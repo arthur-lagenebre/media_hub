@@ -105,9 +105,9 @@ class TestUploadMigration(TempCase):
 
     def test_a_version_4_base_gets_the_column_and_keeps_every_account_and_what_they_watched(self):
         db = Database(self.old_base())
-        self.assertEqual(db.kv_get("schema"), 5)
-        self.assertEqual([tuple(r) for r in db.query("SELECT id, name, pass_hash, role, token_version, created, can_upload FROM users ORDER BY id")],
-                         [("abc", "alice", "h2", "user", 1, 200, 0), ("default", "boss", "h1", "admin", 3, 100, 0)])
+        self.assertEqual(db.kv_get("schema"), database.SCHEMA_VERSION)
+        self.assertEqual([tuple(r) for r in db.query("SELECT id, name, pass_hash, role, token_version, created, can_upload, inbox_dir FROM users ORDER BY id")],
+                         [("abc", "alice", "h2", "user", 1, 200, 0, None), ("default", "boss", "h1", "admin", 3, 100, 0, None)])
         self.assertEqual([tuple(r) for r in db.query("SELECT profile, entry_id, position FROM progress")], [("abc", "e1", 12.5)])
         self.assertEqual([tuple(r) for r in db.query("SELECT user_id, lib, play FROM rights")], [("abc", "films", 0)])
         self.assertEqual(db.kv_get("secret"), "s")
@@ -117,7 +117,20 @@ class TestUploadMigration(TempCase):
         Database(path).execute("UPDATE users SET can_upload=1 WHERE id='abc'")
         again = Database(path)
         self.assertEqual(again.one("SELECT can_upload FROM users WHERE id='abc'")["can_upload"], 1)
-        self.assertEqual(again.kv_get("schema"), 5)
+        self.assertEqual(again.kv_get("schema"), database.SCHEMA_VERSION)
+
+    def test_a_version_5_base_gets_the_folder_column_and_keeps_the_upload_right(self):
+        path = self.old_base()
+        conn = sqlite3.connect(path)
+        conn.execute("ALTER TABLE users ADD COLUMN can_upload INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE users SET can_upload=1 WHERE id='abc'")
+        conn.execute("UPDATE kv SET value='5' WHERE key='schema'")
+        conn.commit()
+        conn.close()
+        db = Database(path)
+        self.assertEqual(db.kv_get("schema"), 6)
+        self.assertEqual([tuple(r) for r in db.query("SELECT id, can_upload, inbox_dir FROM users ORDER BY id")], [("abc", 1, None), ("default", 0, None)])
+        self.assertEqual(db.kv_get("secret"), "s")
 
     def test_a_name_that_is_not_an_identifier_is_refused_before_any_sql_runs(self):
         conn = self.db.connection()
@@ -126,12 +139,12 @@ class TestUploadMigration(TempCase):
                 database._add_column(conn, table, column, "INTEGER")
         self.assertIsNotNone(self.db.one("SELECT name FROM sqlite_master WHERE name='users'"))
 
-    def test_a_new_base_has_the_column_too_and_the_version_is_5(self):
-        self.assertEqual(database.SCHEMA_VERSION, 5)
+    def test_a_new_base_has_the_columns_too_and_the_version_is_6(self):
+        self.assertEqual(database.SCHEMA_VERSION, 6)
         self.db.execute("INSERT INTO users(id, name, pass_hash, created) VALUES('x', 'x', 'h', 1)")
-        self.assertEqual(self.db.one("SELECT can_upload FROM users WHERE id='x'")["can_upload"], 0)
+        self.assertEqual(tuple(self.db.one("SELECT can_upload, inbox_dir FROM users WHERE id='x'")), (0, None))
 
-    def test_a_base_in_version_3_reaches_5_through_the_other_migration_too(self):
+    def test_a_base_in_version_3_reaches_6_through_the_other_migration_too(self):
         path = self.old_base()
         conn = sqlite3.connect(path)
         conn.execute("UPDATE kv SET value='3' WHERE key='schema'")
@@ -140,7 +153,8 @@ class TestUploadMigration(TempCase):
         conn.commit()
         conn.close()
         db = Database(path)
-        self.assertEqual(db.kv_get("schema"), 5)
+        self.assertEqual(db.kv_get("schema"), 6)
+        self.assertIn("inbox_dir", [r["name"] for r in db.query("PRAGMA table_info(users)")])
         self.assertIn("can_upload", [r["name"] for r in db.query("PRAGMA table_info(users)")])
         self.assertIn("play", [r["name"] for r in db.query("PRAGMA table_info(rights)")])
 

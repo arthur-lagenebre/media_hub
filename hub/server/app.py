@@ -98,7 +98,7 @@ class Hub:
         self.jobs = Jobs(cfg, self.db)
         self.sagas = Sagas(cfg.data / "sagas.json")
         self.throttle = accounts.Throttle()                    # les essais de connexion ratés, par adresse
-        self.inbox = Inbox(cfg)                                # les envois des comptes (voir inbox.py)
+        self.inbox = Inbox(cfg, self.db)                       # les envois des comptes (voir inbox.py)
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
         self.active = 0
         self.secret = self._secret()
@@ -2773,8 +2773,8 @@ class CountedBody:
 
 @route("POST", r"/api/inbox")
 def api_inbox_send(h, m, q):
-    """Un fichier envoyé dans la boîte de réception : `?name=<nom du fichier>`, le fichier en corps brut, `Content-Length` obligatoire. Il va dans `HUB_DATA/inbox/<compte>/`, sous un nom nettoyé, sans écraser (voir inbox.py).
-    Les refus (droit, nom, extension, espace, nombre d'envois) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu, mais après avoir laissé la réponse arriver au client qui envoie encore (voir Handler.let_the_reply_arrive). Rend 201 `{"name", "size", "account"}`."""
+    """Un fichier envoyé dans la boîte de réception : `?name=<nom du fichier>`, le fichier en corps brut, `Content-Length` obligatoire. Il va dans le dossier du compte sous HUB_INBOX (par défaut `HUB_DATA/inbox`), nommé d'après le compte, sous un nom nettoyé, sans écraser (voir inbox.py).
+    Les refus (droit, nom, extension, espace, nombre d'envois) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu, mais après avoir laissé la réponse arriver au client qui envoie encore (voir Handler.let_the_reply_arrive). Rend 201 `{"name", "size", "account"}` (`account` : le nom du dossier, celui des URL `/api/inbox/<dossier>/<nom>`)."""
     h.body_taken = True                     # le corps se lit par morceaux, ou pas du tout : _fail ne doit pas le jeter
     body = CountedBody(h.rfile)
     try:
@@ -2784,13 +2784,13 @@ def api_inbox_send(h, m, q):
         h.close_connection = True
         h.body_consumed = body.count
         raise
-    h.send_json({**stored, "account": h.user["id"]}, 201)
+    h.send_json(stored, 201)
 
 
 def inbox_files(hub, files):
-    """Les fichiers de la boîte avec le nom du compte qui les a envoyés (`user`) ; l'identifiant d'un compte supprimé en tient lieu."""
-    names = {row["id"]: row["name"] for row in accounts.rows(hub.db)}
-    return [{**f, "user": names.get(f["account"], f["account"])} for f in files]
+    """Les fichiers de la boîte avec le nom du compte qui les a envoyés (`user`). Le dossier d'un compte supprimé reste, avec ses fichiers : `user` est alors le nom du dossier, et `deleted` vaut vrai."""
+    names = hub.inbox.owners()
+    return [{**f, "user": names.get(f["account"], f["account"]), "deleted": f["account"] not in names} for f in files]
 
 
 @route("GET", r"/api/inbox")
@@ -2805,7 +2805,7 @@ def api_inbox_list(h, m, q):
     h.send_json({"files": inbox_files(h.hub, box.listing(h.user["id"])), "used": box.used(h.user["id"])})
 
 
-@route("GET", r"/api/inbox/(\w+)/([^/]+)")
+@route("GET", r"/api/inbox/([^/]+)/([^/]+)")
 def api_inbox_file(h, m, q):
     """Un fichier de la boîte, en pièce jointe (`Range` accepté pour reprendre) : administrateur seulement. Jamais analysé ni servi autrement : type `application/octet-stream`, `nosniff`."""
     require_admin(h)
@@ -2813,14 +2813,14 @@ def api_inbox_file(h, m, q):
     h.send_file(path, "application/octet-stream", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(path.name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
 
 
-@route("DELETE", r"/api/inbox/(\w+)/([^/]+)")
+@route("DELETE", r"/api/inbox/([^/]+)/([^/]+)")
 def api_inbox_delete(h, m, q):
     """L'administrateur supprime n'importe quel fichier de la boîte ; un compte qui a le droit d'envoyer, seulement les siens (403 pour ceux des autres, qu'ils existent ou non)."""
     h.discard_body()
     account, name = m.groups()
     if h.user["role"] != "admin":
         require_sender(h)
-        if account != h.user["id"]:
+        if account != h.hub.inbox.folder_of(h.user["id"]):
             raise HttpError(403, "ce fichier n'est pas à toi")
     module_call(InboxError, h.hub.inbox.remove, account, name)
     h.send_json({"ok": True})
