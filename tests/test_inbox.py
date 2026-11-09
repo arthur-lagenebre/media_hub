@@ -1,4 +1,4 @@
-"""La boîte de réception, sans réseau : nettoyage des noms, réception d'un fichier (limites, quota, espace libre, envois simultanés, coupures), liste, chemins et nettoyage des `.part`."""
+"""La boîte de réception, sans réseau : nettoyage des noms, réception d'un fichier (espace libre, envois simultanés, coupures), liste, chemins et nettoyage des `.part`."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ MB = 1 << 20
 
 
 def make(root, **over):
-    cfg = {"data": Path(root), "inbox_max_file": 100 * MB, "inbox_quota": 1000 * MB, "inbox_keep_free": 0, "inbox_max_uploads": 2, **over}
+    cfg = {"data": Path(root), "inbox_keep_free": 0, "inbox_max_uploads": 2, **over}
     return Inbox(types.SimpleNamespace(**cfg))
 
 
@@ -93,13 +93,6 @@ class TestCleanName(unittest.TestCase):
 
     def test_an_extension_in_the_middle_of_the_name_does_not_matter(self):
         self.assertEqual(inbox.clean_name("x.exe.mkv"), "x.exe.mkv")
-
-
-class TestSizeText(unittest.TestCase):
-    def test_sizes_are_written_in_octets_megabytes_and_gigabytes_with_a_decimal_comma(self):
-        for count, text in ((0, "0 octets"), (1023, "1023 octets"), (MB - 1, "1048575 octets"), (MB, "1 Mo"), (MB + MB // 2, "1,5 Mo"), (50 * MB, "50 Mo"), ((1 << 30) - 1, "1024 Mo"),
-                            (1 << 30, "1 Go"), ((1 << 30) + (1 << 29), "1,5 Go"), (8192 * MB, "8 Go"), (20480 * MB, "20 Go")):
-            self.assertEqual(inbox.size_text(count), text, count)
 
 
 class TestStoredName(unittest.TestCase):
@@ -292,67 +285,10 @@ class TestSameName(TempCase):
 
 
 class TestLimits(TempCase):
-    def test_a_file_over_the_limit_is_a_413_and_the_body_is_not_read(self):
-        small = make(self.tmp, inbox_max_file=100)
-        source = mock.Mock()
-        with self.assertRaises(InboxError) as caught:
-            small.receive("alice", "x.mkv", source, 101)
-        self.assertEqual(caught.exception.status, 413)
-        source.read.assert_not_called()
-        self.assertEqual(self.files(), [])
-
-    def test_a_file_exactly_at_the_limit_is_accepted(self):
-        small = make(self.tmp, inbox_max_file=100)
-        self.assertEqual(self.put("x.mkv", b"x" * 100, inbox_=small)["size"], 100)
-
-    def test_the_quota_counts_what_the_account_already_sent_and_not_the_others(self):
-        small = make(self.tmp, inbox_quota=100)
-        self.put("a.mkv", b"x" * 60, inbox_=small)
-        with self.assertRaises(InboxError) as caught:
-            self.put("b.mkv", b"x" * 41, inbox_=small)
-        self.assertEqual(caught.exception.status, 413)
-        self.assertIn("quota", caught.exception.message)
-        self.put("b.mkv", b"x" * 40, inbox_=small)                                   # il reste exactement 40
-        self.put("c.mkv", b"x" * 100, account="bob", inbox_=small)                   # un autre compte a son propre quota
-        self.assertEqual(self.files(), ["a.mkv", "b.mkv"])
-
-    def test_deleting_a_file_gives_its_space_back(self):
-        small = make(self.tmp, inbox_quota=100)
-        self.put("a.mkv", b"x" * 100, inbox_=small)
-        small.remove("alice", "a.mkv")
-        self.put("b.mkv", b"x" * 100, inbox_=small)
-
-    def test_a_part_left_by_a_crash_is_not_counted_in_the_quota(self):
-        small = make(self.tmp, inbox_quota=100)
-        folder = self.tmp / "inbox" / "alice"
-        folder.mkdir(parents=True)
-        (folder / "vieux.mkv.part").write_bytes(b"x" * 90)
-        self.put("a.mkv", b"x" * 100, inbox_=small)
-
-    def test_two_uploads_of_one_account_at_once_cannot_both_fit_in_the_quota(self):
-        small = make(self.tmp, inbox_quota=100)
-        with small.admit("alice", 60):
-            with self.assertRaises(InboxError) as caught:
-                with small.admit("alice", 60):
-                    self.fail("le quota aurait dû refuser")
-            self.assertEqual(caught.exception.status, 413)
-            with small.admit("bob", 60):
-                pass
-        with small.admit("alice", 60):                                                # la réservation est rendue à la fin
-            pass
-
     def test_the_folders_above_the_inbox_are_created_when_they_are_missing(self):
         fresh = make(self.tmp / "pas" / "encore" / "la")
         self.assertEqual(fresh.receive("alice", "a.mkv", io.BytesIO(b"abc"), 3)["name"], "a.mkv")
         self.assertEqual((self.tmp / "pas" / "encore" / "la" / "inbox" / "alice" / "a.mkv").read_bytes(), b"abc")
-
-    def test_a_quota_lowered_after_the_uploads_says_that_nothing_is_left(self):
-        small = make(self.tmp, inbox_quota=100)
-        self.put("a.mkv", b"x" * 100, inbox_=small)
-        small.quota = 50
-        with self.assertRaises(InboxError) as caught:
-            self.put("b.mkv", b"x", inbox_=small)
-        self.assertEqual(caught.exception.message, "quota dépassé : il reste 0 octets sur 50 octets")
 
     def test_an_unexpected_system_error_before_reading_gives_the_slot_back(self):
         one = make(self.tmp, inbox_max_uploads=1)
@@ -388,6 +324,8 @@ class TestLimits(TempCase):
                     with keep.admit("bob", 40):
                         self.fail("l'espace aurait dû manquer")
                 self.assertEqual(caught.exception.status, 507)
+            with keep.admit("bob", 40):                                                  # la réservation de alice est rendue à la fin
+                pass
 
     def test_no_more_than_the_allowed_uploads_at_once_and_a_slot_comes_back(self):
         with self.inbox.admit("alice", 1), self.inbox.admit("bob", 1):
@@ -404,12 +342,22 @@ class TestLimits(TempCase):
             one.receive("alice", "x.mkv", io.BytesIO(b"ab"), 5)
         self.assertEqual(self.put("y.mkv", inbox_=one)["name"], "y.mkv")
 
-    def test_the_too_big_and_over_quota_answers_come_before_the_busy_one_so_that_a_retry_is_not_pointless(self):
-        one = make(self.tmp, inbox_max_uploads=1, inbox_max_file=10)
-        with one.admit("alice", 1):
+    def test_the_no_space_answer_comes_before_the_busy_one_so_that_a_retry_is_not_pointless(self):
+        one = make(self.tmp, inbox_max_uploads=1)
+        usage = types.SimpleNamespace(total=10**9, used=0, free=100)
+        with mock.patch.object(inbox.shutil, "disk_usage", return_value=usage), one.admit("alice", 1):
             with self.assertRaises(InboxError) as caught:
-                one.receive("bob", "x.mkv", io.BytesIO(b"x" * 11), 11)
-            self.assertEqual(caught.exception.status, 413)
+                one.receive("bob", "x.mkv", io.BytesIO(b"x" * 200), 200)
+            self.assertEqual(caught.exception.status, 507)
+
+    def test_there_is_no_limit_by_file_or_by_account_only_the_disk_refuses(self):
+        usage = types.SimpleNamespace(total=10**15, used=0, free=10**15)
+        with mock.patch.object(inbox.shutil, "disk_usage", return_value=usage):
+            with self.inbox.admit("alice", 10**13), self.inbox.admit("alice", 10**13):         # deux envois de 10 To pour un seul compte
+                pass
+            self.put("a.mkv", b"x" * 1000)
+            self.put("b.mkv", b"x" * 1000)
+        self.assertEqual(self.inbox.used("alice"), 2000)
 
     def test_real_threads_the_third_upload_is_refused_while_two_are_running(self):
         gate, started, outcome = threading.Event(), threading.Semaphore(0), {}

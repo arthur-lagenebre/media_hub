@@ -161,26 +161,6 @@ class TestUpload(InboxCase):
             self.assertTrue(handler.close_connection, value)
         self.assertEqual(self.everything(), [])
 
-    def test_a_file_over_the_limit_is_a_413_and_its_body_is_not_read(self):
-        self.hub.inbox.max_file = 100
-        handler, reply = self.send(self.alice, "Film.mkv", b"x" * 101)
-        self.assertEqual(reply.status, 413)
-        self.assertIn("trop gros", reply.json()["error"])
-        self.assertTrue(handler.close_connection)
-        self.assertEqual(handler.rfile.tell(), 0)
-        self.assertEqual(self.everything(), [])
-        self.assertEqual(self.send(self.alice, "Film.mkv", b"x" * 100)[1].status, 201)
-
-    def test_the_quota_of_the_account_is_a_413(self):
-        self.hub.inbox.quota = 100
-        self.assertEqual(self.send(self.alice, "a.mkv", b"x" * 70)[1].status, 201)
-        handler, reply = self.send(self.alice, "b.mkv", b"x" * 31)
-        self.assertEqual(reply.status, 413)
-        self.assertIn("quota", reply.json()["error"])
-        self.assertEqual((handler.rfile.tell(), handler.close_connection), (0, True))
-        self.assertEqual(self.send(self.boss, "c.mkv", b"x" * 100)[1].status, 201)             # le quota est par compte, l'administrateur y est soumis aussi
-        self.assertEqual(self.stored(self.alice), ["a.mkv"])
-
     def test_too_little_free_space_is_a_507(self):
         self.hub.inbox.keep_free = 10**30
         handler, reply = self.send(self.alice, "a.mkv")
@@ -343,7 +323,7 @@ class TestRead(InboxCase):
     def test_mine_lists_only_the_files_of_the_caller_and_what_he_still_has_room_for(self):
         _, reply = self.get(self.alice, "/api/inbox?mine=1")
         self.assertEqual([(f["name"], f["size"]) for f in reply.json()["files"]], [("Film.mkv", 10)])
-        self.assertEqual((reply.json()["used"], reply.json()["quota"], reply.json()["max_file"]), (10, self.hub.inbox.quota, self.hub.inbox.max_file))
+        self.assertEqual(reply.json(), {"files": reply.json()["files"], "used": 10})                   # ni quota ni taille maximale
         _, reply = self.get(self.boss, "/api/inbox?mine=1")
         self.assertEqual([f["name"] for f in reply.json()["files"]], ["Livre.epub"])
 
@@ -522,10 +502,10 @@ class TestOnARealServer(AccountsCase):
         self.assertEqual(self.raw("/api/inbox?name=a.mkv", {"Transfer-Encoding": "chunked"}, b"3\r\nabc\r\n0\r\n\r\n")[0], 411)
         self.assertEqual(list(self.inbox.rglob("*.mkv*")), [])
 
-    def test_a_file_over_the_limit_is_refused_before_its_body_is_sent(self):
-        self.hub.inbox.max_file = 1000
+    def test_a_file_that_does_not_fit_on_the_disk_is_refused_before_its_body_is_sent(self):
+        self.hub.inbox.keep_free = 10**30
         status, error = self.raw("/api/inbox?name=gros.mkv", {"Content-Length": str(10 * 1024 * 1024 * 1024)})            # 10 Go annoncés, rien envoyé
-        self.assertEqual((status, "trop gros" in error["error"]), (413, True))
+        self.assertEqual((status, "plus assez de place" in error["error"]), (507, True))
         self.assertEqual(self.alice.json("/api/state")[0], 200)
 
     def test_an_account_without_the_right_is_refused_before_its_body_is_sent(self):

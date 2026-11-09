@@ -2694,7 +2694,7 @@ def announced_length(h):
 @route("POST", r"/api/inbox")
 def api_inbox_send(h, m, q):
     """Un fichier envoyé dans la boîte de réception : `?name=<nom du fichier>`, le fichier en corps brut, `Content-Length` obligatoire. Il va dans `HUB_DATA/inbox/<compte>/`, sous un nom nettoyé, sans écraser (voir inbox.py).
-    Les refus (droit, nom, taille, quota, espace, nombre d'envois) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu. Rend 201 `{"name", "size", "account"}`."""
+    Les refus (droit, nom, extension, espace, nombre d'envois) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu. Rend 201 `{"name", "size", "account"}`."""
     h.body_taken = True                     # le corps se lit par morceaux, ou pas du tout : _fail ne doit pas le jeter
     try:
         require_sender(h)
@@ -2713,14 +2713,14 @@ def inbox_files(hub, files):
 
 @route("GET", r"/api/inbox")
 def api_inbox_list(h, m, q):
-    """L'administrateur voit tous les envois ; `?mine=1` (un compte qui a le droit d'envoyer, l'administrateur compris) ne montre que les siens, avec la place qui lui reste : `used`, `quota`, `max_file` (octets)."""
+    """L'administrateur voit tous les envois ; `?mine=1` (un compte qui a le droit d'envoyer, l'administrateur compris) ne montre que les siens, avec l'espace qu'ils occupent : `used` (octets)."""
     box = h.hub.inbox
     if q.get("mine") != "1":
         require_admin(h)
         h.send_json({"files": inbox_files(h.hub, box.listing())})
         return
     require_sender(h)
-    h.send_json({"files": inbox_files(h.hub, box.listing(h.user["id"])), "used": box.used(h.user["id"]), "quota": box.quota, "max_file": box.max_file})
+    h.send_json({"files": inbox_files(h.hub, box.listing(h.user["id"])), "used": box.used(h.user["id"])})
 
 
 @route("GET", r"/api/inbox/(\w+)/([^/]+)")

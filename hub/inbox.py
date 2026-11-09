@@ -41,14 +41,6 @@ class InboxError(Exception):
         self.status, self.message = status, message
 
 
-def size_text(count):
-    for unit, step in (("Go", 1 << 30), ("Mo", 1 << 20)):
-        if count >= step:
-            text = f"{count / step:.1f}"
-            return (text[:-2] if text.endswith(".0") else text).replace(".", ",") + " " + unit
-    return f"{count} octets"
-
-
 def _safe_char(char):
     """Ni séparateur, ni caractère que Windows refuse, ni caractère de contrôle, de mise en forme (inversion du sens d'écriture) ou de saut de ligne ou de paragraphe (U+2028, U+2029), ni caractère sans codage."""
     return char not in '<>:"/\\|?*' and unicodedata.category(char) not in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
@@ -108,15 +100,15 @@ def _discard(path):
 
 
 class Inbox:
-    """Les limites (octets) viennent de la configuration : par fichier, par compte, espace libre à garder sous HUB_DATA, envois simultanés. Les attributs se lisent à chaque envoi."""
+    """Les limites viennent de la configuration : espace libre à garder sous HUB_DATA (octets) et envois simultanés. Ni taille par fichier ni quota par compte, choix de l'utilisateur : seul le disque limite. Les attributs se lisent à chaque envoi."""
 
     def __init__(self, cfg):
         self.root = Path(cfg.data) / "inbox"
-        self.max_file, self.quota, self.keep_free, self.max_uploads = cfg.inbox_max_file, cfg.inbox_quota, cfg.inbox_keep_free, cfg.inbox_max_uploads
+        self.keep_free, self.max_uploads = cfg.inbox_keep_free, cfg.inbox_max_uploads
         self._lock = threading.Lock()   # les compteurs ci-dessous
         self._names = threading.Lock()  # le choix d'un nom libre et sa publication : un nom pris par un `.part` ne se libère pas entre le contrôle et le renommage d'un autre envoi
         self._active = 0                # envois en cours
-        self._pending = {}              # {compte: octets annoncés des envois en cours} : deux envois qui arrivent ensemble ne dépassent pas le quota à eux deux
+        self._pending = 0               # octets annoncés des envois en cours : deux envois qui arrivent ensemble ne dépassent pas l'espace à garder à eux deux
 
     # --- Chemins : tout nom de dossier ou de fichier passe par ici ---------------
     def _folder(self, account):
@@ -163,30 +155,23 @@ class Inbox:
     @contextlib.contextmanager
     def admit(self, account, length):
         """Accepte (ou refuse) un envoi de `length` octets avant d'en lire un seul, et le compte comme en cours jusqu'à la sortie.
-        Dans l'ordre : trop gros (413), quota du compte (413), pas assez de place sur le disque (507), trop d'envois en même temps (429). Le dernier est le seul qui passe en réessayant."""
+        Dans l'ordre : pas assez de place sur le disque (507), trop d'envois en même temps (429). Le dernier est le seul qui passe en réessayant."""
         if self._folder(account) is None:
             raise InboxError(400, "compte invalide")
-        if length > self.max_file:
-            raise InboxError(413, f"fichier trop gros : {size_text(length)} (au plus {size_text(self.max_file)} par fichier)")
         self.root.mkdir(parents=True, exist_ok=True)
         with self._lock:
-            left = self.quota - self.used(account) - self._pending.get(account, 0)
-            if length > left:
-                raise InboxError(413, f"quota dépassé : il reste {size_text(max(0, left))} sur {size_text(self.quota)}")
-            if shutil.disk_usage(self.root).free - sum(self._pending.values()) - length < self.keep_free:
+            if shutil.disk_usage(self.root).free - self._pending - length < self.keep_free:
                 raise InboxError(507, "plus assez de place sur le serveur pour ce fichier")
             if self._active >= self.max_uploads:
                 raise InboxError(429, "trop d'envois en cours : réessaie dans un moment")
             self._active += 1
-            self._pending[account] = self._pending.get(account, 0) + length
+            self._pending += length
         try:
             yield
         finally:
             with self._lock:
                 self._active -= 1
-                self._pending[account] -= length
-                if not self._pending[account]:
-                    del self._pending[account]
+                self._pending -= length
 
     def _open_part(self, folder, name):
         """(nom retenu, fichier `.part` ouvert) : `name`, ou « stem (2).ext » s'il est pris, par un fichier ou par un envoi en cours. Le `.part` est créé sans écraser : s'il existe déjà, on passe au nom suivant."""
@@ -226,7 +211,7 @@ class Inbox:
 
     def receive(self, account, raw_name, source, length):
         """Range dans le dossier du compte les `length` octets de `source` sous un nom nettoyé, sans jamais écraser. Rend `{"name", "size"}`.
-        Le fichier s'écrit dans `<nom>.part`, renommé quand tout est là ; si l'envoi échoue (flux trop court, coupure, disque plein) le `.part` est effacé. InboxError avant toute lecture quand une limite est dépassée."""
+        Le fichier s'écrit dans `<nom>.part`, renommé quand tout est là ; si l'envoi échoue (flux trop court, coupure, disque plein) le `.part` est effacé. InboxError avant toute lecture quand l'espace manque ou que trop d'envois sont en cours."""
         name = clean_name(raw_name)
         with self.admit(account, length):
             folder = self._folder(account)
