@@ -106,6 +106,19 @@ class TestRename(LabelCase):
         self.rename("series", {"label": "Feuilletons"})
         self.assertEqual(self.rename("series", {"label": "FEUILLETONS"})[0], 200)
 
+    def test_a_body_that_is_not_a_json_object_is_a_400_and_restores_nothing(self):
+        self.rename("films", {"label": "Cinéma"})
+        for raw in (b"{nope", b'["Films"]', b"42", b"", b"label=Films"):
+            reply = call(self.hub, "POST", "/api/library/films/label", raw, headers=self.admin)[1]
+            self.assertEqual((reply.status, reply.json()), (400, {"error": "le corps doit être un objet JSON"}), raw)
+        self.assertEqual(self.label_of("films"), "Cinéma")
+
+    def test_the_rights_and_the_library_are_judged_before_the_body(self):
+        reply = call(self.hub, "POST", "/api/library/films/label", b"{nope", headers=self.user_cookie)[1]
+        self.assertEqual(reply.status, 403)
+        reply = call(self.hub, "POST", "/api/library/inconnue/label", b"{nope", headers=self.admin)[1]
+        self.assertEqual(reply.status, 404)
+
     def test_an_unknown_library_is_a_404(self):
         self.assertEqual(self.rename("inconnue", {"label": "X"}), (404, {"error": "bibliothèque inconnue"}))
 

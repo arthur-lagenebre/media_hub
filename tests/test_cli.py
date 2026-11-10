@@ -185,7 +185,7 @@ class TestAnnounce(unittest.TestCase):
 
     def said(self, cfg, auth=True, inbox_problem=None):
         out, err = Console(), io.StringIO()
-        hub = types.SimpleNamespace(db=None, auth=lambda: auth, inbox=types.SimpleNamespace(check=lambda: inbox_problem))
+        hub = types.SimpleNamespace(db=Database(Path(self.tmp) / "hub.db"), auth=lambda: auth, inbox=types.SimpleNamespace(check=lambda: inbox_problem))
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             cli.announce(cfg, hub)
         self.console = out

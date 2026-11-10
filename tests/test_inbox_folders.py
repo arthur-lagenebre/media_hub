@@ -585,7 +585,7 @@ class TestCheckOverlaps(FolderCase):
 
     def check(self, box, libraries=None, mounted=True):
         """`mounted` : ce que `_is_mount` répond (vrai : un volume monté ; faux : un simple dossier du conteneur ; None : la plate-forme ne sait pas le dire), pour que les essais ne dépendent pas du système où ils tournent."""
-        libs = [types.SimpleNamespace(label="Films", path=self.films)] if libraries is None else libraries
+        libs = [types.SimpleNamespace(id="films", label="Films", path=self.films)] if libraries is None else libraries
         cfg = types.SimpleNamespace(inbox=box, data=self.data, libraries=libs, inbox_keep_free=0, inbox_max_uploads=2)
         with mock.patch.object(inbox, "_is_mount", return_value=mounted):
             return Inbox(cfg, self.db).check()

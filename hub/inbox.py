@@ -553,7 +553,7 @@ class Inbox:
                          "listés et supprimables par l'administrateur. Choisis un dossier dédié (HUB_DATA/inbox par défaut, ou un dossier à côté).")
         for lib in self.libraries:
             if _overlap(self.root, Path(lib.path)):
-                label = labels.shown(self.db, lib) if hasattr(lib, "id") else getattr(lib, "label", None) or Path(lib.path).name
+                label = labels.shown(self.db, lib)
                 found.append(f"HUB_INBOX ({self.root}) recoupe la bibliothèque « {label} » ({lib.path}) : les envois se mêleraient à la médiathèque (ou la boîte la contiendrait), que le hub ne doit jamais modifier. Choisis un dossier hors des bibliothèques.")
         return found
 

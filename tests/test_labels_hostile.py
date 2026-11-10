@@ -1,6 +1,6 @@
 """Renommer une bibliothèque, côté hostile : Unicode qui ressemble à un autre nom, texte à ne jamais altérer, corps et chemins tordus, droits, deux renommages en même temps, valeurs abîmées dans `kv`.
 
-Les tests marqués `expectedFailure` décrivent un défaut du code (dit dans leur commentaire) : ils passent au rouge « réussite inattendue » le jour où il est corrigé, et il faut alors retirer la marque."""
+Un test marqué `expectedFailure` décrirait un défaut connu du code (dit dans son commentaire) ; il n'y en a plus."""
 
 from __future__ import annotations
 
@@ -55,12 +55,31 @@ class TestUnicode(LabelCase):
 
     def test_a_name_made_of_punctuation_only_is_a_name(self):
         self.assertEqual(self.rename("films", {"label": "..."})[1]["label"], "...")
-        self.assertEqual(self.rename("series", {"label": "…"})[1]["label"], "…")
+        self.assertEqual(self.rename("series", {"label": "—"})[1]["label"], "—")
+        self.assertEqual(self.rename("musique", {"label": "…"})[0], 400)          # « … » vaut « ... » une fois les formes de compatibilité ramenées
 
-    @unittest.expectedFailure
     def test_a_full_width_lookalike_of_another_name_is_refused(self):
-        """DÉFAUT (hub/labels.py, `_taken_by_another` : `fold` retire casse, accents et ligatures œ/æ, pas la forme de compatibilité) : « ＦＩＬＭＳ » (pleine largeur) passe à côté de « Films »."""
-        self.assertEqual(self.rename("musique", {"label": "ＦＩＬＭＳ"})[0], 400)
+        self.assertEqual(self.rename("musique", {"label": "ＦＩＬＭＳ"})[0], 400)                       # forme de compatibilité (NFKC)
+        self.assertEqual(self.rename("musique", {"label": "ＳＥ\u0301ＲＩＥＳ"})[0], 400)             # pleine largeur et accent combinant ensemble, contre « Séries »
+
+    def test_spaces_inside_the_name_do_not_hide_another_name(self):
+        self.rename("series", {"label": "Mes séries"})
+        for same in ("Mes  séries", "Mes\u00a0séries", "Mes\u3000séries", "Mes   SÉRIES", "mes\u2009séries"):          # double espace, insécable, idéographique, fine
+            self.assertEqual(self.rename("films", {"label": same})[0], 400, repr(same))
+
+    def test_a_compatibility_ligature_is_the_same_name(self):
+        self.rename("series", {"label": "Office"})
+        self.assertEqual(self.rename("films", {"label": "O\ufb03ce"})[0], 400)                        # « ﬃ » (U+FB03) vaut « ffi »
+
+    def test_a_name_in_decomposed_form_is_kept_composed_and_counted_composed(self):
+        self.assertEqual(self.rename("films", {"label": "e\u0301" * 40})[1]["label"], "é" * 40)       # 80 caractères avant NFC, 40 après : permis, gardé composé
+        self.assertEqual(labels.stored(self.db), {"films": "é" * 40})
+        self.assertEqual(self.rename("films", {"label": "e\u0301" * 41})[0], 400)
+
+    def test_the_original_name_typed_in_decomposed_form_really_restores_it(self):
+        self.rename("series", {"label": "Feuilletons"})
+        self.assertEqual(self.rename("series", {"label": "Se\u0301ries"})[1]["label"], "Séries")        # le même nom : pas de surcharge « Séries » en NFD
+        self.assertEqual(self.db.kv_get(labels.KEY), {})
 
 
 class TestTextIsNeverAltered(LabelCase):
@@ -120,13 +139,16 @@ class TestBodies(LabelCase):
     def test_when_a_key_is_repeated_the_last_one_counts(self):
         self.assertEqual(self.post(b'{"label": "Premier", "label": "Dernier"}')[1]["label"], "Dernier")
 
-    @unittest.expectedFailure
-    def test_a_body_that_is_not_a_json_object_does_not_wipe_the_chosen_name(self):
-        """DÉFAUT (hub/server/app.py `body_json` : « une liste, du bruit » vaut `{}`, et hub/server/app.py:2724 lit alors `label` absent) : un corps illisible rétablit le nom d'origine (200) au lieu d'être refusé (400)."""
+    def test_a_body_that_is_not_a_json_object_is_refused_and_does_not_wipe_the_chosen_name(self):
         self.rename("films", {"label": "Cinéma"})
-        for raw in (b"{nope", b'["Films"]', b"42", b"\xff\xfe"):
-            self.assertEqual(self.post(raw)[0], 400, raw)
-            self.assertEqual(self.label_of("films"), "Cinéma", raw)
+        for raw in (b"{nope", b'["Films"]', b"42", b'"Films"', b"null", b"true", b"", b"\xff\xfe", b'{"label": "a\xffb"}', b"label=Films", b"[" * 100000):
+            self.assertEqual(self.post(raw), (400, {"error": "le corps doit être un objet JSON"}), raw[:20])
+            self.assertEqual(self.label_of("films"), "Cinéma", raw[:20])
+
+    def test_a_valid_object_without_a_usable_label_still_restores_the_original_name(self):
+        for raw in (b"{}", b'{"label": null}', b'{"label": ""}', b'{"autre": 1}', b'  {"label": "   "} '):
+            self.rename("films", {"label": "Cinéma"})
+            self.assertEqual(self.post(raw), (200, {"id": "films", "label": "Films", "default_label": "Films", "kind": "movies"}), raw)
 
 
 class TestRouting(LabelCase):
@@ -232,37 +254,48 @@ class TestSeveralRenames(LabelCase):
 
 
 class TestStoredValuesWrittenByHand(LabelCase):
+    def names(self):
+        return [lib["label"] for lib in self.get("/api/state").json()["libraries"]]
+
     def test_two_libraries_with_the_same_stored_name_still_work_and_each_can_be_repaired(self):
         self.db.kv_set(labels.KEY, {"films": "Pareil", "series": "Pareil"})
-        self.assertEqual([lib["label"] for lib in self.get("/api/state").json()["libraries"]], ["Pareil", "Pareil", "Musique"])
+        self.assertEqual(self.names(), ["Pareil", "Pareil", "Musique"])
         self.assertEqual(self.rename("musique", {"label": "pareil"})[0], 400)            # le nom reste pris : pas un troisième
         self.assertEqual(self.rename("films", {"label": "Cinéma"})[0], 200)
-        self.assertEqual([lib["label"] for lib in self.get("/api/state").json()["libraries"]], ["Cinéma", "Pareil", "Musique"])
+        self.assertEqual(self.names(), ["Cinéma", "Pareil", "Musique"])
 
-    def test_restoring_a_library_clears_an_unusable_stored_name_whatever_it_is(self):
-        self.db.kv_set(labels.KEY, {"films": "x" * 10000, "series": "   "})                 # plus long que permis, et blanc : seule une main a pu les écrire
-        for lib_id, original in (("films", "Films"), ("series", "Séries")):
-            self.assertEqual(self.rename(lib_id, {"label": ""})[1]["label"], original)
-        self.assertEqual(labels.stored(self.db), {})
-
-    def test_a_lone_surrogate_written_by_hand_in_the_database_is_repaired_by_a_rename(self):
-        # écrit comme une échappation JSON, seule façon de la faire entrer dans SQLite ; /api/state échoue (500) tant qu'elle y est
-        self.db.execute("INSERT INTO kv(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (labels.KEY, '{"films": "\\ud800"}'))
-        self.assertEqual(self.get("/api/state").status, 500)
+    def test_a_stored_name_that_is_not_safe_to_show_is_ignored_and_the_original_name_shows(self):
+        for bad in ("x" * 10000, "x" * 41, "   ", "", " Cinéma", "Cinéma ", "Ci\nnéma", "Ci\u200bnéma", "Ci\u202enéma", "Cine\u0301ma", 5, None, ["Cinéma"], {"a": 1}):
+            self.db.kv_set(labels.KEY, {"films": bad})
+            self.assertEqual(self.names(), ["Films", "Séries", "Musique"], repr(bad)[:30])
         self.assertEqual(self.rename("films", {"label": ""})[0], 200)
-        self.assertEqual(self.label_of("films"), "Films")
+        self.assertEqual(self.db.kv_get(labels.KEY), {})
 
-    @unittest.expectedFailure
-    def test_a_library_that_comes_back_does_not_share_its_chosen_name_with_another(self):
-        """DÉFAUT (hub/labels.py `_taken_by_another` ne regarde que `libraries`, donc pas la surcharge gardée d'une bibliothèque absente) : « Feuilletons » est libre tant que `series` n'est pas configurée,
-        `films` le prend ; quand `series` revient, deux bibliothèques s'affichent « Feuilletons » (et la tâche « Mise à jour · Feuilletons » de l'une se fond dans celle de l'autre, voir Jobs._submit)."""
+    def test_a_lone_surrogate_written_by_hand_in_the_database_is_ignored_not_a_500(self):
+        # écrit comme une échappation JSON, seule façon de la faire entrer dans SQLite
+        self.db.execute("INSERT INTO kv(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (labels.KEY, '{"films": "\\ud800", "series": "Feuilletons"}'))
+        state = self.get("/api/state")
+        self.assertEqual(state.status, 200)
+        self.assertEqual([lib["label"] for lib in state.json()["libraries"]], ["Films", "Feuilletons", "Musique"])
+        self.assertEqual(self.rename("films", {"label": ""})[0], 200)
+
+    def test_a_usable_stored_name_is_shown_as_it_is(self):
+        self.db.kv_set(labels.KEY, {"films": "Cinéma", "series": "é" * 40, "musique": "日本"})
+        self.assertEqual(self.names(), ["Cinéma", "é" * 40, "日本"])
+
+    def test_a_library_that_comes_back_never_shares_its_chosen_name_with_another(self):
         self.rename("series", {"label": "Feuilletons"})
         configured = self.hub.cfg.libraries
-        self.hub.cfg.libraries = [lib for lib in configured if lib.id != "series"]
-        self.rename("films", {"label": "Feuilletons"})
+        self.hub.cfg.libraries = [lib for lib in configured if lib.id != "series"]               # le dossier n'est pas monté
+        self.assertEqual(self.rename("films", {"label": "feuilletons"}), (400, {"error": "« Feuilletons » est déjà le nom d'une autre bibliothèque"}))
+        self.assertEqual(self.rename("films", {"label": "ＦＥＵＩＬＬＥＴＯＮＳ"})[0], 400)
+        self.assertEqual(self.rename("films", {"label": "Cinéma"})[0], 200)                       # un autre nom reste libre
         self.hub.cfg.libraries = configured
-        shown = [lib["label"] for lib in self.get("/api/state").json()["libraries"]]
-        self.assertEqual(len(shown), len(set(shown)), shown)
+        self.assertEqual(self.names(), ["Cinéma", "Feuilletons", "Musique"])
+
+    def test_an_absent_library_whose_stored_name_is_unusable_reserves_nothing(self):
+        self.db.kv_set(labels.KEY, {"fantome": "Ci\nnéma", "autre": "  "})
+        self.assertEqual(self.rename("films", {"label": "Cinéma"})[0], 200)
 
 
 class TestNothingButTheLabelsChanges(LabelCase):
@@ -290,18 +323,54 @@ class TestNothingButTheLabelsChanges(LabelCase):
         self.assertEqual(self.db.kv_get(labels.KEY), {"films": "Salle obscure"})
 
 
-class TestTaskTitleFollowsAnOpenRename(LabelCase):
-    @unittest.expectedFailure
+class TestTasksAreTheSameRequestWhateverTheLabel(LabelCase):
+    def setUp(self):
+        super().setUp()
+        self.jobs = Jobs(self.hub.cfg, self.db)
+        self.release = threading.Event()
+        self.addCleanup(self.finish)
+        self.jobs._submit("Occupé", lambda log: self.release.wait(10))                      # tient le fil des tâches : les suivantes restent en attente
+
+    def finish(self):
+        self.release.set()
+        for _ in range(200):
+            if not self.jobs.busy():
+                return
+            time.sleep(0.05)
+
     def test_a_scan_asked_again_after_a_rename_joins_the_one_already_waiting(self):
-        """DÉFAUT (hub/server/jobs.py `_submit` : une tâche en attente ou en cours est reconnue à son INTITULÉ, et l'intitulé porte maintenant le libellé affiché) : renommer une bibliothèque dont la mise à jour attend
-        ou tourne, puis la redemander, met une seconde mise à jour de la même bibliothèque en file au lieu de rendre la première."""
-        jobs = Jobs(self.hub.cfg, self.db)
-        release = threading.Event()
-        self.addCleanup(release.set)
-        jobs._submit("Occupé", lambda log: release.wait(10))                      # tient le fil des tâches : la suivante reste en attente
-        first = jobs.scan(self.libraries[1])
+        first = self.jobs.scan(self.libraries[1])
         self.rename("series", {"label": "Feuilletons"})
-        self.assertIs(jobs.scan(self.libraries[1]), first)
+        self.assertIs(self.jobs.scan(self.libraries[1]), first)
+        self.assertEqual(first.label, "Mise à jour · Séries")                                    # l'intitulé est celui du moment de la demande
+
+    def test_a_library_renamed_all_does_not_swallow_the_scan_of_everything(self):
+        self.rename("series", {"label": "tout"})
+        one = self.jobs.scan(self.libraries[1])
+        everything = self.jobs.scan_all()
+        self.assertIsNot(everything, one)
+        self.assertEqual((one.label, everything.label), ("Mise à jour · tout", "Mise à jour · tout"))     # deux tâches, même intitulé
+        self.assertIs(self.jobs.scan_all(), everything)
+        self.assertIs(self.jobs.scan(self.libraries[1]), one)
+
+    def test_two_libraries_with_the_same_label_in_the_database_do_not_share_their_tasks(self):
+        self.db.kv_set(labels.KEY, {"films": "Pareil", "series": "Pareil"})                   # écrit à la main : le serveur ne le permet plus
+        self.assertIsNot(self.jobs.scan(self.libraries[0]), self.jobs.scan(self.libraries[1]))
+        self.assertIsNot(self.jobs.enrich(self.libraries[0]), self.jobs.enrich(self.libraries[1]))
+        self.assertIsNot(self.jobs.enrich_artists(self.libraries[0]), self.jobs.enrich_artists(self.libraries[1]))
+
+    def test_each_kind_of_task_of_a_library_is_its_own_request(self):
+        lib = self.libraries[1]
+        kinds = [self.jobs.scan(lib), self.jobs.enrich(lib), self.jobs.enrich_sagas(lib), self.jobs.enrich_artists(lib)]
+        self.assertEqual(len({id(job) for job in kinds}), 4)
+        self.assertIs(self.jobs.enrich(lib), kinds[1])
+        self.assertIs(self.jobs.enrich_sagas(lib), kinds[2])
+        self.assertIs(self.jobs.enrich_artists(lib), kinds[3])
+
+    def test_the_people_task_is_one_request_per_set_of_libraries(self):
+        both = self.jobs.enrich_people(self.libraries[:2], "deux")
+        self.assertIs(self.jobs.enrich_people(self.libraries[:2], "autre intitulé"), both)
+        self.assertIsNot(self.jobs.enrich_people(self.libraries[:1], "deux"), both)
 
 
 if __name__ == "__main__":

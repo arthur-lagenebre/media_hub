@@ -756,6 +756,23 @@ def body_dict(h):
     return body if isinstance(body, dict) else {}
 
 
+def strict_body_dict(h):
+    """Le corps JSON de la requête, qui doit être un objet : un corps vide, illisible (JSON ou UTF-8 invalide) ou qui n'en est pas un (liste, nombre, texte) est refusé en 400, au lieu de valoir `{}` comme avec `body_json`.
+    Pour les routes où « aucun champ » a un sens (ici, rétablir le nom d'origine) et ne doit pas se confondre avec une requête mal formée."""
+    h.body_taken = True
+    length = h.content_length()
+    if length > 1 << 20:
+        h.close_connection = True
+        raise HttpError(413, "corps trop gros")
+    try:
+        data = json.loads(h.rfile.read(length).decode("utf-8")) if length else None
+    except (ValueError, RecursionError):
+        data = None
+    if not isinstance(data, dict):
+        raise HttpError(400, "le corps doit être un objet JSON")
+    return data
+
+
 def need_accounts(h):
     """Sans compte (serveur ouvert), il n'y a ni mot de passe à changer ni compte à gérer : en créer un par l'API fermerait la porte derrière celui qui l'a créé, sans qu'il ait de jeton."""
     if not h.hub.auth():
@@ -2716,12 +2733,14 @@ def api_scan(h, m, q):
 
 @route("POST", r"/api/library/([\w-]+)/label")
 def api_library_label(h, m, q):
-    """L'administrateur renomme l'AFFICHAGE d'une bibliothèque : `{"label": "<texte>"}` (1 à 40 caractères, sans caractère de contrôle ni de mise en forme ; un texte vide ou absent rétablit le nom d'origine).
-    L'identifiant ne change jamais. 400 si le nom est déjà celui d'une autre bibliothèque (à la casse et aux accents près, nom d'origine compris). Rend `{"id", "label", "default_label", "kind"}`."""
+    """L'administrateur renomme l'AFFICHAGE d'une bibliothèque : `{"label": "<texte>"}` (1 à 40 caractères, sans caractère de contrôle ni de mise en forme ; un objet sans `label`, `null` ou un texte vide rétablit le nom d'origine).
+    Le corps doit être un objet JSON : vide, illisible ou d'un autre type, 400 (il ne rétablit rien). L'identifiant ne change jamais. 400 si le nom est déjà celui d'une autre bibliothèque
+    (à la casse et aux accents près, nom d'origine compris). Rend `{"id", "label", "default_label", "kind"}`."""
     require_admin(h)
     lib = library_or_404(h.hub, m.group(1))
+    body = strict_body_dict(h)
     try:
-        labels.rename(h.hub.db, h.hub.cfg.libraries, lib, body_dict(h).get("label"))
+        labels.rename(h.hub.db, h.hub.cfg.libraries, lib, body.get("label"))
     except labels.LabelError as e:
         raise HttpError(400, str(e))
     h.send_json(labels.describe(h.hub.db, lib))

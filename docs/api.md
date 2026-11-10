@@ -155,7 +155,7 @@ Corps `{"lib": "<id>", "force": false}` (`lib` facultatif). **Administrateur seu
 
 ### `POST /api/library/<id>/label` — renommer l'affichage d'une bibliothèque
 
-Corps : `{"label": "<texte>"}`. Administrateur seulement. Ne change **que le nom affiché** : l'identifiant (`films`, `series`…), les droits, les éléments, les scans, la progression et les préférences ne bougent pas. On ne peut ni ajouter ni supprimer une bibliothèque par l'API (les dossiers se montent côté serveur : voir `HUB_SRV` et `HUB_LIBRARIES`).
+Corps : un **objet JSON**, `{"label": "<texte>"}`. Administrateur seulement. Un corps vide, illisible (JSON ou UTF-8 invalide) ou qui n'est pas un objet (liste, nombre, texte, `null`, formulaire) est refusé en **400** et ne rétablit rien ; seul un objet valide sans `label` (`{}`), `{"label": null}` ou `{"label": ""}` rétablit le nom d'origine. Ne change **que le nom affiché** : l'identifiant (`films`, `series`…), les droits, les éléments, les scans, la progression et les préférences ne bougent pas. On ne peut ni ajouter ni supprimer une bibliothèque par l'API (les dossiers se montent côté serveur : voir `HUB_SRV` et `HUB_LIBRARIES`).
 
 ```json
 POST /api/library/series/label     {"label": "Feuilletons"}
@@ -165,8 +165,8 @@ POST /api/library/series/label     {"label": ""}            (ou {"label": null},
 200 {"id": "series", "label": "Séries", "default_label": "Séries", "kind": "shows"}
 ```
 
-- **Texte** : les espaces de début et de fin sont retirés (ceux du milieu sont gardés), les accents et tous les alphabets sont permis, 1 à 40 caractères. Un texte vide (ou fait d'espaces) ou absent (`null`, ou pas de `label`) **rétablit le nom d'origine** et efface la surcharge ; retaper le nom d'origine tel quel fait de même. La réponse rend le libellé retenu (`label`, donc sans les espaces de bout) : l'afficher tel quel.
-- **Doublon** : un nom déjà porté par **une autre** bibliothèque est refusé, à la casse et aux accents près (`séries`, `SERIES` valent `Séries`), qu'il soit son nom affiché ou son nom d'origine (on ne peut donc pas prendre le nom d'origine d'une bibliothèque renommée : elle pourrait vouloir y revenir). Changer seulement la casse du nom d'une bibliothèque pour elle-même (`FILMS`) est permis.
+- **Texte** : le texte est mis en forme composée (NFC : « é » écrit en deux caractères devient un seul, et ne compte que pour un), puis les espaces de début et de fin sont retirés (ceux du milieu sont gardés) ; les accents et tous les alphabets sont permis, 1 à 40 caractères. Un texte vide (ou fait d'espaces) ou absent (`null`, ou pas de `label` dans un objet valide) **rétablit le nom d'origine** et efface la surcharge ; retaper le nom d'origine (même en deux caractères) fait de même. La réponse rend le libellé retenu (`label`, donc sans les espaces de bout) : l'afficher tel quel.
+- **Doublon** : un nom déjà porté par **une autre** bibliothèque est refusé, à la casse et aux accents près (`séries`, `SERIES` valent `Séries`), aux formes de compatibilité Unicode près (`ＦＩＬＭＳ` en pleine largeur, ligature `ﬃ`) et aux espaces près (espace insécable, doubles espaces), qu'il soit son nom affiché ou son nom d'origine (on ne peut donc pas prendre le nom d'origine d'une bibliothèque renommée : elle pourrait vouloir y revenir). Le nom que s'est choisi une bibliothèque **absente de la configuration** (dossier non monté) est tout aussi réservé : elle le retrouvera à son retour. **Limite** : les homoglyphes d'un autre alphabet (un « Ѕ » cyrillique pour un « S ») ne sont pas détectés. Changer seulement la casse du nom d'une bibliothèque pour elle-même (`FILMS`) est permis.
 - **Codes** :
 
 | Code | `error` |
@@ -176,11 +176,13 @@ POST /api/library/series/label     {"label": ""}            (ou {"label": null},
 | 400 | `le libellé fait 40 caractères au plus` (plus de 40 caractères, après nettoyage) |
 | 400 | `le libellé ne doit contenir ni caractère de contrôle ni caractère de mise en forme` (tabulation, saut de ligne, caractère nul, espace de largeur nulle, marque de sens d'écriture, séparateur de ligne ou de paragraphe, `U+FEFF`…) |
 | 400 | `le libellé doit être un texte` (nombre, liste, objet, booléen) |
+| 400 | `le corps doit être un objet JSON` (corps vide, illisible, ou qui n'est pas un objet) |
+| 413 | `corps trop gros` (plus de 1 Mo) |
 | 401 | `connexion requise` |
 | 403 | `réservé à l'administrateur` |
 | 404 | `bibliothèque inconnue` |
 
-- **Conservation** : le nom choisi est gardé dans la base du hub (clé `library-labels` de `kv`) ; il survit aux redémarrages et aux scans. Si la bibliothèque disparaît de la configuration (dossier démonté, `HUB_LIBRARIES` changé) puis revient, son nom choisi revient avec elle. Les tâches déjà lancées ou terminées gardent l'intitulé qu'elles avaient.
+- **Conservation** : le nom choisi est gardé dans la base du hub (clé `library-labels` de `kv`) ; il survit aux redémarrages et aux scans. Un nom gardé qui n'est pas sûr à afficher (écrit à la main : trop long, avec un caractère de contrôle, espace de bout, non composé) est ignoré : le nom d'origine s'affiche. Si la bibliothèque disparaît de la configuration (dossier démonté, `HUB_LIBRARIES` changé) puis revient, son nom choisi revient avec elle. Les tâches déjà lancées ou terminées gardent l'intitulé qu'elles avaient.
 - Les autres comptes voient le nouveau nom à leur prochaine requête (rien n'est poussé) : un client relit `GET /api/state`.
 
 ## Objets communs
