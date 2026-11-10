@@ -470,8 +470,8 @@ class Inbox:
         if have + new > MAX_SUBFOLDERS:
             raise InboxError(409, f"trop de sous-dossiers dans ton dossier ({MAX_SUBFOLDERS} au plus)")
 
-    def _make_folders(self, parent, names, made):
-        """Crée `names` l'un dans l'autre sous `parent`, chacun consigné dans `made` pour être repris si l'envoi échoue."""
+    def _make_folders(self, parent, names, touched):
+        """Crée `names` l'un dans l'autre sous `parent`, chacun consigné dans `touched` pour être repris si l'envoi échoue."""
         for name in names:
             parent = parent / name
             try:
@@ -480,19 +480,20 @@ class Inbox:
                 raise InboxError(409, f"« {name} » est apparu pendant l'envoi : recommence")
             except OSError as e:
                 raise self._unusable(f"dossier « {parent} » impossible à créer", e)
-            made.append(parent)
+            touched.append(parent)
         return parent
 
-    def _stage(self, account, parts, name, made):
+    def _stage(self, account, parts, name, touched):
         """`(dossier, nom retenu, fichier .part ouvert)` : le dossier du chemin `parts` sous celui du compte, créé s'il manque (plafond tenu avant d'en créer un), et le `.part` ouvert dedans. Tout sous le verrou des noms : ni deux envois qui créent le même dossier,
-        ni un dossier retiré (vide) entre sa création et le `.part`. Le dossier final est vérifié sous la boîte et sous le dossier du compte."""
+        ni un dossier retiré (vide) entre sa création et le `.part`. Le dossier final est vérifié sous la boîte et sous le dossier du compte. `touched` reçoit les dossiers créés et le dossier cible, même déjà là : si l'envoi échoue, `receive` les retire s'ils sont vides, car l'envoi qui a créé le dossier peut avoir échoué avant celui-ci."""
         with self._names:
             folder, missing = self._existing(account, parts)
             if missing:
                 self._room_for(account, len(missing))
-                folder = self._make_folders(folder, missing, made)
+                folder = self._make_folders(folder, missing, touched)
             if not self._confined(folder, account):
                 raise self._unusable(f"le dossier « {folder} » sort du dossier du compte", "lien ou jonction non reconnu")
+            touched.append(folder)
             final, out = self._open_part(folder, name)
         return folder, final, out
 
@@ -680,21 +681,21 @@ class Inbox:
     def receive(self, uid, raw_name, source, length, raw_dir=None):
         """Range dans le dossier du compte `uid` (ou son sous-dossier `raw_dir`, voir `clean_dir`) les `length` octets de `source` sous un nom nettoyé, sans jamais écraser. Rend `{"name", "size", "account", "dir"}` (`account` : le nom du dossier du compte ; `dir` : le sous-dossier retenu, `""` à la racine).
         Le nom et le chemin sont vérifiés avant tout dossier : un refus (nom, extension, espace, envois en cours, plafond) n'en crée aucun. Le fichier s'écrit dans `<nom>.part`, renommé quand tout est là ; si l'envoi échoue (flux trop court, coupure, disque plein) le `.part` est effacé
-        et les sous-dossiers que cet envoi a créés sont retirés. InboxError avant toute lecture quand l'espace manque ou que trop d'envois sont en cours."""
+        et le sous-dossier cible est retiré s'il est vide (avec ses parents devenus vides, comme `remove`), qu'il ait été créé par cet envoi ou par un autre qui a échoué avant lui ; un dossier qui contient encore quelque chose n'est jamais touché. InboxError avant toute lecture quand l'espace manque ou que trop d'envois sont en cours."""
         name, parts = clean_name(raw_name), clean_dir(raw_dir)
         with self.admit(uid, length):
             folder_name = self.folder_for(uid)
             account = self._folder(folder_name)
             if account is None:                 # un lien ou une jonction à la place du dossier, ou un dossier hors de la boîte : jamais écrire par là
                 raise self._unusable(f"le dossier « {folder_name} » n'est pas un dossier de la boîte", "lien, jonction ou dossier absent")
-            made, stored = [], False
+            touched, stored = [], False
             try:
-                folder, final, out = self._stage(account, parts, name, made)
+                folder, final, out = self._stage(account, parts, name, touched)
                 self._write(folder, final, out, source, length)
                 stored = True
             finally:
                 if not stored:
-                    self._prune(made, account, climb=False)
+                    self._prune(touched, account, climb=True)
         return {"name": final, "size": length, "account": folder_name, "dir": "/".join(folder.relative_to(account).parts)}
 
     # --- Nettoyage ---------------------------------------------------------------

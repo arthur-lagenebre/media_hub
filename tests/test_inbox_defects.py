@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import threading
 import unittest
 
+from hub.inbox import InboxError
 from tests.test_inbox import make
 from tests.test_inbox_hostile import LAG, Gate, Sender
 from tests.test_inbox_subfolders import SubCase, tree
@@ -28,6 +30,36 @@ class TestFailedUploadsLeaveNothing(SubCase):
         two.join(LAG)
         self.assertEqual((one.error.status, two.error.status), (400, 400))
         self.assertEqual(tree(self.alice), [])
+
+    def fail_in(self, sub, name="rate.mkv"):
+        with self.assertRaises(InboxError) as caught:
+            self.inbox.receive("alice", name, io.BytesIO(b"ab"), 10, sub)
+        return caught.exception.status
+
+    def test_a_failed_upload_also_takes_back_a_folder_on_its_way_that_was_already_empty(self):
+        (self.alice / "Vide").mkdir(parents=True)
+        self.assertEqual(self.fail_in("Vide/Neuf"), 400)
+        self.assertEqual(tree(self.alice), [])                 # comme `remove` : un parent devenu vide part avec lui, mais jamais le dossier du compte
+
+    def test_a_failed_upload_never_takes_back_a_folder_that_holds_something(self):
+        self.send("vieux.mkv", "Serie/S1")
+        self.assertEqual(self.fail_in("Serie/S1"), 400)
+        self.assertEqual(self.fail_in("Serie/S2"), 400)
+        self.assertEqual(self.fail_in("Serie/S1/Bonus"), 400)
+        self.assertEqual(tree(self.alice), ["Serie/", "Serie/S1/", "Serie/S1/vieux.mkv"])
+
+    def test_a_failed_upload_in_the_account_folder_keeps_the_account_folder(self):
+        self.send("vieux.mkv")
+        self.assertEqual(self.fail_in(None), 400)
+        self.assertEqual(tree(self.alice), ["vieux.mkv"])
+        self.assertEqual(self.fail_in(""), 400)
+        self.assertTrue(self.alice.is_dir())
+
+    def test_a_failed_upload_that_other_hands_a_file_into_the_folder_keeps_it(self):
+        (self.alice / "Serie" / "S1").mkdir(parents=True)
+        (self.alice / "Serie" / "S1" / "x.txt").write_bytes(b"main")          # posé à la main : le dossier n'est pas vide
+        self.assertEqual(self.fail_in("serie/s1"), 400)
+        self.assertEqual(tree(self.alice), ["Serie/", "Serie/S1/", "Serie/S1/x.txt"])
 
 
 if __name__ == "__main__":
