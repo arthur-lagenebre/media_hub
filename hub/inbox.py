@@ -222,30 +222,45 @@ class Inbox:
                 self._mkdir(current)
                 return current
             stale = current or ""                  # une valeur qui n'est pas un nom de dossier (base touchée à la main) : le compte est traité comme neuf, et la valeur est réécrite avant tout dossier
-            if is_folder_name(uid) and self._is_real_folder(self.root / uid) and not self._held_by_other(uid, uid):
+            if self._old_folder_is_his(uid):
                 return self._record(uid, uid, stale)
-            taken = self._taken()
-            for candidate in self._numbered(clean_folder(row["name"])):
-                if _same(candidate) in taken:
-                    continue
-                try:
-                    (self.root / candidate).mkdir()
-                except FileExistsError:
-                    continue
-                except OSError as e:
-                    raise self._unusable(f"dossier « {candidate} » impossible à créer", e)
-                try:
-                    kept = self._record(uid, candidate, stale)
-                except Exception:
-                    self._remove_empty(candidate)
-                    raise
-                if kept != candidate:                  # la base en retient un autre : le dossier qu'on vient de faire ne sert à personne
-                    self._remove_empty(candidate)
-                    if not is_folder_name(kept):
-                        raise self._unusable(f"le dossier « {kept} » de la base n'est pas un nom de dossier", "base modifiée pendant l'envoi")
-                    self._mkdir(kept)
-                return kept
+            return self._new_folder(uid, row["name"], stale)
+
+    def _old_folder_is_his(self, uid):
+        """Existe-t-il un dossier nommé d'après l'identifiant `uid` (celui d'avant), et aucun autre compte ne le tient-il dans la base ?"""
+        return is_folder_name(uid) and self._is_real_folder(self.root / uid) and not self._held_by_other(uid, uid)
+
+    def _new_folder(self, uid, account_name, stale):
+        """Le premier nom libre (« nom », « nom (2) »…) devient le dossier du compte : créé, puis fixé dans la base. 409 si SAME_NAME noms sont pris."""
+        taken = self._taken()
+        for candidate in self._numbered(clean_folder(account_name)):
+            if _same(candidate) not in taken and self._created(candidate):
+                return self._keep(uid, candidate, stale)
         raise InboxError(409, "trop de dossiers de même nom dans la boîte")
+
+    def _created(self, name):
+        """Crée le dossier `name` de la boîte : vrai s'il est à nous, faux s'il existait (un autre l'a pris entre-temps) ; 503 si le système refuse."""
+        try:
+            (self.root / name).mkdir()
+        except FileExistsError:
+            return False
+        except OSError as e:
+            raise self._unusable(f"dossier « {name} » impossible à créer", e)
+        return True
+
+    def _keep(self, uid, candidate, stale):
+        """Fixe `candidate` dans la base ; rend le nom retenu. Si la base en garde un autre, le dossier qu'on vient de faire ne sert à personne : il est retiré (vide), et l'autre est repris."""
+        try:
+            kept = self._record(uid, candidate, stale)
+        except Exception:
+            self._remove_empty(candidate)
+            raise
+        if kept != candidate:
+            self._remove_empty(candidate)
+            if not is_folder_name(kept):
+                raise self._unusable(f"le dossier « {kept} » de la base n'est pas un nom de dossier", "base modifiée pendant l'envoi")
+            self._mkdir(kept)
+        return kept
 
     def _remove_empty(self, name):
         """Supprime le dossier `name` de la boîte s'il est vide (celui qu'on vient de créer) ; jamais un dossier qui contient quelque chose."""
@@ -395,31 +410,43 @@ class Inbox:
 
     def _migrate_one(self, uid, account_name):
         with self._names:
-            current = self.folder_of(uid)
-            old = self.root / uid
-            if (current is not None and current != uid) or not is_folder_name(uid) or not self._is_real_folder(old):
-                return 0                              # déjà renommé, ou rien d'ancien à renommer
-            if self._held_by_other(uid, uid):
-                return 0                              # ce dossier est celui d'un autre compte (nommé comme cet identifiant), pas l'ancien de celui-ci
-            if current is None:
+            if not self._old_folder_to_rename(uid):
+                return 0                              # déjà renommé, rien d'ancien à renommer, ou ce dossier est celui d'un autre compte
+            if self.folder_of(uid) is None:
                 self._record(uid, uid)               # l'ancien dossier est déjà celui du compte, tel quel : si la suite échoue, la base le dit
-            taken = self._taken() - {_same(uid)}
-            target = next((c for c in self._numbered(clean_folder(account_name)) if _same(c) not in taken), None)
-            if target is None:
-                raise InboxError(409, "trop de dossiers de même nom dans la boîte")
+            target = self._target_name(uid, account_name)
             if target == uid:
                 return 0
-            new = self.root / target
-            if os.path.lexists(new) and not (_same(target) == _same(uid) and os.path.samefile(new, old)):      # jamais d'écrasement : sous POSIX, renommer un dossier sur un dossier vide le remplacerait
-                raise InboxError(409, f"« {target} » existe déjà")
-            os.rename(old, new)
-            try:
-                self.db.execute("UPDATE users SET inbox_dir=? WHERE id=?", (target, uid))
-            except Exception:
-                with contextlib.suppress(OSError):
-                    os.rename(new, old)               # la base garde l'ancien nom : le dossier aussi
-                raise
+            self._rename_folder(uid, target)
             return 1
+
+    def _old_folder_to_rename(self, uid):
+        """Le dossier nommé d'après l'identifiant `uid` est-il à renommer ? Non s'il l'a déjà été (la base a un autre nom), s'il n'existe pas (ou est un lien, une jonction), ou si un autre compte, nommé comme cet identifiant, le tient."""
+        current = self.folder_of(uid)
+        if (current is not None and current != uid) or not is_folder_name(uid) or not self._is_real_folder(self.root / uid):
+            return False
+        return not self._held_by_other(uid, uid)
+
+    def _target_name(self, uid, account_name):
+        """Le nom libre du compte (choisi comme pour un nouveau dossier), l'ancien dossier `uid` ne comptant pas comme pris. 409 si SAME_NAME noms sont pris."""
+        taken = self._taken() - {_same(uid)}
+        target = next((c for c in self._numbered(clean_folder(account_name)) if _same(c) not in taken), None)
+        if target is None:
+            raise InboxError(409, "trop de dossiers de même nom dans la boîte")
+        return target
+
+    def _rename_folder(self, uid, target):
+        """Renomme le dossier de l'ancien nom (l'identifiant `uid`) en `target`, puis la base ; si la base échoue, le dossier reprend son ancien nom (la base garde l'ancien nom : le dossier aussi)."""
+        old, new = self.root / uid, self.root / target
+        if os.path.lexists(new) and not (_same(target) == _same(uid) and os.path.samefile(new, old)):      # jamais d'écrasement : sous POSIX, renommer un dossier sur un dossier vide le remplacerait
+            raise InboxError(409, f"« {target} » existe déjà")
+        os.rename(old, new)
+        try:
+            self.db.execute("UPDATE users SET inbox_dir=? WHERE id=?", (target, uid))
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.rename(new, old)
+            raise
 
     # --- Réception ---------------------------------------------------------------
     @contextlib.contextmanager
