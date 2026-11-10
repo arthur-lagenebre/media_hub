@@ -5,6 +5,7 @@ Sauté si Playwright ou ffmpeg manquent. Ce que ces tests ne peuvent pas garanti
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import json
@@ -3433,6 +3434,118 @@ class TestHomeUnseen(UiCase):
         self.add_newest_films(rated=True)
         self.api("/api/me/settings", {"home_unseen_sort": "rating"})
         self.assert_the_shelf_keeps_twelve_cards_that_the_new_ones_do_not_show()
+
+
+class TestHomeWithNoShelf(UiCase):
+    """L'accueil quand aucun rayon n'est affiché (réglages masqués, ou rien à proposer) : « Bonjour », une phrase, puis les bibliothèques en tuiles."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show"}))
+
+    def hide(self, *names):
+        self.api("/api/me/settings", {name: "hide" for name in names})
+
+    def tiles(self):
+        return self.view(".libtiles a.libtile")
+
+    def libraries(self):
+        return self.api("/api/home")["libraries"]
+
+    def test_the_libraries_appear_as_tiles_under_the_greeting_when_every_shelf_is_hidden(self):
+        self.hide("home_latest", "home_unseen")
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertEqual(self.view(".shelf").count(), 0)
+        libs = self.libraries()
+        self.assertEqual(self.tiles().count(), len(libs))
+        self.assertEqual(self.tiles().evaluate_all("els => els.map(e => e.getAttribute('href'))"), ["#/l/" + l["id"] for l in libs])
+        self.assertEqual(self.view("h1.greeting").inner_text(), "Bonjour")                                          # serveur ouvert : pas de nom
+        self.assertEqual(self.view(".libtiles-note").inner_text(), "Tu as masqué tous les rayons de l’accueil : Paramètres > Préférences, pour les remettre")
+        for tile, lib in zip(self.tiles().all(), libs):
+            self.assertEqual(tile.locator("b").inner_text(), lib["label"])
+            self.assertEqual(tile.locator(".what > span").inner_text(), f"{lib['count']} élément" + ("s" if lib["count"] > 1 else ""))
+        order = self.page.evaluate("(() => { var t = document.querySelector('.view:not([style*=\"none\"]) .libtiles'); var h = document.querySelector('.view:not([style*=\"none\"]) h1.greeting'); var n = document.querySelector('.view:not([style*=\"none\"]) .libtiles-note'); return [h.compareDocumentPosition(n), n.compareDocumentPosition(t)]; })()")
+        self.assertEqual(order, [4, 4])                                                                              # « Bonjour », la phrase, puis les tuiles
+
+    def test_a_tile_has_the_cover_of_the_latest_addition_or_the_colour_of_its_library(self):
+        self.hide("home_latest", "home_unseen")
+
+        def without_cover(route):
+            data = route.fetch().json()
+            for lib in data["libraries"]:
+                if lib["id"] == "livres":
+                    lib["recent"] = []
+            route.fulfill(json=data)
+        self.page.route("**/api/home", without_cover)
+        pixel = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+        self.page.route("**/img/item/**", lambda route: route.fulfill(body=pixel, content_type="image/png"))          # les médias d'essai n'ont pas de pochette : une image d'un point
+        self.open()
+        self.tiles().first.wait_for()
+        films, books = self.view(".libtiles a[data-lib=films]"), self.view(".libtiles a[data-lib=livres]")
+        self.assertEqual(films.locator("img").count(), 1)
+        self.assertTrue(films.locator("img").get_attribute("src").startswith("/img/item/"))
+        self.assertEqual(books.locator("img").count(), 0)                                                            # rien à montrer : la couleur de la bibliothèque
+        self.assertTrue(books.locator(".thumb").evaluate("e => getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'"))
+        colours = self.tiles().evaluate_all("els => els.map(e => getComputedStyle(e.querySelector('.dot')).backgroundColor)")
+        self.assertEqual(len(set(colours)), len(colours))                                                            # chaque bibliothèque a sa couleur
+
+    def test_with_one_shelf_still_shown_the_home_keeps_its_shelves_and_has_no_tiles(self):
+        self.hide("home_unseen")
+        self.open()
+        self.view(".shelf.latest .card").first.wait_for()
+        self.assertEqual(self.view(".libtiles").count(), 0)
+        self.assertEqual(self.view(".libtiles-note").count(), 0)
+
+    def test_a_home_with_nothing_to_resume_or_discover_says_so(self):
+        self.hide("home_latest")                                                                                     # « Pas encore vu » est affiché, mais tout est vu
+        seen = []
+        for lib in ("films", "series", "animations"):
+            for item in self.api(f"/api/library/{lib}")["items"]:
+                self.api(f"/api/item/{item['id']}/seen", {"done": True})
+                seen.append(item["id"])
+        self.addCleanup(lambda: [self.api(f"/api/item/{i}/seen", {"done": False}) for i in seen])
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertEqual(self.view(".libtiles-note").inner_text(), "Rien à reprendre ni à découvrir pour l’instant")
+        self.assertEqual(self.view(".shelf").count(), 0)
+
+    def test_the_tiles_are_real_links_the_remote_reaches_and_the_first_has_the_focus(self):
+        self.hide("home_latest", "home_unseen")
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertTrue(self.tiles().evaluate_all("els => els.every(e => e.tagName === 'A' && e.classList.contains('f') && e.getAttribute('href'))"))
+        self.assertEqual(self.tiles().first.get_attribute("data-autofocus"), "1")
+        self.until(lambda: self.page.evaluate("document.activeElement === document.querySelector('.libtiles a.libtile')"))      # le focus part sur la première tuile
+        first, seen = self.focused(), []
+        for _ in range(len(self.libraries()) + 1):
+            self.press("ArrowRight")
+            seen.append(self.page.evaluate("document.activeElement.getAttribute('data-lib')"))
+        self.assertGreaterEqual(len({s for s in seen if s}), 3)                                                       # les flèches parcourent la grille
+        self.tiles().first.focus()
+        self.press("Enter", wait=500)
+        self.assertIn("#/l/", self.page.url)
+
+    def test_on_a_phone_the_tiles_are_one_or_two_columns_without_sideways_scroll(self):
+        self.hide("home_latest", "home_unseen")
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        lefts = self.tiles().evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().left))")
+        self.assertLessEqual(len(set(lefts)), 2)
+        self.assertTrue(self.tiles().evaluate_all("els => els.every(e => e.getBoundingClientRect().right <= innerWidth && e.getBoundingClientRect().height >= 44)"))       # dans l'écran, assez grandes au doigt
+
+    def test_the_text_and_the_tiles_are_in_english(self):
+        self.hide("home_latest", "home_unseen")
+        self.context.add_cookies([{"name": "hub_lang", "value": "en", "url": self.base}])
+        self.page.add_init_script("localStorage.setItem('hub.lang', JSON.stringify('en'))")
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertEqual(self.view(".libtiles-note").inner_text(), "You have hidden every shelf on the home page: Settings > Preferences, to bring them back")
+        self.assertIn("Movies", self.tiles().locator("b").all_inner_texts())
+        self.assertIn(" items", self.tiles().first.locator(".what > span").inner_text())
+        self.assertEqual(self.page.evaluate("Hub.missing || []"), [])
 
 
 class TestHomeNewArtist(UiCase):

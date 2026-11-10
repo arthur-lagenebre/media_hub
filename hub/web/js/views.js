@@ -244,6 +244,28 @@
       h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + H.tr(lib.label))),
       h('div', { class: 'grid' }, items.map(function (it) { return H.card(it, false); })));
   }
+  // La pochette d'une tuile de bibliothèque : celle de son dernier ajout (pour un artiste, celle de son album), ou rien.
+  function tileCover(lib) {
+    var last = lib.recent && lib.recent[0];
+    if (!last) return '';
+    if (last.type === 'artist') return last.album ? '/img/item/' + last.album + '?w=300' : '';
+    return '/img/item/' + last.id + '?w=300';
+  }
+  // Une bibliothèque en tuile : sa pochette (à défaut, la couleur de la bibliothèque, comme le point de ses rayons), son nom et ce qu'elle compte ; un vrai lien, atteignable à la télécommande.
+  function libraryTile(lib) {
+    var cover = tileCover(lib), thumb = h('span', { class: 'thumb', 'aria-hidden': 'true' });
+    if (cover) thumb.appendChild(h('img', { src: cover, alt: '', loading: 'lazy', decoding: 'async', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } }));
+    return h('a', { class: 'libtile f', href: '#/l/' + lib.id, 'data-lib': lib.id, 'data-key': 'lib-' + lib.id }, thumb,
+      h('span', { class: 'what' }, h('b', null, h('i', { class: 'dot' }), H.tr(lib.label)), h('span', null, H.plural(lib.count, 'élément'))));
+  }
+  // Quand aucun rayon n'est affiché : une phrase (les rayons sont masqués dans les réglages, ou il n'y a rien à proposer), puis les bibliothèques en tuiles ; la première prend le focus.
+  function libraryTiles(libraries) {
+    var masked = H.setting('home_latest') === 'hide' && H.setting('home_unseen') === 'hide';
+    var tiles = libraries.map(libraryTile);
+    if (tiles.length) tiles[0].setAttribute('data-autofocus', '1');
+    return [h('p', { class: 'libtiles-note muted' }, masked ? H.t('Tu as masqué tous les rayons de l’accueil : Paramètres > Préférences, pour les remettre') : H.t('Rien à reprendre ni à découvrir pour l’instant')),
+      h('div', { class: 'libtiles' }, tiles)];
+  }
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
     var timer = null;
@@ -269,9 +291,11 @@
         if (data.continue.length) el.appendChild(row(H.t('Reprendre'), null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
         if (latest.length) el.appendChild(cardsSection('latest', H.t('Nouveautés'), latest));
-        (H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10))).forEach(function (shelf) {
+        var unseen = H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10));
+        unseen.forEach(function (shelf) {
           el.appendChild(libraryShelf('unseen', H.t('Pas encore vu'), shelf.lib, shelf.items));
         });
+        if (!data.continue.length && !latest.length && !unseen.length) libraryTiles(data.libraries).forEach(function (node) { el.appendChild(node); });       // aucun rayon : les bibliothèques, pour ne pas laisser une page nue
         if (!document.body.contains(el) || el.style.display === 'none') return;       // une réponse tardive, la page a été quittée : `H.focus.first()` prendrait le focus de la page courante (la barre de la liseuse, dont les flèches ne tournent plus les pages)
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;

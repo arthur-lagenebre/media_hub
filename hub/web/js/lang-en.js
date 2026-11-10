@@ -123,6 +123,8 @@
     'Reprendre': 'Resume',
     'Nouveautés': 'Recently added',
     'Pas encore vu': 'Not watched yet',
+    'Tu as masqué tous les rayons de l’accueil : Paramètres > Préférences, pour les remettre': 'You have hidden every shelf on the home page: Settings > Preferences, to bring them back',
+    'Rien à reprendre ni à découvrir pour l’instant': 'Nothing to resume or discover for now',
 
     // --- Bibliothèque ---
     'Ajouts récents': 'Recently added',
