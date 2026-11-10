@@ -91,6 +91,17 @@ class TestNamedFolders(FolderRoutes):
         listed = {(f["account"], f["deleted"]) for f in self.get(self.boss, "/api/inbox")[1].json()["files"]}
         self.assertEqual(listed, {("Léa", True), ("Léa (2)", False)})
 
+    def test_the_administrator_deletes_a_file_of_a_deleted_account_and_the_folder_stays_for_the_next_ones(self):
+        lea = self.make_user("Élodie")
+        self.send(lea, "a.mkv", b"a")
+        self.send(lea, "b.mkv", b"b")
+        accounts.delete(self.hub.db, lea["id"])
+        self.assertEqual(self.delete(self.boss, self.url("Élodie", "a.mkv"))[1].status, 200)
+        self.assertEqual(self.everything(), ["Élodie/b.mkv"])
+        listed = self.get(self.boss, "/api/inbox")[1].json()["files"]
+        self.assertEqual([(f["account"], f["name"], f["deleted"]) for f in listed], [("Élodie", "b.mkv", True)])
+        self.assertEqual(self.delete(self.boss, self.url("Élodie", "a.mkv"))[1].status, 404)
+
     def test_the_folders_of_before_are_found_again_after_the_migration_with_their_new_name(self):
         """Un dossier nommé d'après l'identifiant, puis renommé au démarrage : la liste, le téléchargement et la suppression suivent."""
         old = self.inbox / self.alice["id"]

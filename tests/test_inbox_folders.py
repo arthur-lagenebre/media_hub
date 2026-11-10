@@ -126,6 +126,34 @@ class TestAccountFolder(FolderCase):
         self.assertEqual(self.inbox.folder_for(uid), "léa (3)")
         self.assertEqual(self.dirs(), ["LÉA (2)", "Léa", "léa (3)"])
 
+    def test_a_name_still_given_by_the_base_is_not_given_again_to_a_name_that_differs_by_case_even_if_its_folder_is_gone(self):
+        """Le dossier de « Léa: » (« Léa_ ») a été effacé à la main : la base le tient toujours pour sien. « léa_ » ne le reçoit pas, sinon, sur NTFS ou SMB, deux comptes se partageraient le même dossier le jour où le premier revient."""
+        first, second = self.user("Léa:", "1"), self.user("léa_", "2")
+        self.assertEqual(self.inbox.folder_for(first), "Léa_")
+        shutil.rmtree(self.tmp / "inbox" / "Léa_")
+        self.assertEqual(self.inbox.folder_for(second), "léa_ (2)")
+        self.assertEqual(self.inbox.folder_for(first), "Léa_")
+        self.assertEqual(self.dirs(), ["Léa_", "léa_ (2)"])
+
+    def test_every_numbered_name_taken_is_a_409_and_leaves_no_new_folder(self):
+        for name in ("Léa", "Léa (2)", "Léa (3)"):
+            (self.tmp / "inbox" / name).mkdir(parents=True, exist_ok=True)
+        uid = self.user("Léa", "1")
+        with mock.patch.object(inbox, "SAME_NAME", 3), self.assertRaises(InboxError) as caught:
+            self.inbox.folder_for(uid)
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(self.dirs(), ["Léa", "Léa (2)", "Léa (3)"])
+        self.assertIsNone(self.recorded(uid))
+
+    def test_a_folder_name_the_base_holds_that_is_not_a_folder_is_refused_and_writes_nothing_outside(self):
+        """La base a été touchée à la main (« ../dehors ») : l'envoi est un 503, jamais une écriture hors de la boîte."""
+        uid = self.user("Léa", "1", inbox_dir="../dehors")
+        with mock.patch.object(sys, "stderr", io.StringIO()), self.assertRaises(InboxError) as caught:
+            self.put("x.mkv", account=uid)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertFalse((self.tmp / "dehors").exists())
+        self.assertEqual(list(self.tmp.rglob("*.mkv")), [])
+
     def test_names_that_differ_only_by_the_form_of_their_accents_collide_too(self):
         one, two = self.user("Léa", "1"), self.user("Léa", "2")
         self.assertEqual(self.inbox.folder_for(one), "Léa")
