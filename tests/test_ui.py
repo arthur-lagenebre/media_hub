@@ -5093,11 +5093,13 @@ class InboxUiCase(unittest.TestCase):
         self.assertEqual(rows.nth(0).get_attribute("data-dir"), "")
 
     DROP = """(spec) => {
-        function leaf(name, text, broken) { return { isFile: true, isDirectory: false, name: name, file: function (ok, bad) { setTimeout(function () { if (broken) bad(new Error('illisible')); else ok(new File([text], name)); }, 0); } }; }
+        var reads = window.dropReads = { files: 0, folders: {} };                      // ce que le parcours a lu : des fichiers, et des paquets d'entrées par dossier
+        function leaf(name, text, broken) { return { isFile: true, isDirectory: false, name: name, file: function (ok, bad) { reads.files++; setTimeout(function () { if (broken) bad(new Error('illisible')); else ok(new File([text], name)); }, 0); } }; }
         function folder(name, children, failAfter) {
             return { isFile: false, isDirectory: true, name: name, createReader: function () {
                 var at = 0, calls = 0;                         // comme le navigateur : au plus 100 entrées par appel, puis un paquet vide ; `failAfter` : le nombre d'appels qui réussissent avant une erreur
                 return { readEntries: function (ok, bad) {
+                    reads.folders[name] = (reads.folders[name] || 0) + 1;
                     var batch = children.slice(at, at + 100); at += 100;
                     setTimeout(function () { if (failAfter !== undefined && calls++ >= failAfter) bad(new Error('lecture')); else ok(batch); }, 0);
                 } };
@@ -5454,6 +5456,35 @@ class InboxUiCase(unittest.TestCase):
         held[0].continue_()
         page.wait_for_timeout(600)
         self.assertEqual(page.locator(".menu[role=dialog], .menu.sendfolder").count(), 0)               # et aucune confirmation ne s'ouvre sur l'accueil
+
+    def test_a_dropped_folder_does_not_enter_hidden_or_too_deep_folders(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        junk = [{"name": f"m{n}.srt", "text": "m"} for n in range(3000)]
+        page.evaluate(self.DROP, {"name": "Série", "children": [
+            {"name": "a.srt", "text": "a"},
+            {"name": "node_modules", "children": junk}, {"name": ".git", "children": junk},                             # des milliers d'entrées qu'on ne lit pas
+            {"name": "N1", "children": [{"name": "N2", "children": [{"name": "N3", "children": [                         # « Série » compte pour un niveau : N3 est le quatrième, le dernier accepté
+                {"name": "ok.srt", "text": "o"}, {"name": "N4", "children": [{"name": "N5", "children": junk}, {"name": "profond.srt", "text": "p"}]}]}]}]}]})
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator(".lead").inner_text(), "Envoyer le dossier « Série » : 2 fichiers (2 octets), 3 ignorés (fichiers cachés, dossiers trop profonds).")
+        dialog.locator("button", has_text="Voir les fichiers ignorés").click()
+        self.assertEqual(sorted(dialog.locator(".skipped li").all_inner_texts()), sorted(["Série/.git — fichier caché", "Série/node_modules — fichier caché", "Série/N1/N2/N3/N4 — trop profond (4 niveaux au plus)"]))
+        reads = page.evaluate("window.dropReads")
+        self.assertEqual(reads["files"], 2)                                                                              # a.srt et ok.srt : rien d'autre n'a été ouvert
+        self.assertEqual(sorted(reads["folders"]), ["N1", "N2", "N3", "Série"])                                           # ni node_modules, ni .git, ni N4 (le premier trop profond), ni N5
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Série/N1/N2/N3/ok.srt", "Série/a.srt"])
+        self.assertEqual(len(posts), 2)
+
+    def test_the_name_of_a_dropped_folder_is_not_judged_hidden(self):
+        page = self.upload_page()
+        page.evaluate(self.DROP, {"name": ".Archive", "children": [{"name": "a.srt", "text": "a"}]})
+        self.assertEqual(self.dialog(page).locator(".lead").inner_text(), "Envoyer le dossier « .Archive » : 1 fichier (1 octets).")      # le dossier désigné par la personne n'est pas écarté
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Archive/a.srt"])                                                                                 # (le serveur range « .Archive » sous un nom sans point)
 
     def test_a_backslash_in_a_dropped_folder_name_is_refused_on_that_file_and_in_a_file_name_it_keeps_the_last_part(self):
         page = self.upload_page()

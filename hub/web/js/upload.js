@@ -47,18 +47,18 @@
   // --- Un dossier : ce qui part, ce qu'on écarte ----------------------------------------------
   var DEPTH = 4;                // niveaux de dossiers au plus, celui que l'on a choisi compris (le serveur refuse au-delà : 400)
   var SHOWN = 100;              // lignes de la liste des fichiers écartés
-  function hidden(name) { return name.charAt(0) === '.' || /^(thumbs\.db|desktop\.ini)$/i.test(name); }
+  function hidden(name) { return name.charAt(0) === '.' || /^(thumbs\.db|desktop\.ini|node_modules)$/i.test(name); }      // `node_modules` : jamais de la médiathèque, et trop de fichiers à lire pour rien
   function extension(name) {
     var clean = name.replace(/[ .]+$/, ''), at = clean.lastIndexOf('.');      // comme le serveur : ni point ni espace en bout, une extension se lit au dernier point
     return at > 0 ? clean.slice(at).toLowerCase() : '';
   }
-  // `found` : [{path: 'Film/Bonus/a.mkv', file}] (le dossier choisi en tête ; `file` vaut null si le navigateur n'a pas pu le lire) ; `types` : les extensions acceptées {'.mkv': true}, ou null (le serveur tranchera).
+  // `found` : [{path: 'Film/Bonus/a.mkv', file}] (le dossier choisi en tête ; `file` vaut null si le navigateur n'a pas pu le lire ; `unread` : un dossier dont la lecture a échoué ; `pruned` : un dossier caché ou trop profond, écarté sans y entrer) ; `types` : les extensions acceptées {'.mkv': true}, ou null (le serveur tranchera).
   // Rend ce qui part (`take`, dans l'ordre des noms) et ce qui est écarté (`skip`, avec la raison).
   function sift(found, types) {
     var take = [], skip = [];
     found.forEach(function (f) {
       var parts = f.path.split('/'), name = parts[parts.length - 1], why = '';
-      if (f.unread) why = parts.slice(1).some(hidden) ? 'hidden' : parts.length > DEPTH ? 'deep' : 'unread';      // un dossier dont la lecture a échoué (ses fichiers, eux, n'ont pas été vus)
+      if (f.unread || f.pruned) why =parts.slice(1).some(hidden) ? 'hidden' : parts.length > DEPTH ? 'deep' : 'unread';      // un dossier dont la lecture a échoué (ses fichiers, eux, n'ont pas été vus)
       else if (!f.file) why = 'unreadable';
       else if (parts.slice(1).some(hidden)) why = 'hidden';                    // le dossier choisi n'est pas jugé : la personne l'a désigné
       else if (parts.length - 1 > DEPTH) why = 'deep';
@@ -89,6 +89,9 @@
       entry.file(function (file) { found.push({ path: path, file: file }); done(); }, function () { found.push({ path: path, file: null }); done(); });
       return;
     }
+    // Un dossier caché (`.git`, `node_modules` : des milliers d'entrées) ou d'un niveau de plus que le serveur n'en accepte (ses fichiers seraient tous « trop profonds ») est écarté sans y entrer : une seule ligne « ignoré ». Le dossier choisi (niveau 1) n'est pas jugé.
+    var depth = path.split('/').length;
+    if (depth > DEPTH || (depth > 1 && hidden(entry.name))) { found.push({ path: path, file: null, pruned: true }); done(); return; }
     readEntries(entry.createReader(), function (children, failed) {
       if (failed) found.push({ path: path, file: null, unread: true });          // ce dossier est peut-être incomplet : sift le signale, la confirmation le dit
       var left = children.length;
