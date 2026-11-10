@@ -287,6 +287,11 @@
     movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')], ['rating', H.t('Mieux notés')]],      // films et séries ; « Mieux notés » : la note TMDB
     books: [['title', H.t('Collection')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')]]
   };
+  // Les choix du statut, accordés d'après le GENRE de la bibliothèque (jamais d'après son nom, qu'on peut changer) : les films au masculin, les séries et les livres (comptés en « séries ») au féminin. [valeur de `filter=`, libellé]
+  function stateChoices(kind) {
+    var fem = kind === 'shows' || kind === 'books';
+    return [['', fem ? H.t('Toutes') : H.t('Tous')], ['todo', H.t('À voir')], ['progress', H.t('En cours')], ['done', fem ? H.t('Terminées') : H.t('Terminés')]];
+  }
   H.route(/^\/l\/([\w-]+)$/, function (m, params) {
     var libId = m[1], lib = H.lib(libId);
     var kind = lib ? lib.kind : 'movies';
@@ -304,11 +309,8 @@
       oninput: function () { clearTimeout(search.t); search.t = setTimeout(function () { st.q = search.value; reset(); }, 280); },
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
     var bGenre = H.button('', null, { class: 'flt wide', onclick: pickGenre }), bSort = H.button('', null, { class: 'flt wide', onclick: pickSort });
-    // Où en est le compte : quatre choix dont un seul est actif (celui-ci se voit par son fond plein et sa coche, pas par un simple contour) ; la valeur est celle de `filter=` de l'API, vide pour tout montrer.
-    var bState = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': H.t('Avancement') }, [['', H.t('Tous')], ['todo', H.t('À voir')], ['progress', H.t('En cours')], ['done', H.t('Terminés')]].map(function (c) {
-      return h('button', { class: 'chip f', type: 'button', role: 'radio', 'aria-checked': 'false', 'data-state': c[0],
-        onclick: function () { if (st.state !== c[0]) { st.state = c[0]; paint(); reset(); } } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, c[1]));
-    }));
+    // Où en est le compte : une liste comme « Genre » et « Tri » ; sa valeur est celle de `filter=` de l'API, vide pour tout montrer.
+    var bState = H.button('', null, { class: 'flt wide', onclick: pickState });
     var bLists = H.button(H.t('Playlists'), 'queue', { onclick: function () { H.go('#/playlists'); } });
     // Les films d'animation sont dans Films, avec le genre « Animation » : un raccourci depuis la page Animations, si le compte voit Films ; il se range à droite de la rangée des filtres
     var related = libId === 'animations' && H.lib('films') ? h('div', { class: 'related' }, h('a', { class: 'chip f', href: '#/l/films?genre=Animation' }, H.t('Films d’animation'))) : null;
@@ -322,11 +324,7 @@
     function paint() {
       label(bGenre, H.t('Genre'), st.genre || H.t('Tous'));
       label(bSort, H.t('Tri'), (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
-      Array.prototype.forEach.call(bState.children, function (b) {
-        var on = b.getAttribute('data-state') === st.state;
-        b.setAttribute('aria-checked', on ? 'true' : 'false');
-        b.classList.toggle('on', on);
-      });
+      label(bState, H.t('Statut'), (stateChoices(kind).filter(function (c) { return c[0] === st.state; })[0] || stateChoices(kind)[0])[1]);
       bGenre.hidden = !facets.genres.length;
       var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
       var music = kind === 'music' && typeof facets.albums === 'number';          // la musique compte toujours les artistes et les albums de ce que les filtres laissent, quelle que soit la vue
@@ -354,6 +352,9 @@
     }
     function pickSort() {
       H.menu(H.t('Trier par'), sorts.map(function (s) { return { label: s[1], value: s[0] }; }), st.sort, function (v) { st.sort = v; H.pref('sort.' + libId, v); reset(); });
+    }
+    function pickState() {
+      H.menu(H.t('Statut'), stateChoices(kind).map(function (c) { return { label: c[1], value: c[0] }; }), st.state, function (v) { st.state = v; paint(); reset(); });
     }
     function query(offset) {
       var q = ['offset=' + offset, 'limit=240', 'sort=' + encodeURIComponent(st.sort)];

@@ -2443,7 +2443,7 @@ class TestAnimationShortcut(UiCase):
     def test_the_link_is_on_the_row_of_the_filters_pushed_to_the_right_and_pressed_from_the_keyboard(self):
         self.open("#/l/animations")
         self.view(".grid .card").first.wait_for()
-        link, sort = self.view(".tools .related a.f").bounding_box(), self.view(".tools .btn.flt").last.bounding_box()          # le genre est caché quand la bibliothèque n'en a pas : le tri est toujours là
+        link, sort = self.view(".tools .related a.f").bounding_box(), self.view(".tools .btn.flt").last.bounding_box()          # le genre est caché quand la bibliothèque n'en a pas : le tri et le statut sont toujours là
         self.assertLess(abs((link["y"] + link["height"] / 2) - (sort["y"] + sort["height"] / 2)), sort["height"])          # sur la même ligne que les filtres
         self.assertGreater(link["x"], sort["x"] + sort["width"] + 40)                                                    # et décalé : à droite d'eux, pas collé
         self.view(".related a.f").focus()
@@ -2876,10 +2876,10 @@ class TestLibraryToolbar(UiCase):
     def test_the_name_of_each_filter_comes_first_in_bold_then_its_value_in_normal_weight(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.filters().all_inner_texts(), ["Genre : Tous", "Tri : Titre"])
+        self.assertEqual(self.filters().all_inner_texts(), ["Genre : Tous", "Tri : Titre", "Statut : Tous"])
         weights = self.filters().evaluate_all("els => els.map(e => [+getComputedStyle(e.querySelector('b')).fontWeight, +getComputedStyle(e.querySelector('.val')).fontWeight])")
         self.assertTrue(all(name >= 600 and value <= 500 for name, value in weights), weights)
-        self.assertEqual(self.filters().evaluate_all("els => els.map(e => e.querySelector('b').textContent)"), ["Genre :", "Tri :"])
+        self.assertEqual(self.filters().evaluate_all("els => els.map(e => e.querySelector('b').textContent)"), ["Genre :", "Tri :", "Statut :"])
 
     def test_the_best_rated_sort_puts_the_rated_film_first_and_is_not_offered_for_books(self):
         db = self.run_.hub.db
@@ -3043,8 +3043,8 @@ class TestTextSize(UiCase):
                 page.close()
 
 
-class TestLibraryProgressChoice(UiCase):
-    """Tous · À voir · En cours · Terminés : un choix à quatre états au-dessus de la grille ; l'actif se voit par son fond plein et sa coche (un simple contour ne se distingue pas de l'absence de contour)."""
+class TestLibraryStatusList(UiCase):
+    """« Statut : Tous » : une liste déroulante comme « Genre » et « Tri » (Tous · À voir · En cours · Terminés), accordée d'après le genre de la bibliothèque, pas d'après son nom."""
 
     def setUp(self):
         super().setUp()
@@ -3052,94 +3052,166 @@ class TestLibraryProgressChoice(UiCase):
         self.addCleanup(self.api, f"/api/item/{film['id']}/seen", {"done": False})
         self.film = film
 
-    def choice(self, label):
-        return self.view(".seg .chip", has_text=label)
+    def status(self):
+        return self.view(".tools .btn.flt", has_text="Statut")
 
-    def active(self):
-        return self.view(".seg .chip.on").evaluate_all("els => els.map(e => e.getAttribute('data-state'))")
+    def options(self):
+        return self.page.locator(".veil .opt .lbl").all_inner_texts()
+
+    def pick(self, label):
+        self.status().click()
+        self.page.locator(".veil .opt", has_text=label).click()
+        self.page.wait_for_selector(".veil", state="detached")
 
     def titles(self):
         return self.view(".grid .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
 
-    def open_films(self):
-        self.open("#/l/films")
+    def open_library(self, lib="films"):
+        self.open("#/l/" + lib)
         self.view(".grid .card").first.wait_for()
 
-    def test_the_four_choices_are_in_order_and_all_is_the_one_active_at_first(self):
-        self.open_films()
-        self.assertEqual(self.view(".seg .chip .lbl").all_inner_texts(), ["Tous", "À voir", "En cours", "Terminés"])
-        self.assertEqual(self.view(".seg").get_attribute("role"), "radiogroup")
-        self.assertEqual(self.view(".seg .chip").evaluate_all("els => els.map(e => e.getAttribute('aria-checked'))"), ["true", "false", "false", "false"])
-        self.assertEqual(self.active(), [""])
+    def test_the_list_sits_with_genre_and_sort_in_the_same_component_and_says_all_at_first(self):
+        self.open_library()
+        self.assertEqual(self.view(".tools .btn.flt").all_inner_texts(), ["Genre : Tous", "Tri : Titre", "Statut : Tous"])
+        self.assertEqual(self.view(".tools .btn.flt").evaluate_all("els => els.map(e => e.className)"), ["btn f flt wide"] * 3)         # la même fabrique, le même style
+        self.assertEqual(self.status().evaluate("e => e.querySelector('b').textContent"), "Statut :")
+        self.assertEqual(self.view(".seg").count(), 0)
+        self.assertEqual(self.view(".tools .mark, .tools [role=radio]").count(), 0)             # ni coche, ni fond plein : du texte, comme les deux autres
 
-    def test_the_active_choice_has_a_solid_background_and_a_visible_tick_the_others_have_neither(self):
-        self.open_films()
-        def look(label):
-            return self.choice(label).evaluate("e => [getComputedStyle(e).backgroundColor, getComputedStyle(e.querySelector('.mark')).visibility]")
-        (active_bg, active_tick), (other_bg, other_tick) = look("Tous"), look("À voir")
-        self.assertEqual((active_tick, other_tick), ("visible", "hidden"))
-        self.assertNotEqual(active_bg, other_bg)
-        self.choice("En cours").click()
-        self.until(lambda: look("En cours")[1] == "visible" and look("Tous")[1] == "hidden")
-        self.assertEqual(look("En cours")[0], active_bg)
+    def test_the_options_are_those_of_the_kind_of_the_library_movies_in_the_masculine_shows_and_books_in_the_feminine(self):
+        for lib, want in (("films", ["Tous", "À voir", "En cours", "Terminés"]), ("series", ["Toutes", "À voir", "En cours", "Terminées"]), ("livres", ["Toutes", "À voir", "En cours", "Terminées"])):
+            with self.subTest(lib=lib):
+                self.open_library(lib)
+                self.status().click()
+                self.page.wait_for_selector(".veil .opt")
+                self.assertEqual(self.options(), want)
+                self.assertEqual(self.page.locator(".veil .opt.on .lbl").all_inner_texts(), [want[0]])
+                self.press("Escape", wait=300)
+                self.assertEqual(self.status().inner_text(), "Statut : " + want[0])
 
-    def test_each_choice_shows_what_the_server_says_for_its_state(self):
+    def test_the_agreement_follows_the_kind_never_the_name_of_the_library(self):
+        self.open("#/")
+        self.page.evaluate("Hub.libs.forEach(l => { if (l.id === 'series') l.label = 'Films'; if (l.id === 'films') l.label = 'Séries'; })")      # les bibliothèques se renomment
+        self.open_library("series")
+        self.status().click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.options(), ["Toutes", "À voir", "En cours", "Terminées"])
+        self.press("Escape", wait=300)
+        self.open_library("films")
+        self.status().click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.options(), ["Tous", "À voir", "En cours", "Terminés"])
+
+    def test_each_choice_asks_the_server_for_its_state_and_shows_what_it_says(self):
         self.api("/api/progress", {"entry": self.entries("films", "Inception")[0]["id"], "position": 600, "duration": 8880})
-        self.open_films()
+        asked = []
+        self.page.on("request", lambda r: asked.append(r.url) if "/api/library/films" in r.url else None)
+        self.open_library()
         for label, state in (("À voir", "todo"), ("En cours", "progress"), ("Terminés", "done"), ("Tous", "")):
-            self.choice(label).click()
-            self.until(lambda state=state: self.active() == [state])
+            del asked[:]
+            self.pick(label)
+            self.assertEqual(self.status().inner_text(), "Statut : " + label)
+            self.until(lambda: asked)
+            self.assertTrue(f"&filter={state}&" in asked[-1] if state else "filter=" not in asked[-1], asked[-1])
             wanted = self.api("/api/library/films?sagas=1&limit=240" + (f"&filter={state}" if state else ""))["total"]
-            self.until(lambda wanted=wanted: self.view(".grid .card").count() == wanted)
-        self.choice("En cours").click()
+            self.until(lambda wanted=wanted: self.view(".grid .card").count() == wanted or (wanted == 0 and self.view("button", has_text="Retirer les filtres").count()))
+        self.pick("En cours")
         self.until(lambda: self.view(".grid .card").count() == 1)
         self.assertIn(self.film["id"], self.titles())
-        self.choice("À voir").click()
+        self.pick("À voir")
         self.until(lambda: self.film["id"] not in self.titles() and self.view(".grid .card").count() > 1)
 
-    def test_the_active_choice_changes_at_the_click_not_when_the_list_arrives(self):
-        self.open_films()
+    def test_the_series_choice_asks_for_done_and_says_terminees(self):
+        asked = []
+        self.page.on("request", lambda r: asked.append(r.url) if "/api/library/series" in r.url else None)
+        self.open_library("series")
+        self.pick("Terminées")
+        self.until(lambda: any("filter=done" in u for u in asked))
+        self.assertEqual(self.status().inner_text(), "Statut : Terminées")
+
+    def test_the_value_changes_at_the_choice_not_when_the_list_arrives(self):
+        self.open_library()
         held = []
         self.page.route("**/api/library/films*", lambda route: held.append(route))                 # la réponse du serveur est retenue (un NAS lent)
-        self.choice("En cours").click()
-        self.until(lambda: held)                                                                   # la requête est partie, la liste n'est pas là
-        self.assertEqual(self.active(), ["progress"])
-        self.assertEqual(self.choice("En cours").get_attribute("aria-checked"), "true")
-        self.assertEqual(self.choice("Tous").get_attribute("aria-checked"), "false")
-        self.page.unroute("**/api/library/films*")                                                 # on relâche : la liste arrive et le choix reste
+        self.pick("En cours")
+        self.until(lambda: held)
+        self.assertEqual(self.status().inner_text(), "Statut : En cours")
+        self.page.unroute("**/api/library/films*")
         self.until(lambda: self.view(".grid .card").count() == self.api("/api/library/films?sagas=1&filter=progress")["total"])
-        self.assertEqual(self.active(), ["progress"])
+        self.assertEqual(self.status().inner_text(), "Statut : En cours")
 
     def test_a_film_seen_to_the_end_moves_to_done(self):
         self.api(f"/api/item/{self.film['id']}/seen", {"done": True})
-        self.open_films()
-        self.choice("Terminés").click()
+        self.open_library()
+        self.pick("Terminés")
         self.until(lambda: self.titles() == [self.film["id"]])
 
     def test_an_empty_choice_says_so_and_removing_the_filters_goes_back_to_all(self):
-        self.open_films()
+        self.open_library()
         total = self.view(".grid .card").count()
-        self.choice("Terminés").click()
+        self.pick("Terminés")
         self.view("button", has_text="Retirer les filtres").wait_for()                       # rien de terminé : la liste est vide
+        self.assertEqual(self.view("h2", has_text="Rien ne correspond").count(), 1)
         self.view("button", has_text="Retirer les filtres").click()
-        self.until(lambda: self.active() == [""] and self.view(".grid .card").count() == total, tries=100)
+        self.until(lambda: self.status().inner_text() == "Statut : Tous" and self.view(".grid .card").count() == total, tries=100)
 
-    def test_the_choice_works_from_the_arrow_keys_and_enter_and_the_focus_can_be_seen(self):
-        self.open_films()
-        self.choice("Tous").focus()
-        self.press("ArrowRight")
-        self.assertEqual(self.focused(), "✓À voir")
-        outline = self.choice("À voir").evaluate("e => getComputedStyle(e).outlineStyle + ' ' + getComputedStyle(e).outlineWidth")
-        self.assertTrue(outline.startswith("solid") and outline != "solid 0px", outline)         # le focus se voit de loin
-        self.press("Enter", wait=400)
-        self.until(lambda: self.active() == ["todo"])
-        self.press("ArrowRight", "Enter", wait=400)
-        self.until(lambda: self.active() == ["progress"])
-
-    def test_the_music_library_has_no_such_choice(self):
+    def test_the_music_library_has_no_status_list(self):
         self.open("#/l/musique")
         self.view(".tools").first.wait_for()
-        self.assertEqual(self.view(".seg").count(), 0)
+        self.assertEqual(self.view(".tools .btn.flt", has_text="Statut").count(), 0)
+
+    def test_the_list_fits_one_clean_row_on_a_phone_without_overflowing(self):
+        self.open_library()
+        self.page.evaluate("document.documentElement.setAttribute('data-device', 'phone')")
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        box = self.status().bounding_box()
+        self.assertTrue(0 <= box["x"] and box["x"] + box["width"] <= 390, box)
+        self.assertTrue(self.status().evaluate("e => { var l = e.querySelector('.lbl'); return l.scrollWidth <= l.clientWidth; }"))
+        sort = self.view(".tools .btn.flt", has_text="Tri").bounding_box()
+        self.assertGreater(box["y"], sort["y"] - 1)                                          # pas par-dessus la recherche
+
+
+class TestLibraryStatusListOnTv(UiCase):
+    """À la télécommande (data-device="tv") : le focus se voit sur la liste, Entrée l'ouvre, les flèches choisissent, Échap la referme sans rien changer."""
+
+    def setUp(self):
+        super().setUp()
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+
+    def status(self):
+        return self.view(".tools .btn.flt", has_text="Statut")
+
+    def open_library(self, lib="films"):
+        self.open("#/l/" + lib)
+        self.view(".grid .card").first.wait_for()
+
+    def test_the_focus_is_visible_enter_opens_the_arrows_choose_and_escape_closes_without_changing(self):
+        self.open_library()
+        self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), "tv")
+        self.status().focus()
+        self.assertEqual(self.focused(), "Statut : Tous")
+        outline = self.status().evaluate("e => getComputedStyle(e).outlineStyle + ' ' + getComputedStyle(e).outlineWidth")
+        self.assertTrue(outline.startswith("solid") and outline != "solid 0px", outline)         # le focus se voit de loin
+        self.press("Enter", wait=400)
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.focused(), "Tous")                                                 # le focus part sur le choix en cours
+        self.press("Escape", wait=400)
+        self.assertEqual(self.page.locator(".veil").count(), 0)
+        self.assertEqual(self.status().inner_text(), "Statut : Tous")
+        self.assertEqual(self.focused(), "Statut : Tous")                                        # et revient sur la liste
+        self.press("Enter", wait=400)
+        self.press("ArrowDown", wait=200)
+        self.assertEqual(self.focused(), "À voir")
+        self.press("Enter", wait=500)
+        self.until(lambda: self.status().inner_text() == "Statut : À voir")
+        self.assertEqual(self.focused(), "Statut : À voir")
+
+    def test_the_arrows_reach_the_list_from_the_other_filters(self):
+        self.open_library()
+        self.view(".tools .btn.flt", has_text="Tri").focus()
+        self.press("ArrowRight", wait=200)
+        self.assertEqual(self.focused(), "Statut : Tous")
 
 
 class TestHome(UiCase):
