@@ -470,17 +470,32 @@ class Inbox:
         if have + new > MAX_SUBFOLDERS:
             raise InboxError(409, f"trop de sous-dossiers dans ton dossier ({MAX_SUBFOLDERS} au plus)")
 
-    def _make_folders(self, parent, names, touched):
-        """Crée `names` l'un dans l'autre sous `parent`, chacun consigné dans `touched` pour être repris si l'envoi échoue."""
+    def _twin(self, account, path):
+        """Le dossier ordinaire de la boîte que `path` désigne déjà sans le même nom que dans la liste (nom court 8.3 de Windows : `_child`, qui compare les noms, ne le voit pas), ou None. Même contrôle que `_child` : ni fichier, ni lien, ni jonction, et sous le dossier du compte."""
+        for entry in _entries(path.parent):
+            found = Path(entry.path)
+            try:
+                if os.path.samefile(found, path):
+                    return found if is_folder_name(entry.name) and self._is_real_folder(found) and self._confined(found, account) else None
+            except OSError:
+                continue
+        return None
+
+    def _make_folders(self, account, parent, names, touched):
+        """Crée `names` l'un dans l'autre sous `parent`, chacun consigné dans `touched` pour être repris si l'envoi échoue. Un nom qui existe déjà sans que `_child` l'ait vu est l'alias court d'un vrai dossier : on y entre (sous son vrai nom, rien de créé) ; 409 si c'est autre chose."""
         for name in names:
             parent = parent / name
             try:
                 parent.mkdir()
             except FileExistsError:
-                raise InboxError(409, f"« {name} » est apparu pendant l'envoi : recommence")
+                twin = self._twin(account, parent)
+                if twin is None:
+                    raise InboxError(409, f"« {name} » existe déjà sous un autre nom ou n'est pas un dossier ordinaire : choisis un autre nom")
+                parent = twin
             except OSError as e:
                 raise self._unusable(f"dossier « {parent} » impossible à créer", e)
-            touched.append(parent)
+            else:
+                touched.append(parent)
         return parent
 
     def _stage(self, account, parts, name, touched):
@@ -490,7 +505,7 @@ class Inbox:
             folder, missing = self._existing(account, parts)
             if missing:
                 self._room_for(account, len(missing))
-                folder = self._make_folders(folder, missing, touched)
+                folder = self._make_folders(account, folder, missing, touched)
             if not self._confined(folder, account):
                 raise self._unusable(f"le dossier « {folder} » sort du dossier du compte", "lien ou jonction non reconnu")
             touched.append(folder)

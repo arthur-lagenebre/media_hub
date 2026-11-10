@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import io
+import sys
 import threading
 import unittest
+from unittest import mock
 
-from hub.inbox import InboxError
+from hub.inbox import Inbox, InboxError
 from tests.test_inbox import make
 from tests.test_inbox_hostile import LAG, Gate, Sender
 from tests.test_inbox_subfolders import SubCase, tree
@@ -60,6 +62,39 @@ class TestFailedUploadsLeaveNothing(SubCase):
         (self.alice / "Serie" / "S1" / "x.txt").write_bytes(b"main")          # posé à la main : le dossier n'est pas vide
         self.assertEqual(self.fail_in("serie/s1"), 400)
         self.assertEqual(tree(self.alice), ["Serie/", "Serie/S1/", "Serie/S1/x.txt"])
+
+
+class TestFolderThatExistsWithoutBeingSeen(SubCase):
+    """`_existing` ne voit pas un dossier qui existe déjà sous un autre nom (nom court 8.3) ou qui est apparu entre-temps : `mkdir` échoue alors, et l'envoi doit entrer dans le vrai dossier, pas répondre « recommence » à chaque essai. Portable : `_existing` est truquée pour ne rien voir."""
+
+    def blind(self):
+        return mock.patch.object(Inbox, "_existing", lambda self, account, parts: (account, parts))
+
+    def test_a_real_folder_found_by_mkdir_is_entered_and_the_file_is_stored_in_it(self):
+        (self.alice / "Serie").mkdir(parents=True)
+        with self.blind():
+            reply = self.send("x.mkv", "Serie")
+        self.assertEqual((reply["dir"], tree(self.alice)), ("Serie", ["Serie/", "Serie/x.mkv"]))
+
+    def test_below_such_a_folder_the_rest_is_made(self):
+        (self.alice / "Serie").mkdir(parents=True)
+        with self.blind():
+            reply = self.send("x.mkv", "Serie/S1")
+        self.assertEqual((reply["dir"], tree(self.alice)), ("Serie/S1", ["Serie/", "Serie/S1/", "Serie/S1/x.mkv"]))
+
+    def test_a_file_or_a_link_found_by_mkdir_is_a_409_that_says_so_and_nothing_is_written(self):
+        self.alice.mkdir(parents=True)
+        (self.alice / "Fichier").write_bytes(b"x")
+        (self.tmp / "ailleurs").mkdir()
+        self.link(self.tmp / "ailleurs", self.alice / "Lien")
+        before = tree(self.alice)
+        for sub in ("Fichier", "Lien"):
+            with self.blind(), mock.patch.object(sys, "stderr", io.StringIO()):
+                with self.assertRaises(InboxError) as caught:
+                    self.send("x.mkv", sub)
+            self.assertEqual(caught.exception.status, 409, sub)
+            self.assertIn("autre nom", caught.exception.message)
+        self.assertEqual((tree(self.alice), tree(self.tmp / "ailleurs")), (before, []))
 
 
 if __name__ == "__main__":

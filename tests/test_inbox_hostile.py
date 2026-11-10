@@ -218,20 +218,40 @@ class TestShortNames(SubCase):
         self.assertEqual(self.inbox.path_of("alice", reply["name"]).read_bytes(), b"autre")
         self.assertNotEqual(reply["name"], short)
 
-    def test_a_folder_sent_under_the_short_name_of_another_never_fails_with_a_server_error_and_leaves_nothing_behind(self):
+    def test_a_folder_sent_under_the_short_name_of_another_is_that_folder_and_nothing_is_made_elsewhere(self):
         (self.alice / "Un dossier avec un long nom").mkdir(parents=True)
         short = self.alias_of(self.alice / "Un dossier avec un long nom")
-        before = tree(self.alice)
-        with mock.patch.object(sys, "stderr", io.StringIO()):
-            try:
-                reply = self.send("x.mkv", short)
-            except InboxError as e:
-                self.assertLess(e.status, 500, e.message)
-                self.assertEqual(tree(self.alice), before)
-            else:                                                                         # ou il est rangé dans ce dossier : jamais ailleurs
-                self.assertEqual(reply["name"], "x.mkv")
-                self.assertTrue((self.alice / "Un dossier avec un long nom" / "x.mkv").is_file())
+        reply = self.send("x.mkv", short)
+        self.assertEqual((reply["name"], reply["dir"]), ("x.mkv", "Un dossier avec un long nom"))         # le nom que la liste donne, pas l'alias
+        self.assertEqual(tree(self.alice), ["Un dossier avec un long nom/", "Un dossier avec un long nom/x.mkv"])
         self.assertEqual(sorted(p.name for p in (self.tmp / "inbox").iterdir()), ["alice"])
+
+    def test_a_folder_below_the_short_name_of_another_is_made_inside_that_folder(self):
+        (self.alice / "Un dossier avec un long nom").mkdir(parents=True)
+        short = self.alias_of(self.alice / "Un dossier avec un long nom")
+        reply = self.send("x.mkv", short + "/Sous")
+        self.assertEqual(reply["dir"], "Un dossier avec un long nom/Sous")
+        self.assertEqual(tree(self.alice), ["Un dossier avec un long nom/", "Un dossier avec un long nom/Sous/", "Un dossier avec un long nom/Sous/x.mkv"])
+
+    def test_a_failed_upload_under_a_short_name_leaves_the_other_folders_content(self):
+        (self.alice / "Un dossier avec un long nom").mkdir(parents=True)
+        (self.alice / "Un dossier avec un long nom" / "garde.mkv").write_bytes(b"x")
+        short = self.alias_of(self.alice / "Un dossier avec un long nom")
+        with self.assertRaises(InboxError) as caught:
+            self.inbox.receive("alice", "rate.mkv", io.BytesIO(b"ab"), 10, short)
+        self.assertEqual(caught.exception.status, 400)
+        self.assertEqual(tree(self.alice), ["Un dossier avec un long nom/", "Un dossier avec un long nom/garde.mkv"])
+
+    def test_a_short_name_that_is_a_file_is_a_clear_409_and_nothing_is_written(self):
+        (self.alice / "Un fichier avec un long nom.mkv").parent.mkdir(parents=True)
+        (self.alice / "Un fichier avec un long nom.mkv").write_bytes(b"x")
+        short = self.alias_of(self.alice / "Un fichier avec un long nom.mkv")
+        before = tree(self.alice)
+        with self.assertRaises(InboxError) as caught:
+            self.send("x.mkv", short)
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("autre nom", caught.exception.message)
+        self.assertEqual(tree(self.alice), before)
 
 
 @unittest.skipUnless(WINDOWS, "ces noms ne sont réservés que sous Windows")
