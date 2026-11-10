@@ -74,7 +74,21 @@ Utilise hub-deploy : ajoute une bibliothèque « Documentaires » dans le compos
 **Mise en production sur le NAS**
 `hub-deploy` pour le compose et le `.env.example`, puis il te donne la commande exacte à lancer sur le NAS (il n'y a pas accès).
 
-Plusieurs agents peuvent travailler en parallèle s'ils touchent des fichiers différents (par exemple `hub-ui` et `hub-server` sur deux parties indépendantes) : demande-le explicitement.
+Plusieurs agents peuvent travailler en parallèle s'ils touchent des fichiers différents (par exemple `hub-ui` et `hub-server` sur deux parties indépendantes) : demande-le explicitement. Pour deux sessions distinctes, voir plus bas.
+
+## Plusieurs sessions en parallèle : un worktree chacune
+
+Deux sessions Claude Code ouvertes sur le même dossier partagent la même branche et les mêmes fichiers non commités. Un `git checkout`, `git stash` ou `git clean` de l'une efface ou déplace le travail de l'autre, et une suite de tests lancée dans l'une teste le code de l'autre (elle peut échouer, ou réussir, pour une raison qui n'est pas la sienne). Quand tu mènes deux lots en même temps, donne à chaque session son propre **worktree** :
+
+```bash
+git worktree add ../media_hub-<lot> -b <branche> main
+```
+
+- **À côté du dépôt**, dans le même dossier parent : `media_library` doit rester voisin de `media_hub` (ou désigné par `HUB_REPO`), sans quoi aucun test ne démarre.
+- **Une session par worktree**, et le dossier principal reste à celle qui y travaille déjà : ne change pas de branche dans un dossier où une autre session a des modifications non commitées.
+- **Écris le dossier dans la demande** que reçoit l'agent d'implémentation (« travaille dans `D:\Projets\media_hub-lot2` »), puisqu'il démarre sans connaître la conversation.
+- **Un relecteur ne change jamais de branche** : il lit avec `git diff` et `git show`, et lance ses tests sur une copie extraite par `git archive`.
+- **Après la fusion** : `git worktree remove ../media_hub-<lot>`, puis `/merged` pour ranger les branches.
 
 ## Ce qu'ils ne font pas
 

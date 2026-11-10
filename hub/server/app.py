@@ -1002,7 +1002,7 @@ def continue_row(hub, profile, libs=None):
 
 
 today = missing.today                       # le jour (« 2026-11-04 ») : un nom à part pour que les tests puissent le fixer
-UNSEEN = 24
+UNSEEN = 48                                 # ce que le serveur offre par bibliothèque : le navigateur en retire ce que « Nouveautés » (24) montre déjà, puis coupe à `home_unseen_count` (24 au plus) ; à 24 seulement, les tris « date d'ajout » et « note » (les mieux notés sont souvent les plus récents) vidaient le rayon
 
 
 def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random"):
@@ -1013,7 +1013,7 @@ def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random"):
     if sort == "rating":
         pool.sort(key=rating_key)
     elif sort == "added":
-        pool.sort(key=lambda r: (-r["added"], r["sort"]))
+        pool.sort(key=lambda r: (-r["added"], r["sort"], r["id"]))
     else:
         pool.sort(key=lambda r: hashlib.sha1(f"{day}:{profile}:{r['id']}".encode()).hexdigest())
     return [summary(r) for r in pool[:n]]
@@ -1192,9 +1192,9 @@ def row_rating(row):
 
 
 def rating_key(row):
-    """Le tri « Mieux notés », sans inversion : d'abord ce qui a une note montrée, de la meilleure à la moins bonne, puis le plus de votes ; ensuite le reste ; à égalité, par titre."""
+    """Le tri « Mieux notés », sans inversion : d'abord ce qui a une note montrée, de la meilleure à la moins bonne, puis le plus de votes ; ensuite le reste ; à égalité, par titre, puis par identifiant : deux films de même titre, de même note et de même nombre de votes gardent le même rang, quel que soit l'ordre dans lequel la base les rend."""
     vote, votes = row_rating(row)
-    return (vote is None, -(vote or 0), -votes, row["sort"])
+    return (vote is None, -(vote or 0), -votes, row["sort"], row["id"])
 
 
 def release_key(row):
@@ -1406,7 +1406,7 @@ def watch_state(row, seen):
 
 
 def library_filters(q, kind, ranks, of, in_custom, seen):
-    """Les conditions que la requête pose à une vignette (saga, section, genre, recherche, à voir / en cours / terminés) ; elles s'ajoutent."""
+    """Les conditions que la requête pose à une vignette (saga, section, genre, recherche, à voir / en cours / terminés) ; elles s'ajoutent. Un `filter` qui n'est ni vide, ni `todo` / `progress` / `done`, ni l'ancien `unseen`, est une erreur (400) : il ne filtre plus « rien » en silence."""
     genre, group = q.get("genre", ""), q.get("group", "")
     section = q.get("section", "") if kind == "books" else ""
     needle = fold(q.get("q", "")).strip()
@@ -1419,8 +1419,13 @@ def library_filters(q, kind, ranks, of, in_custom, seen):
         tests.append(partial(has_genre, genre=genre))
     if needle:
         tests.append(partial(matches_needle, needle=needle, in_custom=in_custom))
-    state = {"unseen": "todo"}.get(q.get("filter"), q.get("filter"))
-    if state in WATCH_STATES:
+    asked = q.get("filter", "")
+    state = {"unseen": "todo"}.get(asked, asked)
+    if state and state not in WATCH_STATES:
+        raise HttpError(400, f"filtre inconnu : {asked}")
+    if state and kind == "music":
+        raise HttpError(400, "ce filtre n'existe pas pour la musique")          # on n'« a pas vu » un album : plutôt qu'une liste qui a l'air filtrée, un refus
+    if state:
         tests.append(lambda row: watch_state(row, seen) == state)
     return tests
 
