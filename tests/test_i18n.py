@@ -253,7 +253,15 @@ class TestEnglishInTheBrowser(UiCase):
     def test_the_filter_buttons_and_the_music_counter_are_in_english(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.view(".tools .btn.flt").all_inner_texts(), ["Genre: All", "Sort: Title"])      # pas d'espace avant les deux-points en anglais
+        self.assertEqual(self.view(".tools .btn.flt").all_inner_texts(), ["Genre: All", "Sort: Title", "Status: All"])      # pas d'espace avant les deux-points en anglais
+        for lib in ("films", "series"):          # en anglais, un seul libellé : pas d'accord selon le genre de la bibliothèque
+            self.open("#/l/" + lib)
+            self.view(".grid .card").first.wait_for()
+            self.view(".tools .btn.flt", has_text="Status").click()
+            self.page.wait_for_selector(".veil .opt")
+            self.assertEqual(self.page.locator(".veil .opt .lbl").all_inner_texts(), ["All", "To watch", "In progress", "Finished"])
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_selector(".veil", state="detached")
         self.open("#/l/musique")
         self.view(".grid .card").first.wait_for()
         self.assertEqual(self.view(".count").inner_text(), "1 artist · 1 album")

@@ -23,7 +23,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 | Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens de lecture par série, double page, thèmes |
 
 - **Accueil** : « Reprendre » (films, épisodes, livres, albums en cours) et les ajouts récents de chaque bibliothèque.
-- **Bibliothèque** : recherche, genres, tri (titre, ajout, année, note TMDB pour les films et les séries), filtre À voir / En cours / Terminés.
+- **Bibliothèque** : recherche, genres, tri (titre, ajout, année, note TMDB pour les films et les séries), liste « Statut » (Tous / À voir / En cours / Terminés, accordée selon le genre de la bibliothèque).
 - **Lecture adaptée au lecteur** : le navigateur annonce ce qu'il sait lire, le serveur choisit.
   1. *direct* : le fichier tel quel (requêtes Range), aucun calcul sur le NAS ;
   2. *remux* : l'image est recopiée, seul le son (E-AC-3, DTS…) passe en AAC : presque gratuit ;
@@ -194,10 +194,10 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1980 tests : 1681 serveur + 299 interface
+python -m unittest discover -s tests          # 1984 tests : 1681 serveur + 303 interface
 ```
 
-`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 299 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 303 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
 
 ### Intégration continue (GitHub Actions)
 
