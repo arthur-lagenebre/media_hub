@@ -113,7 +113,7 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 - **Tailscale Funnel est activé** (`AllowFunnel` dans `serve.json`) : le hub est **visible de tout Internet**, à l'adresse `https://nas.tail59c227.ts.net`. Rien d'autre n'est publié : Funnel n'ouvre que le port 443 du `media_hub`, et le port 8080 de la télé reste sur le réseau local. Il n'y a **pas de double authentification** : la défense se limite au compte et à son mot de passe, avec `scrypt` pour le hachage, un ralentissement croissant à chaque échec, un blocage (429) après 10 échecs en 5 minutes, compté par adresse réelle du client, et des mots de passe de 12 caractères au moins (à la création et au changement). Un mot de passe faible ou réutilisé est donc la seule chose qui sépare un inconnu de la médiathèque : voir la procédure ci-dessous.
 - Le débit d'un Funnel est limité par Tailscale (limites non configurables, sans chiffre publié) : un film lu depuis l'extérieur peut saccader ; à la maison, utilise l'adresse locale.
 - Le conteneur `media_hub` n'a pas de nouveaux privilèges (`no-new-privileges`) et ne garde que deux capacités Linux : `DAC_OVERRIDE` et `FOWNER`, que « Supprimer » les fichiers parasites et les scripts de `media_library` demandent quand les fichiers appartiennent à un autre compte que root. Après un redéploiement, essaie *Gestion* > *Entretien* > *Supprimer*, puis *Compter* dans la fenêtre, puis *Supprimer définitivement* (avec un volume sans `:ro`) : si une erreur de droits apparaît, retire `cap_drop` du compose.
-- Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data`. Un compte qui a le droit « Envoyer » peut y écrire depuis Internet (boîte de réception, plafonnée par l'espace libre à garder et par une limite de dataset) : ne donne ce droit qu'à des personnes de confiance.
+- Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data` (et dans la boîte `HUB_INBOX`, si tu la montes à part). Un compte qui a le droit « Envoyer » peut y écrire depuis Internet (boîte de réception, plafonnée par l'espace libre à garder et par une limite de dataset) : ne donne ce droit qu'à des personnes de confiance.
 - `.env` contient des secrets : ne le publie pas.
 
 ## Ouvrir à Internet (Funnel)
@@ -152,21 +152,30 @@ Un compte à qui l'administrateur a donné le droit **Envoyer** (*Paramètres* >
 ### Où sont les fichiers
 
 ```text
-/mnt/tank/apps/media/media_hub-data/inbox/<identifiant du compte>/Film.mkv
+/mnt/tank/apps/media/media_hub-data/inbox/<nom du compte>/Film.mkv
 ```
 
-L'identifiant est opaque (`default` pour le premier compte, de l'hexadécimal pour les autres) : pour savoir de qui est un dossier, lis le dernier mot de chaque ligne de
+Le dossier porte le **nom du compte** (nettoyé : pas de `/ \ : * ? " < > |`, pas de point ni d'espace en bout, et `Léa (2)` si `léa` existe déjà, à la casse près). Le lien compte -> dossier est gardé dans la base, fixé au premier envoi : renommer ou supprimer un compte ne déplace rien. Un compte supprimé laisse son dossier et ses fichiers ; l'onglet de la boîte de réception (*Paramètres* > *Gestion*) les montre sous le nom du dossier, marqués « compte supprimé ».
 
-```bash
-docker exec -it media-hub python -m hub user list     # nom, rôle, identifiant
+**Mise à jour depuis une version d'avant** : au démarrage, les dossiers nommés d'après l'identifiant (`default`, ou de l'hexadécimal) sont renommés d'après le compte, sans rien écraser. Relancer ne change rien ; si un dossier ne peut pas être renommé (un partage SMB l'a ouvert, droits), il garde son ancien nom et le journal du conteneur le dit.
+
+### Mettre la boîte sur son propre dataset (`HUB_INBOX`)
+
+Pour un dataset TrueNAS dédié (par exemple `HubReception`, avec son quota, ses snapshots et son partage SMB, sans `hub.db` à côté) : monte-le dans le conteneur et dis au hub où il est.
+
+```yaml
+    environment:
+      HUB_INBOX: /inbox
+    volumes:
+      - /mnt/tank/HubReception:/inbox
 ```
 
-La liste de la boîte de réception dans *Paramètres* > *Gestion* donne aussi, pour chaque fichier, le compte (`user`) et son dossier (`account`) ; le dossier d'un compte supprimé garde son identifiant, et ses fichiers restent là.
+Le dossier doit être inscriptible par le conteneur (il tourne en root) ; le hub le crée s'il manque et, s'il n'est pas inscriptible, le dit au démarrage (`ATTENTION : la boîte de réception … n'est pas utilisable`). `HUB_INBOX_KEEP_FREE` se mesure alors sur ce volume. **Ce réglage n'existe qu'ici, jamais dans l'interface** : un chemin d'écriture ne se choisit pas depuis un navigateur. Changer de boîte ne déplace pas les anciens fichiers : déplace-les toi-même, dossier par dossier.
 
 ### Les récupérer et les ranger
 
 - **Partage SMB** : TrueNAS > Shares > SMB > *Add*, avec pour chemin `/mnt/tank/apps/media/media_hub-data/inbox` (le sous-dossier, **pas** `media_hub-data` : `hub.db` contient les hachés des mots de passe), accessible à ton seul compte. Copie ou déplace les fichiers depuis ton poste. Un fichier effacé par ce partage libère aussitôt son espace (hors snapshots).
-- **Téléchargement** : l'onglet de la boîte de réception dans *Gestion* (administrateur seulement), un fichier à la fois, ou `GET /api/inbox/<compte>/<nom>`.
+- **Téléchargement** : l'onglet de la boîte de réception dans *Gestion* (administrateur seulement), un fichier à la fois, ou `GET /api/inbox/<dossier>/<nom>`.
 - **Ranger** à la main : déplace le fichier dans le bon dossier de `/mnt/tank/media/…` (renomme-le comme le fait `media_library`), puis *Gestion* > *Tout mettre à jour*. Le hub n'ouvre ni ne décompresse un fichier déposé, un `.zip` y compris.
 
 ### L'espace
@@ -196,7 +205,7 @@ La boîte est dans `media_hub-data`, avec `hub.db` : un snapshot ou une sauvegar
 ### Couper en urgence
 
 - Retire le droit « Envoyer » du compte (*Paramètres* > *Comptes*) : il vaut dès l'envoi suivant (403). Fais-le pour chaque compte pour tout couper. Un envoi déjà en cours va jusqu'au bout ; redémarre le conteneur `media-hub` pour l'interrompre.
-- Un `.part` resté après une coupure brutale peut être supprimé à la main dans `inbox/<compte>/`.
+- Un `.part` resté après une coupure brutale peut être supprimé à la main dans `inbox/<nom du compte>/`.
 
 ### Essai à faire sur place (Funnel, 1 à 2 Go)
 
@@ -231,7 +240,7 @@ Note le débit (octets/s ÷ 1 000 000 pour des Mo/s), la durée, et si l'envoi s
 **5. Espace après** : de nouveau `docker exec media-hub df -m /data` et le dataset. L'espace libre a baissé de la taille du fichier (à quelques Mo près). Puis, dans le shell du NAS :
 
 ```bash
-ls -l /mnt/tank/apps/media/media_hub-data/inbox/<identifiant>/
+ls -l /mnt/tank/apps/media/media_hub-data/inbox/<nom du compte>/
 ```
 
 Le fichier doit avoir la **taille exacte** de l'original (`wc -c test-funnel.mkv`, ici 1 500 000 000), aucun `.part` à côté. Pour être sûr du contenu : `sha256sum` des deux.

@@ -310,15 +310,15 @@ Chaque compte a un nom (1 à 40 caractères, unique sans tenir compte de la cass
 
 ## Boîte de réception
 
-Des comptes qui ont le droit **Envoyer** (`can_upload`, voir `POST /api/user/<id>/upload`) déposent des fichiers (films, séries, musique, livres, sous-titres, archives) sur le serveur. **Aucun n'entre dans une bibliothèque** : ils sont rangés dans `HUB_DATA/inbox/<compte>/` et l'administrateur les range lui-même. Un fichier déposé n'est jamais analysé ni indexé. Un client natif n'a pas de jeton de média pour ces routes : seul le jeton de session les ouvre.
+Des comptes qui ont le droit **Envoyer** (`can_upload`, voir `POST /api/user/<id>/upload`) déposent des fichiers (films, séries, musique, livres, sous-titres, archives) sur le serveur. **Aucun n'entre dans une bibliothèque** : ils sont rangés dans la boîte (`HUB_INBOX`, par défaut `HUB_DATA/inbox`), dans un dossier nommé d'après le compte (nom nettoyé, `(2)` en cas de collision), et l'administrateur les range lui-même. Un fichier déposé n'est jamais analysé ni indexé. Un client natif n'a pas de jeton de média pour ces routes : seul le jeton de session les ouvre.
 
 | Route | Qui | Réponse |
 | --- | --- | --- |
-| `POST /api/inbox?name=<nom du fichier>` | un compte qui a le droit d'envoyer (l'administrateur toujours) | **201** `{"name": "Film (2).mkv", "size": 1048576, "account": "<id>"}` : `name` est le nom retenu. Le corps est **le fichier lui-même, en octets bruts** (pas de JSON, pas de `multipart`), `Content-Length` **obligatoire** |
-| `GET /api/inbox` | administrateur | `{"files": [{"account", "user", "name", "size", "date"}]}` : tous les envois, du plus récent au plus ancien ; `user` : le nom du compte (son identifiant si le compte a été supprimé), `date` : horodatage Unix de la fin de l'envoi |
+| `POST /api/inbox?name=<nom du fichier>` | un compte qui a le droit d'envoyer (l'administrateur toujours) | **201** `{"name": "Film (2).mkv", "size": 1048576, "account": "<dossier>"}` : `name` est le nom retenu, `account` le nom du dossier du compte. Le corps est **le fichier lui-même, en octets bruts** (pas de JSON, pas de `multipart`), `Content-Length` **obligatoire** |
+| `GET /api/inbox` | administrateur | `{"files": [{"account", "user", "deleted", "name", "size", "date"}]}` : tous les envois, du plus récent au plus ancien ; `account` : le nom du dossier (ce que les URL ci-dessous attendent, encodé), `user` : le nom du compte (le nom du dossier si le compte a été supprimé : `deleted` vaut alors `true`), `date` : horodatage Unix de la fin de l'envoi |
 | `GET /api/inbox?mine=1` | un compte qui a le droit d'envoyer | `{"files": […], "used": 52428800}` : ses envois seulement et l'espace qu'ils occupent (octets) ; aucun quota ni taille maximale |
-| `GET /api/inbox/<compte>/<nom>` | administrateur | le fichier en pièce jointe (`Content-Disposition: attachment`, `application/octet-stream`, `Range` accepté) |
-| `DELETE /api/inbox/<compte>/<nom>` | administrateur ; un compte qui a le droit, pour ses propres fichiers | `{"ok": true}`. 403 `ce fichier n'est pas à toi` pour le fichier d'un autre (qu'il existe ou non) |
+| `GET /api/inbox/<dossier>/<nom>` | administrateur | le fichier en pièce jointe (`Content-Disposition: attachment`, `application/octet-stream`, `Range` accepté) |
+| `DELETE /api/inbox/<dossier>/<nom>` | administrateur ; un compte qui a le droit, pour ses propres fichiers | `{"ok": true}`. 403 `ce fichier n'est pas à toi` pour le fichier d'un autre (qu'il existe ou non) |
 
 **Envoyer.** Exemple : `curl -X POST -H "Authorization: Bearer <jeton>" --data-binary @Film.mkv "https://hub/api/inbox?name=Film.mkv"`. Le serveur contrôle tout **avant de lire le corps** et coupe alors la connexion (le client n'a pas à finir d'envoyer) ; il laisse d'abord arriver la réponse : une fois écrite, il ferme l'écriture, lit et jette ce que le client envoie encore (au plus 64 Mo et 5 secondes, puis coupe quoi qu'il arrive), pour qu'un navigateur en plein envoi lise le 403, 415, 429 ou 507 au lieu d'une erreur réseau. Dans l'ordre :
 
@@ -329,14 +329,15 @@ Des comptes qui ont le droit **Envoyer** (`can_upload`, voir `POST /api/user/<id
 | 411 | `Content-Length` absent, ou corps en morceaux (`Transfer-Encoding`) |
 | 400 | `Content-Length` illisible (autre chose que des chiffres : `+10`, `1_0`, `-1`…), répété deux fois, ou nul (`fichier vide`) ; nom absent, vide ou illisible |
 | 415 | extension refusée (voir ci-dessous) |
-| 507 | l'espace libre sous `HUB_DATA` tomberait sous `HUB_INBOX_KEEP_FREE` (10 Go) |
+| 507 | l'espace libre sur le volume de la boîte (`HUB_INBOX`) tomberait sous `HUB_INBOX_KEEP_FREE` (10 Go) |
+| 503 | la boîte est inutilisable (dossier introuvable ou non inscriptible, volume illisible) ; le message ne dit pas où, le journal du serveur oui |
 | 429 | déjà `HUB_INBOX_MAX_UPLOADS` envois en cours (2) : c'est la seule réponse qui passe en réessayant plus tard |
 
 Puis le corps est lu par morceaux de 1 Mo dans `<nom>.part`, renommé quand la longueur reçue vaut `Content-Length`. Une coupure, un délai de lecture dépassé (celui de la connexion, 120 s), un corps plus court que `Content-Length` (400 `envoi interrompu…`) ou un disque plein (507) effacent le `.part` ; la connexion est alors fermée. Les `.part` oubliés (arrêt brutal du serveur) sont supprimés après 24 h, au démarrage puis chaque jour. Il n'y a pas de reprise d'un envoi interrompu.
 
 **Le nom** (`name`, décodé de l'URL) est nettoyé : seul le dernier élément du chemin est gardé (`/` et `\` séparent ; `../../x.mkv` donne `x.mkv`), les caractères de contrôle et `<>:"|?*` deviennent `_`, aucun point ni espace au début ou à la fin, un nom réservé de Windows (`CON`, `NUL`, `COM1`…) est précédé de `_`, au plus 200 octets en UTF-8 (l'extension est gardée). Un fichier n'en écrase jamais un autre, un envoi en cours compris : `Film.mkv` devient `Film (2).mkv`, puis `Film (3).mkv`. Extensions acceptées (la casse ne compte pas, seule la dernière compte) : `.mkv .mp4 .m4v .avi .mov .wmv .webm .mpg .mpeg .m2ts .flv .ogv` ; `.flac .mp3 .m4a .aac .ogg .opus .wav .wma .ape .wv` ; `.epub .cbz .cbr .cb7 .pdf .mobi .azw3 .fb2` ; `.srt .ass .ssa .vtt .sub .idx .sup` ; `.zip`. Tout le reste (exécutables, scripts, pages web, images) : 415.
 
-**Lire et supprimer.** `<compte>` est l'identifiant (`account`), `<nom>` le nom tel que la liste le donne, encodé dans l'URL. Un chemin qui sort du dossier du compte (`..`, séparateur, nom caché, `.part`, lien symbolique) répond 404 `fichier introuvable`. Le téléchargement et la liste complète sont réservés à l'administrateur (403 `réservé à l'administrateur`).
+**Lire et supprimer.** `<dossier>` est le nom du dossier du compte (`account`, par exemple `Léa Dupont`), `<nom>` le nom du fichier tel que la liste le donne ; l'un et l'autre sont encodés dans l'URL (`L%C3%A9a%20Dupont`). Le dossier est celui de la base (`users.inbox_dir`) : il garde son nom si le compte est renommé, et celui d'un compte supprimé reste lisible par l'administrateur. Un chemin qui sort de la boîte (`..`, `%2e%2e`, séparateur, octet nul, nom caché, nom réservé de Windows, `.part`, lien symbolique, jonction Windows) répond 404 `fichier introuvable`. Un compte qui supprime ne peut viser que son dossier, par son nom exact. Le téléchargement et la liste complète sont réservés à l'administrateur (403 `réservé à l'administrateur`).
 
 ## Sagas composées à la main
 

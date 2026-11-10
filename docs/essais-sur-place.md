@@ -66,8 +66,8 @@ Suivre la procédure de [deploy/README.md](../deploy/README.md), « Essai à fai
 
 - [ ] **Espace avant :** `docker exec media-hub df -m /data` et, dans TrueNAS, l'espace libre et le quota du dataset `media_hub-data`. **Attendu :** les deux concordent. Sinon, note de combien.
 - [ ] **Envoi de 1 à 2 Go à travers Funnel**, au `curl` puis depuis la page « Envoyer ». **Mesures à noter : le débit, et si l'envoi tient jusqu'au bout.** Les délais de Funnel ne se configurent pas.
-- [ ] Le fichier est dans `inbox/<identifiant du compte>/`, à la bonne taille, sans `.part`.
-- [ ] **Envoi annulé** dans le navigateur, en cours de route. **Attendu :** aucun `.part` ne reste dans `inbox/<compte>/` (compter jusqu'à 3 minutes, voir la procédure).
+- [ ] Le fichier est dans `inbox/<nom du compte>/`, à la bonne taille, sans `.part`.
+- [ ] **Envoi annulé** dans le navigateur, en cours de route. **Attendu :** aucun `.part` ne reste dans `inbox/<nom du compte>/` (compter jusqu'à 3 minutes, voir la procédure).
 - [ ] **Faute de place :** `truncate -s 2T gros.mkv`, puis l'envoyer. **Attendu :** 507 en quelques secondes, avant le moindre octet lu, et rien dans `inbox/`.
 - [ ] **Compte sans le droit « Envoyer »** : essayer d'envoyer. **Attendu :** 403, message affiché, rien d'écrit.
 - [ ] **Refus d'un gros fichier** (le compte sans droit avec le fichier de 1 à 2 Go). **À observer :** le navigateur affiche-t-il le 403, ou une erreur réseau ? Le serveur n'avale que 64 Mo ou 5 s, au-delà il coupe : c'est la limite connue. Ce point décide si elle mérite d'être traitée.
