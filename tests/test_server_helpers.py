@@ -146,7 +146,7 @@ class TestWatchState(unittest.TestCase):
         tests = app.library_filters(query, "movies", None, {}, {}, seen)
         return [r["id"] for r in rows if all(test(r) for test in tests)]
 
-    def test_the_library_filters_pick_one_state_and_the_old_unseen_means_to_watch(self):
+    def test_the_library_filters_pick_one_state_the_old_unseen_means_to_watch_and_an_unknown_one_is_refused(self):
         rows = [self.row(2, "a"), self.row(2, "b"), self.row(2, "c")]
         seen = {"b": (1, 1), "c": (2, 2)}
         self.assertEqual(self.filtered({"filter": "todo"}, rows, seen), ["a"])
@@ -154,7 +154,10 @@ class TestWatchState(unittest.TestCase):
         self.assertEqual(self.filtered({"filter": "done"}, rows, seen), ["c"])
         self.assertEqual(self.filtered({"filter": "unseen"}, rows, seen), ["a"])                # ancien nom, pour les favoris
         self.assertEqual(self.filtered({}, rows, seen), ["a", "b", "c"])
-        self.assertEqual(self.filtered({"filter": "autre"}, rows, seen), ["a", "b", "c"])       # une valeur inconnue ne filtre rien, comme avant
+        self.assertEqual(self.filtered({"filter": ""}, rows, seen), ["a", "b", "c"])            # vide : pas de filtre
+        with self.assertRaisesRegex(app.HttpError, "filtre inconnu : autre") as refused:       # une valeur inconnue est refusée, elle ne filtre plus « rien » en silence
+            self.filtered({"filter": "autre"}, rows, seen)
+        self.assertEqual(refused.exception.status, 400)
 
 
 class TestShownRating(unittest.TestCase):

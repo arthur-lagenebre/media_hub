@@ -387,6 +387,19 @@ class TestUnseenRowOrder(unittest.TestCase):
         self.assertEqual(self.ids(rows, "added"), ["neuf", "a", "b", "vieux"])
         self.assertEqual(self.ids(rows, "added", 2), ["neuf", "a"])
 
+    def test_two_films_alike_in_everything_but_their_id_come_out_in_the_same_order_whatever_the_order_they_come_in(self):
+        for sort in ("rating", "added"):
+            with self.subTest(sort=sort):
+                twins = [self.row("b", "Même titre", 7.0, 100, added=5), self.row("a", "Même titre", 7.0, 100, added=5), self.row("c", "Même titre", 7.0, 100, added=5)]
+                self.assertEqual(self.ids(twins, sort), ["a", "b", "c"])                                      # l'identifiant départage : le rang ne dépend plus de l'ordre de la base
+                self.assertEqual(self.ids(twins[::-1], sort), ["a", "b", "c"])
+                self.assertEqual(self.ids(twins, sort, 2), ["a", "b"])                                        # et la coupe tombe au même endroit
+
+    def test_the_best_rated_sort_of_a_library_breaks_a_tie_on_the_id_too(self):
+        twins = [self.row("b", "Même titre", 7.0, 100), self.row("a", "Même titre", 7.0, 100)]
+        self.assertEqual([r["id"] for r in sorted(twins, key=app.rating_key)], ["a", "b"])
+        self.assertEqual([r["id"] for r in sorted(twins[::-1], key=app.rating_key)], ["a", "b"])
+
     def test_random_is_the_default_and_so_is_a_value_nobody_knows(self):
         rows = [self.row(f"f{n}", f"Film {n}", 5 + n / 10, 100, added=n) for n in range(12)]
         default = [r["id"] for r in app.unseen_row(rows, {}, "p", "2026-11-04")]

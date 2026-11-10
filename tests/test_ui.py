@@ -3330,6 +3330,37 @@ class TestHomeUnseen(UiCase):
         offered = [added[i] for i in self.offered()]
         self.assertEqual(offered, sorted(offered, reverse=True))                                          # du plus récemment ajouté au plus ancien
 
+    def add_newest_films(self, count=60, rated=False):
+        """`count` films jamais vus, tous plus récents que le reste (des dates d'ajout distinctes) ; `rated` : les plus récents sont aussi les mieux notés. « Nouveautés » en prend 24 : le rayon ne doit pas s'en trouver vide. Remis en l'état par le nettoyage de `setUp` (celui qui restaure les films d'origine)."""
+        db = self.run_.hub.db
+        items = [dict(r) for r in db.query("SELECT * FROM items WHERE lib='films'")]
+        entries = [dict(r) for r in db.query("SELECT * FROM entries WHERE lib='films'")]
+        top = db.one("SELECT MAX(added) AS top FROM items")["top"]
+        meta = lambda n: json.dumps({"tmdb_rating": {"vote": 5 + n / 10, "votes": 1000}} if rated else {})
+        new = [{**items[0], "id": f"neuf{n:03d}", "title": f"Neuf {n:03d}", "sort": f"neuf {n:03d}", "grp": "", "added": top + 1000 + n, "meta": meta(n)} for n in range(count)]
+        files = [{**entries[0], "id": f"neuff{n:03d}", "item_id": f"neuf{n:03d}", "rel": f"neuf{n:03d}/film.mkv"} for n in range(count)]
+        db.replace_library("films", items + new, entries + files)
+
+    def assert_the_shelf_keeps_twelve_cards_that_the_new_ones_do_not_show(self):
+        self.open()
+        self.view(".shelf.unseen[data-lib=films] .card").first.wait_for()
+        latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+        self.assertEqual(sum(key.startswith("neuf") for key in latest), 24)                                 # les nouveautés ne sont faites que de ces films
+        shown = self.shown()
+        self.assertGreaterEqual(len(shown), 12)
+        self.assertFalse(set(shown) & set(latest))
+        self.assertTrue(all(key.startswith("neuf") for key in shown), shown)                                  # le tri a bien pris les plus récents / les mieux notés, pas le reste
+
+    def test_sorted_by_date_added_the_shelf_is_not_emptied_by_the_new_ones(self):
+        self.add_newest_films()
+        self.api("/api/me/settings", {"home_unseen_sort": "added"})
+        self.assert_the_shelf_keeps_twelve_cards_that_the_new_ones_do_not_show()
+
+    def test_sorted_by_rating_the_shelf_is_not_emptied_when_the_best_rated_are_the_newest(self):
+        self.add_newest_films(rated=True)
+        self.api("/api/me/settings", {"home_unseen_sort": "rating"})
+        self.assert_the_shelf_keeps_twelve_cards_that_the_new_ones_do_not_show()
+
 
 class TestHomeNewArtist(UiCase):
     def test_the_arrival_of_an_artist_is_one_card_that_opens_his_page(self):
