@@ -17,7 +17,7 @@ from pathlib import Path
 
 from libraries.music import coverfile, wanted
 
-from .. import enrich, scan
+from .. import enrich, labels, scan
 from ..scan.common import is_album_cover
 
 LOG_LINES = 400
@@ -77,7 +77,7 @@ class Jobs:
 
     # --- Les tâches --------------------------------------------------------
     def scan(self, lib):
-        return self._submit(f"Mise à jour · {lib.label}", lambda log: scan.scan_library(self.db, lib, log))
+        return self._submit(f"Mise à jour · {labels.shown(self.db, lib)}", lambda log: scan.scan_library(self.db, lib, log))
 
     def scan_all(self):
         def run(log):
@@ -85,10 +85,10 @@ class Jobs:
         return self._submit("Mise à jour · tout", run)
 
     def enrich(self, lib, force=False):
-        return self._submit(f"Enrichissement TMDB · {lib.label}", self._then_ratings(enrich.enrich_shows, lib, force))
+        return self._submit(f"Enrichissement TMDB · {labels.shown(self.db, lib)}", self._then_ratings(enrich.enrich_shows, lib, force))
 
     def enrich_sagas(self, lib, force=False):
-        return self._submit(f"Sagas TMDB · {lib.label}", self._then_ratings(enrich.enrich_sagas, lib, force))
+        return self._submit(f"Sagas TMDB · {labels.shown(self.db, lib)}", self._then_ratings(enrich.enrich_sagas, lib, force))
 
     def _then_ratings(self, first, lib, force):
         """La tâche qui fait `first` (fiches des séries, sagas des films) puis la passe des notes TMDB de la même bibliothèque : un seul bilan, les échecs des deux additionnés."""
@@ -100,7 +100,7 @@ class Jobs:
         return run
 
     def enrich_artists(self, lib, force=False):
-        return self._submit(f"Fiches artistes · {lib.label}", lambda log: enrich.enrich_artists(self.cfg, self.db, lib, log, force))
+        return self._submit(f"Fiches artistes · {labels.shown(self.db, lib)}", lambda log: enrich.enrich_artists(self.cfg, self.db, lib, log, force))
 
     def enrich_person(self, name, person_id, force=False):
         """Les films que TMDB attribue à une personne (`person_id` : son identifiant TMDB ; `name` : pour l'intitulé de la tâche)."""

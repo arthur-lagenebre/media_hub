@@ -38,6 +38,7 @@ from .. import __version__
 from .. import accounts
 from .. import countries
 from .. import enrich
+from .. import labels
 from .. import missing
 from .. import people
 from .. import playlists
@@ -932,7 +933,7 @@ def api_state(h, m, q):
     libs = []
     for lib in h.visible_libs():                  # une bibliothèque qu'on ne voit pas n'existe pas pour ce compte
         count = hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]
-        libs.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir(), "play": h.can(lib.id, "play"), "download": h.can(lib.id, "download")})
+        libs.append({**labels.describe(hub.db, lib), "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir(), "play": h.can(lib.id, "play"), "download": h.can(lib.id, "download")})
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
                  "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
 
@@ -1034,7 +1035,7 @@ def api_home(h, m, q):
             recent = recent_music(items, seen, 24)
         else:
             recent = [with_seen(r, seen) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
-        row = {"id": lib.id, "label": lib.label, "kind": lib.kind, "recent": recent, "count": len(items)}
+        row = {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind, "recent": recent, "count": len(items)}
         if lib.kind in UNSEEN_KINDS:
             row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order)
         rows.append(row)
@@ -1058,7 +1059,7 @@ def api_search(h, m, q):
                 if len(found) >= 40:
                     break
         if found:
-            results.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "items": found})
+            results.append({"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind, "items": found})
     hits = people.search(hub.db, people.key_of(needle), [lib.id for lib in h.visible_libs()])
     h.send_json({"results": results, "people": [{"name": name, "titles": titles} for name, titles in hits]})
 
@@ -1087,7 +1088,7 @@ def api_person(h, m, q):
     person = person if shown else None              # ce que le compte ne voit pas n'existe pas pour lui
     roles, rows = person_rows(hub.db, person, {lib.id for lib in libs})
     seen = seen_counts(hub, h.user["id"]) if rows else {}
-    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": person_results(libs, rows, seen), **person_extras(hub, person, libs)})
+    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": person_results(hub.db, libs, rows, seen), **person_extras(hub, person, libs)})
 
 
 def person_rows(db, person, visible):
@@ -1101,14 +1102,14 @@ def person_rows(db, person, visible):
     return roles, rows
 
 
-def person_results(libs, rows, seen):
+def person_results(db, libs, rows, seen):
     """Les éléments `rows` groupés par bibliothèque (dans l'ordre de `libs`, sans les bibliothèques vides), du plus récent au plus ancien."""
     results = []
     for lib in libs:
         mine = sorted((r for r in rows.values() if r["lib"] == lib.id), key=lambda r: r["sort"])
         mine.sort(key=lambda r: r["year"] or "", reverse=True)          # sans année en dernier ; à égalité, par titre (le tri est stable)
         if mine:
-            results.append({"id": lib.id, "label": lib.label, "kind": lib.kind, "items": [with_seen(r, seen) for r in mine]})
+            results.append({"id": lib.id, "label": labels.shown(db, lib), "kind": lib.kind, "items": [with_seen(r, seen) for r in mine]})
     return results
 
 
@@ -1136,7 +1137,7 @@ def api_enrich_people(h, m, q):
         lib = library_or_404(hub, body["lib"])
         if lib.kind not in ("movies", "shows"):
             raise HttpError(400, "les films manquants des personnes ne concernent que les bibliothèques de films, de séries et d'animations")
-        libs, label = [lib], lib.label
+        libs, label = [lib], labels.shown(hub.db, lib)
     h.send_json({"job": hub.jobs.enrich_people(libs, label, bool(body.get("force"))).public()}, 202)
 
 
@@ -1519,7 +1520,7 @@ def api_library(h, m, q):
     chosen.sort(key=key, reverse=reverse)
     offset, limit = page_bounds(q)
     page = chosen[offset:offset + limit]
-    out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "total": len(chosen), "offset": offset,
+    out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "total": len(chosen), "offset": offset,
            "items": [library_item(r, seen) for r in page],
            "genres": genre_menu(genres)}
     if group and sort == "part":
@@ -1618,7 +1619,7 @@ def api_item(h, m, q):
     progress = hub.db.progress_for(h.user["id"], [r["id"] for r in rows])
     meta = safe_json(item["meta"], {})
     out = summary(item)
-    out.update({"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
+    out.update({"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
     out.update({key: meta[key] for key in ITEM_META_KEYS if meta.get(key) not in (None, "", [])})
     links = album_links(meta) if item["type"] == "album" else video_links(item, meta)
     if links:
@@ -1783,7 +1784,7 @@ def api_artist(h, m, q):
     seen = seen_counts(hub, h.user["id"], lib.id)
     name = rows[0]["grp"] or "Artiste inconnu"
     tracks, genres = artist_tracks(hub, rows, name)
-    out = {"library": {"id": lib.id, "label": lib.label, "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": tracks}
+    out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": tracks}
     out["genres"] = [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
     kept = artist_kept(hub, rows)
@@ -2711,6 +2712,19 @@ def api_scan(h, m, q):
     jobs = h.hub.jobs
     job = jobs.scan(library_or_404(h.hub, body["lib"])) if body.get("lib") else jobs.scan_all()
     h.send_json({"job": job.public()}, 202)
+
+
+@route("POST", r"/api/library/([\w-]+)/label")
+def api_library_label(h, m, q):
+    """L'administrateur renomme l'AFFICHAGE d'une bibliothèque : `{"label": "<texte>"}` (1 à 40 caractères, sans caractère de contrôle ni de mise en forme ; un texte vide ou absent rétablit le nom d'origine).
+    L'identifiant ne change jamais. 400 si le nom est déjà celui d'une autre bibliothèque (à la casse et aux accents près, nom d'origine compris). Rend `{"id", "label", "default_label", "kind"}`."""
+    require_admin(h)
+    lib = library_or_404(h.hub, m.group(1))
+    try:
+        labels.rename(h.hub.db, h.hub.cfg.libraries, lib, body_dict(h).get("label"))
+    except labels.LabelError as e:
+        raise HttpError(400, str(e))
+    h.send_json(labels.describe(h.hub.db, lib))
 
 
 @route("POST", r"/api/images/refresh")

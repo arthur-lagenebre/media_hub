@@ -3139,7 +3139,7 @@ class TestApiContract(ContractBase):
         self.assertTrue(data["auth"])
         self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "animations", "musique", "livres"])
         for lib in data["libraries"]:
-            self.has(lib, {"id": str, "label": str, "kind": str, "count": int, "scanned": (int, NULL), "exists": bool}, f"state.libraries[{lib['id']}]")
+            self.has(lib, {"id": str, "label": str, "default_label": str, "kind": str, "count": int, "scanned": (int, NULL), "exists": bool}, f"state.libraries[{lib['id']}]")
             self.assertIn(lib["kind"], LIBRARY_KINDS)
 
     def test_home(self):
