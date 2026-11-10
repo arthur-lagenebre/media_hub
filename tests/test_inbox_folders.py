@@ -615,10 +615,25 @@ class TestCheckOverlaps(FolderCase):
         self.assertIn("Films", self.check(self.films / ".." / "Films"))
         self.assertIn("HUB_DATA", self.check(self.data / "inbox" / ".."))
 
-    def test_an_unusable_inbox_and_an_overlap_are_both_said(self):
+    def test_an_inbox_that_overlaps_a_library_writes_nothing_neither_a_folder_nor_the_probe_file(self):
+        """Invariant : le hub n'écrit jamais dans la médiathèque. Le recoupement se détecte AVANT le `mkdir` et le fichier d'essai."""
+        before = sorted(p.name for p in self.films.rglob("*"))
+        for box in (self.films, self.films / "Recus", self.films / "a" / "b", self.base / "srv"):
+            with mock.patch.object(Path, "mkdir") as made, mock.patch.object(inbox.tempfile, "TemporaryFile") as probed:
+                message = self.check(box)
+            self.assertIn("Films", message, box)
+            made.assert_not_called()
+            probed.assert_not_called()
+        self.assertEqual(sorted(p.name for p in self.films.rglob("*")), before)
+        self.assertFalse((self.films / "Recus").exists())
+
+    def test_an_inbox_inside_a_library_that_does_not_exist_yet_is_not_created(self):
+        self.assertIn("Films", self.check(self.films / "Recus"))
+        self.assertEqual(list(self.films.iterdir()), [])
+
+    def test_an_unusable_inbox_that_overlaps_nothing_is_still_said(self):
         (self.base / "fichier").write_bytes(b"x")
-        self.assertIn("n'est pas utilisable", self.check(self.base / "fichier" / "boite", [types.SimpleNamespace(label="Films", path=self.base / "fichier")]))
-        self.assertIn("Films", self.check(self.base / "fichier" / "boite", [types.SimpleNamespace(label="Films", path=self.base / "fichier")]))
+        self.assertIn("n'est pas utilisable", self.check(self.base / "fichier" / "boite"))
 
     def test_a_config_without_data_or_libraries_is_checked_as_before(self):
         self.assertIsNone(Inbox(types.SimpleNamespace(inbox=self.base / "HubReception", inbox_keep_free=0, inbox_max_uploads=2), self.db).check())

@@ -328,6 +328,9 @@ class Inbox:
     # --- Démarrage : vérifier la boîte, migrer les anciens dossiers --------------
     def check(self):
         """Au démarrage : la boîte existe (créée au besoin), le serveur peut y écrire, et elle ne recoupe ni HUB_DATA ni une bibliothèque. None si tout va bien, sinon le message à montrer à l'administrateur (`announce` y met « ATTENTION : ») : un chemin non inscriptible ou mal choisi se dit au démarrage, pas au premier envoi."""
+        found = self._overlaps()
+        if self._in_library():
+            return " ".join(found)          # le hub n'écrit jamais dans la médiathèque : ni dossier ni fichier d'essai tant que la boîte la recoupe
         problems = []
         try:
             self.root.mkdir(parents=True, exist_ok=True)
@@ -335,8 +338,12 @@ class Inbox:
                 pass
         except OSError as e:
             problems.append(f"la boîte de réception ({self.root}) n'est pas utilisable : {e.strerror or e} ; les envois seront refusés (vérifie HUB_INBOX et les droits d'écriture du conteneur).")
-        problems.extend(self._overlaps())
+        problems.extend(found)
         return " ".join(problems) or None
+
+    def _in_library(self):
+        """Vrai si la boîte est une bibliothèque, en contient une ou est dans l'une d'elles."""
+        return any(_overlap(self.root, Path(lib.path)) for lib in self.libraries)
 
     def _overlaps(self):
         """Les messages d'une boîte qui est (ou contient, ou est dans) HUB_DATA ou une bibliothèque. Le défaut `HUB_DATA/inbox` (la boîte DANS les données) est normal et ne dit rien."""
