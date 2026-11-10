@@ -573,6 +573,57 @@ class TestInboxOutsideTheDataFolder(FolderCase):
         self.assertEqual(self.box._active, 0)
 
 
+class TestCheckOverlaps(FolderCase):
+    """HUB_INBOX qui recoupe HUB_DATA ou une bibliothèque : `check` le dit au démarrage (ATTENTION, dans `announce`) ; le défaut HUB_DATA/inbox ne dit rien."""
+
+    def setUp(self):
+        super().setUp()
+        self.base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.base, True)
+        self.data, self.films = self.base / "data", self.base / "srv" / "Films"
+        self.films.mkdir(parents=True)
+
+    def check(self, box, libraries=None):
+        libs = [types.SimpleNamespace(label="Films", path=self.films)] if libraries is None else libraries
+        cfg = types.SimpleNamespace(inbox=box, data=self.data, libraries=libs, inbox_keep_free=0, inbox_max_uploads=2)
+        return Inbox(cfg, self.db).check()
+
+    def test_the_default_inbox_under_the_data_folder_says_nothing(self):
+        self.assertIsNone(self.check(self.data / "inbox"))
+
+    def test_an_inbox_next_to_the_data_and_the_libraries_says_nothing(self):
+        self.assertIsNone(self.check(self.base / "HubReception"))
+        self.assertIsNone(self.check(self.base / "srv" / "Films2"))                    # un dossier voisin dont le nom commence pareil n'est pas un enfant
+
+    def test_an_inbox_that_is_the_data_folder_warns_that_img_and_posters_would_be_account_folders(self):
+        message = self.check(self.data)
+        self.assertIn("HUB_DATA", message)
+        self.assertIn("img", message)
+        self.assertIn("posters", message)
+        self.assertIn("HUB_INBOX", message)
+
+    def test_an_inbox_that_contains_the_data_folder_warns_too(self):
+        self.assertIn("HUB_DATA", self.check(self.base))
+
+    def test_an_inbox_that_is_a_library_contains_one_or_sits_inside_one_warns_with_its_name(self):
+        for box in (self.films, self.base / "srv", self.films / "Recus"):
+            message = self.check(box)
+            self.assertIn("Films", message, box)
+            self.assertIn("HUB_INBOX", message, box)
+
+    def test_the_spelling_of_the_path_does_not_hide_the_overlap(self):
+        self.assertIn("Films", self.check(self.films / ".." / "Films"))
+        self.assertIn("HUB_DATA", self.check(self.data / "inbox" / ".."))
+
+    def test_an_unusable_inbox_and_an_overlap_are_both_said(self):
+        (self.base / "fichier").write_bytes(b"x")
+        self.assertIn("n'est pas utilisable", self.check(self.base / "fichier" / "boite", [types.SimpleNamespace(label="Films", path=self.base / "fichier")]))
+        self.assertIn("Films", self.check(self.base / "fichier" / "boite", [types.SimpleNamespace(label="Films", path=self.base / "fichier")]))
+
+    def test_a_config_without_data_or_libraries_is_checked_as_before(self):
+        self.assertIsNone(Inbox(types.SimpleNamespace(inbox=self.base / "HubReception", inbox_keep_free=0, inbox_max_uploads=2), self.db).check())
+
+
 class TestSystemErrorsWhileStoring(FolderCase):
     """Une erreur système pendant l'écriture (droits, volume en lecture seule…) est un 503 en français sans chemin ; le chemin va au journal ; rien ne reste."""
 

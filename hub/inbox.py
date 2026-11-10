@@ -110,6 +110,19 @@ def _same(name):
     return unicodedata.normalize("NFC", name).casefold()
 
 
+def _overlap(box, other):
+    """Comment la boîte `box` se place par rapport à `other`, chemins résolus et casse de la plate-forme : "same" (le même dossier), "inside_it" (`other` est dans la boîte), "inside" (la boîte est dans `other`), ou "" (rien en commun).
+    Un échec de résolution ou deux volumes distincts : "" (le chemin ne peut pas recouper)."""
+    try:
+        one, two = os.path.normcase(str(box.resolve())), os.path.normcase(str(other.resolve()))
+        common = os.path.commonpath([one, two])
+    except (OSError, RuntimeError, ValueError):
+        return ""
+    if one == two:
+        return "same"
+    return "inside_it" if common == one else "inside" if common == two else ""
+
+
 def _entries(folder):
     try:
         with os.scandir(folder) as found:
@@ -142,6 +155,7 @@ class Inbox:
     `db` est la base du hub : le lien compte -> dossier y est gardé (`users.inbox_dir`)."""
 
     def __init__(self, cfg, db):
+        self.data, self.libraries = getattr(cfg, "data", None), getattr(cfg, "libraries", None) or ()      # HUB_DATA et les bibliothèques : `check` y compare la boîte
         self.root = Path(cfg.inbox)     # HUB_INBOX : peut être un autre volume que HUB_DATA ; l'espace libre se mesure et les `.part` se balaient ici
         self.db = db
         self.keep_free, self.max_uploads = cfg.inbox_keep_free, cfg.inbox_max_uploads
@@ -313,14 +327,28 @@ class Inbox:
 
     # --- Démarrage : vérifier la boîte, migrer les anciens dossiers --------------
     def check(self):
-        """Au démarrage : la boîte existe (créée au besoin) et le serveur peut y écrire. None si tout va bien, sinon le message à montrer à l'administrateur : un chemin non inscriptible se dit au démarrage, pas au premier envoi."""
+        """Au démarrage : la boîte existe (créée au besoin), le serveur peut y écrire, et elle ne recoupe ni HUB_DATA ni une bibliothèque. None si tout va bien, sinon le message à montrer à l'administrateur (`announce` y met « ATTENTION : ») : un chemin non inscriptible ou mal choisi se dit au démarrage, pas au premier envoi."""
+        problems = []
         try:
             self.root.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryFile(dir=self.root):
                 pass
         except OSError as e:
-            return f"la boîte de réception ({self.root}) n'est pas utilisable : {e.strerror or e} ; les envois seront refusés (vérifie HUB_INBOX et les droits d'écriture du conteneur)."
-        return None
+            problems.append(f"la boîte de réception ({self.root}) n'est pas utilisable : {e.strerror or e} ; les envois seront refusés (vérifie HUB_INBOX et les droits d'écriture du conteneur).")
+        problems.extend(self._overlaps())
+        return " ".join(problems) or None
+
+    def _overlaps(self):
+        """Les messages d'une boîte qui est (ou contient, ou est dans) HUB_DATA ou une bibliothèque. Le défaut `HUB_DATA/inbox` (la boîte DANS les données) est normal et ne dit rien."""
+        found = []
+        if self.data is not None and _overlap(self.root, Path(self.data)) in ("same", "inside_it"):
+            found.append(f"HUB_INBOX ({self.root}) est le dossier de données (HUB_DATA) ou en contient : hub.db, img/ et posters/ y seraient pris pour des dossiers de compte et leur contenu pour des envois, "
+                         "listés et supprimables par l'administrateur. Choisis un dossier dédié (HUB_DATA/inbox par défaut, ou un dossier à côté).")
+        for lib in self.libraries:
+            if _overlap(self.root, Path(lib.path)):
+                label = getattr(lib, "label", None) or Path(lib.path).name
+                found.append(f"HUB_INBOX ({self.root}) recoupe la bibliothèque « {label} » ({lib.path}) : les envois se mêleraient à la médiathèque (ou la boîte la contiendrait), que le hub ne doit jamais modifier. Choisis un dossier hors des bibliothèques.")
+        return found
 
     def migrate(self):
         """Au démarrage : le dossier d'un compte nommé d'après son identifiant (`default`, ou hexadécimal : celui d'avant) est renommé d'après le nom du compte. Rend le nombre de dossiers renommés.

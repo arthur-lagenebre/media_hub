@@ -217,6 +217,14 @@ class TestAnnounce(unittest.TestCase):
         err = self.said(fake_config(self.tmp), inbox_problem="la boîte de réception (/x) n'est pas utilisable : refusé")[1]
         self.assertIn("ATTENTION : la boîte de réception (/x) n'est pas utilisable", err)
 
+    def test_an_inbox_that_overlaps_the_data_folder_is_warned_through_the_same_line(self):
+        from hub.inbox import Inbox
+        data = Path(self.tmp) / "data"
+        box = Inbox(types.SimpleNamespace(inbox=data, data=data, libraries=[], inbox_keep_free=0, inbox_max_uploads=2), None)
+        err = self.said(fake_config(self.tmp), inbox_problem=box.check())[1]
+        self.assertIn("ATTENTION : ", err)
+        self.assertIn("HUB_INBOX", err)
+
     def test_a_short_hub_password_is_warned_a_long_one_is_not(self):
         self.assertIn("HUB_PASSWORD fait moins de 12 caractères", self.said(fake_config(self.tmp, password="court"))[1])
         self.assertNotIn("HUB_PASSWORD", self.said(fake_config(self.tmp, password="x" * accounts.MIN_PASSWORD))[1])
