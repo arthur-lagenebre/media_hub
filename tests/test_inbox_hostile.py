@@ -199,6 +199,30 @@ class TestUnicodeFormsOnDisk(SubCase):
         self.assertEqual(self.status(self.inbox.path_of, "alice", "\ud800.mkv", "x"), 404)
 
 
+class TestOnlyListedNamesAreServed(SubCase):
+    """Sans noms courts 8.3 : ce que le système ouvre sans que la liste du dossier le donne (l'alias d'un fichier, d'un dossier) n'est jamais servi ni supprimé. On aveugle ce qui doit l'être pour fabriquer l'alias."""
+
+    def hidden(self, *names):
+        """`_entries` sans les entrées `names` : le fichier est là et s'ouvre par son nom, mais la liste ne le donne pas, comme un alias."""
+        real = inbox._entries
+        return mock.patch.object(inbox, "_entries", lambda folder: [e for e in real(folder) if e.name not in names])
+
+    def test_a_file_the_listing_does_not_give_is_neither_read_nor_removed(self):
+        self.send("x.mkv", data=b"secret")
+        (self.alice / "y.mkv.part").write_bytes(b"en cours")
+        with self.hidden("x.mkv", "y.mkv.part"):
+            self.assertEqual(self.status(self.inbox.path_of, "alice", "x.mkv"), 404)
+            self.assertEqual(self.status(self.inbox.remove, "alice", "x.mkv"), 404)
+        self.assertEqual(self.inbox.path_of("alice", "x.mkv").read_bytes(), b"secret")
+        self.assertEqual((self.alice / "y.mkv.part").read_bytes(), b"en cours")
+
+    def test_a_file_the_listing_does_not_give_in_a_subfolder_is_neither_read_nor_removed(self):
+        self.send("x.mkv", "a/b", data=b"secret")
+        with self.hidden("x.mkv"):
+            self.assertEqual(self.status(self.inbox.path_of, "alice", "x.mkv", "a/b"), 404)
+            self.assertEqual(self.status(self.inbox.remove, "alice", "x.mkv", "a/b"), 404)
+        self.assertEqual(self.inbox.path_of("alice", "x.mkv", "a/b").read_bytes(), b"secret")
+
 @unittest.skipUnless(WINDOWS, "les noms courts 8.3 n'existent que sous Windows")
 class TestShortNames(SubCase):
     """NTFS donne à « Dossier Long » le nom court `DOSSIE~1` et ouvre les deux : le hub ne doit ni écrire ailleurs ni écraser à travers l'un."""
@@ -251,6 +275,17 @@ class TestShortNames(SubCase):
             self.inbox.receive("alice", "rate.mkv", io.BytesIO(b"ab"), 10, short)
         self.assertEqual(caught.exception.status, 400)
         self.assertEqual(tree(self.alice), ["Un dossier avec un long nom/", "Un dossier avec un long nom/garde.mkv"])
+
+    def test_the_short_name_of_a_part_or_of_a_finished_file_is_neither_read_nor_removed(self):
+        self.send("x.mkv", data=b"fini")
+        (self.alice / "Un film en cours.mkv.part").write_bytes(b"en cours")
+        (self.alice / "Un film fini avec un long nom.mkv").write_bytes(b"fini aussi")
+        for long in ("Un film en cours.mkv.part", "Un film fini avec un long nom.mkv"):
+            short = self.alias_of(self.alice / long)
+            self.assertEqual(self.status(self.inbox.path_of, "alice", short), 404, short)
+            self.assertEqual(self.status(self.inbox.remove, "alice", short), 404, short)
+        self.assertEqual((self.alice / "Un film en cours.mkv.part").read_bytes(), b"en cours")
+        self.assertEqual(self.inbox.path_of("alice", "Un film fini avec un long nom.mkv").read_bytes(), b"fini aussi")
 
     def test_a_short_name_that_is_a_file_is_a_clear_409_and_nothing_is_written(self):
         (self.alice / "Un fichier avec un long nom.mkv").parent.mkdir(parents=True)

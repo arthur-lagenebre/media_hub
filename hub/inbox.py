@@ -386,12 +386,13 @@ class Inbox:
 
     def path_of(self, folder_name, name, sub=None):
         """Le fichier fini `name` du dossier `folder_name` (et de son sous-dossier `sub`, des segments séparés par `/`) ; 404 pour tout le reste : un autre dossier, un `.part`, un nom caché, un dossier, un lien, un chemin qui sort de la boîte ou du dossier du compte.
-        Les noms n'ont ni séparateur ni point au début (`is_folder_name`, `is_stored_name`), aucun dossier n'est un lien (`_locate`), et le fichier résolu doit rester sous le dossier du compte résolu."""
+        Les noms n'ont ni séparateur ni point au début (`is_folder_name`, `is_stored_name`), aucun dossier n'est un lien (`_locate`), le nom doit être celui d'une entrée de la liste du dossier (comme `_locate` pour les dossiers : pas d'alias 8.3), et le fichier résolu doit rester sous le dossier du compte résolu."""
         account, folder = self._locate(folder_name, sub)
         if not is_stored_name(name):
             raise InboxError(404, "fichier introuvable")
         path = folder / name
-        if path.is_symlink() or not path.is_file() or not self._confined(path, account):
+        listed = any(_same(e.name) == _same(name) and is_stored_name(e.name) and _stat_file(e) is not None for e in _entries(folder))       # un nom que la liste donne, pas un alias que le système ouvre aussi (le nom court 8.3 d'un `.part` ou d'un fichier fini)
+        if not listed or path.is_symlink() or not path.is_file() or not self._confined(path, account):
             raise InboxError(404, "fichier introuvable")
         return path
 
