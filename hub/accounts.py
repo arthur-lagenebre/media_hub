@@ -359,7 +359,8 @@ def revoke_sessions(db, uid):
 
 
 def delete(db, uid):
-    """Supprime le compte, ses droits, sa progression, ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction."""
+    """Supprime le compte, ses droits, sa progression, ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction.
+    Son dossier de la boîte de réception et les fichiers qu'il contient restent en place (rien n'est perdu) : le lien (`users.inbox_dir`) disparaît avec la ligne, et l'administrateur voit ce dossier sous son nom comme celui d'un compte supprimé."""
     with db.write_lock:
         conn = db.connection()
         try:

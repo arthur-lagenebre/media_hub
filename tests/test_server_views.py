@@ -636,8 +636,9 @@ class TestScrub(unittest.TestCase):
         for folder in (self.films, self.data, self.repo):
             folder.mkdir(parents=True, exist_ok=True)
 
-    def scrub(self, text, repo=True, libs=None):
-        cfg = types.SimpleNamespace(libraries=[types.SimpleNamespace(path=p) for p in (libs if libs is not None else [self.films])], data=self.data, repo=self.repo if repo else None)
+    def scrub(self, text, repo=True, libs=None, inbox=None):
+        cfg = types.SimpleNamespace(libraries=[types.SimpleNamespace(path=p) for p in (libs if libs is not None else [self.films])], data=self.data, repo=self.repo if repo else None,
+                                    inbox=inbox or self.data / "inbox")
         return app.Hub.scrub(types.SimpleNamespace(cfg=cfg), text)
 
     def test_the_folders_of_the_server_are_hidden_in_every_spelling(self):
@@ -651,6 +652,16 @@ class TestScrub(unittest.TestCase):
         self.assertEqual(self.scrub("fichier illisible"), "fichier illisible")
         self.assertEqual(self.scrub(ValueError("code 3")), "code 3")
         self.assertEqual(self.scrub(f"ici {self.repo}", repo=False), f"ici {self.repo}")
+
+    def test_the_inbox_is_hidden_too_even_when_it_is_outside_the_data_folder(self):
+        """HUB_INBOX sur un autre volume : une erreur système (« Permission denied: '/inbox/Léa/film.mkv.part' ») ne montre pas le chemin de la boîte."""
+        outside = self.root / "HubReception"
+        for spelling in (str(outside), outside.as_posix()):
+            self.assertEqual(self.scrub(f"[Errno 13] Permission denied: '{spelling}/Léa/film.mkv.part'", inbox=outside), "[Errno 13] Permission denied: '…/Léa/film.mkv.part'", spelling)
+        self.assertEqual(self.scrub(f"{outside}/a et {self.data}/b", inbox=outside), "…/a et …/b")
+        shown = self.scrub(str(PermissionError(13, "Permission denied", str(outside / "Léa"))), inbox=outside)          # le chemin d'une OSError, antislashs doublés sous Windows
+        self.assertTrue(shown.startswith("[Errno 13] Permission denied: '…"), shown)
+        self.assertNotIn("HubReception", shown)
 
     def test_a_very_short_folder_is_not_a_reason_to_cut_every_message(self):
         self.assertEqual(self.scrub("a/b/c", libs=[Path("/a")]), "a/b/c")

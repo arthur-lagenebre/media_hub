@@ -64,16 +64,21 @@ services:
       HUB_ADMIN: ${HUB_ADMIN:-admin}   # nom de ce premier compte (« admin » si absent du .env)
       HUB_MAX_STREAMS: "2"             # transcodages simultanés (i3-13100F : 2 flux 1080p sans souci)
       HUB_AUTOSCAN_HOURS: "6"
-      # Boîte de réception (les envois des comptes qui ont le droit « Envoyer ») : ils vont dans /data/inbox/<compte>/, donc dans media_hub-data, jamais dans une
-      # bibliothèque. Valeurs en Mo ; ni la taille d'un fichier ni le quota d'un compte n'ont de limite : pour plafonner la boîte, une
-      # limite de dataset TrueNAS sur media_hub-data (voir « Boîte de réception » dans README.md).
-      HUB_INBOX_KEEP_FREE: "${HUB_INBOX_KEEP_FREE:-10240}"       # espace libre à garder sous /data : un envoi qui passerait en dessous est refusé
+      # Boîte de réception (les envois des comptes qui ont le droit « Envoyer ») : un dossier par compte, nommé d'après lui, dans HUB_INBOX (par défaut
+      # /data/inbox, donc dans media_hub-data), jamais dans une bibliothèque. Valeurs en Mo ; ni la taille d'un fichier ni le quota d'un compte n'ont de
+      # limite : pour plafonner la boîte, une limite de dataset TrueNAS (sur media_hub-data, ou sur HubReception si la boîte a le sien : voir « Boîte de réception » dans README.md).
+      # HUB_INBOX: /inbox                # boîte sur son propre dataset : à activer AVEC le montage « /mnt/tank/HubReception:/inbox » plus bas ; jamais réglable depuis l'interface
+      HUB_INBOX_KEEP_FREE: "${HUB_INBOX_KEEP_FREE:-10240}"       # espace libre à garder sur le volume de la boîte (par défaut /data) : un envoi qui passerait en dessous est refusé
       HUB_INBOX_MAX_UPLOADS: "${HUB_INBOX_MAX_UPLOADS:-2}"       # envois simultanés
       TMDB_KEY: ${TMDB_KEY}
     volumes:
       - ${APPS}/media_hub:/app/media_hub:ro
       - ${APPS}/media_library:/app/media_library:ro
       - ${APPS}/media_hub-data:/data
+      # Boîte de réception sur son propre dataset (facultatif) : décommente cette ligne ET « HUB_INBOX: /inbox » plus haut, ensemble. Crée d'abord le dataset
+      # (README.md > « Boîte de réception ») : un montage vers un dossier qui n'existe pas empêche le conteneur de démarrer. Lecture et écriture, sans « :ro » :
+      # c'est le seul volume inscriptible en dehors de media_hub-data. Remplace /mnt/tank/HubReception par ton dataset.
+      # - /mnt/tank/HubReception:/inbox
       - ${APPS}/ffmpeg:/opt/ffmpeg:ro
       # Bibliothèques. « :ro » = lecture seule. Retire-le si tu veux que le bouton « Supprimer » (Gestion > Entretien) supprime les Thumbs.db,
       # ou que les scripts de media_library (étiquetage, renommage) tournent depuis ce conteneur.

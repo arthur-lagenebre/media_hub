@@ -3861,9 +3861,23 @@ class InboxUiCase(unittest.TestCase):
                                      headers={"Authorization": "Bearer " + self.token(name), "Content-Type": "application/octet-stream"})
         stored = json.load(urllib.request.urlopen(req))
         if mtime:
-            account = self.alice["id"] if name == "alice" else self.admin_id
-            os.utime(self.box / account / stored["name"], (mtime, mtime))
+            os.utime(self.box / stored["account"] / stored["name"], (mtime, mtime))
         return stored
+
+    def member(self, name):
+        """Un compte qui a le droit d'envoyer, retiré à la fin du test (les autres tests comptent les comptes)."""
+        from hub import accounts
+        row = accounts.create(self.hub.db, name, self.PASSWORD)
+        accounts.set_can_upload(self.hub.db, row["id"], True)
+        self.addCleanup(lambda: accounts.by_id(self.hub.db, row["id"]) and accounts.delete(self.hub.db, row["id"]))
+        return row
+
+    def admin_inbox(self, **kw):
+        """La liste de la boîte de réception, vue par l'administrateur."""
+        page = self.session("admin", **kw)
+        page.goto(self.base + "/#/settings?tab=inbox")
+        page.locator("#views > .view:visible .inbox-file").first.wait_for()
+        return page, page.locator("#views > .view:visible .inbox-file")
 
     def shown(self, page, hash):
         page.wait_for_function("h => { var c = window.Hub.current(); return !!c && c.hash === h && c.el.style.display !== 'none'; }", arg=hash)
@@ -3891,8 +3905,9 @@ class InboxUiCase(unittest.TestCase):
         cdp.send("Network.enable")
         cdp.send("Network.emulateNetworkConditions", {"offline": False, "latency": 0, "downloadThroughput": -1, "uploadThroughput": bytes_per_second})
 
-    def stored(self, account=None):
-        folder = self.box / (account or self.alice["id"])
+    def stored(self, folder_name="alice"):
+        """Les fichiers du dossier `folder_name` de la boîte : le dossier porte le nom du compte."""
+        folder = self.box / folder_name
         return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
 
     def wait_for(self, condition, tries=100):
@@ -4078,7 +4093,7 @@ class InboxUiCase(unittest.TestCase):
         page.locator(".menu .btn.danger").click()
         self.wait_for(lambda: self.stored() == ["Premier.mkv"])
         self.wait_for(lambda: rows.count() == 1)
-        self.assertEqual(self.stored(self.admin_id), ["Pas à elle.mkv"])
+        self.assertEqual(self.stored("admin"), ["Pas à elle.mkv"])
         rows.first.locator("button", has_text="Supprimer").click()
         page.locator(".menu .btn.danger").click()
         page.locator("#views > .view:visible .mine .empty").wait_for()
@@ -4167,7 +4182,7 @@ class InboxUiCase(unittest.TestCase):
         page.locator(".menu .btn.danger").click()
         page.locator("#views > .view:visible .inbox .empty").wait_for()
         self.assertEqual(page.locator("#views > .view:visible .inbox .empty").inner_text(), "La boîte de réception est vide.")
-        self.assertEqual(self.stored(self.admin_id), [])
+        self.assertEqual(self.stored("admin"), [])
 
     def test_only_the_administrator_has_the_inbox_tab(self):
         page = self.session("alice")
@@ -4175,6 +4190,105 @@ class InboxUiCase(unittest.TestCase):
         page.wait_for_selector("#views > .view:visible .tabs .tab")
         self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Préférences", "Comptes"])
         self.assertEqual(page.context.request.get(self.base + "/api/inbox").status, 403)
+
+    # --- Le dossier d'un compte porte son nom --------------------------------------------
+    def test_an_upload_lands_in_a_folder_named_after_the_account(self):
+        marmotte = self.member("Marmotte")
+        page = self.upload_page("Marmotte")
+        self.send(page, ("Film.mkv", b"f" * 2000), ("Été.mkv", b"e" * 2000))
+        self.wait_for(lambda: self.sends(page, "done").count() == 2)
+        self.assertEqual(sorted(p.name for p in self.box.iterdir()), ["Marmotte"])               # ni l'identifiant du compte, ni « default »
+        self.assertNotIn(marmotte["id"], [p.name for p in self.box.iterdir()])
+        self.assertEqual(self.stored("Marmotte"), ["Film.mkv", "Été.mkv"])
+        page.locator("#views > .view:visible .mine-file").first.wait_for()
+        self.assertEqual(sorted(page.locator("#views > .view:visible .mine-file b").all_inner_texts()), ["Film.mkv", "Été.mkv"])
+        row = page.locator("#views > .view:visible .mine-file", has_text="Film.mkv")                # elle supprime le sien, par l'adresse de son dossier
+        row.locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: self.stored("Marmotte") == ["Été.mkv"])
+
+    def test_the_administrator_sees_the_name_of_the_account_and_downloads_and_deletes_whatever_its_accents(self):
+        for name in ("Marmotte", "Léa", "Élodie"):
+            with self.subTest(account=name):
+                self.member(name)
+                self.put(name, "Été à Paris (2).mkv", name.encode() * 50)
+                self.assertEqual(self.stored(name), ["Été à Paris (2).mkv"])
+                page, rows = self.admin_inbox()
+                self.assertEqual(rows.count(), 1)
+                self.assertEqual(rows.get_attribute("data-account"), name)                         # le dossier, tel que l'administrateur le lit sur le partage
+                what = rows.locator(".what > span").inner_text()
+                self.assertTrue(what.startswith(name + " · "), what)                               # le nom du compte, sans mention « supprimé »
+                self.assertNotIn("supprimé", what)
+                with page.expect_download() as info:
+                    rows.locator("a", has_text="Télécharger").click()
+                self.assertEqual(info.value.suggested_filename, "Été à Paris (2).mkv")
+                self.assertEqual(Path(info.value.path()).read_bytes(), name.encode() * 50)
+                rows.locator("button", has_text="Supprimer").click()
+                self.assertIn(name, page.locator(".menu[role=dialog]").inner_text())
+                page.locator(".menu .btn.danger").click()
+                page.locator("#views > .view:visible .inbox .empty").wait_for()
+                self.assertEqual(self.stored(name), [])
+
+    def test_the_files_of_a_deleted_account_stay_for_the_administrator_marked_as_such(self):
+        from hub import accounts
+        lea = self.member("Léa")
+        self.member("Marmotte")
+        self.put("Léa", "Souvenir.mkv", b"souvenir", mtime=1_700_000_000)
+        self.put("Marmotte", "Récent.mkv", b"recent", mtime=1_700_100_000)
+        accounts.delete(self.hub.db, lea["id"])
+        page, rows = self.admin_inbox()
+        self.assertEqual(rows.count(), 2)
+        alive, gone = rows.nth(0), rows.nth(1)
+        self.assertEqual(alive.locator("b").inner_text(), "Récent.mkv")
+        self.assertTrue(alive.locator(".what > span").inner_text().startswith("Marmotte · "))
+        self.assertEqual(gone.locator("b").inner_text(), "Souvenir.mkv")
+        self.assertTrue(gone.locator(".what > span").inner_text().startswith("Léa (compte supprimé) · "), gone.locator(".what > span").inner_text())
+        self.assertEqual(self.stored("Léa"), ["Souvenir.mkv"])                                     # le compte parti, ses fichiers restent sur le disque
+        with page.expect_download() as info:
+            gone.locator("a", has_text="Télécharger").click()
+        self.assertEqual(Path(info.value.path()).read_bytes(), b"souvenir")
+        gone.locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: self.stored("Léa") == [])
+        self.wait_for(lambda: rows.count() == 1)
+        self.assertEqual(self.stored("Marmotte"), ["Récent.mkv"])
+
+    def test_the_deleted_account_mention_is_in_english(self):
+        from hub import accounts
+        lea = self.member("Léa")
+        self.put("Léa", "Souvenir.mkv")
+        accounts.delete(self.hub.db, lea["id"])
+        page, rows = self.admin_inbox(lang="en")
+        self.assertTrue(rows.locator(".what > span").inner_text().startswith("Léa (deleted account) · "), rows.locator(".what > span").inner_text())
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    def test_an_account_that_comes_back_under_the_name_of_a_deleted_one_has_its_own_folder(self):
+        from hub import accounts
+        lea = self.member("Léa")
+        self.put("Léa", "Ancien.mkv")
+        accounts.delete(self.hub.db, lea["id"])
+        self.member("Léa")
+        self.put("Léa", "Neuf.mkv")
+        self.assertEqual((self.stored("Léa"), self.stored("Léa (2)")), (["Ancien.mkv"], ["Neuf.mkv"]))
+        page = self.upload_page("Léa")
+        self.assertEqual(page.locator("#views > .view:visible .mine-file b").all_inner_texts(), ["Neuf.mkv"])      # elle ne voit pas les fichiers de l'ancienne
+        _, rows = self.admin_inbox()
+        self.assertEqual(sorted(rows.nth(i).locator(".what > span").inner_text().split(" · ")[0] for i in range(rows.count())), ["Léa", "Léa (compte supprimé)"])
+
+    def test_an_account_that_may_upload_sees_and_touches_only_its_own_files(self):
+        self.member("Marmotte")
+        self.put("Marmotte", "A moi.mkv", b"moi")
+        self.put("alice", "A elle.mkv", b"elle")
+        self.put("admin", "Du patron.zip", b"zip")
+        page = self.upload_page("Marmotte")
+        self.assertEqual(page.locator("#views > .view:visible .mine-file b").all_inner_texts(), ["A moi.mkv"])
+        self.assertEqual(page.context.request.get(self.base + "/api/inbox").status, 403)                       # la liste de tous : pour l'administrateur
+        self.assertEqual(page.context.request.get(self.base + "/api/inbox/alice/A%20elle.mkv").status, 403)    # le téléchargement aussi
+        self.assertEqual(page.context.request.get(self.base + "/api/inbox/Marmotte/A%20moi.mkv").status, 403)  # même celui de son propre dossier
+        self.assertEqual(page.context.request.delete(self.base + "/api/inbox/alice/A%20elle.mkv").status, 403)
+        self.assertEqual(self.stored("alice"), ["A elle.mkv"])
+        self.assertEqual(page.context.request.delete(self.base + "/api/inbox/Marmotte/A%20moi.mkv").status, 200)
+        self.assertEqual(self.stored("Marmotte"), [])
 
     # --- Télévision, anglais -------------------------------------------------------------
     def test_a_television_has_neither_the_entry_nor_the_page(self):

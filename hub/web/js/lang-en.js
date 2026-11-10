@@ -624,6 +624,7 @@
     '« {name} » sera supprimé du serveur, et cela ne s’annule pas.': '“{name}” will be deleted from the server, and this can’t be undone.',
     '« {name} », envoyé par {user}, sera supprimé du serveur, et cela ne s’annule pas.': '“{name}”, uploaded by {user}, will be deleted from the server, and this can’t be undone.',
     'Fichier supprimé : {name}': 'File deleted: {name}',
+    '(compte supprimé)': '(deleted account)',
     'Quitter la page ?': 'Leave this page?',
     'Des envois sont en cours ou en attente : si tu quittes cette page, ils seront annulés.': 'Uploads are in progress or waiting: if you leave this page, they will be cancelled.',
     'Quitter et annuler': 'Leave and cancel',

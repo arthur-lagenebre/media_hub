@@ -116,6 +116,9 @@ def announce(cfg, hub):
         print(f"  {lib.label:<12} {lib.kind:<7} {lib.path}" + ("" if lib.path.is_dir() else "  (dossier introuvable)"), flush=True)
     if not cfg.libraries:
         print("  aucune bibliothèque : monte tes dossiers sous HUB_SRV (Films, Series, Animations, Musique, Livres) ou décris-les dans HUB_LIBRARIES.", file=sys.stderr)
+    problem = hub.inbox.check()
+    if problem:
+        print(f"  ATTENTION : {problem}", file=sys.stderr)
     if not cfg.ffmpeg:
         print("  ffmpeg introuvable : lecture directe uniquement (voir deploy/README.md).", file=sys.stderr)
     if cfg.bind not in ("127.0.0.1", "localhost", "::1") and not hub.auth():
@@ -136,6 +139,7 @@ def main():
     announce(cfg, hub)
     hub.first_scan()
     hub.autoscan()
+    hub.inbox.migrate()
     hub.inbox.keep_clean()
     try:
         server.serve_forever()

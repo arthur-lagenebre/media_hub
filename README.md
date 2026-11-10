@@ -58,7 +58,8 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 | `HUB_ADMIN` | nom du compte créé par `HUB_PASSWORD` | `admin` |
 | `HUB_FFMPEG` | dossier (ou fichier) de `ffmpeg` / `ffprobe` | `PATH`, puis `HUB_DATA/bin` |
 | `HUB_MAX_STREAMS` | flux simultanés ; au-delà : HTTP 503 | `2` |
-| `HUB_INBOX_KEEP_FREE` | espace libre à garder sous `HUB_DATA`, en Mo : un envoi qui le ferait passer en dessous est refusé (507) | `10240` |
+| `HUB_INBOX` | dossier de la boîte de réception (les envois des comptes). Il peut être hors de `HUB_DATA`, par exemple le point de montage d'un dataset dédié (« HubReception »). Créé s'il manque ; s'il n'est pas inscriptible, ou s'il recoupe `HUB_DATA` (égal ou parent : `img/` et `posters/` seraient pris pour des dossiers de compte) ou une bibliothèque (égal, parent ou enfant : dans ce cas le hub n'écrit rien pour le vérifier), ou si, donné hors de `HUB_DATA`, ce n'est pas un point de montage (les envois iraient dans le conteneur et seraient perdus au redéploiement ; Linux seulement), le démarrage le dit (`ATTENTION`, sans bloquer). **Se règle ici seulement** : aucun réglage dans l'interface (voir [decisions.md](docs/decisions.md)) | `HUB_DATA/inbox` |
+| `HUB_INBOX_KEEP_FREE` | espace libre à garder **sur le volume de la boîte** (`HUB_INBOX`), en Mo : un envoi qui le ferait passer en dessous est refusé (507) | `10240` |
 | `HUB_INBOX_MAX_UPLOADS` | envois simultanés (un envoi occupe un fil du serveur) ; au-delà : HTTP 429 | `2` |
 | `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne fait perdre aucune progression de lecture, et un `.mkv` illisible n'arrête pas le scan | `0` |
 | `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting), décrit les films qui manquent aux sagas et ceux qui manquent à une personne ; lue aussi dans le `.env` de `media_library` | aucune |
@@ -132,15 +133,16 @@ python -m hub user rights <nom> --set Livres=none --set Films=view    # all : vo
 
 ## Boîte de réception (les envois)
 
-Un compte à qui l'administrateur a donné le droit **Envoyer** (`POST /api/user/<id>/upload`, `{"upload": true}` ; l'administrateur l'a toujours, un compte neuf non) dépose des fichiers sur le NAS : films, séries, musique, livres, sous-titres, archives `.zip`. **Rien n'entre dans une bibliothèque** : les fichiers vont dans `HUB_DATA/inbox/<compte>/` (le hub n'écrit pas dans la médiathèque, ses volumes restent en `:ro`) et l'administrateur les range lui-même. Un fichier déposé n'est jamais analysé (ni ffprobe ni scan) ; seul l'administrateur le télécharge, en pièce jointe.
+Un compte à qui l'administrateur a donné le droit **Envoyer** (`POST /api/user/<id>/upload`, `{"upload": true}` ; l'administrateur l'a toujours, un compte neuf non) dépose des fichiers sur le NAS : films, séries, musique, livres, sous-titres, archives `.zip`. **Rien n'entre dans une bibliothèque** : les fichiers vont dans la boîte (`HUB_INBOX`, par défaut `HUB_DATA/inbox`), un dossier par compte nommé d'après le **nom** du compte (le hub n'écrit pas dans la médiathèque, ses volumes restent en `:ro`) et l'administrateur les range lui-même. Un fichier déposé n'est jamais analysé (ni ffprobe ni scan) ; seul l'administrateur le télécharge, en pièce jointe.
 
 - **Pas d'envoi sans compte** : un serveur ouvert (sans compte) refuse tout envoi (403), il est visible d'Internet par Funnel.
 - **Réception** : `POST /api/inbox?name=<nom>`, le fichier en corps brut, `Content-Length` obligatoire (411 sinon ; pas de corps en morceaux). Le corps est lu par morceaux de 1 Mo dans `<nom>.part`, renommé quand tout est arrivé ; un envoi coupé ou trop court n'en laisse rien. Délai de lecture : celui de la connexion (120 s), un envoi bloqué se coupe.
-- **Limites**, vérifiées avant de lire le corps (la connexion est alors coupée) : espace libre à garder sous `HUB_DATA` (`HUB_INBOX_KEEP_FREE`, 507), envois simultanés (`HUB_INBOX_MAX_UPLOADS`, 429). **Aucune limite de taille**, ni par fichier ni par compte : seul l'espace à garder refuse un envoi, pour que le disque ne se remplisse pas et ne coupe pas la base.
+- **Limites**, vérifiées avant de lire le corps (la connexion est alors coupée) : espace libre à garder sur le volume de la boîte (`HUB_INBOX_KEEP_FREE`, 507), envois simultanés (`HUB_INBOX_MAX_UPLOADS`, 429). **Aucune limite de taille**, ni par fichier ni par compte : seul l'espace à garder refuse un envoi, pour que le disque ne se remplisse pas et ne coupe pas la base.
 - **Noms** : seul le dernier élément du chemin est gardé (`../x.mkv` donne `x.mkv`), les caractères de contrôle et `<>:"|?*` deviennent `_`, pas de point au début, les noms réservés de Windows sont préfixés, longueur bornée (200 octets). Extensions acceptées : vidéo (`.mkv .mp4 .avi…`), audio (`.flac .mp3 .m4a…`), livres (`.epub .cbz .pdf…`), sous-titres (`.srt .ass .vtt…`) et `.zip` ; tout le reste (exécutables, scripts, pages web) : 415. Un fichier n'en écrase jamais un autre : `Film.mkv` devient `Film (2).mkv`.
-- **Compte supprimé** : ses fichiers restent dans la boîte (l'administrateur les voit sous l'identifiant du compte).
+- **Dossier d'un compte** : son nom est celui du compte, nettoyé comme un nom de fichier (pas de `/ \ : * ? " < > |`, pas de point ni d'espace au début ou à la fin, pas de nom réservé de Windows ; `compte` si rien ne reste), avec `(2)`, `(3)`… si un autre porte déjà ce nom, **à la casse près** (`Léa` et `léa` sont le même dossier sur un partage SMB). Le lien compte -> dossier est gardé dans la base (`users.inbox_dir`) et fixé au premier envoi : un renommage de compte ou un nom qui se confond avec un autre ne donne jamais un dossier à un autre compte. Au démarrage, les dossiers d'avant (nommés d'après l'identifiant : `default`, ou hexadécimal) sont renommés d'après le compte, sans rien écraser (relancer ne change rien ; un dossier qui résiste garde son ancien nom et le journal le dit).
+- **Compte supprimé** : son dossier et ses fichiers restent dans la boîte ; l'administrateur les voit sous le nom du dossier, marqués « compte supprimé ».
 - **Nettoyage** : au démarrage puis chaque jour, les `.part` de plus de 24 h (un envoi abandonné par un arrêt brutal du serveur) sont supprimés.
-- **Lecture** : l'administrateur liste (`GET /api/inbox`), télécharge (`GET /api/inbox/<compte>/<nom>`) et supprime (`DELETE` du même) ; un compte qui a le droit ne voit et ne supprime que les siens (`GET /api/inbox?mine=1`).
+- **Lecture** : l'administrateur liste (`GET /api/inbox`), télécharge (`GET /api/inbox/<dossier>/<nom>`, le dossier encodé dans l'URL) et supprime (`DELETE` du même) ; un compte qui a le droit ne voit et ne supprime que les siens (`GET /api/inbox?mine=1`).
 
 ## Interface HTTP
 
@@ -168,7 +170,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/sagas`, `POST /api/sagas`, `POST /api/sagas/add`, `GET /api/sagas/films` | sagas composées à la main (`sagas.json`, administrateur seulement) : lire, tout remplacer (avec la `version` lue, pour ne pas écraser un autre), ajouter des films, cacher un film des manquants (`POST /api/sagas/ignore`), chercher des films à y mettre ; `GET /img/film/<tmdb>` : l'affiche d'un film manquant |
 | `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete\|rights` | comptes (administrateur seulement) : lister (avec leurs droits par bibliothèque), créer, régler ce qu'un compte voit et télécharge, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
 | `POST /api/user/<id>/upload` | (administrateur) `{"upload": true}` : donne ou retire le droit d'envoyer dans la boîte de réception (400 pour un administrateur, qui envoie toujours) |
-| `POST /api/inbox?name=`, `GET /api/inbox`, `GET /api/inbox/<compte>/<nom>`, `DELETE /api/inbox/<compte>/<nom>` | boîte de réception (voir [Boîte de réception](#boîte-de-réception-les-envois)) : envoyer un fichier en corps brut (`Content-Length` obligatoire), lister (`?mine=1` : seulement les siens), télécharger (administrateur) et supprimer (administrateur, ou son propre fichier) |
+| `POST /api/inbox?name=`, `GET /api/inbox`, `GET /api/inbox/<dossier>/<nom>`, `DELETE /api/inbox/<dossier>/<nom>` | boîte de réception (voir [Boîte de réception](#boîte-de-réception-les-envois)) : envoyer un fichier en corps brut (`Content-Length` obligatoire), lister (`?mine=1` : seulement les siens), télécharger (administrateur) et supprimer (administrateur, ou son propre fichier) |
 | `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
 | `POST /api/me/signout-others` | chacun déconnecte ses autres appareils, sans changer de mot de passe (`{"current": "…"}`) ; la session de l'appelant est renouvelée |
 | Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session et propre au compte : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage, et ne donne que ce que ce compte peut voir. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte et révoque aussi son jeton de média |
@@ -192,10 +194,10 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1851 tests : 1558 serveur + 293 interface
+python -m unittest discover -s tests          # 1980 tests : 1681 serveur + 299 interface
 ```
 
-`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 293 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 299 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
 
 ### Intégration continue (GitHub Actions)
 

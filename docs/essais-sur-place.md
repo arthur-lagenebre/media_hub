@@ -66,12 +66,25 @@ Suivre la procédure de [deploy/README.md](../deploy/README.md), « Essai à fai
 
 - [ ] **Espace avant :** `docker exec media-hub df -m /data` et, dans TrueNAS, l'espace libre et le quota du dataset `media_hub-data`. **Attendu :** les deux concordent. Sinon, note de combien.
 - [ ] **Envoi de 1 à 2 Go à travers Funnel**, au `curl` puis depuis la page « Envoyer ». **Mesures à noter : le débit, et si l'envoi tient jusqu'au bout.** Les délais de Funnel ne se configurent pas.
-- [ ] Le fichier est dans `inbox/<identifiant du compte>/`, à la bonne taille, sans `.part`.
-- [ ] **Envoi annulé** dans le navigateur, en cours de route. **Attendu :** aucun `.part` ne reste dans `inbox/<compte>/` (compter jusqu'à 3 minutes, voir la procédure).
+- [ ] Le fichier est dans `inbox/<nom du compte>/`, à la bonne taille, sans `.part`.
+- [ ] **Envoi annulé** dans le navigateur, en cours de route. **Attendu :** aucun `.part` ne reste dans `inbox/<nom du compte>/` (compter jusqu'à 3 minutes, voir la procédure).
 - [ ] **Faute de place :** `truncate -s 2T gros.mkv`, puis l'envoyer. **Attendu :** 507 en quelques secondes, avant le moindre octet lu, et rien dans `inbox/`.
 - [ ] **Compte sans le droit « Envoyer »** : essayer d'envoyer. **Attendu :** 403, message affiché, rien d'écrit.
 - [ ] **Refus d'un gros fichier** (le compte sans droit avec le fichier de 1 à 2 Go). **À observer :** le navigateur affiche-t-il le 403, ou une erreur réseau ? Le serveur n'avale que 64 Mo ou 5 s, au-delà il coupe : c'est la limite connue. Ce point décide si elle mérite d'être traitée.
 - [ ] **Coupure réseau** pendant un envoi (couper le Wi-Fi du poste). **À observer :** rien n'est gardé ; la reprise n'existe pas, un envoi coupé se refait en entier. Ce point dit si la reprise (`Content-Range`) est nécessaire.
+
+### Boîte de réception sur le dataset HubReception (facultatif)
+
+À faire seulement si le dataset « HubReception » est activé (le montage et `HUB_INBOX: /inbox` décommentés **ensemble** dans `docker-compose.yml`). La procédure complète est dans [deploy/README.md](../deploy/README.md), « Boîte de réception ». Ce que les tests ne peuvent pas voir : un vrai volume ZFS, SMB, les ACL.
+
+- [ ] **Création, renommage, suppression depuis le conteneur :** `docker exec media-hub sh -c 'touch /inbox/.essai && mv /inbox/.essai /inbox/.essai2 && rm /inbox/.essai2' && echo OK`. **Attendu :** `OK`. Sinon, noter l'erreur (droits, ACL, dataset en lecture seule).
+- [ ] **Pas d'« ATTENTION » dans les journaux :** `docker logs media-hub 2>&1 | grep -n "ATTENTION"`. **Attendu :** rien qui parle de la boîte de réception (ni « n'est pas utilisable », ni « recoupe », ni « n'est pas un point de montage »).
+- [ ] **Envoi réel** depuis la page « Envoyer », puis `ls -l /mnt/tank/HubReception/`. **Attendu :** un dossier au **nom du compte** (« admin », « Léa »…), le fichier à la bonne taille, aucun `.part`, rien dans `media_hub-data/inbox/`.
+- [ ] **Renommage et suppression par SMB :** depuis le partage de `HubReception`, renommer puis supprimer le fichier déposé. **Attendu :** les deux réussissent (entrée d'ACL avec héritage pour le compte SMB, voir le README). Les dossiers créés par le hub appartiennent à root.
+- [ ] **Dossier de compte renommé ou supprimé par SMB, hub arrêté** (déconseillé hub en marche) : redémarrer. **Attendu :** l'ancien nom apparaît dans la liste de l'administrateur avec « (compte supprimé) » ; l'envoi suivant du compte recrée un dossier neuf, rien n'est perdu.
+- [ ] **Faute de place sur ce dataset :** mettre temporairement `HUB_INBOX_KEEP_FREE` au-dessus de l'espace libre du dataset (`docker exec media-hub df -m /inbox`), redéployer, envoyer un petit fichier. **Attendu :** 507 avec « plus assez de place sur le serveur pour ce fichier », rien d'écrit. Remettre `10240` et redéployer.
+- [ ] **Migration des anciens dossiers :** avant le premier démarrage de cette version, noter `ls media_hub-data/inbox/` (dossiers `default` et hexadécimaux) ; après : les dossiers portent le nom des comptes, les fichiers y sont, `grep "boîte de réception"` dans les journaux est vide ou explique chaque dossier resté sous son identifiant. Relancer le hub : rien ne bouge. Si le dataset est activé ensuite, déplacer le contenu de l'ancienne boîte hub arrêté (procédure du README) et vérifier que les fichiers se retrouvent sous les noms de comptes.
+- [ ] **Non vérifié, à noter :** si `DAC_OVERRIDE` (la capacité gardée par le conteneur, qui tourne en root avec `cap_drop: ALL`) passe outre une **ACL NFSv4 ZFS** (préréglage SMB du dataset) pour créer, écrire et renommer. L'essai du premier point le tranche : s'il échoue sur un dataset aux ACL SMB, régler l'ACL du dataset, sans élargir les capacités du conteneur.
 
 ---
 

@@ -189,6 +189,24 @@ class TestLoad(TempCase):
         cfg = self.load(HUB_INBOX_KEEP_FREE="-1", HUB_INBOX_MAX_UPLOADS="0")
         self.assertEqual((cfg.inbox_keep_free, cfg.inbox_max_uploads), (0, 1))
 
+    def test_the_inbox_is_under_the_data_folder_by_default(self):
+        self.assertEqual(self.load().inbox, (self.tmp / "data" / "inbox").resolve())
+        self.assertEqual(self.load(HUB_INBOX="").inbox, (self.tmp / "data" / "inbox").resolve())
+        self.assertEqual(self.load(HUB_INBOX="   ").inbox, (self.tmp / "data" / "inbox").resolve())
+
+    def test_hub_inbox_puts_the_inbox_anywhere_even_outside_the_data_folder(self):
+        elsewhere = self.tmp / "HubReception"
+        cfg = self.load(HUB_INBOX=str(elsewhere))
+        self.assertEqual(cfg.inbox, elsewhere.resolve())
+        self.assertNotIn(cfg.data, cfg.inbox.parents)
+
+    def test_a_relative_inbox_is_resolved_like_the_data_folder(self):
+        self.assertTrue(self.load(HUB_INBOX="boite").inbox.is_absolute())
+
+    def test_a_config_built_by_hand_keeps_the_inbox_under_its_data_folder(self):
+        self.assertEqual(config.Config(data=self.tmp / "d").inbox, self.tmp / "d" / "inbox")
+        self.assertEqual(config.Config(data=self.tmp / "d", inbox=self.tmp / "autre").inbox, self.tmp / "autre")
+
     def test_the_tmdb_key_comes_from_the_environment_before_the_dotenv_file(self):
         repo = self.tmp / "ml"
         (repo / "libraries").mkdir(parents=True)
