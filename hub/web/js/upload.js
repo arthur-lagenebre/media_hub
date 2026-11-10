@@ -71,7 +71,8 @@
     skip.sort(function (a, b) { return byName(a.path, b.path); });
     return { take: take, skip: skip };
   }
-  function byName(a, b) { return a.localeCompare(b, undefined, { numeric: true }); }     // « 2 » avant « 10 »
+  var collator = new Intl.Collator(undefined, { numeric: true });          // « 2 » avant « 10 » ; créé une fois : `localeCompare` en recrée un à chaque comparaison
+  function byName(a, b) { return collator.compare(a, b); }
   // Un dossier glissé : l'API de fichiers du navigateur. `readEntries` rend ses résultats par paquets (100 au plus) : on le rappelle jusqu'à un paquet vide.
   // Une lecture qui échoue ne rend pas la liste partielle pour complète : `done(all, true)` le dit.
   function readEntries(reader, done) {

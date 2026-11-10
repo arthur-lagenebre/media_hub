@@ -5478,6 +5478,17 @@ class InboxUiCase(unittest.TestCase):
         self.assertEqual(self.tree(), ["Série/N1/N2/N3/ok.srt", "Série/a.srt"])
         self.assertEqual(len(posts), 2)
 
+    def test_the_files_of_a_folder_are_sorted_in_natural_order_with_one_collator(self):
+        page = self.upload_page()
+        page.evaluate("window.localeCompares = 0; var compare = String.prototype.localeCompare; String.prototype.localeCompare = function () { if (arguments[2] && arguments[2].numeric) window.localeCompares++; return compare.apply(this, arguments); };")
+        self.pick_folder(page, self.make_folder("Épisodes", {f"f{n}.srt": b"s" for n in (10, 2, 1, 11, 3, 20, 9)}))
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.folders(page).locator(":scope > button[data-key^=files-]").click()
+        files = self.folders(page).locator(".sendfile b")
+        self.assertEqual(files.all_inner_texts(), ["f1.srt", "f2.srt", "f3.srt", "f9.srt", "f10.srt", "f11.srt", "f20.srt"])        # « 2 » avant « 10 »
+        self.assertEqual(page.evaluate("window.localeCompares"), 0)                                                              # un collateur créé une fois, pas un `localeCompare` (et son collateur) par comparaison
+
     def test_the_name_of_a_dropped_folder_is_not_judged_hidden(self):
         page = self.upload_page()
         page.evaluate(self.DROP, {"name": ".Archive", "children": [{"name": "a.srt", "text": "a"}]})
