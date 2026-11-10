@@ -256,7 +256,10 @@
       var o = offers.shift();
       if (!o || !alive) { offering = false; return; }
       offering = true;
-      (types ? Promise.resolve() : load()).then(function () { confirmFolder(o.root, o.found, nextOffer); });
+      (types ? Promise.resolve() : load()).then(function () {
+        if (!alive || !document.body.contains(el) || el.style.display === 'none') { offering = false; offers = []; return; }       // une réponse tardive, la page a été quittée : la confirmation s'ouvrirait sur une autre page
+        confirmFolder(o.root, o.found, nextOffer);
+      });
     }
     function why(kind) {               // la raison d'un fichier écarté, au pluriel (le résumé) ou au singulier (sa ligne)
       var WHY = { type: [H.t('types non acceptés'), H.t('type non accepté')], hidden: [H.t('fichiers cachés'), H.t('fichier caché')], deep: [H.t('dossiers trop profonds'), H.t('trop profond (4 niveaux au plus)')],

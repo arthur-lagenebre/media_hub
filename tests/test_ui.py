@@ -5426,6 +5426,35 @@ class InboxUiCase(unittest.TestCase):
         self.assertEqual(self.tree(), ["Série/a.srt"])
         self.assertEqual(len(posts), 1)
 
+    def test_a_folder_confirmation_does_not_open_once_the_page_has_been_left(self):
+        page = self.session("alice")
+        held, first = [], []
+
+        def late(route):                                                                               # un serveur d'avant `extensions` : chaque dépôt relit la liste, ici une réponse que l'on retient
+            if not first:
+                first.append(1)
+                reply = route.fetch()
+                body = reply.json()
+                body.pop("extensions", None)
+                route.fulfill(response=reply, json=body)
+            else:
+                held.append(route)
+        page.route(re.compile(r"/api/inbox\?mine=1"), late)
+        page.goto(self.base + "/#/upload")
+        self.shown(page, "#/upload")
+        page.wait_for_selector("#views > .view:visible .used .usedline")
+        page.evaluate(self.DROP, {"name": "Série", "children": [{"name": "a.srt", "text": "a"}]})
+        for _ in range(50):                                                                             # la lecture du dossier est finie, la liste des types n'est pas arrivée
+            if held:
+                break
+            page.wait_for_timeout(100)                                                                  # (et non time.sleep : le gestionnaire de route ne tourne que pendant les appels à la page)
+        self.assertEqual(len(held), 1)
+        page.locator("#nav .brand").click()
+        self.shown(page, "#/")                                                                          # la page est quittée avant la réponse
+        held[0].continue_()
+        page.wait_for_timeout(600)
+        self.assertEqual(page.locator(".menu[role=dialog], .menu.sendfolder").count(), 0)               # et aucune confirmation ne s'ouvre sur l'accueil
+
     def test_a_backslash_in_a_dropped_folder_name_is_refused_on_that_file_and_in_a_file_name_it_keeps_the_last_part(self):
         page = self.upload_page()
         page.evaluate(self.DROP, {"name": "Film", "children": [{"name": "ok.srt", "text": "ok"}, {"name": "x\\y", "children": [{"name": "a.srt", "text": "a"}]}, {"name": "b\\c.srt", "text": "b"}]})
