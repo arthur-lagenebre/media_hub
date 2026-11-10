@@ -371,15 +371,16 @@ class Inbox:
         return tuple(segments)
 
     def _locate(self, folder_name, sub):
-        """`(dossier du compte, dossier du fichier)` ; 404 pour un compte inconnu, un chemin invalide, un dossier absent, un lien, une jonction ou un chemin qui sort du dossier du compte."""
+        """`(dossier du compte, dossier du fichier)` ; 404 pour un compte inconnu, un chemin invalide, un dossier absent ou que la liste ne donne pas sous ce nom (un nom court 8.3), un lien, une jonction ou un chemin qui sort du dossier du compte."""
         account = self._folder(folder_name)
         parts = self._read_dir(sub)
         if account is None:
             raise InboxError(404, "fichier introuvable")
         folder = account
         for segment in parts:
+            listed = any(_same(e.name) == _same(segment) for e in _entries(folder))       # un nom que la liste donne (à la casse près), pas un alias que le système ouvre aussi : le nom court 8.3
             folder = folder / segment
-            if not self._is_real_folder(folder) or not self._confined(folder, account):
+            if not listed or not self._is_real_folder(folder) or not self._confined(folder, account):
                 raise InboxError(404, "fichier introuvable")
         return account, folder
 

@@ -233,6 +233,16 @@ class TestShortNames(SubCase):
         self.assertEqual(reply["dir"], "Un dossier avec un long nom/Sous")
         self.assertEqual(tree(self.alice), ["Un dossier avec un long nom/", "Un dossier avec un long nom/Sous/", "Un dossier avec un long nom/Sous/x.mkv"])
 
+    def test_a_folder_is_read_and_removed_only_under_a_name_the_listing_gives_not_under_its_short_name(self):
+        self.send("a.mkv", "Un dossier avec un long nom/Un sous-dossier long", data=b"vu")
+        base = self.alice / "Un dossier avec un long nom"
+        short, sub_short = self.alias_of(base), self.alias_of(base / "Un sous-dossier long")
+        for sub in (short + "/Un sous-dossier long", "Un dossier avec un long nom/" + sub_short, short + "/" + sub_short):
+            self.assertEqual(self.status(self.inbox.path_of, "alice", "a.mkv", sub), 404, sub)
+            self.assertEqual(self.status(self.inbox.remove, "alice", "a.mkv", sub), 404, sub)
+        self.assertEqual(self.inbox.path_of("alice", "a.mkv", "Un dossier avec un long nom/Un sous-dossier long").read_bytes(), b"vu")
+        self.assertEqual(self.inbox.path_of("alice", "a.mkv", "UN DOSSIER avec un LONG nom/un sous-dossier LONG").read_bytes(), b"vu")      # la casse reste équivalente
+
     def test_a_failed_upload_under_a_short_name_leaves_the_other_folders_content(self):
         (self.alice / "Un dossier avec un long nom").mkdir(parents=True)
         (self.alice / "Un dossier avec un long nom" / "garde.mkv").write_bytes(b"x")
