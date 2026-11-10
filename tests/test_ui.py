@@ -2719,6 +2719,7 @@ class TestPersonMissingUi(UiCase):
         button = self.view("[data-key=people-films]")
         self.assertEqual(button.inner_text().strip(), "Films manquants")                       # le bouton d'une bibliothèque de films
         self.assertIn("réalisateurs et des acteurs de cette bibliothèque", button.get_attribute("title"))
+        self.assertIn("une heure ou plus", button.get_attribute("title"))                       # la durée du traitement se lit toujours dans l'infobulle
         self.assertTrue(button.evaluate("e => e.classList.contains('f')"))                     # atteignable à la télécommande
         with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
             button.click()

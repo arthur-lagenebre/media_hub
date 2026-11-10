@@ -451,7 +451,7 @@
     'Films des personnes (TMDB)': 'People’s movies (TMDB)',
     'Films manquants': 'Missing movies',
     'Demande à TMDB les films des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Les identifiants viennent de « Enrichir (TMDB) » : lance-le d’abord une fois.': 'Asks TMDB for the movies of this library’s actors, to see on each person’s page the ones that are not in your library. The ids come from “Enrich (TMDB)”: run it once first.',
-    'Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque.': 'Asks TMDB for the movies of this library’s directors and actors, to see on each person’s page the ones that are not in your library.',
+    'Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Compte une heure ou plus la première fois (un appel par personne, puis les affiches) ; une personne déjà connue depuis moins d’un mois n’est pas redemandée.': 'Asks TMDB for the movies of this library’s directors and actors, to see on each person’s page the ones that are not in your library. Allow an hour or more the first time (one call per person, then the posters); a person already known for less than a month is not asked again.',
     'mis à jour {when}': 'updated {when}',
     'dossier introuvable': 'folder not found',
     'Enrichir (TMDB)': 'Enrich (TMDB)',
