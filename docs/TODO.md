@@ -8,7 +8,6 @@ Les essais que les tests ne peuvent pas faire (NAS, Funnel, téléphone, tablett
 
 ## Limites connues, non traitées
 
-- [ ] **Renommer une bibliothèque : l'interface reste à faire** (Gestion). Le serveur est prêt : `POST /api/library/<id>/label` et `default_label` dans `GET /api/state` (voir [api.md](api.md)). À faire dans `hub/web` : un champ de nom par bibliothèque dans Gestion, un bouton « Rétablir », l'affichage de l'erreur 400 telle que le serveur la rédige, la relecture de `/api/state` après un renommage. À savoir : les tâches déjà terminées gardent l'ancien nom dans leur intitulé et leur journal.
 - [ ] **`test_admin_runs_an_update` échoue parfois** (une fois sur une machine, jamais sur l'autre) : le relancer seul avec `python -W ignore -m unittest tests.test_ui.TestDetailPages.test_admin_runs_an_update` et garder les lignes de l'échec. Ce test attend au plus 30 s qu'un scan se termine.
 - [ ] **Un refus précoce de plus de 64 Mo ou de 5 s d'envoi** : le serveur laisse arriver la réponse en jetant le corps dans ces bornes (`INBOX_DRAIN_BYTES`, `INBOX_DRAIN_SECONDS`) ; un refus qui tombe sur un fichier de plusieurs Go ferme ensuite la connexion avec des octets non lus, et le navigateur peut encore voir une erreur réseau (message neutre de la page « Envoyer »). Un `Content-Length` illisible ou un corps en morceaux (411, 400) n'est pas jeté non plus.
 - [ ] **Pas de reprise d'un envoi interrompu** (`Content-Range`) : un envoi coupé se refait en entier ; la reprise viendra plus tard, si le besoin se confirme.

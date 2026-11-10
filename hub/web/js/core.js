@@ -248,26 +248,29 @@
     H.overlay.open(box);
   };
 
-  // form : une fenêtre à champs, ou à contenu propre : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password', auto, maxlength}], extra: [éléments sous les champs],
+  // form : une fenêtre à champs, ou à contenu propre : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password', auto, maxlength, value}], extra: [éléments sous les champs],
   // ok: libellé du bouton, danger, kind (« form » par défaut s'il y a des champs), cls (modificateur), submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse,
+  // alt: {label, submit(valeurs)} (facultatif) : une seconde action, entre la première et Annuler (« Rétablir »), qui passe par le même chemin que `submit` (un seul envoi à la fois, erreur dans la fenêtre),
   // done(résultat) une fois la fenêtre fermée, cancel() une fois fermée sans avoir agi}. Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
+  // `value` préremplit le premier champ, qui s'ouvre alors sélectionné (comme H.prompt).
   H.form = function (o) {
     var fields = o.fields || [], inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
-    var box = H.box((o.kind || (fields.length ? 'form' : 'confirm')) + (fields.length > 1 ? ' stacked' : '') + (o.cls ? ' ' + o.cls : ''), o.title);
+    var box = H.box((o.kind || (fields.length ? 'form' : 'confirm')) + (fields.length > 1 || o.alt ? ' stacked' : '') + (o.cls ? ' ' + o.cls : ''), o.title);
     (o.lead || []).forEach(function (t) { box.appendChild(h('p', { class: 'lead' }, t)); });
     function show(text) { err.textContent = text || ''; }
-    function send() {
+    function send(act) {
       if (busy) return;
       var values = {};
       fields.forEach(function (f) { var v = inputs[f.key].value; values[f.key] = f.type === 'password' ? v : v.replace(/\s+/g, ' ').trim(); });
-      var r = o.submit ? o.submit(values) : Promise.resolve();
+      act = act || o.submit;
+      var r = act ? act(values) : Promise.resolve();
       if (typeof r === 'string') { show(r); return; }
       busy = true; show('');
       r.then(function (res) { H.overlay.close(function () { if (o.done) o.done(res); }); },
         function (e) { busy = false; show(e.message); });
     }
     fields.forEach(function (f, i) {
-      var input = h('input', { class: 'f field big', type: f.type === 'password' ? 'password' : 'text', maxlength: String(f.maxlength || (f.type === 'password' ? 200 : 40)), autocomplete: f.auto || 'off',
+      var input = h('input', { class: 'f field big', type: f.type === 'password' ? 'password' : 'text', maxlength: String(f.maxlength || (f.type === 'password' ? 200 : 40)), autocomplete: f.auto || 'off', value: f.value || '',
         'data-autofocus': i === 0 ? '1' : null,
         onkeydown: function (e) {
           if (e.key !== 'Enter') return;
@@ -279,10 +282,10 @@
     });
     (o.extra || []).forEach(function (x) { box.appendChild(x); });
     box.appendChild(err);
-    ok = H.button(o.ok || H.t('Valider'), o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: send });
-    box.appendChild(h('div', { class: 'btns' }, ok, H.button(H.t('Annuler'), null, { 'data-autofocus': fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));   // sans champ, le focus part sur Annuler : Entrée ne détruit rien
+    ok = H.button(o.ok || H.t('Valider'), o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: function () { send(); } });
+    box.appendChild(h('div', { class: 'btns' }, ok, o.alt ? H.button(o.alt.label, null, { 'data-key': 'form-alt', onclick: function () { send(o.alt.submit); } }) : null, H.button(H.t('Annuler'), null, { 'data-autofocus': fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));   // sans champ, le focus part sur Annuler : Entrée ne détruit rien
     H.overlay.open(box, null, o.cancel);
-    if (fields.length) setTimeout(function () { try { list[0].focus(); } catch (e) { /* tant pis */ } }, 30);
+    if (fields.length) setTimeout(function () { try { list[0].focus(); if (fields[0].value) list[0].select(); } catch (e) { /* tant pis */ } }, 30);
   };
 
   // confirm : « Supprimer ceci ? ». o = {title, lead, ok, danger, extra, submit, done} comme H.form, sans champ ; `done` est appelé une fois la fenêtre fermée.
@@ -418,7 +421,7 @@
       return;
     }
     if (BACK_KEYS[key] || BACK_CODES[code] || (key === 'Backspace' && !typing)) {
-      if (typing && key === 'Escape') { t.blur(); e.preventDefault(); return; }
+      if (typing && key === 'Escape' && !H.overlay.isOpen()) { t.blur(); e.preventDefault(); return; }       // un champ de la page : Échap en sort ; dans une fenêtre, Échap la ferme (sans quoi il en faudrait deux)
       e.preventDefault();
       H.back();
       return;
@@ -519,6 +522,8 @@
     if (replace) { H.replaceNext = true; location.replace(hash); } else location.hash = hash;
   };
   H.current = function () { return stack[stack.length - 1] || null; };
+  // Jette les pages gardées en réserve derrière la page courante : ce qu'elles montrent est périmé (un nom de bibliothèque changé). Retour les refait à neuf, avec les bons textes.
+  H.dropParked = function () { while (stack.length > 1) destroy(stack.shift()); };
   // Retour : ferme la fenêtre ouverte, sinon remonte d'une page ; `fallback` sert quand la page a été ouverte directement.
   H.back = function (fallback) {
     if (H.overlay.isOpen()) { H.overlay.close(); return; }

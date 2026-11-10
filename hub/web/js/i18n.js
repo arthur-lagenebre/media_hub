@@ -1,7 +1,7 @@
 /* Les langues de l'interface : le français (celui du code) et l'anglais (lang-en.js).
    Le texte français sert de clé : `H.t('Paramètres')` rend « Settings » en anglais et le texte tel quel en français ; une clé sans traduction reste en français.
    `{nom}` marque une valeur : H.t('{n} fichiers', { n: 3 }).
-   `H.tr(texte)` traduit un texte que le serveur a écrit en français (message d'erreur, libellé de piste…) : mot pour mot, ou d'après un modèle de H.srv.en.
+   `H.tr(texte)` traduit un texte que le serveur a écrit en français (message d'erreur, libellé de piste…) : mot pour mot, ou d'après un modèle de H.srv.en. Le nom d'une bibliothèque se traduit par `H.libLabel` (views.js), pas par H.tr.
    La langue se retient dans un cookie (le serveur y lit celle de la page de connexion) et dans le navigateur ; sans choix, c'est le français. */
 (function () {
   'use strict';
@@ -78,7 +78,10 @@
       var m = list[i].re.exec(text);
       if (!m) continue;
       var params = {};
-      list[i].names.forEach(function (name, k) { params[name] = H.tr(m[k + 1]); });          // une bibliothèque nommée dans le message (« Musique ») se traduit aussi
+      list[i].names.forEach(function (name, k) {                                              // une bibliothèque nommée dans le message (« Musique ») se traduit aussi,
+        var part = m[k + 1];                                                                  // sauf un nom que l'administrateur a choisi : il vient de lui, pas du dictionnaire
+        params[name] = H.isChosenLabel && H.isChosenLabel(part) ? part : H.tr(part);
+      });
       return fill(list[i].to, params);
     }
     return text;
