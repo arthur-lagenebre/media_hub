@@ -213,14 +213,27 @@ class TestRenameDialog(RenameCase):
         self.page.wait_for_selector(".veil", state="detached")
         self.assertEqual(len(sent), 1)
 
-    def test_escape_closes_the_box_without_saving_and_gives_the_focus_back_to_the_button(self):
+    def test_escape_leaves_the_field_then_closes_the_box_without_saving_and_gives_the_focus_back_to_the_button(self):
         self.management()
         box = self.open_rename()
         box.locator("input").fill("Feuilletons")
-        self.page.keyboard.press("Escape")                                                                              # une seule fois : le focus est dans le champ
+        self.page.keyboard.press("Escape")                                                                              # le comportement de tout champ : un premier Échap en sort...
+        self.page.wait_for_function("document.activeElement.tagName !== 'INPUT'")
+        self.assertTrue(box.is_visible())                                                                              # ...la fenêtre est toujours là
+        self.page.keyboard.press("Escape")                                                                              # ...un second la ferme
         self.page.wait_for_selector(".veil", state="detached")
         self.assertEqual(self.labels()["series"], "Séries")                                                            # rien n'est enregistré
         self.assertEqual(self.nav_texts()[1], "Séries")
+        self.until(lambda: self.focused() == "Renommer la bibliothèque Séries")
+
+    def test_escape_closes_the_box_at_once_when_the_focus_is_not_in_the_field(self):
+        self.management()
+        box = self.open_rename()
+        box.locator("input").fill("Feuilletons")
+        box.locator(".btns .btn.primary").focus()                                                                      # le focus sur un bouton (comme à la télécommande, après les flèches)
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_selector(".veil", state="detached")
+        self.assertEqual(self.labels()["series"], "Séries")
         self.until(lambda: self.focused() == "Renommer la bibliothèque Séries")
 
     def test_cancel_and_the_remote_back_key_close_the_box_without_saving(self):

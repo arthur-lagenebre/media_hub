@@ -421,7 +421,7 @@
       return;
     }
     if (BACK_KEYS[key] || BACK_CODES[code] || (key === 'Backspace' && !typing)) {
-      if (typing && key === 'Escape' && !H.overlay.isOpen()) { t.blur(); e.preventDefault(); return; }       // un champ de la page : Échap en sort ; dans une fenêtre, Échap la ferme (sans quoi il en faudrait deux)
+      if (typing && key === 'Escape') { t.blur(); e.preventDefault(); return; }
       e.preventDefault();
       H.back();
       return;
