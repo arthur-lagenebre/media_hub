@@ -5058,11 +5058,34 @@ class InboxUiCase(unittest.TestCase):
         page.evaluate(self.DROP, [{"name": "Gros", "failAfter": 1, "children": [{"name": f"e{n:03d}.srt", "text": "s"} for n in range(125)]}, {"name": "Autre", "children": [{"name": "o.srt", "text": "o"}]}])
         first = self.dialog(page)
         self.assertEqual(first.locator("h3").inner_text(), "Envoyer ce dossier ?")                     # la fenêtre s'ouvre malgré l'erreur de lecture
+        leads = first.locator(".lead").all_inner_texts()
+        self.assertIn("100 fichiers", leads[0])                                                         # ce qui a été lu
+        self.assertIn("La lecture du dossier « Gros » a échoué : il peut manquer des fichiers.", leads)  # et le dossier tronqué ne passe pas pour complet
+        first.locator("button", has_text="Voir les fichiers ignorés").click()
+        self.assertEqual(first.locator(".skipped li").all_inner_texts(), ["Gros — lecture du dossier échouée"])
         first.get_by_role("button", name="Annuler", exact=True).click()
         page.locator(".menu[role=dialog] .lead", has_text="« Autre »").wait_for()                      # et les dossiers suivants passent
         self.confirm(page)
         self.folders(page, "done").wait_for()
         self.assertEqual(self.tree(), ["Autre/o.srt"])
+        self.assertEqual(len(posts), 1)
+
+    def test_a_dropped_folder_whose_reading_fails_at_once_says_reading_was_impossible_and_a_failed_subfolder_is_named(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        page.evaluate(self.DROP, {"name": "Vide", "failAfter": 0, "children": [{"name": "a.srt", "text": "a"}]})
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator("h3").inner_text(), "Dossier illisible")                       # pas « Rien à envoyer » : le dossier n'est pas vide, on n'a pas pu le lire
+        self.assertEqual(dialog.locator(".lead").all_inner_texts(), ["La lecture du dossier « Vide » a échoué : aucun fichier n’a pu être lu."])
+        dialog.get_by_role("button", name="Compris").click()
+        dialog.wait_for(state="detached")
+        page.evaluate(self.DROP, {"name": "Série", "children": [{"name": "a.srt", "text": "a"}, {"name": "Extras", "failAfter": 0, "children": [{"name": "x.srt", "text": "x"}]}]})
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator("h3").inner_text(), "Envoyer ce dossier ?")                      # le reste se lit : on peut l'envoyer, en connaissance de cause
+        self.assertIn("La lecture du dossier « Série/Extras » a échoué : il peut manquer des fichiers.", dialog.locator(".lead").all_inner_texts())
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Série/a.srt"])
         self.assertEqual(len(posts), 1)
 
     def test_a_backslash_in_a_dropped_folder_name_is_refused_on_that_file_and_in_a_file_name_it_keeps_the_last_part(self):

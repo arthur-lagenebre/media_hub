@@ -58,7 +58,8 @@
     var take = [], skip = [];
     found.forEach(function (f) {
       var parts = f.path.split('/'), name = parts[parts.length - 1], why = '';
-      if (!f.file) why = 'unreadable';
+      if (f.unread) why = parts.slice(1).some(hidden) ? 'hidden' : parts.length > DEPTH ? 'deep' : 'unread';      // un dossier dont la lecture a échoué (ses fichiers, eux, n'ont pas été vus)
+      else if (!f.file) why = 'unreadable';
       else if (parts.slice(1).some(hidden)) why = 'hidden';                    // le dossier choisi n'est pas jugé : la personne l'a désigné
       else if (parts.length - 1 > DEPTH) why = 'deep';
       else if (types && !types[extension(name)]) why = 'type';
@@ -72,14 +73,15 @@
   }
   function byName(a, b) { return a.localeCompare(b, undefined, { numeric: true }); }     // « 2 » avant « 10 »
   // Un dossier glissé : l'API de fichiers du navigateur. `readEntries` rend ses résultats par paquets (100 au plus) : on le rappelle jusqu'à un paquet vide.
+  // Une lecture qui échoue ne rend pas la liste partielle pour complète : `done(all, true)` le dit.
   function readEntries(reader, done) {
     var all = [];
     (function more() {
       reader.readEntries(function (batch) {
-        if (!batch.length) { done(all); return; }
+        if (!batch.length) { done(all, false); return; }
         all = all.concat(Array.prototype.slice.call(batch));
         more();
-      }, function () { done(all); });
+      }, function () { done(all, true); });
     })();
   }
   function walk(entry, path, found, done) {
@@ -87,7 +89,8 @@
       entry.file(function (file) { found.push({ path: path, file: file }); done(); }, function () { found.push({ path: path, file: null }); done(); });
       return;
     }
-    readEntries(entry.createReader(), function (children) {
+    readEntries(entry.createReader(), function (children, failed) {
+      if (failed) found.push({ path: path, file: null, unread: true });          // ce dossier est peut-être incomplet : sift le signale, la confirmation le dit
       var left = children.length;
       if (!left) { done(); return; }
       children.forEach(function (child) { walk(child, path + '/' + child.name, found, function () { if (--left === 0) done(); }); });
@@ -257,13 +260,14 @@
     }
     function why(kind) {               // la raison d'un fichier écarté, au pluriel (le résumé) ou au singulier (sa ligne)
       var WHY = { type: [H.t('types non acceptés'), H.t('type non accepté')], hidden: [H.t('fichiers cachés'), H.t('fichier caché')], deep: [H.t('dossiers trop profonds'), H.t('trop profond (4 niveaux au plus)')],
-        empty: [H.t('fichiers vides'), H.t('fichier vide')], unreadable: [H.t('fichiers illisibles'), H.t('illisible')] };
+        empty: [H.t('fichiers vides'), H.t('fichier vide')], unreadable: [H.t('fichiers illisibles'), H.t('illisible')],
+        unread: [H.t('dossiers illisibles'), H.t('lecture du dossier échouée')] };
       return WHY[kind];
     }
     function summary(skip) {           // « types non acceptés, fichiers cachés » : les raisons présentes, dans un ordre fixe
       var seen = {};
       skip.forEach(function (s) { seen[s.why] = true; });
-      return ['type', 'hidden', 'deep', 'empty', 'unreadable'].filter(function (k) { return seen[k]; }).map(function (k) { return why(k)[0]; }).join(', ');
+      return ['type', 'hidden', 'deep', 'empty', 'unreadable', 'unread'].filter(function (k) { return seen[k]; }).map(function (k) { return why(k)[0]; }).join(', ');
     }
     function skippedList(skip) {
       var ul = h('ul', { class: 'skipped' });
@@ -273,9 +277,15 @@
     }
     function confirmFolder(root, found, next) {
       var s = sift(found, types), reason = summary(s.skip), extra = [];
+      var unread = s.skip.filter(function (k) { return k.why === 'unread'; });
       if (s.skip.length) {
         var ul = skippedList(s.skip);
         extra = [disclose(H.t('Voir les fichiers ignorés'), H.t('Masquer les fichiers ignorés'), ul, { 'data-key': 'skipped' }), ul];
+      }
+      if (!s.take.length && unread.length) {            // rien n'a pu être lu : ce n'est pas « rien à envoyer », le dossier n'est peut-être pas vide
+        H.confirm({ title: H.t('Dossier illisible'), ok: H.t('Compris'), cls: 'sendfolder', extra: extra, cancel: next, done: next,
+          lead: [H.t('La lecture du dossier « {name} » a échoué : aucun fichier n’a pu être lu.', { name: root })] });
+        return;
       }
       if (!s.take.length) {            // rien d'envoyable : on le dit, sans rien lancer
         H.confirm({ title: H.t('Rien à envoyer'), ok: H.t('Compris'), cls: 'sendfolder', extra: extra, cancel: next, done: next,
@@ -283,9 +293,12 @@
         return;
       }
       var size = s.take.reduce(function (sum, t) { return sum + t.file.size; }, 0), files = H.plural(s.take.length, 'fichier');
-      H.confirm({ title: H.t('Envoyer ce dossier ?'), ok: H.t('Envoyer'), cls: 'sendfolder', extra: extra, cancel: next,
-        lead: [s.skip.length ? H.t('Envoyer le dossier « {name} » : {files} ({size}), {skipped} ({why}).', { name: root, files: files, size: sizeText(size), skipped: H.plural(s.skip.length, 'ignoré', 'ignorés'), why: reason })
-                             : H.t('Envoyer le dossier « {name} » : {files} ({size}).', { name: root, files: files, size: sizeText(size) })],
+      var lead = [s.skip.length ? H.t('Envoyer le dossier « {name} » : {files} ({size}), {skipped} ({why}).', { name: root, files: files, size: sizeText(size), skipped: H.plural(s.skip.length, 'ignoré', 'ignorés'), why: reason })
+                                : H.t('Envoyer le dossier « {name} » : {files} ({size}).', { name: root, files: files, size: sizeText(size) })];
+      if (unread.length)               // un dossier lu à moitié : la personne sait qu'il peut manquer des fichiers, et peut annuler ou envoyer quand même
+        lead.push(unread.length === 1 ? H.t('La lecture du dossier « {name} » a échoué : il peut manquer des fichiers.', { name: unread[0].path })
+                                      : H.t('La lecture de {n} dossiers a échoué : il peut manquer des fichiers.', { n: unread.length }));
+      H.confirm({ title: H.t('Envoyer ce dossier ?'), ok: H.t('Envoyer'), cls: 'sendfolder', extra: extra, cancel: next, lead: lead,
         done: function () { if (alive) addFolder(root, s.take); next(); } });
     }
     function addFolder(name, take) {
