@@ -3830,8 +3830,7 @@ class InboxUiCase(unittest.TestCase):
                                      headers={"Authorization": "Bearer " + self.token(name), "Content-Type": "application/octet-stream"})
         stored = json.load(urllib.request.urlopen(req))
         if mtime:
-            account = self.alice["id"] if name == "alice" else self.admin_id
-            os.utime(self.box / account / stored["name"], (mtime, mtime))
+            os.utime(self.box / stored["account"] / stored["name"], (mtime, mtime))
         return stored
 
     def shown(self, page, hash):
@@ -3860,8 +3859,9 @@ class InboxUiCase(unittest.TestCase):
         cdp.send("Network.enable")
         cdp.send("Network.emulateNetworkConditions", {"offline": False, "latency": 0, "downloadThroughput": -1, "uploadThroughput": bytes_per_second})
 
-    def stored(self, account=None):
-        folder = self.box / (account or self.alice["id"])
+    def stored(self, folder_name="alice"):
+        """Les fichiers du dossier `folder_name` de la boîte : le dossier porte le nom du compte."""
+        folder = self.box / folder_name
         return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
 
     def wait_for(self, condition, tries=100):
@@ -4047,7 +4047,7 @@ class InboxUiCase(unittest.TestCase):
         page.locator(".menu .btn.danger").click()
         self.wait_for(lambda: self.stored() == ["Premier.mkv"])
         self.wait_for(lambda: rows.count() == 1)
-        self.assertEqual(self.stored(self.admin_id), ["Pas à elle.mkv"])
+        self.assertEqual(self.stored("admin"), ["Pas à elle.mkv"])
         rows.first.locator("button", has_text="Supprimer").click()
         page.locator(".menu .btn.danger").click()
         page.locator("#views > .view:visible .mine .empty").wait_for()
@@ -4136,7 +4136,7 @@ class InboxUiCase(unittest.TestCase):
         page.locator(".menu .btn.danger").click()
         page.locator("#views > .view:visible .inbox .empty").wait_for()
         self.assertEqual(page.locator("#views > .view:visible .inbox .empty").inner_text(), "La boîte de réception est vide.")
-        self.assertEqual(self.stored(self.admin_id), [])
+        self.assertEqual(self.stored("admin"), [])
 
     def test_only_the_administrator_has_the_inbox_tab(self):
         page = self.session("alice")
