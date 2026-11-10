@@ -4755,14 +4755,17 @@ class InboxUiCase(unittest.TestCase):
         self.assertEqual(rows.nth(0).get_attribute("data-dir"), "")
 
     DROP = """(spec) => {
-        function leaf(name, text) { return { isFile: true, isDirectory: false, name: name, file: function (ok) { setTimeout(function () { ok(new File([text], name)); }, 0); } }; }
-        function folder(name, children) {
+        function leaf(name, text, broken) { return { isFile: true, isDirectory: false, name: name, file: function (ok, bad) { setTimeout(function () { if (broken) bad(new Error('illisible')); else ok(new File([text], name)); }, 0); } }; }
+        function folder(name, children, failAfter) {
             return { isFile: false, isDirectory: true, name: name, createReader: function () {
-                var at = 0;                                    // comme le navigateur : au plus 100 entrées par appel, puis un paquet vide
-                return { readEntries: function (ok) { var batch = children.slice(at, at + 100); at += 100; setTimeout(function () { ok(batch); }, 0); } };
+                var at = 0, calls = 0;                         // comme le navigateur : au plus 100 entrées par appel, puis un paquet vide ; `failAfter` : le nombre d'appels qui réussissent avant une erreur
+                return { readEntries: function (ok, bad) {
+                    var batch = children.slice(at, at + 100); at += 100;
+                    setTimeout(function () { if (failAfter !== undefined && calls++ >= failAfter) bad(new Error('lecture')); else ok(batch); }, 0);
+                } };
             } };
         }
-        function build(node) { return node.children ? folder(node.name, node.children.map(build)) : leaf(node.name, node.text); }
+        function build(node) { return node.children ? folder(node.name, node.children.map(build), node.failAfter) : leaf(node.name, node.text, node.broken); }
         var specs = Array.isArray(spec) ? spec : [spec], el = document.querySelector('#views > .view.upload:not([style*="none"])');
         var dt = { types: ['Files'], files: specs.map(function (s) { return new File(s.children ? [] : [s.text], s.name); }),
                    items: specs.map(function (s) { var entry = s.children ? build(s) : { isFile: true, isDirectory: false, name: s.name }; return { webkitGetAsEntry: function () { return entry; } }; }) };
@@ -4954,6 +4957,148 @@ class InboxUiCase(unittest.TestCase):
         rows.filter(has_text="b.mkv").locator("button", has_text="Supprimer").click()
         page.locator(".menu .btn.danger").click()                                                    # et dans celle de la suppression
         self.wait_for(lambda: self.tree() == [nasty + "/a.mkv"])
+
+
+    def test_two_folders_with_the_same_name_are_two_lines_and_cancelling_one_leaves_the_other(self):
+        page = self.upload_page()
+        self.throttle(page, 150_000)
+        self.pick_folder(page, self.make_folder("Film", {"a.mkv": b"a" * 300_000, "b.mkv": b"b" * 300_000}))
+        self.confirm(page)
+        self.sending(page)
+        self.pick_folder(page, self.make_folder("Film", {"c.mkv": b"c" * 2000}))                      # le même nom, pendant que le premier part
+        self.confirm(page)
+        folders = self.folders(page)
+        self.assertEqual(folders.count(), 2)
+        first, second = folders.nth(0), folders.nth(1)
+        self.assertEqual(first.get_attribute("data-folder"), second.get_attribute("data-folder"))
+        self.assertNotEqual(first.get_attribute("data-send"), second.get_attribute("data-send"))      # deux lignes distinctes
+        first.locator(":scope > button", has_text="Annuler").click()
+        self.folders(page, "cancel").wait_for()
+        self.throttle(page, -1)
+        self.folders(page, "done").wait_for()                                                          # l'autre dossier part quand même
+        self.assertEqual(self.line(self.folders(page, "done")), "1 / 1 fichier · 2 Ko · Envoyé")
+        self.assertEqual(self.line(self.folders(page, "cancel")), "0 / 2 fichiers · 585,9 Ko · Annulé")
+        self.wait_for(lambda: self.tree() == ["Film/c.mkv"])
+
+    def test_the_same_folder_sent_twice_merges_and_numbers_the_files_of_the_same_name(self):
+        page = self.upload_page()
+        for sent in range(2):
+            self.pick_folder(page, self.make_folder("Film", {"a.mkv": b"a" * 2000, "Bonus/b.mkv": b"b" * 2000}))
+            self.confirm(page)
+            self.wait_for(lambda: self.folders(page, "done").count() == sent + 1)
+        self.assertEqual(self.folders(page).count(), 2)
+        self.assertEqual(self.tree(), ["Film/Bonus/b (2).mkv", "Film/Bonus/b.mkv", "Film/a (2).mkv", "Film/a.mkv"])
+        self.assertEqual(self.stored(), ["Film"])                                                      # un seul dossier, jamais « Film (2) »
+        folder = self.folders(page).nth(1)
+        folder.locator(":scope > button[data-key^=files-]").click()
+        self.assertEqual(folder.locator(".sendfile b").all_inner_texts(), ["a (2).mkv", "Bonus/b (2).mkv"])      # la ligne dit le nom que le serveur a retenu
+        self.assertIn("enregistré sous ce nom (tu l’avais appelé « a.mkv »)", folder.locator(".sendfile .what > span").first.inner_text())
+
+    def test_cancelling_a_folder_while_a_file_waits_for_a_new_try_sends_nothing_more(self):
+        page = self.upload_page()
+        page.evaluate("Hub.upload.retry = 60000")
+        calls = []
+
+        def busy(route):
+            calls.append(1)
+            route.fulfill(status=429, content_type="application/json", body=json.dumps({"error": "trop d'envois en cours : réessaie dans un moment"}))
+        page.route("**/api/inbox?name=*", busy)
+        self.pick_folder(page, self.make_folder("Série", {"a.mkv": b"a" * 2000, "b.mkv": b"b" * 2000}))
+        self.confirm(page)
+        folder = self.folders(page, "wait")
+        folder.wait_for()
+        folder.locator(":scope > button[data-key^=files-]").click()
+        folder.locator(".sendfile[data-state=wait]", has_text="occupé").wait_for()                     # le fichier attend son nouvel essai
+        folder.locator(":scope > button", has_text="Annuler").click()
+        self.folders(page, "cancel").wait_for()
+        page.wait_for_timeout(300)
+        self.assertEqual(len(calls), 1)                                                                # ni nouvel essai, ni fichier suivant
+        self.assertEqual(self.line(self.folders(page)), "0 / 2 fichiers · 3,9 Ko · Annulé")
+        self.assertEqual(page.locator("#views > .view:visible .sendfile[data-state=cancel]").count(), 2)
+        self.assertEqual(self.tree(), [])
+
+    def test_a_server_that_gives_no_extensions_leaves_the_refusals_to_the_server_file_by_file(self):
+        page = self.session("alice")
+
+        def old_server(route):                                                                         # un serveur d'avant `extensions` : la liste ne les donne pas
+            reply = route.fetch()
+            body = reply.json()
+            body.pop("extensions", None)
+            route.fulfill(response=reply, json=body)
+        page.route(re.compile(r"/api/inbox\?mine=1"), old_server)
+        page.goto(self.base + "/#/upload")
+        self.shown(page, "#/upload")
+        page.wait_for_selector("#views > .view:visible .used .usedline")
+        self.pick_folder(page, self.make_folder("Papiers", {"a.mkv": b"a" * 2000, "notes.txt": b"n" * 100, ".cache/x.mkv": b"x"}))
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator(".lead").inner_text(), "Envoyer le dossier « Papiers » : 2 fichiers (2,1 Ko), 1 ignoré (fichiers cachés).")      # les types ne sont pas jugés, le reste l'est
+        self.confirm(page)
+        self.folders(page, "error").wait_for()
+        self.assertEqual(self.line(self.folders(page)), "1 / 2 fichiers · 2,1 Ko · 1 en erreur")
+        self.folders(page).locator(":scope > button[data-key^=files-]").click()
+        failed = self.folders(page).locator(".sendfile[data-state=error]")
+        self.assertEqual(failed.locator("b").inner_text(), "notes.txt")
+        self.assertIn("type de fichier refusé", failed.locator(".what > span").inner_text())          # le message du serveur, sur ce fichier
+        self.assertEqual(self.tree(), ["Papiers/a.mkv"])
+
+    def test_a_dropped_file_the_browser_cannot_read_is_left_out_and_said(self):
+        page = self.upload_page()
+        page.evaluate(self.DROP, {"name": "Série", "children": [{"name": "a.srt", "text": "a"}, {"name": "b.srt", "text": "b", "broken": True}]})
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator(".lead").inner_text(), "Envoyer le dossier « Série » : 1 fichier (1 octets), 1 ignoré (fichiers illisibles).")
+        dialog.locator("button", has_text="Voir les fichiers ignorés").click()
+        self.assertEqual(dialog.locator(".skipped li").all_inner_texts(), ["Série/b.srt — illisible"])
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Série/a.srt"])
+
+    def test_a_dropped_folder_whose_reading_fails_midway_does_not_freeze_the_page(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        page.evaluate(self.DROP, [{"name": "Gros", "failAfter": 1, "children": [{"name": f"e{n:03d}.srt", "text": "s"} for n in range(125)]}, {"name": "Autre", "children": [{"name": "o.srt", "text": "o"}]}])
+        first = self.dialog(page)
+        self.assertEqual(first.locator("h3").inner_text(), "Envoyer ce dossier ?")                     # la fenêtre s'ouvre malgré l'erreur de lecture
+        first.get_by_role("button", name="Annuler", exact=True).click()
+        page.locator(".menu[role=dialog] .lead", has_text="« Autre »").wait_for()                      # et les dossiers suivants passent
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Autre/o.srt"])
+        self.assertEqual(len(posts), 1)
+
+    def test_a_backslash_in_a_dropped_folder_name_is_refused_on_that_file_and_in_a_file_name_it_keeps_the_last_part(self):
+        page = self.upload_page()
+        page.evaluate(self.DROP, {"name": "Film", "children": [{"name": "ok.srt", "text": "ok"}, {"name": "x\\y", "children": [{"name": "a.srt", "text": "a"}]}, {"name": "b\\c.srt", "text": "b"}]})
+        self.confirm(page)
+        self.folders(page, "error").wait_for()
+        self.assertEqual(self.line(self.folders(page)), "2 / 3 fichiers · 4 octets · 1 en erreur")
+        self.folders(page).locator(":scope > button[data-key^=files-]").click()
+        failed = self.folders(page).locator(".sendfile[data-state=error]")
+        self.assertEqual(failed.locator("b").inner_text(), "x\\y/a.srt")                              # le dossier au `\` : refusé, sur ce fichier seul
+        self.assertIn("pas un séparateur de dossiers", failed.locator(".what > span").inner_text())
+        self.assertEqual(self.tree(), ["Film/c.srt", "Film/ok.srt"])                                    # le nom à `\` garde sa dernière partie, comme le serveur le dit
+        renamed = self.folders(page).locator(".sendfile[data-state=done]", has_text="c.srt")
+        self.assertIn("tu l’avais appelé « b\\c.srt »", renamed.locator(".what > span").inner_text())
+
+    def test_the_administrator_sees_the_subfolders_of_a_deleted_account_and_reaches_them(self):
+        from hub import accounts
+        lea = self.member("Léa")
+        self.put("Léa", "Épisode.mkv", b"profond", mtime=1_700_000_000, dir="Été/Saison 1")
+        self.put("Léa", "Bonus.mkv", b"bonus", mtime=1_699_000_000, dir="Été")
+        accounts.delete(self.hub.db, lea["id"])
+        page, rows = self.admin_inbox()
+        self.assertEqual(rows.count(), 2)
+        deep = rows.nth(0)
+        self.assertEqual(deep.get_attribute("data-dir"), "Été/Saison 1")
+        self.assertTrue(deep.locator(".what > span").inner_text().startswith("Léa (compte supprimé) · Été/Saison 1 · "), deep.locator(".what > span").inner_text())
+        with page.expect_download() as info:
+            deep.locator("a", has_text="Télécharger").click()
+        self.assertEqual(Path(info.value.path()).read_bytes(), b"profond")
+        deep.locator("button", has_text="Supprimer").click()
+        self.assertIn("« Été/Saison 1/Épisode.mkv », envoyé par Léa", self.dialog(page).inner_text())
+        page.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: rows.count() == 1)
+        self.assertEqual(self.tree("Léa"), ["Été/Bonus.mkv"])
+        self.assertFalse((self.box / "Léa" / "Été" / "Saison 1").exists())                              # le sous-dossier vidé a disparu, pas celui qui garde un fichier
 
 
 if __name__ == "__main__":
