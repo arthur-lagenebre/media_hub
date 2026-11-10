@@ -32,7 +32,7 @@ class TestNamedFolders(FolderRoutes):
     def test_the_folder_is_the_name_of_the_account_with_its_accents_and_the_url_carries_it_encoded(self):
         lea = self.make_user("Léa Dupont")
         _, reply = self.send(lea, "Film.mkv", b"0123456789")
-        self.assertEqual((reply.status, reply.json()), (201, {"name": "Film.mkv", "size": 10, "account": "Léa Dupont"}))
+        self.assertEqual((reply.status, reply.json()), (201, {"name": "Film.mkv", "size": 10, "account": "Léa Dupont", "dir": ""}))
         self.assertEqual((self.inbox / "Léa Dupont" / "Film.mkv").read_bytes(), b"0123456789")
         self.assertNotIn(lea["id"], [p.name for p in self.inbox.iterdir()])
         listed = self.get(self.boss, "/api/inbox")[1].json()["files"]
@@ -229,7 +229,7 @@ class TestRightsBetweenFolders(FolderRoutes):
 
     def test_an_account_that_never_sent_anything_has_no_folder_and_deletes_nothing(self):
         carol = self.make_user("carol")
-        self.assertEqual(self.get(carol, "/api/inbox?mine=1")[1].json(), {"files": [], "used": 0})
+        self.assertEqual(self.get(carol, "/api/inbox?mine=1")[1].json(), {"files": [], "used": 0, "extensions": sorted(inbox.EXTENSIONS)})
         for folder in ("carol", "alice", "bob", ""):
             self.assertIn(self.delete(carol, self.url(folder or "x", "Film.mkv"))[1].status, (403, 404))
         self.assertEqual(sorted(self.everything()), ["alice/Film.mkv", "bob/Autre.mkv"])

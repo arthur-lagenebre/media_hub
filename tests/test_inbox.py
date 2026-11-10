@@ -143,7 +143,7 @@ class TestSmallHelpers(TempCase):
 class TestReceive(TempCase):
     def test_a_file_is_stored_under_its_account_with_its_bytes_and_no_part_left(self):
         out = self.put("Film.mkv", b"0123456789")
-        self.assertEqual(out, {"name": "Film.mkv", "size": 10, "account": "alice"})
+        self.assertEqual(out, {"name": "Film.mkv", "size": 10, "account": "alice", "dir": ""})
         self.assertEqual((self.tmp / "inbox" / "alice" / "Film.mkv").read_bytes(), b"0123456789")
         self.assertEqual(self.files(), ["Film.mkv"])
 
@@ -412,8 +412,8 @@ class TestListing(TempCase):
         (folder / "bob" / "dossier").mkdir()
         (folder / "stray.txt").write_bytes(b"x")                                     # un fichier hors d'un dossier de compte
         self.assertEqual(self.inbox.listing(), [
-            {"account": "bob", "name": "neuf.mp3", "size": 5, "date": 2000},
-            {"account": "alice", "name": "vieux.mkv", "size": 3, "date": 1000}])
+            {"account": "bob", "dir": "", "name": "neuf.mp3", "size": 5, "date": 2000},
+            {"account": "alice", "dir": "", "name": "vieux.mkv", "size": 3, "date": 1000}])
 
     def test_one_account_only(self):
         self.put("a.mkv", account="alice")
@@ -429,7 +429,7 @@ class TestListing(TempCase):
         self.put("b.mkv")
 
         class Gone:
-            name = "gone.mkv"
+            name = path = "gone.mkv"
 
             def is_file(self, follow_symlinks=True):
                 return True

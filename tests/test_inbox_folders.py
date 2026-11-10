@@ -98,9 +98,9 @@ class TestAccountFolder(FolderCase):
 
     def test_a_file_is_stored_in_it_and_listed_under_its_name(self):
         uid = self.user("Zoë", "9f8e7d6c5b4a3210")
-        self.assertEqual(self.put("a.mkv", account=uid), {"name": "a.mkv", "size": 3, "account": "Zoë"})
+        self.assertEqual(self.put("a.mkv", account=uid), {"name": "a.mkv", "size": 3, "account": "Zoë", "dir": ""})
         self.assertEqual((self.tmp / "inbox" / "Zoë" / "a.mkv").read_bytes(), b"abc")
-        self.assertEqual(self.inbox.listing(uid), [{"account": "Zoë", "name": "a.mkv", "size": 3, "date": mock.ANY}])
+        self.assertEqual(self.inbox.listing(uid), [{"account": "Zoë", "dir": "", "name": "a.mkv", "size": 3, "date": mock.ANY}])
         self.assertEqual(self.inbox.owners()["Zoë"], "Zoë")
         self.assertEqual(self.inbox.used(uid), 3)
 

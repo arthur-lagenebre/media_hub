@@ -46,7 +46,7 @@ from .. import urls
 from .. import sagas as sagafile
 from ..sagas import Sagas
 from ..db import Database, make_id
-from ..inbox import Inbox, InboxError
+from ..inbox import EXTENSIONS, Inbox, InboxError
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
@@ -2785,13 +2785,15 @@ class CountedBody:
 
 @route("POST", r"/api/inbox")
 def api_inbox_send(h, m, q):
-    """Un fichier envoyé dans la boîte de réception : `?name=<nom du fichier>`, le fichier en corps brut, `Content-Length` obligatoire. Il va dans le dossier du compte sous HUB_INBOX (par défaut `HUB_DATA/inbox`), nommé d'après le compte, sous un nom nettoyé, sans écraser (voir inbox.py).
-    Les refus (droit, nom, extension, espace, nombre d'envois) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu, mais après avoir laissé la réponse arriver au client qui envoie encore (voir Handler.let_the_reply_arrive). Rend 201 `{"name", "size", "account"}` (`account` : le nom du dossier, celui des URL `/api/inbox/<dossier>/<nom>`)."""
+    """Un fichier envoyé dans la boîte de réception : `?name=<nom du fichier>`, le fichier en corps brut, `Content-Length` obligatoire, et `&dir=<chemin relatif>` (facultatif : des dossiers séparés par `/`, 4 niveaux au plus). Il va dans le dossier du compte sous HUB_INBOX (par défaut `HUB_DATA/inbox`), nommé d'après le compte,
+    dans le sous-dossier demandé (créé s'il manque), sous un nom nettoyé, sans écraser (voir inbox.py).
+    Les refus (droit, nom, extension, chemin, espace, nombre d'envois, plafond de sous-dossiers) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu, mais après avoir laissé la réponse arriver au client qui envoie encore (voir Handler.let_the_reply_arrive).
+    Rend 201 `{"name", "size", "account", "dir"}` (`account` : le nom du dossier du compte, celui des URL `/api/inbox/<dossier>/<nom>` ; `dir` : le sous-dossier retenu, `""` à la racine)."""
     h.body_taken = True                     # le corps se lit par morceaux, ou pas du tout : _fail ne doit pas le jeter
     body = CountedBody(h.rfile)
     try:
         require_sender(h)
-        stored = module_call(InboxError, h.hub.inbox.receive, h.user["id"], q.get("name"), body, announced_length(h))
+        stored = module_call(InboxError, h.hub.inbox.receive, h.user["id"], q.get("name"), body, announced_length(h), q.get("dir"))
     except Exception:                       # un refus (HttpError), mais aussi une erreur système avant la lecture : dans tous les cas le corps n'est pas lu, ou à moitié
         h.close_connection = True
         h.body_consumed = body.count
@@ -2807,34 +2809,35 @@ def inbox_files(hub, files):
 
 @route("GET", r"/api/inbox")
 def api_inbox_list(h, m, q):
-    """L'administrateur voit tous les envois ; `?mine=1` (un compte qui a le droit d'envoyer, l'administrateur compris) ne montre que les siens, avec l'espace qu'ils occupent : `used` (octets)."""
+    """L'administrateur voit tous les envois ; `?mine=1` (un compte qui a le droit d'envoyer, l'administrateur compris) ne montre que les siens, avec l'espace qu'ils occupent : `used` (octets), et `extensions`, les extensions acceptées (triées), pour que l'interface écarte d'avance les fichiers refusés.
+    Chaque fichier porte `dir` : son sous-dossier (chemin relatif, `""` à la racine)."""
     box = h.hub.inbox
     if q.get("mine") != "1":
         require_admin(h)
         h.send_json({"files": inbox_files(h.hub, box.listing())})
         return
     require_sender(h)
-    h.send_json({"files": inbox_files(h.hub, box.listing(h.user["id"])), "used": box.used(h.user["id"])})
+    h.send_json({"files": inbox_files(h.hub, box.listing(h.user["id"])), "used": box.used(h.user["id"]), "extensions": sorted(EXTENSIONS)})
 
 
 @route("GET", r"/api/inbox/([^/]+)/([^/]+)")
 def api_inbox_file(h, m, q):
-    """Un fichier de la boîte, en pièce jointe (`Range` accepté pour reprendre) : administrateur seulement. Jamais analysé ni servi autrement : type `application/octet-stream`, `nosniff`."""
+    """Un fichier de la boîte, en pièce jointe (`Range` accepté pour reprendre) : administrateur seulement. `?dir=<chemin relatif>` pour un fichier d'un sous-dossier. Jamais analysé ni servi autrement : type `application/octet-stream`, `nosniff`."""
     require_admin(h)
-    path = module_call(InboxError, h.hub.inbox.path_of, m.group(1), m.group(2))
+    path = module_call(InboxError, h.hub.inbox.path_of, m.group(1), m.group(2), q.get("dir"))
     h.send_file(path, "application/octet-stream", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(path.name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
 
 
 @route("DELETE", r"/api/inbox/([^/]+)/([^/]+)")
 def api_inbox_delete(h, m, q):
-    """L'administrateur supprime n'importe quel fichier de la boîte ; un compte qui a le droit d'envoyer, seulement les siens (403 pour ceux des autres, qu'ils existent ou non)."""
+    """L'administrateur supprime n'importe quel fichier de la boîte ; un compte qui a le droit d'envoyer, seulement les siens (403 pour ceux des autres, qu'ils existent ou non). `?dir=<chemin relatif>` pour un fichier d'un sous-dossier, qui part avec le dernier fichier qu'il contient."""
     h.discard_body()
     account, name = m.groups()
     if h.user["role"] != "admin":
         require_sender(h)
         if account != h.hub.inbox.folder_of(h.user["id"]):
             raise HttpError(403, "ce fichier n'est pas à toi")
-    module_call(InboxError, h.hub.inbox.remove, account, name)
+    module_call(InboxError, h.hub.inbox.remove, account, name, q.get("dir"))
     h.send_json({"ok": True})
 
 
