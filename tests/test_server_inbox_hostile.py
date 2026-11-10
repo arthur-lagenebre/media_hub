@@ -104,6 +104,18 @@ class TestNothingAliasedIsServed(Hostile):
         self.assertEqual(self.everything(), self.before)
         self.assertEqual(self.get(self.boss, "/api/inbox/alice/a.mkv?dir=x")[1].body, b"alice")                 # sans cela tout marche
 
+    def test_an_upload_in_progress_is_not_served_nor_deleted_whatever_the_case_of_part(self):
+        (self.inbox / "alice" / "x" / "en cours.mkv.part").write_bytes(b"secret en cours")
+        before = self.everything()
+        for suffix in (".part", ".PART", ".Part", ".pArT"):
+            target = "/api/inbox/alice/" + quote("en cours.mkv" + suffix) + "?dir=x"
+            got = self.get(self.boss, target)[1]
+            self.assertEqual((got.status, b"secret" in got.body), (404, False), target)
+            self.assertEqual(self.delete(self.boss, target)[1].status, 404, target)
+            self.assertEqual(self.delete(self.alice, target)[1].status, 404, target)
+        self.assertEqual(self.everything(), before)
+        self.assertEqual((self.inbox / "alice" / "x" / "en cours.mkv.part").read_bytes(), b"secret en cours")
+
     def test_a_stream_in_the_sent_name_or_folder_is_a_plain_underscore_and_no_second_file_appears(self):
         reply = call(self.hub, "POST", "/api/inbox?name=a.mkv%3Aflux.mkv&dir=x%3A%3A%24INDEX_ALLOCATION", b"autre", self.cookie(self.alice))[1]
         self.assertEqual((reply.status, reply.json()["name"], reply.json()["dir"]), (201, "a.mkv_flux.mkv", "x__$INDEX_ALLOCATION"))

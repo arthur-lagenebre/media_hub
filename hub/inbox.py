@@ -76,12 +76,12 @@ def clean_name(raw):
 
 
 def is_stored_name(name):
-    """Ce nom peut-il être celui d'un fichier fini de la boîte ? Le contraire de ce que `clean_name` ne produit jamais : séparateur, caractère douteux, point au début, point ou espace à la fin, `.part`."""
+    """Ce nom peut-il être celui d'un fichier fini de la boîte ? Le contraire de ce que `clean_name` ne produit jamais : séparateur, caractère douteux, point au début, point ou espace à la fin, `.part` (en toute casse : NTFS et SMB ouvrent `.PART` comme `.part`)."""
     try:
         size = len(name.encode("utf-8"))
     except (AttributeError, UnicodeEncodeError):
         return False
-    return 0 < size <= 255 and name == name.strip(" .") and not name.endswith(PART) and all(_safe_char(c) for c in name)
+    return 0 < size <= 255 and name == name.strip(" .") and not name.lower().endswith(PART) and all(_safe_char(c) for c in name)
 
 
 

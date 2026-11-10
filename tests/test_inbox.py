@@ -117,6 +117,10 @@ class TestStoredName(unittest.TestCase):
         for name in ("Film (2).mkv", "Amélie.mkv", "a.b.c.mkv"):
             self.assertTrue(inbox.is_stored_name(name), name)
 
+    def test_a_part_file_is_one_in_any_case(self):
+        for name in ("a.mkv.PART", "a.mkv.Part", "a.mkv.pArT"):                   # NTFS et SMB ouvrent « .PART » comme « .part » : l'envoi en cours ne se lit ni ne se supprime
+            self.assertFalse(inbox.is_stored_name(name), name)
+
 
 class TestSmallHelpers(TempCase):
     def test_discard_says_whether_it_removed_something(self):
