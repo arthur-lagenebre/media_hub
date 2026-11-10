@@ -458,6 +458,8 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .rights .rrow .chip .mark { visibility: hidden; margin-right: 0.35em; }
 .rights .rrow .chip.on .mark { visibility: visible; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
+.rights .rrow[data-upload-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* le droit d'envoi : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas de plus */
+.rights .rrow[data-upload-right] b { grid-column: auto; }
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
 /* Sagas composées à la main */

@@ -1194,24 +1194,11 @@
         var mine = H.session.user && u.id === H.session.user.id;
         panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' ' + H.t('(toi)') : '')),
           h('span', null, (ROLES[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
-          u.role === 'admin' ? null : uploadSwitch(u),
-          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger', { name: u.name }), onclick: function () { rightsOf(u); } }),
+          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger, envoyer', { name: u.name }), onclick: function () { rightsOf(u); } }),
           H.button(H.t('Mot de passe'), 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': H.t('Changer le mot de passe de {name}', { name: u.name }), onclick: function () { passwordOf(u, mine); } }),
           H.button(H.t('Supprimer'), 'trash', { 'data-key': 'del-' + u.id, 'aria-label': H.t('Supprimer le compte de {name}', { name: u.name }), onclick: function () { deleteUser(u, mine); } })));
       });
       return panel;
-    }
-    // Le droit « Envoyer » d'un compte : un interrupteur, valable à la requête suivante. Un administrateur l'a toujours : pas d'interrupteur.
-    function uploadSwitch(u) {
-      return h('button', { class: 'chip switch f' + (u.can_upload ? ' on' : ''), type: 'button', 'aria-pressed': u.can_upload ? 'true' : 'false', 'data-key': 'upload-' + u.id,
-        'aria-label': H.t('Peut envoyer des fichiers : {name}', { name: u.name }),
-        onclick: function () {
-          var allow = !u.can_upload;
-          H.api('/api/user/' + encodeURIComponent(u.id) + '/upload', { upload: allow }).then(function () {
-            H.toast(allow ? H.t('{name} peut envoyer des fichiers', { name: u.name }) : H.t('{name} ne peut plus envoyer de fichiers', { name: u.name }));
-            refreshUsers('upload-' + u.id);
-          }).catch(function (e) { H.toast(e.message, 5000); });
-        } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, H.t('Peut envoyer des fichiers')));
     }
     function addUser() {
       var role = 'user', toggle = H.button(H.t('Rôle : {role}', { role: ROLES.user }), null, { 'data-key': 'new-role', 'aria-label': H.t('Rôle du nouveau compte, à changer'), onclick: function () {
@@ -1230,23 +1217,26 @@
         },
         done: function (u) { H.toast(H.t('Compte créé : {name}', { name: u.name })); refreshUsers('user-add'); } });
     }
-    // Ce qu'un compte peut consulter, lire et télécharger, en une phrase pour la liste des comptes.
+    // Ce qu'un compte peut consulter, lire et télécharger, puis s'il peut envoyer des fichiers, en une phrase pour la liste des comptes.
     function rightsSummary(u) {
-      var libs = (state && state.libraries) || [], rights = u.rights || {};
-      if (!libs.length) return '';
+      var libs = (state && state.libraries) || [], rights = u.rights || {}, parts = [];
       function who(perm) {
         var list = libs.filter(function (l) { return !rights[l.id] || rights[l.id][perm]; });
         return list.length === libs.length ? H.t('tout') : list.length ? list.map(function (l) { return H.tr(l.label); }).join(', ') : H.t('rien');
       }
-      return H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') });
+      if (libs.length) parts.push(H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') }));
+      parts.push(H.t('Envoyer des fichiers : {upload}', { upload: u.can_upload ? H.t('oui') : H.t('non') }));
+      return parts.join(' · ');
     }
-    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Les droits valent tout de suite, sans que la personne se reconnecte.
+    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Au-dessous, le droit d'envoyer des fichiers (Oui / Non), qui ne tient pas à une bibliothèque.
+    // Les droits valent tout de suite, sans que la personne se reconnecte.
     function rightsOf(u) {
-      var draft = {}, rows = h('div', { class: 'rights' });
+      var draft = {}, rows = h('div', { class: 'rights' }), upload = !!u.can_upload;
       (state.libraries || []).forEach(function (l) {
         var r = (u.rights || {})[l.id] || { view: true, play: true, download: true };
         draft[l.id] = { view: !!r.view, play: !!(r.view && r.play), download: !!(r.view && r.download) };
       });
+      var saved = { rights: JSON.stringify(draft), upload: upload, touched: false };      // ce que le serveur a déjà : un second essai n'envoie que le reste
       function toggle(l, which) {
         var button = h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + l.id, onclick: function () {
           var d = draft[l.id];
@@ -1256,11 +1246,16 @@
         } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }));        // la coche a toujours sa place (visible ou non) : le bouton garde la même largeur
         return button;
       }
-      var buttons = {};
+      function choice(value, label) {
+        return h('button', { class: 'chip f', type: 'button', 'data-key': 'r-upload-' + (value ? 'yes' : 'no'), onclick: function () { upload = value; paint(); } },
+          h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, label));
+      }
+      var buttons = {}, yes = choice(true, H.t('Oui')), no = choice(false, H.t('Non'));
       (state.libraries || []).forEach(function (l) {
         buttons[l.id] = { view: toggle(l, 'view'), play: toggle(l, 'play'), download: toggle(l, 'download') };
         rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, H.tr(l.label)), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
       });
+      rows.appendChild(h('div', { class: 'rrow', 'data-upload-right': '1' }, h('b', null, H.t('Envoyer des fichiers')), yes, no));
       function paint() {
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
@@ -1273,13 +1268,38 @@
           b.download.querySelector('.lbl').textContent = H.t('Télécharger');
           b.download.disabled = !d.view;
         });
+        yes.classList.toggle('on', upload); yes.setAttribute('aria-pressed', upload ? 'true' : 'false');
+        no.classList.toggle('on', !upload); no.setAttribute('aria-pressed', upload ? 'false' : 'true');
       }
       paint();
       H.form({ title: H.t('Droits de {name}', { name: u.name }), ok: H.t('Enregistrer'), kind: 'form', cls: 'rightsbox',
         lead: [H.t('Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.')],
         extra: [rows],
-        submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/rights', { rights: draft }); },
-        done: function () { H.toast(H.t('Droits enregistrés : {name}', { name: u.name })); refreshUsers('rights-' + u.id); } });
+        submit: function () { return saveAccount(u, draft, upload, saved); },
+        done: function () { H.toast(H.t('Droits enregistrés : {name}', { name: u.name })); refreshUsers('rights-' + u.id); },
+        cancel: function () { if (saved.touched) refreshUsers('rights-' + u.id); } });       // fermée après un enregistrement à moitié réussi : la liste montre ce qui l'est
+    }
+    // Enregistre les droits de bibliothèque et le droit d'envoi, chacun par son appel et seulement s'il a changé. Refuse (avec ce qui a réussi et ce qui a échoué) si l'un des deux échoue.
+    function saveAccount(u, draft, upload, saved) {
+      var base = '/api/user/' + encodeURIComponent(u.id), now = JSON.stringify(draft), failed = {}, applied = {};
+      function run(part, changed, path, body, keep) {
+        if (!changed) return Promise.resolve();
+        return H.api(path, body).then(function () { keep(); applied[part] = true; saved.touched = true; }, function (e) { failed[part] = e.message; });
+      }
+      return Promise.all([
+        run('rights', now !== saved.rights, base + '/rights', { rights: draft }, function () { saved.rights = now; }),
+        run('upload', upload !== saved.upload, base + '/upload', { upload: upload }, function () { saved.upload = upload; })
+      ]).then(function () {
+        var bad = saveFailure(failed, applied);
+        if (bad) throw new Error(bad);
+      });
+    }
+    // Dit ce qui a échoué, et seulement ce qui est enregistré s'il l'est : l'un n'est jamais présenté comme raté parce que l'autre l'est.
+    function saveFailure(failed, applied) {
+      if (failed.rights && failed.upload) return H.t('Rien n’a été enregistré. Droits de bibliothèque : {rights}. Envoyer des fichiers : {upload}', { rights: failed.rights, upload: failed.upload });
+      if (failed.rights) return applied.upload ? H.t('« Envoyer des fichiers » est enregistré, mais pas les droits de bibliothèque : {error}', { error: failed.rights }) : H.t('Les droits de bibliothèque n’ont pas été enregistrés : {error}', { error: failed.rights });
+      if (failed.upload) return applied.rights ? H.t('Les droits de bibliothèque sont enregistrés, mais pas « Envoyer des fichiers » : {error}', { error: failed.upload }) : H.t('« Envoyer des fichiers » n’a pas été enregistré : {error}', { error: failed.upload });
+      return '';
     }
     function passwordOf(u, mine) {
       if (mine) { changeMine(); return; }                              // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)

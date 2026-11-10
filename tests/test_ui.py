@@ -4004,22 +4004,169 @@ class InboxUiCase(unittest.TestCase):
                     self.shown(page, "#/")                                                 # l'adresse directe retombe sur l'accueil
                     self.assertEqual(page.locator("#views > .view:visible .upload").count(), 0)
 
-    def test_the_administrator_gives_and_withdraws_the_right(self):
+    def rights_box(self, page, who):
+        """La boîte « Droits de {nom} » du compte `who`, ouverte depuis Paramètres > Comptes."""
+        page.goto(self.base + "/#/settings?tab=comptes")
+        page.locator(f'[data-key="rights-{who["id"]}"]').click()
+        page.locator(".menu.rightsbox").wait_for()
+        return page.locator(".menu.rightsbox")
+
+    def calls(self, page):
+        """Les appels d'écriture de droits que la page envoie : « rights » et « upload »."""
+        seen = []
+        page.on("request", lambda r: seen.append(r.url.rsplit("/", 1)[1]) if r.method == "POST" and re.search(r"/api/user/\w+/(rights|upload)$", r.url) else None)
+        return seen
+
+    def reset_rights(self, row):
+        """Les droits du compte `row` sont remis comme au départ à la fin du test (la classe partage ses comptes)."""
+        from hub import accounts
+        def undo():
+            ids = [lib.id for lib in self.hub.cfg.libraries]
+            accounts.set_can_upload(self.hub.db, row["id"], row["id"] == self.alice["id"])
+            accounts.set_rights(self.hub.db, row["id"], set(ids), {i: {"view": True, "play": True, "download": True} for i in ids})
+        self.addCleanup(undo)
+
+    def test_the_administrator_gives_and_withdraws_the_right_in_the_rights_box(self):
+        self.reset_rights(self.bob)
         page = self.session("admin")
         page.goto(self.base + "/#/settings?tab=comptes")
-        switch = page.locator(f'[data-key="upload-{self.bob["id"]}"]')
-        switch.wait_for()
-        self.assertEqual(switch.get_attribute("aria-pressed"), "false")
-        self.assertEqual(page.locator(f'[data-key="upload-{self.alice["id"]}"]').get_attribute("aria-pressed"), "true")
-        self.assertEqual(page.locator(f'[data-key="upload-{self.admin_id}"]').count(), 0)                  # un administrateur envoie toujours : pas d'interrupteur
-        self.assertIn("toujours", page.locator(f'[data-upload="{self.admin_id}"]').inner_text())
-        switch.click()
-        page.locator(f'[data-key="upload-{self.bob["id"]}"][aria-pressed="true"]').wait_for()
+        line = page.locator(f'[data-user="{self.bob["id"]}"]')
+        line.wait_for()
+        self.assertEqual(page.locator(f'[data-key="upload-{self.bob["id"]}"]').count(), 0)               # plus de pastille à part dans la ligne du compte
+        self.assertIn("Envoyer des fichiers : non", line.locator("[data-rights]").inner_text())
+        box = self.rights_box(page, self.bob)
+        self.assertEqual(box.locator(".rrow[data-upload-right] b").inner_text(), "Envoyer des fichiers")
+        yes, no = box.locator('[data-key="r-upload-yes"]'), box.locator('[data-key="r-upload-no"]')
+        self.assertEqual((yes.inner_text().strip("✓ \n"), no.inner_text().strip("✓ \n")), ("Oui", "Non"))
+        self.assertEqual((yes.get_attribute("aria-pressed"), no.get_attribute("aria-pressed")), ("false", "true"))
+        self.assertTrue(yes.evaluate("e => e.classList.contains('f')") and no.evaluate("e => e.classList.contains('f')"))       # atteignables à la télécommande
+        yes.click()
+        self.assertEqual((yes.get_attribute("aria-pressed"), no.get_attribute("aria-pressed")), ("true", "false"))
+        self.assertFalse(self.users()["bob"]["can_upload"])                                              # rien n'est écrit avant « Enregistrer »
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        line.locator("[data-rights]", has_text="Envoyer des fichiers : oui").wait_for()
         self.assertTrue(self.users()["bob"]["can_upload"])
-        bob = self.session("bob")                                                                  # le droit vaut tout de suite
+        bob = self.session("bob")                                                                        # le droit vaut tout de suite
         self.assertEqual(bob.locator('#nav [data-nav="#/upload"]').count(), 1)
-        page.locator(f'[data-key="upload-{self.bob["id"]}"]').click()
-        page.locator(f'[data-key="upload-{self.bob["id"]}"][aria-pressed="false"]').wait_for()
+        box = self.rights_box(page, self.bob)
+        self.assertEqual(box.locator('[data-key="r-upload-yes"]').get_attribute("aria-pressed"), "true")
+        box.locator('[data-key="r-upload-no"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        line.locator("[data-rights]", has_text="Envoyer des fichiers : non").wait_for()
+        self.assertFalse(self.users()["bob"]["can_upload"])
+
+    def test_an_administrator_always_sends_and_has_no_box_for_it(self):
+        page = self.session("admin")
+        page.goto(self.base + "/#/settings?tab=comptes")
+        line = page.locator(f'[data-user="{self.admin_id}"]')
+        line.wait_for()
+        self.assertIn("toujours", line.locator("[data-upload]").inner_text())
+        self.assertEqual(line.locator('[data-key^="upload-"], [data-key^="rights-"]').count(), 0)       # ni interrupteur, ni boîte pour cela
+
+    def test_only_what_changed_is_sent(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        calls = self.calls(page)
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-upload-yes"]').click()                                                 # le droit d'envoi seul
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(calls, ["upload"])
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-download-films"]').click()                                             # un droit de bibliothèque seul
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(calls, ["upload", "rights"])
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-download-films"]').click()                                             # remis comme avant, avec le droit d'envoi retiré : les deux partent
+        box.locator('[data-key="r-upload-no"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(sorted(calls[2:]), ["rights", "upload"])
+
+    def test_one_refusal_says_which_part_failed_and_keeps_the_box_open(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        calls = self.calls(page)
+        page.route("**/api/user/*/rights", lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "disque en panne"}'))
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-upload-yes"]').click()
+        box.locator('[data-key="r-download-films"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        error = box.locator(".formerr")
+        error.filter(has_text="disque en panne").wait_for()
+        self.assertIn("Envoyer des fichiers", error.inner_text())
+        self.assertIn("enregistré", error.inner_text())                                                  # l'envoi, lui, a réussi : on le dit
+        self.assertTrue(self.users()["bob"]["can_upload"])
+        self.assertEqual(self.users()["bob"]["rights"]["films"]["download"], True)                       # les droits de bibliothèque, non
+        self.assertEqual(page.locator(".menu.rightsbox").count(), 1)                                     # la boîte reste ouverte
+        page.unroute("**/api/user/*/rights")
+        del calls[:]
+        box.locator(".btn", has_text="Enregistrer").click()                                              # on réessaie : seul ce qui manque est renvoyé
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(calls, ["rights"])
+        self.assertEqual(self.users()["bob"]["rights"]["films"]["download"], False)
+        self.assertTrue(self.users()["bob"]["can_upload"])
+
+    def test_closing_after_a_half_saved_attempt_shows_what_was_saved(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        page.route("**/api/user/*/rights", lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "disque en panne"}'))
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-upload-yes"]').click()
+        box.locator('[data-key="r-download-films"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        box.locator(".formerr", has_text="disque en panne").wait_for()
+        box.locator(".btn", has_text="Annuler").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        page.locator(f'[data-user="{self.bob["id"]}"] [data-rights]', has_text="Envoyer des fichiers : oui").wait_for()      # la liste dit ce qui est enregistré
+        self.assertIn("Télécharger : tout", page.locator(f'[data-rights="{self.bob["id"]}"]').inner_text())                # les droits de bibliothèque, refusés, sont restés ce qu'ils étaient
+
+    def test_a_refused_upload_right_does_not_make_the_library_rights_look_refused(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        page.route("**/api/user/*/upload", lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "base verrouillée"}'))
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-upload-yes"]').click()
+        box.locator('[data-key="r-download-series"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        error = box.locator(".formerr")
+        error.filter(has_text="base verrouillée").wait_for()
+        self.assertIn("droits de bibliothèque", error.inner_text())
+        self.assertIn("enregistrés", error.inner_text())
+        self.assertFalse(self.users()["bob"]["can_upload"])
+        self.assertFalse(self.users()["bob"]["rights"]["series"]["download"])
+        page.unroute("**/api/user/*/upload")
+        box.locator('[data-key="r-upload-no"]').click()                                                  # on renonce à l'envoi : les droits de bibliothèque, eux, sont gardés
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertFalse(self.users()["bob"]["can_upload"])
+        self.assertFalse(self.users()["bob"]["rights"]["series"]["download"])
+
+    def test_the_upload_choice_fits_a_phone(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin", device="phone", width=390)
+        box = self.rights_box(page, self.bob)
+        chips = box.locator(".rrow[data-upload-right] .chip")
+        edge = box.evaluate("e => e.getBoundingClientRect().right")
+        self.assertTrue(chips.evaluate_all("(els, edge) => els.every(e => e.getBoundingClientRect().right <= edge)", edge))        # rien ne dépasse de la fenêtre
+        self.assertTrue(chips.evaluate_all("els => els.every(e => e.getBoundingClientRect().height >= 32)"))                       # une cible tactile assez grande
+
+    def test_the_arrow_keys_reach_the_upload_choice_and_escape_closes_the_box(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-download-livres"]').focus()                                            # le dernier choix de la dernière bibliothèque
+        page.keyboard.press("ArrowDown")
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), "r-upload-no")      # la colonne de droite descend sur « Non »
+        page.keyboard.press("ArrowLeft")
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), "r-upload-yes")
+        page.keyboard.press("Enter")
+        self.assertEqual(box.locator('[data-key="r-upload-yes"]').get_attribute("aria-pressed"), "true")
+        page.keyboard.press("Escape")
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), f"rights-{self.bob['id']}")
         self.assertFalse(self.users()["bob"]["can_upload"])
 
     # --- Envoyer -------------------------------------------------------------
@@ -4402,7 +4549,7 @@ class InboxUiCase(unittest.TestCase):
         page.locator("#views > .view:visible .send[data-state=error]", has_text="not enough room on the server").wait_for()
         self.assertEqual(page.evaluate("Hub.missing"), [])
 
-    def test_the_inbox_tab_and_the_switch_are_in_english(self):
+    def test_the_inbox_tab_and_the_upload_choice_are_in_english(self):
         self.put("alice", "Film.mkv", b"f" * 2000)
         page = self.session("admin", lang="en")
         page.goto(self.base + "/#/settings?tab=inbox")
@@ -4411,8 +4558,12 @@ class InboxUiCase(unittest.TestCase):
         self.assertEqual(page.locator("#views > .view:visible .inbox-file .btn").all_inner_texts(), ["Download", "Delete"])
         self.assertEqual(page.locator("#views > .view:visible .inbox .total").inner_text(), "1 file · 2 KB")
         page.goto(self.base + "/#/settings?tab=comptes")
-        page.locator(f'[data-key="upload-{self.bob["id"]}"]').wait_for()
-        self.assertEqual(page.locator(f'[data-key="upload-{self.bob["id"]}"]').inner_text().strip("✓ \n"), "Can upload files")
+        page.locator(f'[data-key="rights-{self.bob["id"]}"]').click()
+        page.locator(".menu.rightsbox .rrow[data-upload-right]").wait_for()
+        self.assertEqual(page.locator(".menu.rightsbox .rrow[data-upload-right] b").inner_text(), "Upload files")
+        self.assertEqual([t.strip("✓ \n") for t in page.locator(".menu.rightsbox .rrow[data-upload-right] .chip").all_inner_texts()], ["Yes", "No"])
+        self.assertIn("Upload files: no", page.locator(f'[data-user="{self.bob["id"]}"] [data-rights]').inner_text())
+        page.locator(".menu.rightsbox .btn", has_text="Cancel").click()
         self.assertIn("always", page.locator(f'[data-upload="{self.admin_id}"]').inner_text())
         self.assertEqual(page.evaluate("Hub.missing"), [])
 

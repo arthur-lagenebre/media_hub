@@ -557,7 +557,7 @@
     '(toi)': '(you)',
     'créé le {date}': 'created {date}',
     'Droits': 'Permissions',
-    'Droits de {name} : consulter, lecture, télécharger': 'Permissions of {name}: browse, playback, download',
+    'Droits de {name} : consulter, lecture, télécharger, envoyer': 'Permissions of {name}: browse, playback, download, upload',
     'Mot de passe': 'Password',
     'Changer le mot de passe de {name}': 'Change the password of {name}',
     'Supprimer le compte de {name}': 'Delete the account of {name}',
@@ -634,11 +634,18 @@
     'Les fichiers que les comptes ont envoyés. Rien n’y est rangé dans une bibliothèque : télécharge-les, puis range-les toi-même.': 'The files the accounts have uploaded. None is filed in a library: download them, then file them yourself.',
     'La boîte de réception est vide.': 'The inbox is empty.',
     'Télécharger {name}': 'Download {name}',
-    'Peut envoyer des fichiers': 'Can upload files',
     'Peut envoyer des fichiers : toujours': 'Can upload files: always',
-    'Peut envoyer des fichiers : {name}': 'Can upload files: {name}',
-    '{name} peut envoyer des fichiers': '{name} can now upload files',
-    '{name} ne peut plus envoyer de fichiers': '{name} can no longer upload files'
+    'Envoyer des fichiers': 'Upload files',
+    'Envoyer des fichiers : {upload}': 'Upload files: {upload}',
+    'oui': 'yes',
+    'non': 'no',
+    'Oui': 'Yes',
+    'Non': 'No',
+    'Rien n’a été enregistré. Droits de bibliothèque : {rights}. Envoyer des fichiers : {upload}': 'Nothing was saved. Library permissions: {rights}. Upload files: {upload}',
+    '« Envoyer des fichiers » est enregistré, mais pas les droits de bibliothèque : {error}': '“Upload files” is saved, but the library permissions are not: {error}',
+    'Les droits de bibliothèque n’ont pas été enregistrés : {error}': 'The library permissions were not saved: {error}',
+    'Les droits de bibliothèque sont enregistrés, mais pas « Envoyer des fichiers » : {error}': 'The library permissions are saved, but “Upload files” is not: {error}',
+    '« Envoyer des fichiers » n’a pas été enregistré : {error}': '“Upload files” was not saved: {error}'
   };
 
   // Ce que le serveur écrit. Les libellés de bibliothèque viennent de la configuration (« Films », « Séries »…) : un nom que l'on a choisi soi-même reste tel quel.
