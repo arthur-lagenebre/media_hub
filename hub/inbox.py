@@ -197,8 +197,9 @@ class Inbox:
             if current and is_folder_name(current):
                 self._mkdir(current)
                 return current
+            stale = current or ""                  # une valeur qui n'est pas un nom de dossier (base touchée à la main) : le compte est traité comme neuf, et la valeur est réécrite avant tout dossier
             if is_folder_name(uid) and self._is_real_folder(self.root / uid) and not self._held_by_other(uid, uid):
-                return self._record(uid, uid)
+                return self._record(uid, uid, stale)
             taken = self._taken()
             for candidate in self._numbered(clean_folder(row["name"])):
                 if _same(candidate) in taken:
@@ -210,12 +211,22 @@ class Inbox:
                 except OSError as e:
                     raise self._unusable(f"dossier « {candidate} » impossible à créer", e)
                 try:
-                    return self._record(uid, candidate)
+                    kept = self._record(uid, candidate, stale)
                 except Exception:
-                    with contextlib.suppress(OSError):
-                        (self.root / candidate).rmdir()
+                    self._remove_empty(candidate)
                     raise
+                if kept != candidate:                  # la base en retient un autre : le dossier qu'on vient de faire ne sert à personne
+                    self._remove_empty(candidate)
+                    if not is_folder_name(kept):
+                        raise self._unusable(f"le dossier « {kept} » de la base n'est pas un nom de dossier", "base modifiée pendant l'envoi")
+                    self._mkdir(kept)
+                return kept
         raise InboxError(409, "trop de dossiers de même nom dans la boîte")
+
+    def _remove_empty(self, name):
+        """Supprime le dossier `name` de la boîte s'il est vide (celui qu'on vient de créer) ; jamais un dossier qui contient quelque chose."""
+        with contextlib.suppress(OSError):
+            (self.root / name).rmdir()
 
     def _held_by_other(self, uid, name):
         """Un autre compte que `uid` tient-il déjà le dossier `name` dans la base (à la casse et à la forme Unicode près) ? Alors ce dossier n'est pas à `uid`, même s'il porte son identifiant."""
@@ -229,9 +240,9 @@ class Inbox:
         except OSError as e:
             raise self._unusable(f"dossier « {name} » impossible à créer", e)
 
-    def _record(self, uid, name):
-        """Fixe le dossier du compte dans la base, sauf s'il en a déjà un ; rend le nom retenu."""
-        self.db.execute("UPDATE users SET inbox_dir=? WHERE id=? AND (inbox_dir IS NULL OR inbox_dir='')", (name, uid))
+    def _record(self, uid, name, stale=""):
+        """Fixe le dossier du compte dans la base, sauf s'il en a déjà un (`stale`, une valeur qui n'était pas un nom de dossier, est remplacée) ; rend le nom retenu."""
+        self.db.execute("UPDATE users SET inbox_dir=? WHERE id=? AND (inbox_dir IS NULL OR inbox_dir='' OR inbox_dir=?)", (name, uid, stale))
         return self.folder_of(uid) or name
 
     @staticmethod

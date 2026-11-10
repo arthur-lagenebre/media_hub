@@ -145,14 +145,36 @@ class TestAccountFolder(FolderCase):
         self.assertEqual(self.dirs(), ["Léa", "Léa (2)", "Léa (3)"])
         self.assertIsNone(self.recorded(uid))
 
-    def test_a_folder_name_the_base_holds_that_is_not_a_folder_is_refused_and_writes_nothing_outside(self):
-        """La base a été touchée à la main (« ../dehors ») : l'envoi est un 503, jamais une écriture hors de la boîte."""
+    def test_a_folder_name_the_base_holds_that_is_not_a_folder_is_replaced_before_any_folder_is_made_and_writes_nothing_outside(self):
+        """La base a été touchée à la main (« ../dehors ») : le lien est réécrit proprement d'après le nom du compte, jamais une écriture hors de la boîte, jamais un dossier orphelin."""
         uid = self.user("Léa", "1", inbox_dir="../dehors")
-        with mock.patch.object(sys, "stderr", io.StringIO()), self.assertRaises(InboxError) as caught:
-            self.put("x.mkv", account=uid)
-        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual(self.put("x.mkv", account=uid)["account"], "Léa")
+        self.assertEqual(self.recorded(uid), "Léa")
         self.assertFalse((self.tmp / "dehors").exists())
-        self.assertEqual(list(self.tmp.rglob("*.mkv")), [])
+        self.assertEqual(self.dirs(), ["Léa"])
+        self.assertEqual([p.name for p in (self.tmp / "inbox" / "Léa").iterdir()], ["x.mkv"])
+
+    def test_a_dubious_folder_name_in_the_base_does_not_make_a_new_empty_folder_at_each_attempt(self):
+        for n, bad in enumerate(("../x", "a/b", ".caché", "CON", "a\b", "x" * 300)):
+            uid = self.user("Léa" + str(n), str(n), inbox_dir=bad)
+            for attempt in range(3):
+                self.assertEqual(self.put(f"x{attempt}.mkv", account=uid)["account"], f"Léa{n}", bad)
+            self.assertEqual(self.recorded(uid), f"Léa{n}", bad)
+        self.assertEqual(self.dirs(), [f"Léa{n}" for n in range(6)])                     # un dossier par compte, pas un de plus
+
+    def test_a_dubious_folder_name_in_the_base_does_not_hide_an_old_folder_named_after_the_identifier(self):
+        uid = self.user("Arthur", "default", inbox_dir="../x")
+        (self.tmp / "inbox" / "default").mkdir(parents=True)
+        (self.tmp / "inbox" / "default" / "ancien.mkv").write_bytes(b"1")
+        self.assertEqual(self.put("neuf.mkv", account=uid)["account"], "default")
+        self.assertEqual(self.recorded(uid), "default")
+        self.assertEqual(self.dirs(), ["default"])
+
+    def test_a_folder_made_for_a_name_the_base_does_not_keep_is_removed_when_empty(self):
+        uid = self.user("Léa", "1")
+        with mock.patch.object(Inbox, "folder_of", return_value="Autre"):              # la base retient un autre nom que celui qui vient d'être créé
+            self.assertEqual(self.inbox.folder_for(uid), "Autre")
+        self.assertNotIn("Léa", self.dirs())
 
     def test_names_that_differ_only_by_the_form_of_their_accents_collide_too(self):
         one, two = self.user("Léa", "1"), self.user("Léa", "2")
