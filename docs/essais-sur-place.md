@@ -28,7 +28,7 @@ Navigateur de bureau, administrateur, clé TMDB réglée.
 
 ### Films manquants d'une personne
 
-- [ ] *Gestion* > « Films manquants (bibliothèques de films) ». **Mesures à noter : la durée, et la taille de `HUB_DATA/tmdb`** (`du -sh` sur le NAS). L'estimation de [deploy/README.md](../deploy/README.md) est « une heure ou plus la première fois, plusieurs centaines de Mo », non mesurée.
+- [ ] *Gestion* > « Détail par bibliothèque » > « Films manquants » de la bibliothèque de films. **Mesures à noter : la durée, et la taille de `HUB_DATA/tmdb`** (`du -sh` sur le NAS). L'estimation de [deploy/README.md](../deploy/README.md) est « une heure ou plus la première fois, plusieurs centaines de Mo », non mesurée.
 - [ ] Ouvrir la page d'un réalisateur (`#/person?n=`), puis celle d'un acteur : **attendu :** les films manquants en cases grisées, du plus récent au plus ancien.
 - [ ] Sur une personne pas encore enrichie : « Chercher ses films manquants ». **Attendu :** les cases grisées apparaissent.
 - [ ] Un bouton par bibliothèque (« Films des personnes (TMDB) ») sur une bibliothèque de séries ou d'animations. **Attendu :** une catégorie à la fois, sans toucher aux autres.

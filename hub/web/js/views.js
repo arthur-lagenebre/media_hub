@@ -968,24 +968,18 @@
       H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast(r.removed > 1 ? H.t('Covers à relire : {name} ({n} vignettes oubliées)', { name: H.tr(l.label), n: r.removed }) : H.t('Covers à relire : {name} ({n} vignette oubliée)', { name: H.tr(l.label), n: r.removed })); })
         .catch(function (e) { H.toast(e.message, 5000); });
     }
-    // Les films qui manquent aux réalisateurs et acteurs de premier plan des bibliothèques de films : une tâche de fond, qui n'a de sens qu'avec une clé TMDB et au moins une bibliothèque de films.
-    function peopleButton() {
-      var hasMovies = state.libraries.some(function (l) { return l.kind === 'movies'; });
-      if (!state.tmdb || !hasMovies) return null;
-      return H.button(H.t('Films manquants (bibliothèques de films)'), null, { 'data-key': 'enrich-people', title: H.t('Demande à TMDB les films des réalisateurs et des acteurs de premier plan, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Compte une heure ou plus la première fois (un appel par personne, puis les affiches) ; une personne déjà connue depuis moins d’un mois n’est pas redemandée.'),
-        onclick: function () { start('/api/enrich/people', {}, H.t('Recherche des films manquants lancée : bibliothèques de films')); } });
-    }
-    // Les films des personnes d'une catégorie (une bibliothèque de films, de séries ou d'animations) : une tâche de fond par catégorie. Pour des séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ».
+    // Les films des personnes d'une bibliothèque de films ou de séries (animations comprises) : une tâche de fond par bibliothèque, qui n'a de sens qu'avec une clé TMDB.
+    // Pour des films, c'est « Films manquants » ; pour des séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ».
     function categoryButton(l) {
       if (!state.tmdb || (l.kind !== 'movies' && l.kind !== 'shows')) return null;
-      return H.button(H.t('Films des personnes (TMDB)'), null, { 'data-key': 'people-' + l.id, title: l.kind === 'shows' ? H.t('Demande à TMDB les films des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Les identifiants viennent de « Enrichir (TMDB) » : lance-le d’abord une fois.') : H.t('Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque.'),
+      var shows = l.kind === 'shows';
+      return H.button(shows ? H.t('Films des personnes (TMDB)') : H.t('Films manquants'), null, { 'data-key': 'people-' + l.id, title: shows ? H.t('Demande à TMDB les films des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Les identifiants viennent de « Enrichir (TMDB) » : lance-le d’abord une fois.') : H.t('Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque.'),
         onclick: function () { start('/api/enrich/people', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.tr(l.label) })); } });
     }
     // Les cinq bibliothèques tiennent sur une ligne tant qu'on ne les déplie pas : « Tout mettre à jour » suffit presque toujours.
     function libsPanel() {
       var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Bibliothèques')),
-        H.button(H.t('Tout mettre à jour'), 'refresh', { class: 'primary', 'data-key': 'scan-all', title: H.t('Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.'), onclick: function () { start('/api/scan', {}, H.t('Mise à jour lancée')); } }),
-        peopleButton()));
+        H.button(H.t('Tout mettre à jour'), 'refresh', { class: 'primary', 'data-key': 'scan-all', title: H.t('Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.'), onclick: function () { start('/api/scan', {}, H.t('Mise à jour lancée')); } })));
       libs.appendChild(h('button', { class: 'jhead f', 'aria-expanded': libsOpen ? 'true' : 'false', 'data-key': 'libs-toggle',
         onclick: function () { libsOpen = !libsOpen; showLibs('libs-toggle'); } }, h('span', { class: 'jt' }, h('b', null, H.t('Détail par bibliothèque')), h('span', null, H.plural(state.libraries.length, 'bibliothèque')))));
       if (!libsOpen) return libs;

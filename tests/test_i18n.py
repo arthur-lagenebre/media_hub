@@ -330,6 +330,17 @@ class TestEnglishInTheBrowser(UiCase):
         self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Management", "Inbox", "Preferences", "Accounts"])
         self.assertIn("Libraries", self.view(".panel h2").all_inner_texts())
 
+    def test_the_people_buttons_of_the_libraries_are_in_english(self):
+        self.run_.hub.cfg.tmdb_key = "fake"
+        self.addCleanup(setattr, self.run_.hub.cfg, "tmdb_key", "")
+        self.open("#/settings")
+        self.view("[data-key=libs-toggle]").click()
+        self.view("[data-key=scan-films]").wait_for()
+        self.assertEqual(self.view("[data-key=people-films]").inner_text(), "Missing movies")
+        self.assertEqual(self.view("[data-key=people-series]").inner_text(), "People’s movies (TMDB)")
+        self.assertEqual(self.view("[data-key=enrich-people]").count(), 0)
+        self.assertEqual(self.missing(), [])
+
     def test_the_language_is_chosen_in_the_settings_and_kept(self):
         context = self.browser.new_context(viewport={"width": 1920, "height": 1080})
         page = context.new_page()

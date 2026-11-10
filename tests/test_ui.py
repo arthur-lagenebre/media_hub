@@ -2711,14 +2711,17 @@ class TestPersonMissingUi(UiCase):
         self.assertEqual(self.missing_titles(), ["Réalisé ailleurs"])
         self.assertEqual(self.view(".card.wanted .s").inner_text(), "1999 · Réalisateur")
 
-    def test_the_general_button_in_management_asks_tmdb_for_everybody(self):
-        self.open("#/admin")
-        button = self.view("[data-key=enrich-people]")
-        button.wait_for()
+    def test_a_movie_library_has_a_missing_movies_button_and_the_general_one_is_gone(self):
+        self.open_libraries_detail()
+        self.assertEqual(self.view("[data-key=enrich-people]").count(), 0)                    # plus de bouton global dans l'en-tête du panneau
+        self.assertNotIn("bibliothèques de films", self.page.inner_text("body"))
+        button = self.view("[data-key=people-films]")
+        self.assertEqual(button.inner_text().strip(), "Films manquants")                       # le bouton d'une bibliothèque de films
+        self.assertIn("réalisateurs et des acteurs de cette bibliothèque", button.get_attribute("title"))
         self.assertTrue(button.evaluate("e => e.classList.contains('f')"))                     # atteignable à la télécommande
         with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
             button.click()
-            self.page.locator("#toast.on", has_text="Recherche des films manquants lancée").wait_for()
+            self.page.locator("#toast.on", has_text="Recherche des films manquants lancée : Films").wait_for()
             self.until(lambda: len(FakePersonTmdb.calls) >= 2, tries=100)
             self.run_.wait_jobs()
         self.assertEqual(sorted(FakePersonTmdb.calls), ["person/8100/movie_credits", "person/8200/movie_credits"])
@@ -2746,6 +2749,10 @@ class TestPersonMissingUi(UiCase):
         for lib in ("films", "series", "animations"):
             self.assertEqual(self.view(f"[data-key=people-{lib}]").count(), 1, lib)                  # films, séries et animations : une catégorie chacune
         self.assertEqual(self.view("[data-key=people-musique], [data-key=people-livres]").count(), 0)
+        self.assertEqual(self.view("[data-key=people-films]").inner_text().strip(), "Films manquants")                  # d'après le genre de la bibliothèque : films...
+        for lib in ("series", "animations"):
+            self.assertEqual(self.view(f"[data-key=people-{lib}]").inner_text().strip(), "Films des personnes (TMDB)")       # ...séries et animations (genre « shows »)
+        self.assertIn("Les identifiants viennent de", self.view("[data-key=people-series]").get_attribute("title"))
         self.assertTrue(self.view("[data-key=people-series]").evaluate("e => e.classList.contains('f')"))
         with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
             self.view("[data-key=people-series]").click()
@@ -2764,12 +2771,6 @@ class TestPersonMissingUi(UiCase):
         self.view("[data-key=libs-toggle]").click()
         self.view("[data-key=scan-films]").wait_for()
         self.assertEqual(self.view("[data-key^=people-]").count(), 0)
-
-    def test_the_general_button_has_no_meaning_without_a_tmdb_key(self):
-        self.run_.hub.cfg.tmdb_key = ""
-        self.open("#/admin")
-        self.view("[data-key=scan-all]").wait_for()                                            # la page est là
-        self.assertEqual(self.view("[data-key=enrich-people]").count(), 0)
 
     def test_without_a_tmdb_key_there_is_no_button(self):
         self.run_.hub.cfg.tmdb_key = ""
