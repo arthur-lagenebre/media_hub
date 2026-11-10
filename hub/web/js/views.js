@@ -244,6 +244,28 @@
       h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + H.tr(lib.label))),
       h('div', { class: 'grid' }, items.map(function (it) { return H.card(it, false); })));
   }
+  // La pochette d'une tuile de bibliothèque : celle de son dernier ajout (pour un artiste, celle de son album), ou rien.
+  function tileCover(lib) {
+    var last = lib.recent && lib.recent[0];
+    if (!last) return '';
+    if (last.type === 'artist') return last.album ? '/img/item/' + last.album + '?w=300' : '';
+    return '/img/item/' + last.id + '?w=300';
+  }
+  // Une bibliothèque en tuile : sa pochette (à défaut, la couleur de la bibliothèque, comme le point de ses rayons), son nom et ce qu'elle compte ; un vrai lien, atteignable à la télécommande.
+  function libraryTile(lib) {
+    var cover = tileCover(lib), thumb = h('span', { class: 'thumb', 'aria-hidden': 'true' });
+    if (cover) thumb.appendChild(h('img', { src: cover, alt: '', loading: 'lazy', decoding: 'async', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } }));
+    return h('a', { class: 'libtile f', href: '#/l/' + lib.id, 'data-lib': lib.id, 'data-key': 'lib-' + lib.id }, thumb,
+      h('span', { class: 'what' }, h('b', null, h('i', { class: 'dot' }), H.tr(lib.label)), h('span', null, H.plural(lib.count, 'élément'))));
+  }
+  // Quand aucun rayon n'est affiché : une phrase (les rayons sont masqués dans les réglages, ou il n'y a rien à proposer), puis les bibliothèques en tuiles ; la première prend le focus.
+  function libraryTiles(libraries) {
+    var masked = H.setting('home_latest') === 'hide' && H.setting('home_unseen') === 'hide';
+    var tiles = libraries.map(libraryTile);
+    if (tiles.length) tiles[0].setAttribute('data-autofocus', '1');
+    return [h('p', { class: 'libtiles-note muted' }, masked ? H.t('Tu as masqué tous les rayons de l’accueil : Paramètres > Préférences, pour les remettre') : H.t('Rien à reprendre ni à découvrir pour l’instant')),
+      h('div', { class: 'libtiles' }, tiles)];
+  }
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
     var timer = null;
@@ -269,9 +291,11 @@
         if (data.continue.length) el.appendChild(row(H.t('Reprendre'), null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
         if (latest.length) el.appendChild(cardsSection('latest', H.t('Nouveautés'), latest));
-        (H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10))).forEach(function (shelf) {
+        var unseen = H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10));
+        unseen.forEach(function (shelf) {
           el.appendChild(libraryShelf('unseen', H.t('Pas encore vu'), shelf.lib, shelf.items));
         });
+        if (!data.continue.length && !latest.length && !unseen.length) libraryTiles(data.libraries).forEach(function (node) { el.appendChild(node); });       // aucun rayon : les bibliothèques, pour ne pas laisser une page nue
         if (!document.body.contains(el) || el.style.display === 'none') return;       // une réponse tardive, la page a été quittée : `H.focus.first()` prendrait le focus de la page courante (la barre de la liseuse, dont les flèches ne tournent plus les pages)
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
@@ -287,6 +311,11 @@
     movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')], ['rating', H.t('Mieux notés')]],      // films et séries ; « Mieux notés » : la note TMDB
     books: [['title', H.t('Collection')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')]]
   };
+  // Les choix du statut, accordés d'après le GENRE de la bibliothèque (jamais d'après son nom, qu'on peut changer) : les films au masculin, les séries et les livres (comptés en « séries ») au féminin. [valeur de `filter=`, libellé]
+  function stateChoices(kind) {
+    var fem = kind === 'shows' || kind === 'books';
+    return [['', fem ? H.t('Toutes') : H.t('Tous')], ['todo', H.t('À voir')], ['progress', H.t('En cours')], ['done', fem ? H.t('Terminées') : H.t('Terminés')]];
+  }
   H.route(/^\/l\/([\w-]+)$/, function (m, params) {
     var libId = m[1], lib = H.lib(libId);
     var kind = lib ? lib.kind : 'movies';
@@ -304,11 +333,8 @@
       oninput: function () { clearTimeout(search.t); search.t = setTimeout(function () { st.q = search.value; reset(); }, 280); },
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
     var bGenre = H.button('', null, { class: 'flt wide', onclick: pickGenre }), bSort = H.button('', null, { class: 'flt wide', onclick: pickSort });
-    // Où en est le compte : quatre choix dont un seul est actif (celui-ci se voit par son fond plein et sa coche, pas par un simple contour) ; la valeur est celle de `filter=` de l'API, vide pour tout montrer.
-    var bState = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': H.t('Avancement') }, [['', H.t('Tous')], ['todo', H.t('À voir')], ['progress', H.t('En cours')], ['done', H.t('Terminés')]].map(function (c) {
-      return h('button', { class: 'chip f', type: 'button', role: 'radio', 'aria-checked': 'false', 'data-state': c[0],
-        onclick: function () { if (st.state !== c[0]) { st.state = c[0]; paint(); reset(); } } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, c[1]));
-    }));
+    // Où en est le compte : une liste comme « Genre » et « Tri » ; sa valeur est celle de `filter=` de l'API, vide pour tout montrer.
+    var bState = H.button('', null, { class: 'flt wide', onclick: pickState });
     var bLists = H.button(H.t('Playlists'), 'queue', { onclick: function () { H.go('#/playlists'); } });
     // Les films d'animation sont dans Films, avec le genre « Animation » : un raccourci depuis la page Animations, si le compte voit Films ; il se range à droite de la rangée des filtres
     var related = libId === 'animations' && H.lib('films') ? h('div', { class: 'related' }, h('a', { class: 'chip f', href: '#/l/films?genre=Animation' }, H.t('Films d’animation'))) : null;
@@ -322,11 +348,7 @@
     function paint() {
       label(bGenre, H.t('Genre'), st.genre || H.t('Tous'));
       label(bSort, H.t('Tri'), (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
-      Array.prototype.forEach.call(bState.children, function (b) {
-        var on = b.getAttribute('data-state') === st.state;
-        b.setAttribute('aria-checked', on ? 'true' : 'false');
-        b.classList.toggle('on', on);
-      });
+      label(bState, H.t('Statut'), (stateChoices(kind).filter(function (c) { return c[0] === st.state; })[0] || stateChoices(kind)[0])[1]);
       bGenre.hidden = !facets.genres.length;
       var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
       var music = kind === 'music' && typeof facets.albums === 'number';          // la musique compte toujours les artistes et les albums de ce que les filtres laissent, quelle que soit la vue
@@ -354,6 +376,9 @@
     }
     function pickSort() {
       H.menu(H.t('Trier par'), sorts.map(function (s) { return { label: s[1], value: s[0] }; }), st.sort, function (v) { st.sort = v; H.pref('sort.' + libId, v); reset(); });
+    }
+    function pickState() {
+      H.menu(H.t('Statut'), stateChoices(kind).map(function (c) { return { label: c[1], value: c[0] }; }), st.state, function (v) { st.state = v; paint(); reset(); });
     }
     function query(offset) {
       var q = ['offset=' + offset, 'limit=240', 'sort=' + encodeURIComponent(st.sort)];
@@ -967,24 +992,18 @@
       H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast(r.removed > 1 ? H.t('Covers à relire : {name} ({n} vignettes oubliées)', { name: H.tr(l.label), n: r.removed }) : H.t('Covers à relire : {name} ({n} vignette oubliée)', { name: H.tr(l.label), n: r.removed })); })
         .catch(function (e) { H.toast(e.message, 5000); });
     }
-    // Les films qui manquent aux réalisateurs et acteurs de premier plan des bibliothèques de films : une tâche de fond, qui n'a de sens qu'avec une clé TMDB et au moins une bibliothèque de films.
-    function peopleButton() {
-      var hasMovies = state.libraries.some(function (l) { return l.kind === 'movies'; });
-      if (!state.tmdb || !hasMovies) return null;
-      return H.button(H.t('Films manquants (bibliothèques de films)'), null, { 'data-key': 'enrich-people', title: H.t('Demande à TMDB les films des réalisateurs et des acteurs de premier plan, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Compte une heure ou plus la première fois (un appel par personne, puis les affiches) ; une personne déjà connue depuis moins d’un mois n’est pas redemandée.'),
-        onclick: function () { start('/api/enrich/people', {}, H.t('Recherche des films manquants lancée : bibliothèques de films')); } });
-    }
-    // Les films des personnes d'une catégorie (une bibliothèque de films, de séries ou d'animations) : une tâche de fond par catégorie. Pour des séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ».
+    // Les films des personnes d'une bibliothèque de films ou de séries (animations comprises) : une tâche de fond par bibliothèque, qui n'a de sens qu'avec une clé TMDB.
+    // Pour des films, c'est « Films manquants » ; pour des séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ».
     function categoryButton(l) {
       if (!state.tmdb || (l.kind !== 'movies' && l.kind !== 'shows')) return null;
-      return H.button(H.t('Films des personnes (TMDB)'), null, { 'data-key': 'people-' + l.id, title: l.kind === 'shows' ? H.t('Demande à TMDB les films des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Les identifiants viennent de « Enrichir (TMDB) » : lance-le d’abord une fois.') : H.t('Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque.'),
+      var shows = l.kind === 'shows';
+      return H.button(shows ? H.t('Films des personnes (TMDB)') : H.t('Films manquants'), null, { 'data-key': 'people-' + l.id, title: shows ? H.t('Demande à TMDB les films des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Les identifiants viennent de « Enrichir (TMDB) » : lance-le d’abord une fois.') : H.t('Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Compte une heure ou plus la première fois (un appel par personne, puis les affiches) ; une personne déjà connue depuis moins d’un mois n’est pas redemandée.'),
         onclick: function () { start('/api/enrich/people', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.tr(l.label) })); } });
     }
     // Les cinq bibliothèques tiennent sur une ligne tant qu'on ne les déplie pas : « Tout mettre à jour » suffit presque toujours.
     function libsPanel() {
       var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Bibliothèques')),
-        H.button(H.t('Tout mettre à jour'), 'refresh', { class: 'primary', 'data-key': 'scan-all', title: H.t('Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.'), onclick: function () { start('/api/scan', {}, H.t('Mise à jour lancée')); } }),
-        peopleButton()));
+        H.button(H.t('Tout mettre à jour'), 'refresh', { class: 'primary', 'data-key': 'scan-all', title: H.t('Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.'), onclick: function () { start('/api/scan', {}, H.t('Mise à jour lancée')); } })));
       libs.appendChild(h('button', { class: 'jhead f', 'aria-expanded': libsOpen ? 'true' : 'false', 'data-key': 'libs-toggle',
         onclick: function () { libsOpen = !libsOpen; showLibs('libs-toggle'); } }, h('span', { class: 'jt' }, h('b', null, H.t('Détail par bibliothèque')), h('span', null, H.plural(state.libraries.length, 'bibliothèque')))));
       if (!libsOpen) return libs;
@@ -1193,24 +1212,11 @@
         var mine = H.session.user && u.id === H.session.user.id;
         panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' ' + H.t('(toi)') : '')),
           h('span', null, (ROLES[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
-          u.role === 'admin' ? null : uploadSwitch(u),
-          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger', { name: u.name }), onclick: function () { rightsOf(u); } }),
+          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger, envoyer', { name: u.name }), onclick: function () { rightsOf(u); } }),
           H.button(H.t('Mot de passe'), 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': H.t('Changer le mot de passe de {name}', { name: u.name }), onclick: function () { passwordOf(u, mine); } }),
           H.button(H.t('Supprimer'), 'trash', { 'data-key': 'del-' + u.id, 'aria-label': H.t('Supprimer le compte de {name}', { name: u.name }), onclick: function () { deleteUser(u, mine); } })));
       });
       return panel;
-    }
-    // Le droit « Envoyer » d'un compte : un interrupteur, valable à la requête suivante. Un administrateur l'a toujours : pas d'interrupteur.
-    function uploadSwitch(u) {
-      return h('button', { class: 'chip switch f' + (u.can_upload ? ' on' : ''), type: 'button', 'aria-pressed': u.can_upload ? 'true' : 'false', 'data-key': 'upload-' + u.id,
-        'aria-label': H.t('Peut envoyer des fichiers : {name}', { name: u.name }),
-        onclick: function () {
-          var allow = !u.can_upload;
-          H.api('/api/user/' + encodeURIComponent(u.id) + '/upload', { upload: allow }).then(function () {
-            H.toast(allow ? H.t('{name} peut envoyer des fichiers', { name: u.name }) : H.t('{name} ne peut plus envoyer de fichiers', { name: u.name }));
-            refreshUsers('upload-' + u.id);
-          }).catch(function (e) { H.toast(e.message, 5000); });
-        } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, H.t('Peut envoyer des fichiers')));
     }
     function addUser() {
       var role = 'user', toggle = H.button(H.t('Rôle : {role}', { role: ROLES.user }), null, { 'data-key': 'new-role', 'aria-label': H.t('Rôle du nouveau compte, à changer'), onclick: function () {
@@ -1229,23 +1235,26 @@
         },
         done: function (u) { H.toast(H.t('Compte créé : {name}', { name: u.name })); refreshUsers('user-add'); } });
     }
-    // Ce qu'un compte peut consulter, lire et télécharger, en une phrase pour la liste des comptes.
+    // Ce qu'un compte peut consulter, lire et télécharger, puis s'il peut envoyer des fichiers, en une phrase pour la liste des comptes.
     function rightsSummary(u) {
-      var libs = (state && state.libraries) || [], rights = u.rights || {};
-      if (!libs.length) return '';
+      var libs = (state && state.libraries) || [], rights = u.rights || {}, parts = [];
       function who(perm) {
         var list = libs.filter(function (l) { return !rights[l.id] || rights[l.id][perm]; });
         return list.length === libs.length ? H.t('tout') : list.length ? list.map(function (l) { return H.tr(l.label); }).join(', ') : H.t('rien');
       }
-      return H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') });
+      if (libs.length) parts.push(H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') }));
+      parts.push(H.t('Envoyer des fichiers : {upload}', { upload: u.can_upload ? H.t('oui') : H.t('non') }));
+      return parts.join(' · ');
     }
-    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Les droits valent tout de suite, sans que la personne se reconnecte.
+    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Au-dessous, le droit d'envoyer des fichiers (Oui / Non), qui ne tient pas à une bibliothèque.
+    // Les droits valent tout de suite, sans que la personne se reconnecte.
     function rightsOf(u) {
-      var draft = {}, rows = h('div', { class: 'rights' });
+      var draft = {}, rows = h('div', { class: 'rights' }), upload = !!u.can_upload;
       (state.libraries || []).forEach(function (l) {
         var r = (u.rights || {})[l.id] || { view: true, play: true, download: true };
         draft[l.id] = { view: !!r.view, play: !!(r.view && r.play), download: !!(r.view && r.download) };
       });
+      var saved = { rights: JSON.stringify(draft), upload: upload, touched: false };      // ce que le serveur a déjà : un second essai n'envoie que le reste
       function toggle(l, which) {
         var button = h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + l.id, onclick: function () {
           var d = draft[l.id];
@@ -1255,11 +1264,16 @@
         } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }));        // la coche a toujours sa place (visible ou non) : le bouton garde la même largeur
         return button;
       }
-      var buttons = {};
+      function choice(value, label) {
+        return h('button', { class: 'chip f', type: 'button', 'data-key': 'r-upload-' + (value ? 'yes' : 'no'), onclick: function () { upload = value; paint(); } },
+          h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, label));
+      }
+      var buttons = {}, yes = choice(true, H.t('Oui')), no = choice(false, H.t('Non'));
       (state.libraries || []).forEach(function (l) {
         buttons[l.id] = { view: toggle(l, 'view'), play: toggle(l, 'play'), download: toggle(l, 'download') };
         rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, H.tr(l.label)), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
       });
+      rows.appendChild(h('div', { class: 'rrow', 'data-upload-right': '1' }, h('b', null, H.t('Envoyer des fichiers')), yes, no));
       function paint() {
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
@@ -1272,13 +1286,38 @@
           b.download.querySelector('.lbl').textContent = H.t('Télécharger');
           b.download.disabled = !d.view;
         });
+        yes.classList.toggle('on', upload); yes.setAttribute('aria-pressed', upload ? 'true' : 'false');
+        no.classList.toggle('on', !upload); no.setAttribute('aria-pressed', upload ? 'false' : 'true');
       }
       paint();
       H.form({ title: H.t('Droits de {name}', { name: u.name }), ok: H.t('Enregistrer'), kind: 'form', cls: 'rightsbox',
         lead: [H.t('Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.')],
         extra: [rows],
-        submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/rights', { rights: draft }); },
-        done: function () { H.toast(H.t('Droits enregistrés : {name}', { name: u.name })); refreshUsers('rights-' + u.id); } });
+        submit: function () { return saveAccount(u, draft, upload, saved); },
+        done: function () { H.toast(H.t('Droits enregistrés : {name}', { name: u.name })); refreshUsers('rights-' + u.id); },
+        cancel: function () { if (saved.touched) refreshUsers('rights-' + u.id); } });       // fermée après un enregistrement à moitié réussi : la liste montre ce qui l'est
+    }
+    // Enregistre les droits de bibliothèque et le droit d'envoi, chacun par son appel et seulement s'il a changé. Refuse (avec ce qui a réussi et ce qui a échoué) si l'un des deux échoue.
+    function saveAccount(u, draft, upload, saved) {
+      var base = '/api/user/' + encodeURIComponent(u.id), now = JSON.stringify(draft), failed = {}, applied = {};
+      function run(part, changed, path, body, keep) {
+        if (!changed) return Promise.resolve();
+        return H.api(path, body).then(function () { keep(); applied[part] = true; saved.touched = true; }, function (e) { failed[part] = e.message; });
+      }
+      return Promise.all([
+        run('rights', now !== saved.rights, base + '/rights', { rights: draft }, function () { saved.rights = now; }),
+        run('upload', upload !== saved.upload, base + '/upload', { upload: upload }, function () { saved.upload = upload; })
+      ]).then(function () {
+        var bad = saveFailure(failed, applied);
+        if (bad) throw new Error(bad);
+      });
+    }
+    // Dit ce qui a échoué, et seulement ce qui est enregistré s'il l'est : l'un n'est jamais présenté comme raté parce que l'autre l'est.
+    function saveFailure(failed, applied) {
+      if (failed.rights && failed.upload) return H.t('Rien n’a été enregistré. Droits de bibliothèque : {rights}. Envoyer des fichiers : {upload}', { rights: failed.rights, upload: failed.upload });
+      if (failed.rights) return applied.upload ? H.t('« Envoyer des fichiers » est enregistré, mais pas les droits de bibliothèque : {error}', { error: failed.rights }) : H.t('Les droits de bibliothèque n’ont pas été enregistrés : {error}', { error: failed.rights });
+      if (failed.upload) return applied.rights ? H.t('Les droits de bibliothèque sont enregistrés, mais pas « Envoyer des fichiers » : {error}', { error: failed.upload }) : H.t('« Envoyer des fichiers » n’a pas été enregistré : {error}', { error: failed.upload });
+      return '';
     }
     function passwordOf(u, mine) {
       if (mine) { changeMine(); return; }                              // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)

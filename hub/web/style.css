@@ -119,6 +119,17 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .row > .card.wide { flex-basis: 17rem; }
 .greeting { padding: 1.4rem var(--gut) 0; font-size: 1.7rem; }
 .latest .grid { padding-top: 0.9rem; }
+.libtiles-note { padding: 0.6rem var(--gut) 0; margin: 0; }
+.libtiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); grid-gap: 1.1rem; padding: 1.1rem var(--gut) 1rem; }       /* une colonne sur un téléphone étroit, deux dès que la place y est */
+.libtile { display: flex; align-items: center; min-width: 0; padding: 0.6rem; background: var(--s1); border-radius: 0.8rem; text-decoration: none; }
+.libtile:hover, .libtile:focus { background: var(--s2); }
+.libtile .thumb { position: relative; flex: 0 0 4.2rem; height: 5.6rem; margin-right: 0.9rem; border-radius: 0.5rem; overflow: hidden; background: var(--accent); opacity: 0.95; }        /* la couleur de la bibliothèque, sous la pochette quand il y en a une */
+.libtile .thumb img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.25s; }
+.libtile .thumb img.in { opacity: 1; }
+.libtile .what { display: flex; flex-direction: column; min-width: 0; }
+.libtile .what b { display: flex; align-items: center; font-size: 1.1rem; overflow-wrap: anywhere; }
+.libtile .what > span { color: var(--mute); font-size: 0.9rem; }
+.libtile .dot { flex: none; width: 0.6rem; height: 0.6rem; margin-right: 0.55rem; border-radius: 50%; background: var(--accent); }
 .card .s .dot { display: inline-block; width: 0.55rem; height: 0.55rem; margin-right: 0.4rem; border-radius: 50%; background: var(--accent); vertical-align: 0.04rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--cw), 1fr)); grid-gap: 1.5rem 1.1rem; padding: 0.6rem var(--gut) 1rem; }
 .grid .card { width: auto; }
@@ -133,13 +144,6 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .tools .related .chip { display: inline-block; margin: 0; text-decoration: none; }      /* un lien en pastille */
 .tools .related + .count { margin-left: 0; }
 .tools .count { margin-left: auto; color: var(--mute); font-size: 0.9rem; }
-/* Le choix Tous · À voir · En cours · Terminés : un seul actif, au fond plein ET à la coche (la coche a toujours sa place, la largeur ne bouge pas) ; les autres ont un simple contour */
-.seg { display: flex; flex-wrap: wrap; }
-.seg .chip { display: inline-flex; align-items: center; min-height: 2.5rem; margin: 0 0.4rem 0 0; box-shadow: inset 0 0 0 1px var(--line); }
-.seg .chip.on { box-shadow: none; }
-.seg .chip .mark { visibility: hidden; margin-right: 0.35em; }
-.seg .chip.on .mark { visibility: visible; }
-@media (max-width: 640px) { .tools > .seg { width: 100%; margin-right: 0; } .seg .chip { flex: 1 1 auto; justify-content: center; padding-left: 0.4rem; padding-right: 0.4rem; } }
 /* Boutons de filtre « Genre : Tous » : largeur fixe (elle ne dépend pas de la valeur choisie), nom en gras, valeur en poids normal, coupée par « … » si elle est trop longue */
 .tools .btn.flt { width: 11.5rem; justify-content: flex-start; }
 .tools .btn.flt.wide { width: 14.5rem; }
@@ -468,6 +472,8 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .rights .rrow .chip .mark { visibility: hidden; margin-right: 0.35em; }
 .rights .rrow .chip.on .mark { visibility: visible; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
+.rights .rrow[data-upload-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* le droit d'envoi : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas de plus */
+.rights .rrow[data-upload-right] b { grid-column: auto; }
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
 /* Sagas composées à la main */

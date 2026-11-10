@@ -5,6 +5,7 @@ Sauté si Playwright ou ffmpeg manquent. Ce que ces tests ne peuvent pas garanti
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import json
@@ -2443,7 +2444,7 @@ class TestAnimationShortcut(UiCase):
     def test_the_link_is_on_the_row_of_the_filters_pushed_to_the_right_and_pressed_from_the_keyboard(self):
         self.open("#/l/animations")
         self.view(".grid .card").first.wait_for()
-        link, sort = self.view(".tools .related a.f").bounding_box(), self.view(".tools .btn.flt").last.bounding_box()          # le genre est caché quand la bibliothèque n'en a pas : le tri est toujours là
+        link, sort = self.view(".tools .related a.f").bounding_box(), self.view(".tools .btn.flt").last.bounding_box()          # le genre est caché quand la bibliothèque n'en a pas : le tri et le statut sont toujours là
         self.assertLess(abs((link["y"] + link["height"] / 2) - (sort["y"] + sort["height"] / 2)), sort["height"])          # sur la même ligne que les filtres
         self.assertGreater(link["x"], sort["x"] + sort["width"] + 40)                                                    # et décalé : à droite d'eux, pas collé
         self.view(".related a.f").focus()
@@ -2711,14 +2712,18 @@ class TestPersonMissingUi(UiCase):
         self.assertEqual(self.missing_titles(), ["Réalisé ailleurs"])
         self.assertEqual(self.view(".card.wanted .s").inner_text(), "1999 · Réalisateur")
 
-    def test_the_general_button_in_management_asks_tmdb_for_everybody(self):
-        self.open("#/admin")
-        button = self.view("[data-key=enrich-people]")
-        button.wait_for()
+    def test_a_movie_library_has_a_missing_movies_button_and_the_general_one_is_gone(self):
+        self.open_libraries_detail()
+        self.assertEqual(self.view("[data-key=enrich-people]").count(), 0)                    # plus de bouton global dans l'en-tête du panneau
+        self.assertNotIn("bibliothèques de films", self.page.inner_text("body"))
+        button = self.view("[data-key=people-films]")
+        self.assertEqual(button.inner_text().strip(), "Films manquants")                       # le bouton d'une bibliothèque de films
+        self.assertIn("réalisateurs et des acteurs de cette bibliothèque", button.get_attribute("title"))
+        self.assertIn("une heure ou plus", button.get_attribute("title"))                       # la durée du traitement se lit toujours dans l'infobulle
         self.assertTrue(button.evaluate("e => e.classList.contains('f')"))                     # atteignable à la télécommande
         with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
             button.click()
-            self.page.locator("#toast.on", has_text="Recherche des films manquants lancée").wait_for()
+            self.page.locator("#toast.on", has_text="Recherche des films manquants lancée : Films").wait_for()
             self.until(lambda: len(FakePersonTmdb.calls) >= 2, tries=100)
             self.run_.wait_jobs()
         self.assertEqual(sorted(FakePersonTmdb.calls), ["person/8100/movie_credits", "person/8200/movie_credits"])
@@ -2746,6 +2751,10 @@ class TestPersonMissingUi(UiCase):
         for lib in ("films", "series", "animations"):
             self.assertEqual(self.view(f"[data-key=people-{lib}]").count(), 1, lib)                  # films, séries et animations : une catégorie chacune
         self.assertEqual(self.view("[data-key=people-musique], [data-key=people-livres]").count(), 0)
+        self.assertEqual(self.view("[data-key=people-films]").inner_text().strip(), "Films manquants")                  # d'après le genre de la bibliothèque : films...
+        for lib in ("series", "animations"):
+            self.assertEqual(self.view(f"[data-key=people-{lib}]").inner_text().strip(), "Films des personnes (TMDB)")       # ...séries et animations (genre « shows »)
+        self.assertIn("Les identifiants viennent de", self.view("[data-key=people-series]").get_attribute("title"))
         self.assertTrue(self.view("[data-key=people-series]").evaluate("e => e.classList.contains('f')"))
         with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
             self.view("[data-key=people-series]").click()
@@ -2764,12 +2773,6 @@ class TestPersonMissingUi(UiCase):
         self.view("[data-key=libs-toggle]").click()
         self.view("[data-key=scan-films]").wait_for()
         self.assertEqual(self.view("[data-key^=people-]").count(), 0)
-
-    def test_the_general_button_has_no_meaning_without_a_tmdb_key(self):
-        self.run_.hub.cfg.tmdb_key = ""
-        self.open("#/admin")
-        self.view("[data-key=scan-all]").wait_for()                                            # la page est là
-        self.assertEqual(self.view("[data-key=enrich-people]").count(), 0)
 
     def test_without_a_tmdb_key_there_is_no_button(self):
         self.run_.hub.cfg.tmdb_key = ""
@@ -2876,10 +2879,10 @@ class TestLibraryToolbar(UiCase):
     def test_the_name_of_each_filter_comes_first_in_bold_then_its_value_in_normal_weight(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.filters().all_inner_texts(), ["Genre : Tous", "Tri : Titre"])
+        self.assertEqual(self.filters().all_inner_texts(), ["Genre : Tous", "Tri : Titre", "Statut : Tous"])
         weights = self.filters().evaluate_all("els => els.map(e => [+getComputedStyle(e.querySelector('b')).fontWeight, +getComputedStyle(e.querySelector('.val')).fontWeight])")
         self.assertTrue(all(name >= 600 and value <= 500 for name, value in weights), weights)
-        self.assertEqual(self.filters().evaluate_all("els => els.map(e => e.querySelector('b').textContent)"), ["Genre :", "Tri :"])
+        self.assertEqual(self.filters().evaluate_all("els => els.map(e => e.querySelector('b').textContent)"), ["Genre :", "Tri :", "Statut :"])
 
     def test_the_best_rated_sort_puts_the_rated_film_first_and_is_not_offered_for_books(self):
         db = self.run_.hub.db
@@ -3043,8 +3046,8 @@ class TestTextSize(UiCase):
                 page.close()
 
 
-class TestLibraryProgressChoice(UiCase):
-    """Tous · À voir · En cours · Terminés : un choix à quatre états au-dessus de la grille ; l'actif se voit par son fond plein et sa coche (un simple contour ne se distingue pas de l'absence de contour)."""
+class TestLibraryStatusList(UiCase):
+    """« Statut : Tous » : une liste déroulante comme « Genre » et « Tri » (Tous · À voir · En cours · Terminés), accordée d'après le genre de la bibliothèque, pas d'après son nom."""
 
     def setUp(self):
         super().setUp()
@@ -3052,94 +3055,166 @@ class TestLibraryProgressChoice(UiCase):
         self.addCleanup(self.api, f"/api/item/{film['id']}/seen", {"done": False})
         self.film = film
 
-    def choice(self, label):
-        return self.view(".seg .chip", has_text=label)
+    def status(self):
+        return self.view(".tools .btn.flt", has_text="Statut")
 
-    def active(self):
-        return self.view(".seg .chip.on").evaluate_all("els => els.map(e => e.getAttribute('data-state'))")
+    def options(self):
+        return self.page.locator(".veil .opt .lbl").all_inner_texts()
+
+    def pick(self, label):
+        self.status().click()
+        self.page.locator(".veil .opt", has_text=label).click()
+        self.page.wait_for_selector(".veil", state="detached")
 
     def titles(self):
         return self.view(".grid .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
 
-    def open_films(self):
-        self.open("#/l/films")
+    def open_library(self, lib="films"):
+        self.open("#/l/" + lib)
         self.view(".grid .card").first.wait_for()
 
-    def test_the_four_choices_are_in_order_and_all_is_the_one_active_at_first(self):
-        self.open_films()
-        self.assertEqual(self.view(".seg .chip .lbl").all_inner_texts(), ["Tous", "À voir", "En cours", "Terminés"])
-        self.assertEqual(self.view(".seg").get_attribute("role"), "radiogroup")
-        self.assertEqual(self.view(".seg .chip").evaluate_all("els => els.map(e => e.getAttribute('aria-checked'))"), ["true", "false", "false", "false"])
-        self.assertEqual(self.active(), [""])
+    def test_the_list_sits_with_genre_and_sort_in_the_same_component_and_says_all_at_first(self):
+        self.open_library()
+        self.assertEqual(self.view(".tools .btn.flt").all_inner_texts(), ["Genre : Tous", "Tri : Titre", "Statut : Tous"])
+        self.assertEqual(self.view(".tools .btn.flt").evaluate_all("els => els.map(e => e.className)"), ["btn f flt wide"] * 3)         # la même fabrique, le même style
+        self.assertEqual(self.status().evaluate("e => e.querySelector('b').textContent"), "Statut :")
+        self.assertEqual(self.view(".seg").count(), 0)
+        self.assertEqual(self.view(".tools .mark, .tools [role=radio]").count(), 0)             # ni coche, ni fond plein : du texte, comme les deux autres
 
-    def test_the_active_choice_has_a_solid_background_and_a_visible_tick_the_others_have_neither(self):
-        self.open_films()
-        def look(label):
-            return self.choice(label).evaluate("e => [getComputedStyle(e).backgroundColor, getComputedStyle(e.querySelector('.mark')).visibility]")
-        (active_bg, active_tick), (other_bg, other_tick) = look("Tous"), look("À voir")
-        self.assertEqual((active_tick, other_tick), ("visible", "hidden"))
-        self.assertNotEqual(active_bg, other_bg)
-        self.choice("En cours").click()
-        self.until(lambda: look("En cours")[1] == "visible" and look("Tous")[1] == "hidden")
-        self.assertEqual(look("En cours")[0], active_bg)
+    def test_the_options_are_those_of_the_kind_of_the_library_movies_in_the_masculine_shows_and_books_in_the_feminine(self):
+        for lib, want in (("films", ["Tous", "À voir", "En cours", "Terminés"]), ("series", ["Toutes", "À voir", "En cours", "Terminées"]), ("livres", ["Toutes", "À voir", "En cours", "Terminées"])):
+            with self.subTest(lib=lib):
+                self.open_library(lib)
+                self.status().click()
+                self.page.wait_for_selector(".veil .opt")
+                self.assertEqual(self.options(), want)
+                self.assertEqual(self.page.locator(".veil .opt.on .lbl").all_inner_texts(), [want[0]])
+                self.press("Escape", wait=300)
+                self.assertEqual(self.status().inner_text(), "Statut : " + want[0])
 
-    def test_each_choice_shows_what_the_server_says_for_its_state(self):
+    def test_the_agreement_follows_the_kind_never_the_name_of_the_library(self):
+        self.open("#/")
+        self.page.evaluate("Hub.libs.forEach(l => { if (l.id === 'series') l.label = 'Films'; if (l.id === 'films') l.label = 'Séries'; })")      # les bibliothèques se renomment
+        self.open_library("series")
+        self.status().click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.options(), ["Toutes", "À voir", "En cours", "Terminées"])
+        self.press("Escape", wait=300)
+        self.open_library("films")
+        self.status().click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.options(), ["Tous", "À voir", "En cours", "Terminés"])
+
+    def test_each_choice_asks_the_server_for_its_state_and_shows_what_it_says(self):
         self.api("/api/progress", {"entry": self.entries("films", "Inception")[0]["id"], "position": 600, "duration": 8880})
-        self.open_films()
+        asked = []
+        self.page.on("request", lambda r: asked.append(r.url) if "/api/library/films" in r.url else None)
+        self.open_library()
         for label, state in (("À voir", "todo"), ("En cours", "progress"), ("Terminés", "done"), ("Tous", "")):
-            self.choice(label).click()
-            self.until(lambda state=state: self.active() == [state])
+            del asked[:]
+            self.pick(label)
+            self.assertEqual(self.status().inner_text(), "Statut : " + label)
+            self.until(lambda: asked)
+            self.assertTrue(f"&filter={state}&" in asked[-1] if state else "filter=" not in asked[-1], asked[-1])
             wanted = self.api("/api/library/films?sagas=1&limit=240" + (f"&filter={state}" if state else ""))["total"]
-            self.until(lambda wanted=wanted: self.view(".grid .card").count() == wanted)
-        self.choice("En cours").click()
+            self.until(lambda wanted=wanted: self.view(".grid .card").count() == wanted or (wanted == 0 and self.view("button", has_text="Retirer les filtres").count()))
+        self.pick("En cours")
         self.until(lambda: self.view(".grid .card").count() == 1)
         self.assertIn(self.film["id"], self.titles())
-        self.choice("À voir").click()
+        self.pick("À voir")
         self.until(lambda: self.film["id"] not in self.titles() and self.view(".grid .card").count() > 1)
 
-    def test_the_active_choice_changes_at_the_click_not_when_the_list_arrives(self):
-        self.open_films()
+    def test_the_series_choice_asks_for_done_and_says_terminees(self):
+        asked = []
+        self.page.on("request", lambda r: asked.append(r.url) if "/api/library/series" in r.url else None)
+        self.open_library("series")
+        self.pick("Terminées")
+        self.until(lambda: any("filter=done" in u for u in asked))
+        self.assertEqual(self.status().inner_text(), "Statut : Terminées")
+
+    def test_the_value_changes_at_the_choice_not_when_the_list_arrives(self):
+        self.open_library()
         held = []
         self.page.route("**/api/library/films*", lambda route: held.append(route))                 # la réponse du serveur est retenue (un NAS lent)
-        self.choice("En cours").click()
-        self.until(lambda: held)                                                                   # la requête est partie, la liste n'est pas là
-        self.assertEqual(self.active(), ["progress"])
-        self.assertEqual(self.choice("En cours").get_attribute("aria-checked"), "true")
-        self.assertEqual(self.choice("Tous").get_attribute("aria-checked"), "false")
-        self.page.unroute("**/api/library/films*")                                                 # on relâche : la liste arrive et le choix reste
+        self.pick("En cours")
+        self.until(lambda: held)
+        self.assertEqual(self.status().inner_text(), "Statut : En cours")
+        self.page.unroute("**/api/library/films*")
         self.until(lambda: self.view(".grid .card").count() == self.api("/api/library/films?sagas=1&filter=progress")["total"])
-        self.assertEqual(self.active(), ["progress"])
+        self.assertEqual(self.status().inner_text(), "Statut : En cours")
 
     def test_a_film_seen_to_the_end_moves_to_done(self):
         self.api(f"/api/item/{self.film['id']}/seen", {"done": True})
-        self.open_films()
-        self.choice("Terminés").click()
+        self.open_library()
+        self.pick("Terminés")
         self.until(lambda: self.titles() == [self.film["id"]])
 
     def test_an_empty_choice_says_so_and_removing_the_filters_goes_back_to_all(self):
-        self.open_films()
+        self.open_library()
         total = self.view(".grid .card").count()
-        self.choice("Terminés").click()
+        self.pick("Terminés")
         self.view("button", has_text="Retirer les filtres").wait_for()                       # rien de terminé : la liste est vide
+        self.assertEqual(self.view("h2", has_text="Rien ne correspond").count(), 1)
         self.view("button", has_text="Retirer les filtres").click()
-        self.until(lambda: self.active() == [""] and self.view(".grid .card").count() == total, tries=100)
+        self.until(lambda: self.status().inner_text() == "Statut : Tous" and self.view(".grid .card").count() == total, tries=100)
 
-    def test_the_choice_works_from_the_arrow_keys_and_enter_and_the_focus_can_be_seen(self):
-        self.open_films()
-        self.choice("Tous").focus()
-        self.press("ArrowRight")
-        self.assertEqual(self.focused(), "✓À voir")
-        outline = self.choice("À voir").evaluate("e => getComputedStyle(e).outlineStyle + ' ' + getComputedStyle(e).outlineWidth")
-        self.assertTrue(outline.startswith("solid") and outline != "solid 0px", outline)         # le focus se voit de loin
-        self.press("Enter", wait=400)
-        self.until(lambda: self.active() == ["todo"])
-        self.press("ArrowRight", "Enter", wait=400)
-        self.until(lambda: self.active() == ["progress"])
-
-    def test_the_music_library_has_no_such_choice(self):
+    def test_the_music_library_has_no_status_list(self):
         self.open("#/l/musique")
         self.view(".tools").first.wait_for()
-        self.assertEqual(self.view(".seg").count(), 0)
+        self.assertEqual(self.view(".tools .btn.flt", has_text="Statut").count(), 0)
+
+    def test_the_list_fits_one_clean_row_on_a_phone_without_overflowing(self):
+        self.open_library()
+        self.page.evaluate("document.documentElement.setAttribute('data-device', 'phone')")
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        box = self.status().bounding_box()
+        self.assertTrue(0 <= box["x"] and box["x"] + box["width"] <= 390, box)
+        self.assertTrue(self.status().evaluate("e => { var l = e.querySelector('.lbl'); return l.scrollWidth <= l.clientWidth; }"))
+        sort = self.view(".tools .btn.flt", has_text="Tri").bounding_box()
+        self.assertGreater(box["y"], sort["y"] - 1)                                          # pas par-dessus la recherche
+
+
+class TestLibraryStatusListOnTv(UiCase):
+    """À la télécommande (data-device="tv") : le focus se voit sur la liste, Entrée l'ouvre, les flèches choisissent, Échap la referme sans rien changer."""
+
+    def setUp(self):
+        super().setUp()
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+
+    def status(self):
+        return self.view(".tools .btn.flt", has_text="Statut")
+
+    def open_library(self, lib="films"):
+        self.open("#/l/" + lib)
+        self.view(".grid .card").first.wait_for()
+
+    def test_the_focus_is_visible_enter_opens_the_arrows_choose_and_escape_closes_without_changing(self):
+        self.open_library()
+        self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), "tv")
+        self.status().focus()
+        self.assertEqual(self.focused(), "Statut : Tous")
+        outline = self.status().evaluate("e => getComputedStyle(e).outlineStyle + ' ' + getComputedStyle(e).outlineWidth")
+        self.assertTrue(outline.startswith("solid") and outline != "solid 0px", outline)         # le focus se voit de loin
+        self.press("Enter", wait=400)
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.focused(), "Tous")                                                 # le focus part sur le choix en cours
+        self.press("Escape", wait=400)
+        self.assertEqual(self.page.locator(".veil").count(), 0)
+        self.assertEqual(self.status().inner_text(), "Statut : Tous")
+        self.assertEqual(self.focused(), "Statut : Tous")                                        # et revient sur la liste
+        self.press("Enter", wait=400)
+        self.press("ArrowDown", wait=200)
+        self.assertEqual(self.focused(), "À voir")
+        self.press("Enter", wait=500)
+        self.until(lambda: self.status().inner_text() == "Statut : À voir")
+        self.assertEqual(self.focused(), "Statut : À voir")
+
+    def test_the_arrows_reach_the_list_from_the_other_filters(self):
+        self.open_library()
+        self.view(".tools .btn.flt", has_text="Tri").focus()
+        self.press("ArrowRight", wait=200)
+        self.assertEqual(self.focused(), "Statut : Tous")
 
 
 class TestHome(UiCase):
@@ -3360,6 +3435,118 @@ class TestHomeUnseen(UiCase):
         self.add_newest_films(rated=True)
         self.api("/api/me/settings", {"home_unseen_sort": "rating"})
         self.assert_the_shelf_keeps_twelve_cards_that_the_new_ones_do_not_show()
+
+
+class TestHomeWithNoShelf(UiCase):
+    """L'accueil quand aucun rayon n'est affiché (réglages masqués, ou rien à proposer) : « Bonjour », une phrase, puis les bibliothèques en tuiles."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show"}))
+
+    def hide(self, *names):
+        self.api("/api/me/settings", {name: "hide" for name in names})
+
+    def tiles(self):
+        return self.view(".libtiles a.libtile")
+
+    def libraries(self):
+        return self.api("/api/home")["libraries"]
+
+    def test_the_libraries_appear_as_tiles_under_the_greeting_when_every_shelf_is_hidden(self):
+        self.hide("home_latest", "home_unseen")
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertEqual(self.view(".shelf").count(), 0)
+        libs = self.libraries()
+        self.assertEqual(self.tiles().count(), len(libs))
+        self.assertEqual(self.tiles().evaluate_all("els => els.map(e => e.getAttribute('href'))"), ["#/l/" + l["id"] for l in libs])
+        self.assertEqual(self.view("h1.greeting").inner_text(), "Bonjour")                                          # serveur ouvert : pas de nom
+        self.assertEqual(self.view(".libtiles-note").inner_text(), "Tu as masqué tous les rayons de l’accueil : Paramètres > Préférences, pour les remettre")
+        for tile, lib in zip(self.tiles().all(), libs):
+            self.assertEqual(tile.locator("b").inner_text(), lib["label"])
+            self.assertEqual(tile.locator(".what > span").inner_text(), f"{lib['count']} élément" + ("s" if lib["count"] > 1 else ""))
+        order = self.page.evaluate("(() => { var t = document.querySelector('.view:not([style*=\"none\"]) .libtiles'); var h = document.querySelector('.view:not([style*=\"none\"]) h1.greeting'); var n = document.querySelector('.view:not([style*=\"none\"]) .libtiles-note'); return [h.compareDocumentPosition(n), n.compareDocumentPosition(t)]; })()")
+        self.assertEqual(order, [4, 4])                                                                              # « Bonjour », la phrase, puis les tuiles
+
+    def test_a_tile_has_the_cover_of_the_latest_addition_or_the_colour_of_its_library(self):
+        self.hide("home_latest", "home_unseen")
+
+        def without_cover(route):
+            data = route.fetch().json()
+            for lib in data["libraries"]:
+                if lib["id"] == "livres":
+                    lib["recent"] = []
+            route.fulfill(json=data)
+        self.page.route("**/api/home", without_cover)
+        pixel = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+        self.page.route("**/img/item/**", lambda route: route.fulfill(body=pixel, content_type="image/png"))          # les médias d'essai n'ont pas de pochette : une image d'un point
+        self.open()
+        self.tiles().first.wait_for()
+        films, books = self.view(".libtiles a[data-lib=films]"), self.view(".libtiles a[data-lib=livres]")
+        self.assertEqual(films.locator("img").count(), 1)
+        self.assertTrue(films.locator("img").get_attribute("src").startswith("/img/item/"))
+        self.assertEqual(books.locator("img").count(), 0)                                                            # rien à montrer : la couleur de la bibliothèque
+        self.assertTrue(books.locator(".thumb").evaluate("e => getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)'"))
+        colours = self.tiles().evaluate_all("els => els.map(e => getComputedStyle(e.querySelector('.dot')).backgroundColor)")
+        self.assertEqual(len(set(colours)), len(colours))                                                            # chaque bibliothèque a sa couleur
+
+    def test_with_one_shelf_still_shown_the_home_keeps_its_shelves_and_has_no_tiles(self):
+        self.hide("home_unseen")
+        self.open()
+        self.view(".shelf.latest .card").first.wait_for()
+        self.assertEqual(self.view(".libtiles").count(), 0)
+        self.assertEqual(self.view(".libtiles-note").count(), 0)
+
+    def test_a_home_with_nothing_to_resume_or_discover_says_so(self):
+        self.hide("home_latest")                                                                                     # « Pas encore vu » est affiché, mais tout est vu
+        seen = []
+        for lib in ("films", "series", "animations"):
+            for item in self.api(f"/api/library/{lib}")["items"]:
+                self.api(f"/api/item/{item['id']}/seen", {"done": True})
+                seen.append(item["id"])
+        self.addCleanup(lambda: [self.api(f"/api/item/{i}/seen", {"done": False}) for i in seen])
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertEqual(self.view(".libtiles-note").inner_text(), "Rien à reprendre ni à découvrir pour l’instant")
+        self.assertEqual(self.view(".shelf").count(), 0)
+
+    def test_the_tiles_are_real_links_the_remote_reaches_and_the_first_has_the_focus(self):
+        self.hide("home_latest", "home_unseen")
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertTrue(self.tiles().evaluate_all("els => els.every(e => e.tagName === 'A' && e.classList.contains('f') && e.getAttribute('href'))"))
+        self.assertEqual(self.tiles().first.get_attribute("data-autofocus"), "1")
+        self.until(lambda: self.page.evaluate("document.activeElement === document.querySelector('.libtiles a.libtile')"))      # le focus part sur la première tuile
+        first, seen = self.focused(), []
+        for _ in range(len(self.libraries()) + 1):
+            self.press("ArrowRight")
+            seen.append(self.page.evaluate("document.activeElement.getAttribute('data-lib')"))
+        self.assertGreaterEqual(len({s for s in seen if s}), 3)                                                       # les flèches parcourent la grille
+        self.tiles().first.focus()
+        self.press("Enter", wait=500)
+        self.assertIn("#/l/", self.page.url)
+
+    def test_on_a_phone_the_tiles_are_one_or_two_columns_without_sideways_scroll(self):
+        self.hide("home_latest", "home_unseen")
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        lefts = self.tiles().evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().left))")
+        self.assertLessEqual(len(set(lefts)), 2)
+        self.assertTrue(self.tiles().evaluate_all("els => els.every(e => e.getBoundingClientRect().right <= innerWidth && e.getBoundingClientRect().height >= 44)"))       # dans l'écran, assez grandes au doigt
+
+    def test_the_text_and_the_tiles_are_in_english(self):
+        self.hide("home_latest", "home_unseen")
+        self.context.add_cookies([{"name": "hub_lang", "value": "en", "url": self.base}])
+        self.page.add_init_script("localStorage.setItem('hub.lang', JSON.stringify('en'))")
+        self.open()
+        self.tiles().first.wait_for()
+        self.assertEqual(self.view(".libtiles-note").inner_text(), "You have hidden every shelf on the home page: Settings > Preferences, to bring them back")
+        self.assertIn("Movies", self.tiles().locator("b").all_inner_texts())
+        self.assertIn(" items", self.tiles().first.locator(".what > span").inner_text())
+        self.assertEqual(self.page.evaluate("Hub.missing || []"), [])
 
 
 class TestHomeNewArtist(UiCase):
@@ -3932,22 +4119,169 @@ class InboxUiCase(unittest.TestCase):
                     self.shown(page, "#/")                                                 # l'adresse directe retombe sur l'accueil
                     self.assertEqual(page.locator("#views > .view:visible .upload").count(), 0)
 
-    def test_the_administrator_gives_and_withdraws_the_right(self):
+    def rights_box(self, page, who):
+        """La boîte « Droits de {nom} » du compte `who`, ouverte depuis Paramètres > Comptes."""
+        page.goto(self.base + "/#/settings?tab=comptes")
+        page.locator(f'[data-key="rights-{who["id"]}"]').click()
+        page.locator(".menu.rightsbox").wait_for()
+        return page.locator(".menu.rightsbox")
+
+    def calls(self, page):
+        """Les appels d'écriture de droits que la page envoie : « rights » et « upload »."""
+        seen = []
+        page.on("request", lambda r: seen.append(r.url.rsplit("/", 1)[1]) if r.method == "POST" and re.search(r"/api/user/\w+/(rights|upload)$", r.url) else None)
+        return seen
+
+    def reset_rights(self, row):
+        """Les droits du compte `row` sont remis comme au départ à la fin du test (la classe partage ses comptes)."""
+        from hub import accounts
+        def undo():
+            ids = [lib.id for lib in self.hub.cfg.libraries]
+            accounts.set_can_upload(self.hub.db, row["id"], row["id"] == self.alice["id"])
+            accounts.set_rights(self.hub.db, row["id"], set(ids), {i: {"view": True, "play": True, "download": True} for i in ids})
+        self.addCleanup(undo)
+
+    def test_the_administrator_gives_and_withdraws_the_right_in_the_rights_box(self):
+        self.reset_rights(self.bob)
         page = self.session("admin")
         page.goto(self.base + "/#/settings?tab=comptes")
-        switch = page.locator(f'[data-key="upload-{self.bob["id"]}"]')
-        switch.wait_for()
-        self.assertEqual(switch.get_attribute("aria-pressed"), "false")
-        self.assertEqual(page.locator(f'[data-key="upload-{self.alice["id"]}"]').get_attribute("aria-pressed"), "true")
-        self.assertEqual(page.locator(f'[data-key="upload-{self.admin_id}"]').count(), 0)                  # un administrateur envoie toujours : pas d'interrupteur
-        self.assertIn("toujours", page.locator(f'[data-upload="{self.admin_id}"]').inner_text())
-        switch.click()
-        page.locator(f'[data-key="upload-{self.bob["id"]}"][aria-pressed="true"]').wait_for()
+        line = page.locator(f'[data-user="{self.bob["id"]}"]')
+        line.wait_for()
+        self.assertEqual(page.locator(f'[data-key="upload-{self.bob["id"]}"]').count(), 0)               # plus de pastille à part dans la ligne du compte
+        self.assertIn("Envoyer des fichiers : non", line.locator("[data-rights]").inner_text())
+        box = self.rights_box(page, self.bob)
+        self.assertEqual(box.locator(".rrow[data-upload-right] b").inner_text(), "Envoyer des fichiers")
+        yes, no = box.locator('[data-key="r-upload-yes"]'), box.locator('[data-key="r-upload-no"]')
+        self.assertEqual((yes.inner_text().strip("✓ \n"), no.inner_text().strip("✓ \n")), ("Oui", "Non"))
+        self.assertEqual((yes.get_attribute("aria-pressed"), no.get_attribute("aria-pressed")), ("false", "true"))
+        self.assertTrue(yes.evaluate("e => e.classList.contains('f')") and no.evaluate("e => e.classList.contains('f')"))       # atteignables à la télécommande
+        yes.click()
+        self.assertEqual((yes.get_attribute("aria-pressed"), no.get_attribute("aria-pressed")), ("true", "false"))
+        self.assertFalse(self.users()["bob"]["can_upload"])                                              # rien n'est écrit avant « Enregistrer »
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        line.locator("[data-rights]", has_text="Envoyer des fichiers : oui").wait_for()
         self.assertTrue(self.users()["bob"]["can_upload"])
-        bob = self.session("bob")                                                                  # le droit vaut tout de suite
+        bob = self.session("bob")                                                                        # le droit vaut tout de suite
         self.assertEqual(bob.locator('#nav [data-nav="#/upload"]').count(), 1)
-        page.locator(f'[data-key="upload-{self.bob["id"]}"]').click()
-        page.locator(f'[data-key="upload-{self.bob["id"]}"][aria-pressed="false"]').wait_for()
+        box = self.rights_box(page, self.bob)
+        self.assertEqual(box.locator('[data-key="r-upload-yes"]').get_attribute("aria-pressed"), "true")
+        box.locator('[data-key="r-upload-no"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        line.locator("[data-rights]", has_text="Envoyer des fichiers : non").wait_for()
+        self.assertFalse(self.users()["bob"]["can_upload"])
+
+    def test_an_administrator_always_sends_and_has_no_box_for_it(self):
+        page = self.session("admin")
+        page.goto(self.base + "/#/settings?tab=comptes")
+        line = page.locator(f'[data-user="{self.admin_id}"]')
+        line.wait_for()
+        self.assertIn("toujours", line.locator("[data-upload]").inner_text())
+        self.assertEqual(line.locator('[data-key^="upload-"], [data-key^="rights-"]').count(), 0)       # ni interrupteur, ni boîte pour cela
+
+    def test_only_what_changed_is_sent(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        calls = self.calls(page)
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-upload-yes"]').click()                                                 # le droit d'envoi seul
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(calls, ["upload"])
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-download-films"]').click()                                             # un droit de bibliothèque seul
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(calls, ["upload", "rights"])
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-download-films"]').click()                                             # remis comme avant, avec le droit d'envoi retiré : les deux partent
+        box.locator('[data-key="r-upload-no"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(sorted(calls[2:]), ["rights", "upload"])
+
+    def test_one_refusal_says_which_part_failed_and_keeps_the_box_open(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        calls = self.calls(page)
+        page.route("**/api/user/*/rights", lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "disque en panne"}'))
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-upload-yes"]').click()
+        box.locator('[data-key="r-download-films"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        error = box.locator(".formerr")
+        error.filter(has_text="disque en panne").wait_for()
+        self.assertIn("Envoyer des fichiers", error.inner_text())
+        self.assertIn("enregistré", error.inner_text())                                                  # l'envoi, lui, a réussi : on le dit
+        self.assertTrue(self.users()["bob"]["can_upload"])
+        self.assertEqual(self.users()["bob"]["rights"]["films"]["download"], True)                       # les droits de bibliothèque, non
+        self.assertEqual(page.locator(".menu.rightsbox").count(), 1)                                     # la boîte reste ouverte
+        page.unroute("**/api/user/*/rights")
+        del calls[:]
+        box.locator(".btn", has_text="Enregistrer").click()                                              # on réessaie : seul ce qui manque est renvoyé
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(calls, ["rights"])
+        self.assertEqual(self.users()["bob"]["rights"]["films"]["download"], False)
+        self.assertTrue(self.users()["bob"]["can_upload"])
+
+    def test_closing_after_a_half_saved_attempt_shows_what_was_saved(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        page.route("**/api/user/*/rights", lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "disque en panne"}'))
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-upload-yes"]').click()
+        box.locator('[data-key="r-download-films"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        box.locator(".formerr", has_text="disque en panne").wait_for()
+        box.locator(".btn", has_text="Annuler").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        page.locator(f'[data-user="{self.bob["id"]}"] [data-rights]', has_text="Envoyer des fichiers : oui").wait_for()      # la liste dit ce qui est enregistré
+        self.assertIn("Télécharger : tout", page.locator(f'[data-rights="{self.bob["id"]}"]').inner_text())                # les droits de bibliothèque, refusés, sont restés ce qu'ils étaient
+
+    def test_a_refused_upload_right_does_not_make_the_library_rights_look_refused(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        page.route("**/api/user/*/upload", lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "base verrouillée"}'))
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-upload-yes"]').click()
+        box.locator('[data-key="r-download-series"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        error = box.locator(".formerr")
+        error.filter(has_text="base verrouillée").wait_for()
+        self.assertIn("droits de bibliothèque", error.inner_text())
+        self.assertIn("enregistrés", error.inner_text())
+        self.assertFalse(self.users()["bob"]["can_upload"])
+        self.assertFalse(self.users()["bob"]["rights"]["series"]["download"])
+        page.unroute("**/api/user/*/upload")
+        box.locator('[data-key="r-upload-no"]').click()                                                  # on renonce à l'envoi : les droits de bibliothèque, eux, sont gardés
+        box.locator(".btn", has_text="Enregistrer").click()
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertFalse(self.users()["bob"]["can_upload"])
+        self.assertFalse(self.users()["bob"]["rights"]["series"]["download"])
+
+    def test_the_upload_choice_fits_a_phone(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin", device="phone", width=390)
+        box = self.rights_box(page, self.bob)
+        chips = box.locator(".rrow[data-upload-right] .chip")
+        edge = box.evaluate("e => e.getBoundingClientRect().right")
+        self.assertTrue(chips.evaluate_all("(els, edge) => els.every(e => e.getBoundingClientRect().right <= edge)", edge))        # rien ne dépasse de la fenêtre
+        self.assertTrue(chips.evaluate_all("els => els.every(e => e.getBoundingClientRect().height >= 32)"))                       # une cible tactile assez grande
+
+    def test_the_arrow_keys_reach_the_upload_choice_and_escape_closes_the_box(self):
+        self.reset_rights(self.bob)
+        page = self.session("admin")
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-download-livres"]').focus()                                            # le dernier choix de la dernière bibliothèque
+        page.keyboard.press("ArrowDown")
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), "r-upload-no")      # la colonne de droite descend sur « Non »
+        page.keyboard.press("ArrowLeft")
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), "r-upload-yes")
+        page.keyboard.press("Enter")
+        self.assertEqual(box.locator('[data-key="r-upload-yes"]').get_attribute("aria-pressed"), "true")
+        page.keyboard.press("Escape")
+        page.locator(".menu.rightsbox").wait_for(state="detached")
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), f"rights-{self.bob['id']}")
         self.assertFalse(self.users()["bob"]["can_upload"])
 
     # --- Envoyer -------------------------------------------------------------
@@ -4330,7 +4664,7 @@ class InboxUiCase(unittest.TestCase):
         page.locator("#views > .view:visible .send[data-state=error]", has_text="not enough room on the server").wait_for()
         self.assertEqual(page.evaluate("Hub.missing"), [])
 
-    def test_the_inbox_tab_and_the_switch_are_in_english(self):
+    def test_the_inbox_tab_and_the_upload_choice_are_in_english(self):
         self.put("alice", "Film.mkv", b"f" * 2000)
         page = self.session("admin", lang="en")
         page.goto(self.base + "/#/settings?tab=inbox")
@@ -4339,8 +4673,12 @@ class InboxUiCase(unittest.TestCase):
         self.assertEqual(page.locator("#views > .view:visible .inbox-file .btn").all_inner_texts(), ["Download", "Delete"])
         self.assertEqual(page.locator("#views > .view:visible .inbox .total").inner_text(), "1 file · 2 KB")
         page.goto(self.base + "/#/settings?tab=comptes")
-        page.locator(f'[data-key="upload-{self.bob["id"]}"]').wait_for()
-        self.assertEqual(page.locator(f'[data-key="upload-{self.bob["id"]}"]').inner_text().strip("✓ \n"), "Can upload files")
+        page.locator(f'[data-key="rights-{self.bob["id"]}"]').click()
+        page.locator(".menu.rightsbox .rrow[data-upload-right]").wait_for()
+        self.assertEqual(page.locator(".menu.rightsbox .rrow[data-upload-right] b").inner_text(), "Upload files")
+        self.assertEqual([t.strip("✓ \n") for t in page.locator(".menu.rightsbox .rrow[data-upload-right] .chip").all_inner_texts()], ["Yes", "No"])
+        self.assertIn("Upload files: no", page.locator(f'[data-user="{self.bob["id"]}"] [data-rights]').inner_text())
+        page.locator(".menu.rightsbox .btn", has_text="Cancel").click()
         self.assertIn("always", page.locator(f'[data-upload="{self.admin_id}"]').inner_text())
         self.assertEqual(page.evaluate("Hub.missing"), [])
 

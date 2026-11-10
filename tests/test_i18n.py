@@ -253,7 +253,15 @@ class TestEnglishInTheBrowser(UiCase):
     def test_the_filter_buttons_and_the_music_counter_are_in_english(self):
         self.open("#/l/films")
         self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.view(".tools .btn.flt").all_inner_texts(), ["Genre: All", "Sort: Title"])      # pas d'espace avant les deux-points en anglais
+        self.assertEqual(self.view(".tools .btn.flt").all_inner_texts(), ["Genre: All", "Sort: Title", "Status: All"])      # pas d'espace avant les deux-points en anglais
+        for lib in ("films", "series"):          # en anglais, un seul libellé : pas d'accord selon le genre de la bibliothèque
+            self.open("#/l/" + lib)
+            self.view(".grid .card").first.wait_for()
+            self.view(".tools .btn.flt", has_text="Status").click()
+            self.page.wait_for_selector(".veil .opt")
+            self.assertEqual(self.page.locator(".veil .opt .lbl").all_inner_texts(), ["All", "To watch", "In progress", "Finished"])
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_selector(".veil", state="detached")
         self.open("#/l/musique")
         self.view(".grid .card").first.wait_for()
         self.assertEqual(self.view(".count").inner_text(), "1 artist · 1 album")
@@ -321,6 +329,17 @@ class TestEnglishInTheBrowser(UiCase):
         self.assertEqual(self.view("h1").inner_text(), "Settings")
         self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Management", "Inbox", "Preferences", "Accounts"])
         self.assertIn("Libraries", self.view(".panel h2").all_inner_texts())
+
+    def test_the_people_buttons_of_the_libraries_are_in_english(self):
+        self.run_.hub.cfg.tmdb_key = "fake"
+        self.addCleanup(setattr, self.run_.hub.cfg, "tmdb_key", "")
+        self.open("#/settings")
+        self.view("[data-key=libs-toggle]").click()
+        self.view("[data-key=scan-films]").wait_for()
+        self.assertEqual(self.view("[data-key=people-films]").inner_text(), "Missing movies")
+        self.assertEqual(self.view("[data-key=people-series]").inner_text(), "People’s movies (TMDB)")
+        self.assertEqual(self.view("[data-key=enrich-people]").count(), 0)
+        self.assertEqual(self.missing(), [])
 
     def test_the_language_is_chosen_in_the_settings_and_kept(self):
         context = self.browser.new_context(viewport={"width": 1920, "height": 1080})
