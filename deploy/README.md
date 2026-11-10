@@ -26,7 +26,9 @@ Sur un dataset d'applications (ici `/mnt/tank/apps/media`, adapte) :
   tailscale-config/   y copier deploy/serve.json
 ```
 
-Les bibliothèques gardent leur place (`/mnt/tank/media/Films`, `Series`, `Animations`, `Musique`, `Livres`). Si le conteneur tourne avec un utilisateur non root, `media_hub-data` doit lui être accessible en écriture.
+Facultatif : un dataset à part, `/mnt/tank/HubReception`, pour la boîte de réception (voir [Boîte de réception](#boîte-de-réception)) ; il n'est utilisé que si tu actives son montage dans le compose.
+
+Les bibliothèques gardent leur place (`/mnt/tank/media/Films`, `Series`, `Animations`, `Musique`, `Livres`). Si le conteneur tourne avec un utilisateur non root, `media_hub-data` (et `HubReception`, s'il est monté) doit lui être accessible en écriture.
 
 ## 2. ffmpeg
 
@@ -147,45 +149,91 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 
 ## Boîte de réception
 
-Un compte à qui l'administrateur a donné le droit **Envoyer** (*Paramètres* > *Comptes*) dépose des fichiers par l'adresse Funnel, comme par l'adresse locale. **Rien n'entre dans une bibliothèque** : les volumes restent en `:ro`, aucun volume n'a été ajouté pour cela. Les fichiers vont dans le dossier de données, que le conteneur monte déjà en lecture et écriture ; c'est à toi de les ranger. Le fonctionnement du côté serveur (noms, extensions acceptées, codes d'erreur) est dans le [README principal](../README.md#boîte-de-réception-les-envois).
+Un compte à qui l'administrateur a donné le droit **Envoyer** (*Paramètres* > *Comptes*) dépose des fichiers par l'adresse Funnel, comme par l'adresse locale. **Rien n'entre dans une bibliothèque** : les volumes restent en `:ro`. Par défaut les fichiers vont dans le dossier de données, que le conteneur monte déjà en lecture et écriture ; tu peux aussi les mettre sur leur propre dataset (voir plus bas, **désactivé par défaut**). C'est à toi de les ranger. Le fonctionnement du côté serveur (noms, extensions acceptées, codes d'erreur) est dans le [README principal](../README.md#boîte-de-réception-les-envois).
 
 ### Où sont les fichiers
 
 ```text
-/mnt/tank/apps/media/media_hub-data/inbox/<nom du compte>/Film.mkv
+/mnt/tank/apps/media/media_hub-data/inbox/<nom du compte>/Film.mkv     par défaut
+/mnt/tank/HubReception/<nom du compte>/Film.mkv                        avec le dataset « HubReception » (HUB_INBOX=/inbox)
 ```
 
-Le dossier porte le **nom du compte** (nettoyé : pas de `/ \ : * ? " < > |`, pas de point ni d'espace en bout, et `Léa (2)` si `léa` existe déjà, à la casse près). Le lien compte -> dossier est gardé dans la base, fixé au premier envoi : renommer ou supprimer un compte ne déplace rien. Un compte supprimé laisse son dossier et ses fichiers ; l'onglet de la boîte de réception (*Paramètres* > *Gestion*) les montre sous le nom du dossier, marqués « compte supprimé ».
+Le dossier porte le **nom du compte** (nettoyé : pas de `/ \ : * ? " < > |`, pas de point ni d'espace en bout, et `Léa (2)` si `léa` existe déjà, à la casse près). Le lien compte -> dossier est gardé dans la base (`hub.db`), fixé au premier envoi : renommer ou supprimer un compte ne déplace rien. Un compte supprimé laisse son dossier et ses fichiers ; l'onglet de la boîte de réception (*Paramètres* > *Gestion*) les montre sous le nom du dossier, marqués « compte supprimé ».
 
-**Mise à jour depuis une version d'avant** : au démarrage, les dossiers nommés d'après l'identifiant (`default`, ou de l'hexadécimal) sont renommés d'après le compte, sans rien écraser. Relancer ne change rien ; si un dossier ne peut pas être renommé (un partage SMB l'a ouvert, droits), il garde son ancien nom et le journal du conteneur le dit.
+### Mise à jour depuis une version d'avant (migration automatique)
+
+Avant, le dossier d'un compte portait son identifiant (`default` pour le premier compte, de l'hexadécimal pour les autres). **Au premier démarrage avec la nouvelle version**, le hub renomme chaque `inbox/<identifiant>/` d'après le nom du compte (`default` devient `admin`, par exemple), dans la boîte active :
+
+- **Rien n'est écrasé ni perdu** : si le nom est déjà pris (un dossier posé à la main, ou un autre compte), le dossier devient `Nom (2)`. Les `.part` en cours partent avec leur dossier.
+- **Relancer ne change rien.** Un dossier dont le compte n'existe plus reste tel quel (« compte supprimé »).
+- **Aucune ligne dans le journal quand tout va bien** : vérifie avec `ls /mnt/tank/apps/media/media_hub-data/inbox/`. Un échec est journalisé et n'empêche pas le démarrage : `docker logs media-hub 2>&1 | grep "boîte de réception"` donne `le dossier du compte « Léa » garde son ancien nom (…)`. L'ancien dossier reste en place, sous son ancien nom, et sera repris au démarrage suivant.
+- **Dossier ouvert par un partage SMB** : ferme les fenêtres du partage avant de mettre à jour. Sous Windows, un dossier ouvert ne se renomme pas (le renommage échoue, l'ancien nom reste, repris au démarrage suivant) ; sur le NAS (Linux), Samba ne devrait pas bloquer le renommage, mais la fenêtre ouverte chez le client affichera un dossier qui n'existe plus : je n'ai pas pu le vérifier sur place.
 
 ### Mettre la boîte sur son propre dataset (`HUB_INBOX`)
 
-Pour un dataset TrueNAS dédié (par exemple `HubReception`, avec son quota, ses snapshots et son partage SMB, sans `hub.db` à côté) : monte-le dans le conteneur et dis au hub où il est.
+Le dataset « HubReception » a son quota, ses instantanés et son partage SMB, sans `hub.db` à côté. **C'est facultatif et désactivé par défaut** : tant que tu n'as pas fait ce qui suit, la boîte reste sous `media_hub-data/inbox`. Le montage et `HUB_INBOX` sont **commentés** dans `docker-compose.yml`, et **les deux lignes s'activent ensemble** : un montage vers un dossier qui n'existe pas empêche le conteneur de démarrer, et `HUB_INBOX=/inbox` sans montage rangerait les envois dans le conteneur lui-même (perdus à son prochain redéploiement, sans erreur au démarrage).
 
-```yaml
-    environment:
-      HUB_INBOX: /inbox
-    volumes:
-      - /mnt/tank/HubReception:/inbox
+1. **Créer le dataset** : TrueNAS > Datasets > sélectionne `tank` > *Add Dataset* ; *Name* : `HubReception` (soit `/mnt/tank/HubReception`) ; *Dataset Preset* : `SMB` (ACL de type NFSv4, utile pour le partage) ; *Save*. Valeurs d'exemple : remplace `tank` par ton pool.
+2. **Quota** (conseillé) : *Edit* > *Advanced Options* > *Quota for this dataset*, par exemple **50 Go**. Il doit dépasser `HUB_INBOX_KEEP_FREE` (10 Go par défaut), sinon tous les envois sont refusés (507) : la place réellement disponible pour les envois est le quota moins cette réserve.
+3. **Droits** : voir « Droits d'écriture du conteneur » ci-dessous, à régler **avant** l'étape suivante.
+4. **Si la boîte contient déjà des dossiers** (`media_hub-data/inbox/…`), déplace-les maintenant (voir « Reprendre les anciens dossiers » ci-dessous), l'application arrêtée.
+5. **Activer** : dans `docker-compose.yml` (ou dans l'éditeur YAML de TrueNAS), décommente **les deux lignes** :
+
+   ```yaml
+       environment:
+         HUB_INBOX: /inbox
+       volumes:
+         - /mnt/tank/HubReception:/inbox     # lecture et écriture : pas de « :ro »
+   ```
+
+   Chemin absolu, comme les autres (`${APPS}` et `${MEDIA}` ne conviennent pas : le dataset n'est pas dans ces dossiers). Redéploie l'application entière (*Edit* > *Save*, ou `docker compose up -d` ; un simple `docker restart` ne relit pas le compose).
+6. **Vérifier** : voir « Vérifications après déploiement ».
+
+**Ce réglage n'existe qu'ici, jamais dans l'interface** : un compte administrateur compromis (le hub est visible d'Internet) pourrait sinon faire écrire le serveur n'importe où. Ce montage est le seul volume en lecture et écriture, avec `media_hub-data`.
+
+### Droits d'écriture du conteneur
+
+Le conteneur tourne en **root**, avec `cap_drop: ALL` et deux capacités gardées : **`DAC_OVERRIDE`** et **`FOWNER`** (voir le compose). Pour la boîte :
+
+- **Écrire, créer un dossier, renommer** : `DAC_OVERRIDE` suffit. Il permet à root de passer outre les droits de lecture, d'écriture et de parcours (propriétaire, mode, ACL POSIX) quel que soit le propriétaire du dataset. C'est exactement le cas où un root *sans* cette capacité échouerait (dataset d'un autre utilisateur, sans droit d'écriture pour « autres »). Le hub n'a besoin de rien d'autre : il ne fait ni `chown` ni `chmod` ni `utime` dans la boîte, donc `FOWNER` ne sert pas ici, et **aucune capacité n'est à ajouter** (`CHOWN` non plus : les dossiers et fichiers créés appartiennent à root, ou héritent de l'ACL du dataset).
+- **Ce que je n'ai pas pu vérifier** : que `DAC_OVERRIDE` passe aussi outre l'ACL NFSv4 d'un dataset ZFS créé avec le préréglage `SMB` (attendu : oui, ZFS le prévoit pour root avec cette capacité). Un dataset en lecture seule, plein (quota atteint) ou ayant un attribut « immuable » refuse l'écriture quelles que soient les capacités.
+- **Le point à régler côté dataset est l'autre côté** : les dossiers créés par le hub appartiennent à **root**. Pour que ton compte SMB puisse les lire, les renommer et les supprimer, ouvre l'ACL du dataset : TrueNAS > Datasets > `HubReception` > *Permissions* > *Edit* : ajoute une entrée pour ton compte SMB (par exemple `arthur`, *Full Control*, avec les drapeaux *Inherit*), coche *Apply permissions recursively* si le dataset contient déjà des fichiers, puis *Save*. Sur ZFS, les dossiers et fichiers que root crée ensuite héritent de cette entrée. Sans elle, le hub écrit bien, mais le partage SMB ne pourra ni modifier ni supprimer ce que le hub a déposé.
+- **Essai** (seul le NAS tranche) :
+
+  ```bash
+  docker exec media-hub sh -c 'touch /inbox/.essai && mv /inbox/.essai /inbox/.essai2 && rm /inbox/.essai2' && echo OK
+  ```
+
+  `OK` : le conteneur écrit et renomme. `Permission denied` : propriétaire, ACL ou mode du dataset (ouvre l'accès à l'uid 0 par l'ACL, ou change le propriétaire du dataset) ; `Read-only file system` : le dataset ou le montage est en lecture seule. N'élargis pas les capacités du conteneur pour contourner cela.
+
+### Reprendre les anciens dossiers (`media_hub-data/inbox/` vers le dataset)
+
+Activer `HUB_INBOX=/inbox` avec un dataset vide **ne déplace pas** les anciens dossiers : ils restent dans `media_hub-data/inbox/`, que le hub ne regarde plus (leurs fichiers ne sont pas listés, mais ne sont pas perdus). Pour les reprendre, **application arrêtée** (pour qu'aucun envoi ne se glisse entre-temps) :
+
+```bash
+rsync -a /mnt/tank/apps/media/media_hub-data/inbox/ /mnt/tank/HubReception/
+ls -l /mnt/tank/HubReception/         # vérifie : un dossier par compte, les fichiers y sont
 ```
 
-Le dossier doit être inscriptible par le conteneur (il tourne en root) ; le hub le crée s'il manque et, s'il n'est pas inscriptible, le dit au démarrage (`ATTENTION : la boîte de réception … n'est pas utilisable`). `HUB_INBOX_KEEP_FREE` se mesure alors sur ce volume. **Ce réglage n'existe qu'ici, jamais dans l'interface** : un chemin d'écriture ne se choisit pas depuis un navigateur. Changer de boîte ne déplace pas les anciens fichiers : déplace-les toi-même, dossier par dossier.
+Puis active les deux lignes du compose (étape 5) et redémarre. Le hub retrouve les dossiers par leur nom : `users.inbox_dir`, dans `hub.db`, garde le nom de chaque dossier, et un dossier de ce nom présent dans la boîte est repris tel quel ; un ancien dossier encore nommé d'après l'identifiant est renommé au démarrage, comme ci-dessus. Quand tout est bon, supprime les anciens dossiers de `media_hub-data/inbox/` (ou garde-les jusqu'à la prochaine sauvegarde). `rsync` conserve les propriétaires et les dates ; s'il manque : `cp -a`.
+
+Pour revenir à la boîte dans `media_hub-data` : arrête l'application, recopie de la même façon `HubReception` vers `media_hub-data/inbox/`, recommente les deux lignes, redéploie.
 
 ### Les récupérer et les ranger
 
-- **Partage SMB** : TrueNAS > Shares > SMB > *Add*, avec pour chemin `/mnt/tank/apps/media/media_hub-data/inbox` (le sous-dossier, **pas** `media_hub-data` : `hub.db` contient les hachés des mots de passe), accessible à ton seul compte. Copie ou déplace les fichiers depuis ton poste. Un fichier effacé par ce partage libère aussitôt son espace (hors snapshots).
+- **Partage SMB** : TrueNAS > Shares > SMB > *Add*, accessible à ton seul compte. Avec le dataset dédié, le chemin est **`/mnt/tank/HubReception`**, directement : tu vois un dossier par compte, lisible par nom (« Léa », « admin »…). Sans dataset dédié, le chemin est le sous-dossier `/mnt/tank/apps/media/media_hub-data/inbox`. **Ne monte jamais `hub.db` ni `media_hub-data` dans un partage** : `hub.db` contient les hachés des mots de passe. Copie ou déplace les fichiers depuis ton poste. Un fichier effacé par ce partage libère aussitôt son espace (hors instantanés).
+- **Ne renomme ni ne supprime un dossier de compte depuis le partage**, et surtout pas pendant que le hub tourne : le lien compte -> dossier est dans la base, qui ne le sait pas. Le dossier renommé apparaît alors dans la liste de l'administrateur comme « compte supprimé » (ses fichiers y sont toujours), et le compte en recrée un neuf, vide, à son envoi suivant. Range les **fichiers** dans les dossiers, pas les dossiers eux-mêmes.
 - **Téléchargement** : l'onglet de la boîte de réception dans *Gestion* (administrateur seulement), un fichier à la fois, ou `GET /api/inbox/<dossier>/<nom>`.
 - **Ranger** à la main : déplace le fichier dans le bon dossier de `/mnt/tank/media/…` (renomme-le comme le fait `media_library`), puis *Gestion* > *Tout mettre à jour*. Le hub n'ouvre ni ne décompresse un fichier déposé, un `.zip` y compris.
 
 ### L'espace
 
-Le hub ne limite ni la taille d'un fichier ni l'espace d'un compte : seul le disque limite, et le dossier de données n'a pas de limite propre : sans réglage, des envois peuvent prendre la place de la médiathèque. Deux protections se complètent, mets les deux :
+Le hub ne limite ni la taille d'un fichier ni l'espace d'un compte : seul le disque limite, et sans réglage, des envois peuvent prendre la place de la médiathèque (le pool est partagé). Deux protections se complètent, mets les deux :
 
-1. **Une limite sur le dataset `media_hub-data`** (TrueNAS > Datasets > `media_hub-data` > *Edit* > *Advanced Options* > *Quota for this dataset*). Choisis la place que la boîte peut prendre, plus `HUB_INBOX_KEEP_FREE`, plus la place des données du hub (base, cache d'images, TMDB : quelques Go, davantage avec beaucoup d'affiches). Exemple : 40 Go pour les envois, 10 Go à garder libres, 10 Go de données : **60 Go**. Une limite plus petite que `HUB_INBOX_KEEP_FREE` fait refuser tous les envois (507).
-2. **`HUB_INBOX_KEEP_FREE`** : le serveur refuse (507) un envoi qui laisserait moins de cet espace libre sous `/data`, avant d'en lire un octet. Avec le quota du dataset, c'est l'espace libre *du dataset* que le serveur voit (à vérifier, voir l'essai ci-dessous) ; sans quota, c'est celui du pool, partagé avec la médiathèque.
+1. **Une limite sur le dataset de la boîte** : `media_hub-data` par défaut, `HubReception` s'il existe (TrueNAS > Datasets > le dataset > *Edit* > *Advanced Options* > *Quota for this dataset*). Choisis la place que la boîte peut prendre, plus `HUB_INBOX_KEEP_FREE`. Pour `media_hub-data`, ajoute la place des données du hub (base, cache d'images, TMDB : quelques Go, davantage avec beaucoup d'affiches). Exemple : 40 Go pour les envois, 10 Go à garder libres, 10 Go de données : **60 Go** (ou **50 Go** pour `HubReception`, sans données). Une limite plus petite que `HUB_INBOX_KEEP_FREE` fait refuser tous les envois (507).
+2. **`HUB_INBOX_KEEP_FREE`** : le serveur refuse (507) un envoi qui laisserait moins de cet espace libre **sur le volume de la boîte** (`/data`, ou `/inbox` avec le dataset dédié), avant d'en lire un octet. Avec un quota, c'est l'espace libre *du dataset* que le serveur voit (à vérifier, voir l'essai ci-dessous) ; sans quota, c'est celui du pool, partagé avec la médiathèque.
 
-Les snapshots gardent les fichiers effacés : si `media_hub-data` en a, l'espace d'une boîte vidée ne revient qu'à l'expiration du snapshot.
+Les instantanés gardent les fichiers effacés : si le dataset de la boîte en a, l'espace d'une boîte vidée ne revient qu'à l'expiration de l'instantané.
 
 ### Ajuster les limites
 
@@ -193,23 +241,39 @@ Deux variables sont dans le `.env` (en Mo, valeurs par défaut dans `.env.exampl
 
 | Variable | Rôle | Défaut |
 | --- | --- | --- |
-| `HUB_INBOX_KEEP_FREE` | espace libre à garder sous `/data` (507) | `10240` |
+| `HUB_INBOX_KEEP_FREE` | espace libre à garder sur le volume de la boîte (507) | `10240` |
 | `HUB_INBOX_MAX_UPLOADS` | envois simultanés, tous comptes confondus (429) | `2` |
 
 Il n'y a pas de réglage de taille par fichier ni par compte : la limite de dataset ci-dessus est le plafond. Le conteneur ne les relit qu'à sa création : modifie le `.env` (ou les valeurs collées dans l'éditeur YAML de TrueNAS) puis **redéploie l'application** (*Edit* > *Save*, ou `docker compose up -d`). Un simple `docker restart media-hub` garde les anciennes valeurs. Un envoi en cours est coupé par le redéploiement.
 
-### Sauvegarde
+### Sauvegarde et instantanés
 
-La boîte est dans `media_hub-data`, avec `hub.db` : un snapshot ou une sauvegarde de ce dataset l'emporte. Ce sont des fichiers à ranger, pas des données à garder : si la boîte est grosse, exclus `inbox/` de la sauvegarde de la base (la tâche de sauvegarde accepte un sous-dossier à exclure) ou range-la avant. Les `.part` d'envois abandonnés sont effacés par le serveur au bout de 24 h.
+- **Le dataset « HubReception » ne contient que des fichiers déposés, pas de base** : programme-lui des **instantanés périodiques** (TrueNAS > Data Protection > *Periodic Snapshot Tasks* > *Add*, dataset `tank/HubReception`, par exemple chaque jour, conservés 2 semaines) et, si tu les gardes, une réplication ou une sauvegarde *Cloud Sync* vers un autre emplacement. Ce sont des fichiers à ranger, pas des données à garder longtemps : si la boîte est grosse, range-la avant ou exclus-la de la sauvegarde.
+- **Le lien compte -> dossier est dans `hub.db`**, donc dans `media_hub-data` : sauvegarde `media_hub-data` aussi. Restaurer l'un sans l'autre (une vieille `hub.db` avec un dataset récent, ou l'inverse) ne perd aucun fichier : des dossiers apparaissent « compte supprimé » dans la liste de l'administrateur, et un compte peut recevoir un dossier neuf (`Léa (2)`). Range ensuite les fichiers.
+- Sans dataset dédié, la boîte est dans `media_hub-data`, avec `hub.db` : un instantané de ce dataset l'emporte. Si la boîte est grosse, exclus `inbox/` de la sauvegarde de la base (la tâche de sauvegarde accepte un sous-dossier à exclure) ou range-la avant.
+- Les `.part` d'envois abandonnés sont effacés par le serveur au bout de 24 h.
+
+### Retour arrière (version d'avant)
+
+Une ancienne version du hub cherche `inbox/<identifiant>/` et ne voit plus les dossiers renommés d'après le compte : **les fichiers ne sont pas perdus**, ils ne sont simplement plus listés (et le compte recevrait un dossier neuf nommé d'après l'identifiant). Deux issues : **rester sur la nouvelle version** (le plus simple), ou revenir en arrière en renommant les dossiers à la main, `<nom du compte>` vers `<identifiant>` (relevé avec `docker exec -it media-hub python -m hub user list` **avant** le retour), dans `media_hub-data/inbox/`. Une ancienne version ne connaît pas `HUB_INBOX` : si tu as activé le dataset, recopie d'abord son contenu dans `media_hub-data/inbox/`.
 
 ### Couper en urgence
 
 - Retire le droit « Envoyer » du compte (*Paramètres* > *Comptes*) : il vaut dès l'envoi suivant (403). Fais-le pour chaque compte pour tout couper. Un envoi déjà en cours va jusqu'au bout ; redémarre le conteneur `media-hub` pour l'interrompre.
-- Un `.part` resté après une coupure brutale peut être supprimé à la main dans `inbox/<nom du compte>/`.
+- Un `.part` resté après une coupure brutale peut être supprimé à la main dans le dossier du compte (`inbox/<nom du compte>/`, ou `HubReception/<nom du compte>/`).
+
+### Vérifications après déploiement
+
+À faire une fois le dataset activé (les deux premières valent aussi sans lui) :
+
+1. **Pas d'« ATTENTION » au démarrage** : `docker logs media-hub 2>&1 | grep -n "ATTENTION"` ne doit rien afficher qui parle de la boîte de réception (ni « n'est pas utilisable », ni « recoupe » HUB_DATA ou une bibliothèque).
+2. **Écriture et renommage** : la commande d'essai de « Droits d'écriture du conteneur » répond `OK`.
+3. **Un envoi arrive au bon endroit** : depuis la page « Envoyer », avec un compte qui a ce droit, envoie un petit fichier (un `.srt`, par exemple), puis dans le shell du NAS `ls -l /mnt/tank/HubReception/` : un dossier au **nom du compte** contient le fichier, sans `.part`. Regarde aussi le partage SMB : le dossier y est, et ton compte SMB peut renommer puis supprimer ce fichier (sinon, l'ACL du dataset : voir plus haut).
+4. **L'espace libre refuse un envoi trop gros sur ce dataset** : relève l'espace libre vu par le conteneur, `docker exec media-hub df -m /inbox` (à comparer à celui de TrueNAS pour `HubReception`). Puis soit envoie un fichier plus gros que cet espace moins `HUB_INBOX_KEEP_FREE`, soit, plus simple, mets temporairement `HUB_INBOX_KEEP_FREE` au-dessus de l'espace libre (par exemple 2 Mo de plus que le résultat de `df`), redéploie, et envoie le petit fichier : l'envoi est refusé (507) avec « plus assez de place sur le serveur pour ce fichier ». **Remets ensuite la valeur d'origine** (`10240`) et redéploie. Supprime le fichier d'essai de la boîte.
 
 ### Essai à faire sur place (Funnel, 1 à 2 Go)
 
-Je n'ai pas pu lancer cet essai : il demande le NAS et Funnel. Il vérifie ce qu'on ne peut pas régler : le débit de Funnel, ses délais, et l'espace réel sous `/data`. Note chaque résultat.
+Je n'ai pas pu lancer cet essai : il demande le NAS et Funnel. Il vérifie ce qu'on ne peut pas régler : le débit de Funnel, ses délais, et l'espace réel sous `/data` (ou `/inbox`). Note chaque résultat.
 
 **Préparer** (sur ton poste, pas sur le NAS) :
 
@@ -221,7 +285,7 @@ TOKEN=$(curl -s -X POST -H "Content-Type: application/json" -d "{\"user\":\"alic
 
 (Pas de `/dev/urandom` sous Windows ? Du contenu aléatoire est préférable à des zéros : ZFS compresserait des zéros et fausserait la mesure d'espace.)
 
-**1. Espace avant** : `docker exec media-hub df -m /data` (c'est ce que le serveur lit pour `HUB_INBOX_KEEP_FREE`) et, dans TrueNAS, l'espace libre et le quota du dataset `media_hub-data`. Les deux doivent concorder ; s'ils diffèrent, note de combien.
+**1. Espace avant** : `docker exec media-hub df -m /data` (`/inbox` avec le dataset dédié : c'est ce que le serveur lit pour `HUB_INBOX_KEEP_FREE`) et, dans TrueNAS, l'espace libre et le quota du dataset de la boîte (`media_hub-data`, ou `HubReception`). Les deux doivent concorder ; s'ils diffèrent, note de combien.
 
 **2. Envoi en ligne de commande, par Funnel** (depuis un réseau qui n'est pas celui du NAS, par exemple en partage de connexion du téléphone) :
 
@@ -237,10 +301,10 @@ Note le débit (octets/s ÷ 1 000 000 pour des Mo/s), la durée, et si l'envoi s
 
 **4. Pendant un envoi** (relance-le pour avoir le temps) : depuis un autre appareil, lis un film et navigue dans les bibliothèques. Rien ne doit saccader ni se bloquer : un envoi tient un fil du serveur, pas un des `HUB_MAX_STREAMS` flux de lecture. Si tu peux, lance en même temps deux lectures en transcodage : elles démarrent, la troisième seulement répond 503.
 
-**5. Espace après** : de nouveau `docker exec media-hub df -m /data` et le dataset. L'espace libre a baissé de la taille du fichier (à quelques Mo près). Puis, dans le shell du NAS :
+**5. Espace après** : de nouveau `docker exec media-hub df -m /data` (ou `/inbox`) et le dataset. L'espace libre a baissé de la taille du fichier (à quelques Mo près). Puis, dans le shell du NAS :
 
 ```bash
-ls -l /mnt/tank/apps/media/media_hub-data/inbox/<nom du compte>/
+ls -l /mnt/tank/apps/media/media_hub-data/inbox/<nom du compte>/     # ou /mnt/tank/HubReception/<nom du compte>/
 ```
 
 Le fichier doit avoir la **taille exacte** de l'original (`wc -c test-funnel.mkv`, ici 1 500 000 000), aucun `.part` à côté. Pour être sûr du contenu : `sha256sum` des deux.
@@ -250,7 +314,7 @@ Le fichier doit avoir la **taille exacte** de l'original (`wc -c test-funnel.mkv
 **7. Refus** (sans modifier de réglage) :
 
 - Un compte **sans** le droit « Envoyer » (avec son propre jeton) lance la même commande `curl` : `HTTP 403`, en une seconde ou deux. Si curl met des minutes, le serveur lit le fichier avant de refuser : c'est un défaut à signaler.
-- Faute de place : crée un fichier creux plus gros que l'espace libre du dataset (vu à l'étape 1, plus `HUB_INBOX_KEEP_FREE` ; par exemple `truncate -s 2T gros.mkv`, qui n'occupe pas d'espace) et envoie-le avec la même commande : `HTTP 507` aussitôt, avant que le moindre octet ait été lu. curl peut afficher une erreur d'envoi en plus (la connexion est coupée) : ce qui compte est le code HTTP, quand il y en a un, et que la réponse arrive en quelques secondes. Vérifie ensuite qu'aucun fichier ni `.part` n'est apparu dans `inbox/`.
+- Faute de place : crée un fichier creux plus gros que l'espace libre du dataset de la boîte (vu à l'étape 1, plus `HUB_INBOX_KEEP_FREE` ; par exemple `truncate -s 2T gros.mkv`, qui n'occupe pas d'espace) et envoie-le avec la même commande : `HTTP 507` aussitôt, avant que le moindre octet ait été lu. curl peut afficher une erreur d'envoi en plus (la connexion est coupée) : ce qui compte est le code HTTP, quand il y en a un, et que la réponse arrive en quelques secondes. Vérifie ensuite qu'aucun fichier ni `.part` n'est apparu dans la boîte (`inbox/` ou `HubReception/`).
 
 Efface ensuite `test-funnel.mkv` de la boîte (téléchargement/suppression dans *Gestion*, ou `rm` sur le NAS). Si l'un de ces points échoue, mets le résultat (code, durée, journal `docker logs media-hub`) dans une issue ou au bas de `docs/TODO.md`.
 
@@ -269,5 +333,6 @@ Le compose ci-dessus monte les sources dans `python:3.13-slim`. À chaque étiqu
 | Mot de passe refusé alors que `HUB_PASSWORD` est bon | `HUB_PASSWORD` n'amorce que le premier compte ; ensuite : `docker exec -it media-hub python -m hub user passwd <nom>` |
 | `https://nas…` ne répond pas | `docker logs media-hub-tailscale` : clé expirée, HTTPS non activé dans la console Tailscale, ou **Funnel non autorisé dans la politique du tailnet** (attribut `funnel` absent pour le nœud `nas` : ça marche alors avec Tailscale, pas sans) |
 | `media-hub-tailscale` redémarre en boucle, le port 8080 refuse la connexion, et `docker logs media-hub-tailscale` dit « failed to read serve config: invalid character '{' after top-level value » | le `serve.json` copié dans `tailscale-config/` n'est pas un JSON valide (par exemple le nouveau contenu collé à la suite de l'ancien). Remplace **tout** le fichier par `deploy/serve.json`, vérifie-le avec `python3 -m json.tool <chemin>/serve.json`, puis redémarre l'application entière |
-| Un envoi est refusé : 507 / 429 | 507 : le fichier laisserait moins de `HUB_INBOX_KEEP_FREE` d'espace libre sous `/data` (range ou supprime des fichiers de la boîte, ou agrandis la limite du dataset ; des snapshots peuvent retenir l'espace) ; 429 : `HUB_INBOX_MAX_UPLOADS` envois déjà en cours, réessaie plus tard |
+| Un envoi est refusé : 507 / 429 | 507 : le fichier laisserait moins de `HUB_INBOX_KEEP_FREE` d'espace libre sur le volume de la boîte (`/data`, ou `/inbox` avec le dataset dédié ; range ou supprime des fichiers de la boîte, ou agrandis la limite du dataset ; des instantanés peuvent retenir l'espace) ; 429 : `HUB_INBOX_MAX_UPLOADS` envois déjà en cours, réessaie plus tard |
+| Un envoi est refusé : 503 « la boîte de réception du serveur est inutilisable », ou « ATTENTION : la boîte de réception … » au démarrage | `docker logs media-hub 2>&1 \| grep -e ATTENTION -e "boîte de réception"` donne le chemin et la cause. Dataset non monté ou inexistant : le montage `/mnt/tank/HubReception:/inbox` et `HUB_INBOX: /inbox` s'activent **ensemble** (un montage vers un dossier absent empêche le conteneur de démarrer) ; droits : lance l'essai `docker exec media-hub sh -c 'touch /inbox/.essai && mv /inbox/.essai /inbox/.essai2 && rm /inbox/.essai2'` (voir « Droits d'écriture du conteneur ») ; dataset en lecture seule ou plein ; « recoupe HUB_DATA ou une bibliothèque » : choisis un dossier dédié hors des données et des bibliothèques |
 | Tout le monde est bloqué (« trop d'essais ») après des échecs d'une seule personne | le serveur ne voit pas l'adresse réelle du client (tout arrive de `127.0.0.1`) : voir l'étape 4 d'« Ouvrir à Internet » ; le blocage s'efface après 5 minutes ou au redémarrage de `media-hub` |
