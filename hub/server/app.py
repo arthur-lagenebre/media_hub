@@ -140,10 +140,11 @@ class Hub:
         return lib, path
 
     def scrub(self, text):
-        """Le message sans les chemins du serveur (dossiers des bibliothèques, HUB_DATA, media_library) : ffprobe, ffmpeg et les OSError les écrivent tels quels, et la réponse part à n'importe quel compte connecté."""
+        """Le message sans les chemins du serveur (dossiers des bibliothèques, HUB_DATA, HUB_INBOX, media_library) : ffprobe, ffmpeg et les OSError les écrivent tels quels, et la réponse part à n'importe quel compte connecté."""
         text = str(text)
-        roots = [Path(lib.path) for lib in self.cfg.libraries] + [Path(self.cfg.data)] + ([Path(self.cfg.repo)] if self.cfg.repo else [])
+        roots = [Path(lib.path) for lib in self.cfg.libraries] + [Path(self.cfg.data), Path(self.cfg.inbox)] + ([Path(self.cfg.repo)] if self.cfg.repo else [])
         forms = {form for root in roots for form in (str(root), root.as_posix(), str(root.resolve()), root.resolve().as_posix()) if len(form) > 3}
+        forms |= {form.replace("\\", "\\\\") for form in forms if "\\" in form}      # une OSError écrit son chemin entre guillemets, antislashs doublés (Windows)
         for form in sorted(forms, key=len, reverse=True):          # le plus long d'abord : un dossier peut en contenir un autre
             text = text.replace(form, "…")
         return text

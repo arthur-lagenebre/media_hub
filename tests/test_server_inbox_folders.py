@@ -289,6 +289,25 @@ class TestInboxOutsideTheDataFolder(unittest.TestCase):
         self.assertTrue(handler.close_connection)
         self.assertEqual(call(self.hub, "GET", "/api/inbox", headers=self.cookie(self.boss))[1].status, 200)
 
+    def test_a_permission_error_while_storing_is_a_503_in_french_with_no_path_for_the_client(self):
+        denied = PermissionError(13, "Permission denied", str(self.volume / "HubReception" / "Léa" / "Film.mkv.part"))
+        with mock.patch("hub.inbox.open", side_effect=denied, create=True):
+            handler, reply = call(self.hub, "POST", "/api/inbox?name=Film.mkv", b"abc", self.cookie(self.lea))
+        self.assertEqual(reply.status, 503)
+        self.assertIn("inutilisable", reply.json()["error"])
+        for part in (str(self.volume), "HubReception", "Permission denied", "Errno"):
+            self.assertNotIn(part, reply.json()["error"])
+        self.assertIn("HubReception", handler.stderr)                                  # le journal dit où
+        self.assertEqual(call(self.hub, "GET", "/api/inbox", headers=self.cookie(self.boss))[1].json()["files"], [])
+
+    def test_an_unexpected_system_error_that_reaches_the_500_does_not_show_the_inbox_path_either(self):
+        denied = PermissionError(13, "Permission denied", str(self.volume / "HubReception" / "Léa" / "Film.mkv.part"))
+        with mock.patch.object(inbox.Inbox, "receive", side_effect=denied), mock.patch.object(sys, "stderr", io.StringIO()):
+            _, reply = call(self.hub, "POST", "/api/inbox?name=Film.mkv", b"abc", self.cookie(self.lea))
+        self.assertEqual(reply.status, 500)
+        self.assertNotIn(str(self.volume), reply.json()["error"])
+        self.assertIn("…", reply.json()["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -573,6 +573,44 @@ class TestInboxOutsideTheDataFolder(FolderCase):
         self.assertEqual(self.box._active, 0)
 
 
+class TestSystemErrorsWhileStoring(FolderCase):
+    """Une erreur système pendant l'écriture (droits, volume en lecture seule…) est un 503 en français sans chemin ; le chemin va au journal ; rien ne reste."""
+
+    def refused(self, patched, error):
+        err = io.StringIO()
+        with patched, mock.patch.object(sys, "stderr", err), self.assertRaises(InboxError) as caught:
+            self.put("film.mkv", account="alice")
+        self.assertEqual(caught.exception.status, 503)
+        self.assertNotIn(str(self.tmp), caught.exception.message)
+        self.assertNotIn("Errno", caught.exception.message)
+        self.assertIn("film.mkv", err.getvalue())                                  # le journal dit où
+        self.assertEqual(self.inbox._active, 0)
+        self.assertEqual(sorted(p.name for p in (self.tmp / "inbox" / "alice").iterdir()), [])        # ni `.part` ni fichier
+
+    def test_a_part_file_that_cannot_be_created_is_a_503_without_the_path(self):
+        error = PermissionError(13, "Permission denied", str(self.tmp / "inbox" / "alice" / "film.mkv.part"))
+        self.refused(mock.patch("hub.inbox.open", side_effect=error, create=True), error)
+
+    def test_a_rename_that_is_refused_is_a_503_and_the_part_file_is_removed(self):
+        error = PermissionError(13, "Permission denied", str(self.tmp / "inbox" / "alice" / "film.mkv.part"))
+        self.refused(mock.patch.object(inbox.os, "rename", side_effect=error), error)
+
+    def test_a_part_file_that_already_exists_still_moves_on_to_the_next_name(self):
+        real = open
+        calls = []
+
+        def first_one_exists(path, mode="r", *a, **kw):
+            calls.append(Path(path).name)
+            if len(calls) == 1:
+                raise FileExistsError(17, "File exists", str(path))
+            return real(path, mode, *a, **kw)
+
+        with mock.patch("hub.inbox.open", first_one_exists, create=True):
+            self.assertEqual(self.put("film.mkv")["name"], "film (2).mkv")
+        self.assertEqual(calls, ["film.mkv.part", "film (2).mkv.part"])
+        self.assertEqual(self.files(), ["film (2).mkv"])
+
+
 class TestConfinement(FolderCase):
     """Une fois résolu, un chemin reste sous la boîte : en plus des contrôles de nom, des liens et des jonctions."""
 

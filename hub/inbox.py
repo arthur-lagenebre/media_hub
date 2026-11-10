@@ -405,6 +405,8 @@ class Inbox:
                     return candidate, open(folder / (candidate + PART), "xb")
                 except FileExistsError:
                     continue
+                except OSError as e:               # droits, volume en lecture seule, nom refusé… : le chemin va au journal, jamais au client
+                    raise self._unusable(f"« {candidate + PART} » impossible à créer dans {folder}", e)
         raise InboxError(409, "trop de fichiers du même nom")
 
     def _publish(self, folder, final):
@@ -412,7 +414,12 @@ class Inbox:
         with self._names:
             if os.path.lexists(folder / final):
                 raise InboxError(409, "un fichier de ce nom est apparu pendant l'envoi : recommence")
-            os.rename(folder / (final + PART), folder / final)
+            try:
+                os.rename(folder / (final + PART), folder / final)
+            except FileExistsError:
+                raise
+            except OSError as e:
+                raise self._unusable(f"« {final + PART} » impossible à renommer dans {folder}", e)
 
     @staticmethod
     def _copy(source, out, length):
