@@ -6,7 +6,10 @@ Le dossier d'un compte porte le NOM du compte, nettoyé (`clean_folder`) : c'est
 un renommage, une collision de noms ou un compte supprimé ne donnent pas le dossier à un autre. Un compte supprimé laisse son dossier et ses fichiers en place. Les dossiers d'avant (nommés d'après l'identifiant du compte : `default`, ou hexadécimal) sont renommés au démarrage (`migrate`).
 Le choix d'un nom libre se fait sous un verrou (`_names`), en comparant sans tenir compte de la casse (NTFS et SMB ne distinguent pas « Léa » de « léa ») et sans jamais écraser un dossier existant.
 
-Ce module ne connaît pas HTTP : `receive` lit un flux (le corps de la requête) et tient les limites, `listing`, `path_of` et `remove` bornent tout chemin à la boîte (le chemin est résolu puis vérifié, en plus des contrôles de nom). Le serveur (`server/app.py`) décide qui a le droit.
+Un envoi peut aller dans un sous-dossier du dossier du compte (jusqu'à DEPTH niveaux, `clean_dir`) : le hub le crée quand un fichier y arrive, jamais vide, jamais en cas de refus, et le reprend si l'envoi échoue. Deux écritures qui ne diffèrent que par la casse (ou la forme Unicode) sont le MÊME dossier, jamais « (2) » : envoyer deux fois un dossier le fusionne, seuls les fichiers de même nom prennent un numéro.
+`listing`, `used`, `sweep`, `path_of` et `remove` parcourent ces sous-dossiers sans jamais suivre un lien symbolique ni une jonction, et sans sortir du dossier du compte ; supprimer le dernier fichier d'un sous-dossier retire le dossier.
+
+Ce module ne connaît pas HTTP : `receive` lit un flux (le corps de la requête) et tient les limites, `listing`, `path_of` et `remove` bornent tout chemin à la boîte puis au dossier du compte (le chemin est résolu puis vérifié, en plus des contrôles de nom). Le serveur (`server/app.py`) décide qui a le droit.
 """
 
 from __future__ import annotations
@@ -28,6 +31,8 @@ NAME_BYTES = 200                # longueur du nom, en octets UTF-8 : de la place
 SAME_NAME = 999                 # « Film (2).mkv », « Film (3).mkv »… jusque-là
 FOLDER_BYTES = 120              # un nom de dossier de compte, en octets UTF-8 : de la place pour « (999) » sous la limite de 255 des systèmes de fichiers
 FOLDER_FALLBACK = "compte"      # le nom d'un dossier dont le nom de compte ne laisse rien après nettoyage
+DEPTH = 4                       # niveaux de sous-dossiers sous le dossier du compte : de quoi garder « Série/Saison 1/Disque 2/Bonus », pas de quoi bâtir une arborescence sans fond (chaque parcours la descend, et un chemin trop long gênerait les partages Windows)
+MAX_SUBFOLDERS = 1000           # sous-dossiers d'un compte, tous niveaux : un envoi qui en créerait au-delà est refusé. Chaque dossier est une entrée de plus à lire à chaque liste, calcul d'espace et nettoyage ; sans plafond, un client (ou un bogue) en sèmerait sans fin avec des fichiers d'un octet.
 
 # Ce que l'on accepte de ranger : vidéo, audio, livre, sous-titres, archive zip. Ni exécutable, ni script, ni page web (.exe, .sh, .bat, .js, .html, .svg…) : la liste est l'autorisation, tout le reste est refusé.
 EXTENSIONS = frozenset({
@@ -71,12 +76,12 @@ def clean_name(raw):
 
 
 def is_stored_name(name):
-    """Ce nom peut-il être celui d'un fichier fini de la boîte ? Le contraire de ce que `clean_name` ne produit jamais : séparateur, caractère douteux, point au début, point ou espace à la fin, `.part`."""
+    """Ce nom peut-il être celui d'un fichier fini de la boîte ? Le contraire de ce que `clean_name` ne produit jamais : séparateur, caractère douteux, point au début, point ou espace à la fin, `.part` (en toute casse : NTFS et SMB ouvrent `.PART` comme `.part`)."""
     try:
         size = len(name.encode("utf-8"))
     except (AttributeError, UnicodeEncodeError):
         return False
-    return 0 < size <= 255 and name == name.strip(" .") and not name.endswith(PART) and all(_safe_char(c) for c in name)
+    return 0 < size <= 255 and name == name.strip(" .") and not name.lower().endswith(PART) and all(_safe_char(c) for c in name)
 
 
 
@@ -93,6 +98,29 @@ def clean_folder(raw):
         name = "_" + name
     name = name.encode("utf-8")[:FOLDER_BYTES].decode("utf-8", "ignore").rstrip(" .")
     return name or FOLDER_FALLBACK
+
+
+def _clean_segment(raw):
+    """Un segment de `clean_dir` : les règles de `clean_folder`, mais un segment qui ne laisse rien (vide, `.`, `..`, points et espaces) est refusé (400), jamais remplacé par un nom neutre."""
+    name = unicodedata.normalize("NFC", raw)
+    if not name.strip(" ."):
+        raise InboxError(400, "segment de dossier vide, « . » ou « .. » refusé")
+    return clean_folder(name)
+
+
+def clean_dir(raw):
+    """Le chemin relatif d'un sous-dossier (`?dir=`), en segments nettoyés : des noms séparés par `/`, chacun passé par `clean_folder`. Rien ou un texte vide : `()` (le dossier du compte). 400 en français pour un segment vide, `.` ou `..` (jamais ignoré),
+    une barre oblique inverse (séparateur de Windows : refusée plutôt que changée en `_`, le client croirait envoyer deux niveaux), plus de DEPTH niveaux, ou autre chose qu'un texte. Le texte n'est pas décodé ici : `%2e%2e` est un nom de dossier ordinaire."""
+    if raw is None or raw == "":
+        return ()
+    if not isinstance(raw, str):
+        raise InboxError(400, "chemin de dossier attendu sous forme de texte (?dir=…)")
+    if "\\" in raw:
+        raise InboxError(400, "« \\ » n'est pas un séparateur de dossiers : sépare-les par « / » (?dir=…)")
+    segments = raw.split("/", DEPTH)                   # au plus DEPTH + 1 morceaux : un chemin énorme n'est pas découpé en entier
+    if len(segments) > DEPTH:
+        raise InboxError(400, f"dossiers trop profonds : {DEPTH} niveaux au plus")
+    return tuple(_clean_segment(segment) for segment in segments)
 
 
 def is_folder_name(name):
@@ -170,7 +198,8 @@ class Inbox:
         self.db = db
         self.keep_free, self.max_uploads = cfg.inbox_keep_free, cfg.inbox_max_uploads
         self._lock = threading.Lock()   # les compteurs ci-dessous
-        self._names = threading.Lock()  # le choix d'un nom libre (de dossier ou de fichier) et sa publication : un nom pris par un `.part` ne se libère pas entre le contrôle et le renommage d'un autre envoi, deux comptes ne choisissent pas le même dossier
+        self._names = threading.RLock() # le choix d'un nom libre (de dossier ou de fichier) et sa publication : un nom pris par un `.part` ne se libère pas entre le contrôle et le renommage d'un autre envoi, deux comptes ne choisissent pas le même dossier.
+                                        # Aussi la création et le retrait des sous-dossiers : un dossier retrouvé vide n'est pas retiré pendant qu'un envoi s'apprête à y poser son `.part`. Réentrant : `_stage` tient le verrou autour de `_open_part`, qui le prend aussi
         self._active = 0                # envois en cours
         self._pending = 0               # octets annoncés des envois en cours : deux envois qui arrivent ensemble ne dépassent pas l'espace à garder à eux deux
 
@@ -313,42 +342,177 @@ class Inbox:
     def _account_folders(self):
         return [folder for e in _entries(self.root) if e.is_dir() and (folder := self._folder(e.name)) is not None]
 
-    def path_of(self, folder_name, name):
-        """Le fichier fini `name` du dossier `folder_name` ; 404 pour tout le reste : un autre dossier, un `.part`, un nom caché, un dossier, un lien, un chemin qui sort de la boîte.
-        Les deux noms n'ont ni séparateur ni point au début (`is_folder_name`, `is_stored_name`), le dossier n'est pas un lien (`_folder`), et le fichier résolu doit rester sous le dossier résolu."""
-        folder = self._folder(folder_name)
-        if folder is None or not is_stored_name(name):
+    def _confined(self, path, account):
+        """`path` résolu reste-t-il sous la boîte ET sous le dossier du compte `account` ? Le second contrôle compte : un lien ou une jonction que les contrôles de nom ne voient pas pourrait mener au dossier d'un AUTRE compte, qui est bien sous la boîte."""
+        return self._inside(path, self.root) and self._inside(path, account)
+
+    def _is_subfolder(self, entry, account):
+        """Une entrée du dossier d'un compte que l'on descend : un vrai dossier (ni lien ni jonction) au nom de dossier valable (donc ni caché ni réservé), qui reste sous le dossier du compte."""
+        path = Path(entry.path)
+        return is_folder_name(entry.name) and self._is_real_folder(path) and self._confined(path, account)
+
+    def _tree(self, account):
+        """`(dossier, chemin relatif en segments, entrées)` du dossier du compte puis de chacun de ses sous-dossiers, jusqu'à DEPTH niveaux. Aucun lien ni jonction n'est descendu : le parcours ne sort jamais du dossier du compte, et ne boucle pas."""
+        pending = [(account, ())]
+        while pending:
+            folder, relative = pending.pop()
+            entries = _entries(folder)
+            yield folder, relative, entries
+            if len(relative) < DEPTH:
+                pending.extend((Path(e.path), relative + (e.name,)) for e in entries if self._is_subfolder(e, account))
+
+    def _read_dir(self, sub):
+        """Les segments d'un `?dir=` pour LIRE : chacun doit déjà être un nom de dossier tel que la liste le donne (pas de nettoyage : on ne devine pas un dossier), DEPTH au plus ; 404 sinon, comme pour tout chemin qui ne mène à rien."""
+        if sub is None or sub == "":
+            return ()
+        segments = sub.split("/", DEPTH) if isinstance(sub, str) else None
+        if segments is None or len(segments) > DEPTH or not all(is_folder_name(segment) for segment in segments):
+            raise InboxError(404, "fichier introuvable")
+        return tuple(segments)
+
+    def _locate(self, folder_name, sub):
+        """`(dossier du compte, dossier du fichier)` ; 404 pour un compte inconnu, un chemin invalide, un dossier absent ou que la liste ne donne pas sous ce nom (un nom court 8.3), un lien, une jonction ou un chemin qui sort du dossier du compte."""
+        account = self._folder(folder_name)
+        parts = self._read_dir(sub)
+        if account is None:
+            raise InboxError(404, "fichier introuvable")
+        folder = account
+        for segment in parts:
+            listed = any(_same(e.name) == _same(segment) for e in _entries(folder))       # un nom que la liste donne (à la casse près), pas un alias que le système ouvre aussi : le nom court 8.3
+            folder = folder / segment
+            if not listed or not self._is_real_folder(folder) or not self._confined(folder, account):
+                raise InboxError(404, "fichier introuvable")
+        return account, folder
+
+    def path_of(self, folder_name, name, sub=None):
+        """Le fichier fini `name` du dossier `folder_name` (et de son sous-dossier `sub`, des segments séparés par `/`) ; 404 pour tout le reste : un autre dossier, un `.part`, un nom caché, un dossier, un lien, un chemin qui sort de la boîte ou du dossier du compte.
+        Les noms n'ont ni séparateur ni point au début (`is_folder_name`, `is_stored_name`), aucun dossier n'est un lien (`_locate`), le nom doit être celui d'une entrée de la liste du dossier (comme `_locate` pour les dossiers : pas d'alias 8.3), et le fichier résolu doit rester sous le dossier du compte résolu."""
+        account, folder = self._locate(folder_name, sub)
+        if not is_stored_name(name):
             raise InboxError(404, "fichier introuvable")
         path = folder / name
-        if path.is_symlink() or not path.is_file() or not self._inside(path, folder):
+        listed = any(_same(e.name) == _same(name) and is_stored_name(e.name) and _stat_file(e) is not None for e in _entries(folder))       # un nom que la liste donne, pas un alias que le système ouvre aussi (le nom court 8.3 d'un `.part` ou d'un fichier fini)
+        if not listed or path.is_symlink() or not path.is_file() or not self._confined(path, account):
             raise InboxError(404, "fichier introuvable")
         return path
 
-    def remove(self, folder_name, name):
-        path = self.path_of(folder_name, name)
+    def remove(self, folder_name, name, sub=None):
+        """Supprime le fichier ; le sous-dossier qu'il laisse vide part avec lui (et ses parents devenus vides), jamais le dossier du compte ni un dossier qui contient encore quelque chose (même un `.part`)."""
+        path = self.path_of(folder_name, name, sub)
         try:
             os.unlink(path)
         except FileNotFoundError:
             raise InboxError(404, "fichier introuvable")
+        self._prune([path.parent], self._folder(folder_name), climb=True)
 
-    def listing(self, uid=None):
-        """Les fichiers finis, du plus récent au plus ancien : `{"account", "name", "size", "date"}` (`account` : le nom du dossier), ceux du compte `uid` ou de tous. Ni `.part`, ni dossier, ni lien."""
-        if uid is None:
-            folders = self._account_folders()
-        else:
-            name = self.folder_of(uid)
-            folders = [folder for folder in [self._folder(name)] if folder is not None] if name else []
-        files = []
-        for folder in folders:
-            for entry in _entries(folder):
+    def _prune(self, folders, account, climb):
+        """Retire de `folders` ceux qui sont vides, du plus profond au plus haut, sous le verrou des noms ; avec `climb`, remonte aussi aux parents devenus vides. S'arrête avant le dossier du compte, qui reste toujours."""
+        if account is None:
+            return
+        with self._names:
+            for folder in sorted(folders, key=lambda p: len(p.parts), reverse=True):
+                while folder != account and account in folder.parents:
+                    try:
+                        folder.rmdir()
+                    except OSError:                       # il n'est pas vide (ou a disparu) : on le laisse
+                        break
+                    folder = folder.parent if climb else account
+
+    def _files_of(self, account):
+        for folder, relative, entries in self._tree(account):
+            for entry in entries:
                 info = _stat_file(entry) if is_stored_name(entry.name) else None
                 if info is not None:
-                    files.append({"account": folder.name, "name": entry.name, "size": info.st_size, "date": int(info.st_mtime)})
-        return sorted(files, key=lambda f: (-f["date"], f["account"], f["name"]))
+                    yield {"account": account.name, "dir": "/".join(relative), "name": entry.name, "size": info.st_size, "date": int(info.st_mtime)}
+
+    def listing(self, uid=None):
+        """Les fichiers finis, du plus récent au plus ancien : `{"account", "dir", "name", "size", "date"}` (`account` : le nom du dossier du compte ; `dir` : le chemin relatif du sous-dossier, `""` à la racine), ceux du compte `uid` ou de tous,
+        sous-dossiers compris. Ni `.part`, ni dossier, ni lien."""
+        if uid is None:
+            accounts = self._account_folders()
+        else:
+            name = self.folder_of(uid)
+            accounts = [account for account in [self._folder(name)] if account is not None] if name else []
+        files = [f for account in accounts for f in self._files_of(account)]
+        return sorted(files, key=lambda f: (-f["date"], f["account"], f["dir"], f["name"]))
 
     def used(self, uid):
-        """Ce que les fichiers finis du compte occupent."""
+        """Ce que les fichiers finis du compte occupent, sous-dossiers compris."""
         return sum(f["size"] for f in self.listing(uid))
+
+    # --- Sous-dossiers à la réception ---------------------------------------------
+    def _child(self, account, parent, segment):
+        """Le sous-dossier de `parent` qui se confond avec `segment` (casse et forme Unicode ignorées), ou None s'il n'y en a pas. 409 si ce nom est pris par un fichier, un lien ou une jonction (jamais écrit à travers) ; 503 si le dossier mène hors du dossier du compte."""
+        key = _same(segment)
+        for entry in _entries(parent):
+            if _same(entry.name) != key:
+                continue
+            path = Path(entry.path)
+            if not (is_folder_name(entry.name) and self._is_real_folder(path)):
+                print(f"boîte de réception : « {path} » n'est pas un dossier ordinaire (fichier, lien ou jonction)", file=sys.stderr)
+                raise InboxError(409, f"« {segment} » : un fichier ou un lien porte déjà ce nom")
+            if not self._confined(path, account):
+                raise self._unusable(f"le dossier « {path} » sort du dossier du compte", "lien ou jonction non reconnu")
+            return path
+        return None
+
+    def _existing(self, account, parts):
+        """`(le dossier existant le plus profond du chemin, les segments qui restent à créer)`."""
+        folder = account
+        for index, segment in enumerate(parts):
+            found = self._child(account, folder, segment)
+            if found is None:
+                return folder, parts[index:]
+            folder = found
+        return folder, ()
+
+    def _room_for(self, account, new):
+        """409 si créer `new` sous-dossiers de plus porterait le compte au-delà de MAX_SUBFOLDERS. Un dossier déjà là n'est pas concerné (on ne passe ici que pour en créer)."""
+        have = sum(1 for _ in self._tree(account)) - 1          # le dossier du compte lui-même ne compte pas
+        if have + new > MAX_SUBFOLDERS:
+            raise InboxError(409, f"trop de sous-dossiers dans ton dossier ({MAX_SUBFOLDERS} au plus)")
+
+    def _twin(self, account, path):
+        """Le dossier ordinaire de la boîte que `path` désigne déjà sans le même nom que dans la liste (nom court 8.3 de Windows : `_child`, qui compare les noms, ne le voit pas), ou None. Même contrôle que `_child` : ni fichier, ni lien, ni jonction, et sous le dossier du compte."""
+        for entry in _entries(path.parent):
+            found = Path(entry.path)
+            try:
+                if os.path.samestat(os.lstat(found), os.lstat(path)):         # sans suivre les liens : une jonction ne se confond pas avec sa cible, quel que soit l'ordre de `scandir`
+                    return found if is_folder_name(entry.name) and self._is_real_folder(found) and self._confined(found, account) else None
+            except OSError:
+                continue
+        return None
+
+    def _make_folders(self, account, parent, names, touched):
+        """Crée `names` l'un dans l'autre sous `parent`, chacun consigné dans `touched` pour être repris si l'envoi échoue. Un nom qui existe déjà sans que `_child` l'ait vu est l'alias court d'un vrai dossier : on y entre (sous son vrai nom, rien de créé) ; 409 si c'est autre chose."""
+        for name in names:
+            parent = parent / name
+            try:
+                parent.mkdir()
+            except FileExistsError:
+                twin = self._twin(account, parent)
+                if twin is None:
+                    raise InboxError(409, f"« {name} » existe déjà sous un autre nom ou n'est pas un dossier ordinaire : choisis un autre nom")
+                parent = twin
+            except OSError as e:
+                raise self._unusable(f"dossier « {parent} » impossible à créer", e)
+            else:
+                touched.append(parent)
+        return parent
+
+    def _stage(self, account, parts, name, touched):
+        """`(dossier, nom retenu, fichier .part ouvert)` : le dossier du chemin `parts` sous celui du compte, créé s'il manque (plafond tenu avant d'en créer un), et le `.part` ouvert dedans. Tout sous le verrou des noms : ni deux envois qui créent le même dossier,
+        ni un dossier retiré (vide) entre sa création et le `.part`. Le dossier final est vérifié sous la boîte et sous le dossier du compte. `touched` reçoit les dossiers créés et le dossier cible, même déjà là : si l'envoi échoue, `receive` les retire s'ils sont vides, car l'envoi qui a créé le dossier peut avoir échoué avant celui-ci."""
+        with self._names:
+            folder, missing = self._existing(account, parts)
+            if missing:
+                self._room_for(account, len(missing))
+                folder = self._make_folders(account, folder, missing, touched)
+            if not self._confined(folder, account):
+                raise self._unusable(f"le dossier « {folder} » sort du dossier du compte", "lien ou jonction non reconnu")
+            touched.append(folder)
+            final, out = self._open_part(folder, name)
+        return folder, final, out
 
     # --- Démarrage : vérifier la boîte, migrer les anciens dossiers --------------
     def check(self):
@@ -517,39 +681,53 @@ class Inbox:
             got += len(chunk)
         return got
 
-    def receive(self, uid, raw_name, source, length):
-        """Range dans le dossier du compte `uid` les `length` octets de `source` sous un nom nettoyé, sans jamais écraser. Rend `{"name", "size", "account"}` (`account` : le nom du dossier).
-        Le fichier s'écrit dans `<nom>.part`, renommé quand tout est là ; si l'envoi échoue (flux trop court, coupure, disque plein) le `.part` est effacé. InboxError avant toute lecture quand l'espace manque ou que trop d'envois sont en cours."""
-        name = clean_name(raw_name)
+    def _write(self, folder, final, out, source, length):
+        """Copie le corps dans `<final>.part` puis le publie ; le `.part` est effacé si l'envoi échoue."""
+        part, stored = folder / (final + PART), False
+        try:
+            with out:
+                got = self._copy(source, out, length)
+            if got != length:
+                raise InboxError(400, f"envoi interrompu : {got} octets reçus sur {length}")
+            self._publish(folder, final)
+            stored = True
+        finally:
+            if not stored:
+                _discard(part)
+
+    def receive(self, uid, raw_name, source, length, raw_dir=None):
+        """Range dans le dossier du compte `uid` (ou son sous-dossier `raw_dir`, voir `clean_dir`) les `length` octets de `source` sous un nom nettoyé, sans jamais écraser. Rend `{"name", "size", "account", "dir"}` (`account` : le nom du dossier du compte ; `dir` : le sous-dossier retenu, `""` à la racine).
+        Le nom et le chemin sont vérifiés avant tout dossier : un refus (nom, extension, espace, envois en cours, plafond) n'en crée aucun. Le fichier s'écrit dans `<nom>.part`, renommé quand tout est là ; si l'envoi échoue (flux trop court, coupure, disque plein) le `.part` est effacé
+        et le sous-dossier cible est retiré s'il est vide (avec ses parents devenus vides, comme `remove`), qu'il ait été créé par cet envoi ou par un autre qui a échoué avant lui ; un dossier qui contient encore quelque chose n'est jamais touché. InboxError avant toute lecture quand l'espace manque ou que trop d'envois sont en cours."""
+        name, parts = clean_name(raw_name), clean_dir(raw_dir)
         with self.admit(uid, length):
             folder_name = self.folder_for(uid)
-            folder = self._folder(folder_name)
-            if folder is None:                  # un lien ou une jonction à la place du dossier, ou un dossier hors de la boîte : jamais écrire par là
+            account = self._folder(folder_name)
+            if account is None:                 # un lien ou une jonction à la place du dossier, ou un dossier hors de la boîte : jamais écrire par là
                 raise self._unusable(f"le dossier « {folder_name} » n'est pas un dossier de la boîte", "lien, jonction ou dossier absent")
-            final, out = self._open_part(folder, name)
-            part, stored = folder / (final + PART), False
+            touched, stored = [], False
             try:
-                with out:
-                    got = self._copy(source, out, length)
-                if got != length:
-                    raise InboxError(400, f"envoi interrompu : {got} octets reçus sur {length}")
-                self._publish(folder, final)
+                folder, final, out = self._stage(account, parts, name, touched)
+                self._write(folder, final, out, source, length)
                 stored = True
             finally:
                 if not stored:
-                    _discard(part)
-        return {"name": final, "size": length, "account": folder_name}
+                    self._prune(touched, account, climb=True)
+        return {"name": final, "size": length, "account": folder_name, "dir": "/".join(folder.relative_to(account).parts)}
 
     # --- Nettoyage ---------------------------------------------------------------
     def sweep(self, now=None):
-        """Efface, dans la boîte (HUB_INBOX, son volume), les `.part` vieux de plus de STALE secondes (un envoi abandonné par un arrêt brutal) ; rend leur nombre. Un envoi en cours écrit sans cesse : son `.part` est toujours récent."""
+        """Efface, dans la boîte (HUB_INBOX, son volume), les `.part` vieux de plus de STALE secondes (un envoi abandonné par un arrêt brutal), sous-dossiers compris ; rend leur nombre. Un sous-dossier que cela laisse vide est retiré. Un envoi en cours écrit sans cesse : son `.part` est toujours récent."""
         limit = (time.time() if now is None else now) - STALE
         removed = 0
-        for folder in self._account_folders():
-            for entry in _entries(folder):
-                info = _stat_file(entry) if entry.name.endswith(PART) else None
-                if info is not None and info.st_mtime < limit:
-                    removed += _discard(entry.path)
+        for account in self._account_folders():
+            emptied = []
+            for folder, _, entries in self._tree(account):
+                gone = sum(_discard(e.path) for e in entries if e.name.lower().endswith(PART) and (info := _stat_file(e)) is not None and info.st_mtime < limit)
+                removed += gone
+                if gone:
+                    emptied.append(folder)
+            self._prune(emptied, account, climb=True)
         return removed
 
     def _sweep_quietly(self):

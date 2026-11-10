@@ -16,7 +16,7 @@ from unittest import mock
 from urllib.parse import quote
 
 from tests.rig import MiniHub, Rig, call
-from hub import accounts
+from hub import accounts, inbox
 from hub.server import app
 from hub.inbox import Inbox, InboxError
 from tests.test_server import AccountsCase, Client
@@ -86,7 +86,7 @@ class InboxCase(unittest.TestCase):
 class TestUpload(InboxCase):
     def test_an_account_with_the_right_sends_a_file_into_its_own_folder(self):
         handler, reply = self.send(self.alice, "Film.mkv", b"0123456789")
-        self.assertEqual((reply.status, reply.json()), (201, {"name": "Film.mkv", "size": 10, "account": "alice"}))
+        self.assertEqual((reply.status, reply.json()), (201, {"name": "Film.mkv", "size": 10, "account": "alice", "dir": ""}))
         self.assertEqual((self.inbox / "alice" / "Film.mkv").read_bytes(), b"0123456789")
         self.assertEqual(self.everything(), [f"{self.alice['name']}/Film.mkv"])
         self.assertFalse(handler.close_connection)
@@ -325,7 +325,7 @@ class TestRead(InboxCase):
     def test_mine_lists_only_the_files_of_the_caller_and_what_he_still_has_room_for(self):
         _, reply = self.get(self.alice, "/api/inbox?mine=1")
         self.assertEqual([(f["name"], f["size"]) for f in reply.json()["files"]], [("Film.mkv", 10)])
-        self.assertEqual(reply.json(), {"files": reply.json()["files"], "used": 10})                   # ni quota ni taille maximale
+        self.assertEqual(reply.json(), {"files": reply.json()["files"], "used": 10, "extensions": sorted(inbox.EXTENSIONS)})                   # ni quota ni taille maximale
         _, reply = self.get(self.boss, "/api/inbox?mine=1")
         self.assertEqual([f["name"] for f in reply.json()["files"]], ["Livre.epub"])
 

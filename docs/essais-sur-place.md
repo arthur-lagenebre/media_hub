@@ -86,6 +86,18 @@ Suivre la procédure de [deploy/README.md](../deploy/README.md), « Essai à fai
 - [ ] **Migration des anciens dossiers :** avant le premier démarrage de cette version, noter `ls media_hub-data/inbox/` (dossiers `default` et hexadécimaux) ; après : les dossiers portent le nom des comptes, les fichiers y sont, `grep "boîte de réception"` dans les journaux est vide ou explique chaque dossier resté sous son identifiant. Relancer le hub : rien ne bouge. Si le dataset est activé ensuite, déplacer le contenu de l'ancienne boîte hub arrêté (procédure du README) et vérifier que les fichiers se retrouvent sous les noms de comptes.
 - [ ] **Non vérifié, à noter :** si `DAC_OVERRIDE` (la capacité gardée par le conteneur, qui tourne en root avec `cap_drop: ALL`) passe outre une **ACL NFSv4 ZFS** (préréglage SMB du dataset) pour créer, écrire et renommer. L'essai du premier point le tranche : s'il échoue sur un dataset aux ACL SMB, régler l'ACL du dataset, sans élargir les capacités du conteneur.
 
+### Envoi d'un dossier entier (depuis la 0.9.0)
+
+Les tests simulent le navigateur et un disque local : rien de ceci n'a été essayé sur un vrai PC, un vrai téléphone ni le NAS.
+
+- [ ] **Un vrai dossier de plusieurs centaines de fichiers depuis un PC** (« Envoyer un dossier » puis, une autre fois, glisser-déposer depuis l'explorateur), avec des sous-dossiers sur 3 ou 4 niveaux, des accents, des fichiers non compatibles et un `Thumbs.db`. **Attendu :** la confirmation annonce le bon nombre de fichiers, la taille et les ignorés ; la ligne du dossier avance (« 12 / 342 fichiers ») ; l'arborescence arrive à l'identique sous le dossier du compte ; rien d'ignoré n'est écrit. **Mesures à noter :** le temps total, la fluidité de la page pendant l'envoi, le nombre de 429 vus (file d'attente).
+- [ ] **Annulation et reprise :** annuler en plein milieu d'un gros dossier, puis le renvoyer. **Attendu :** les fichiers déjà arrivés restent, le reste n'arrive pas, le renvoi fusionne dans le même dossier et les fichiers de même nom passent en « (2) » ; aucun `.part` ne traîne.
+- [ ] **Depuis un téléphone (Android, iOS) :** le bouton « Envoyer un dossier » peut ne pas apparaître, ou ouvrir un sélecteur de fichiers ordinaire (le navigateur annonce `webkitdirectory` sans le gérer). **Attendu :** ni erreur ni page cassée ; noter, par navigateur, ce qui se passe.
+- [ ] **Dossier renommé ou supprimé par SMB pendant un envoi** (depuis le partage de `HubReception`, pendant l'envoi d'un gros dossier). **Attendu :** un message d'erreur clair sur les fichiers concernés (pas de plantage du hub), les suivants recréent le dossier ; noter ce que Windows (SMB) accepte ou refuse de renommer quand un `.part` y est ouvert.
+- [ ] **Arborescence profonde sur le dataset « HubReception »** : 4 niveaux, des noms de 100 à 120 caractères accentués. **Attendu :** les envois passent ; noter si un chemin dépasse la limite des chemins Windows (260 caractères) côté SMB, car le hub ne borne que chaque segment (120 octets), pas le chemin entier.
+- [ ] **Plafond de 1 000 sous-dossiers :** envoyer un dossier qui en contient davantage. **Attendu :** refus en français sur les fichiers concernés, les fichiers des dossiers déjà créés passent.
+- [ ] **Listes volumineuses :** avec 1 000 fichiers dans la boîte, ouvrir la page « Envoyer » et l'onglet de l'administrateur. **Attendu :** la liste s'affiche sans attente notable (le serveur relit l'arbre à chaque affichage).
+
 ---
 
 ## Séance 3 : sur le téléphone (≈ 20 min)
