@@ -42,7 +42,7 @@ def main():
         return  # entrée illisible : ne rien bloquer
     answer = decide(event, datetime.datetime.now())
     if answer:
-        print(json.dumps(answer, ensure_ascii=False))
+        print(json.dumps(answer))  # ASCII : sous Windows, la sortie suit la page de code, pas l'UTF-8
 
 
 if __name__ == "__main__":

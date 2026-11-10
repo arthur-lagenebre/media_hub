@@ -9,7 +9,13 @@
       {
         "matcher": "Agent|Task",
         "hooks": [
-          { "type": "command", "command": "python .claude/hooks/confirm-night.py" }
+          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/confirm-night.py\"" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-git.py\"" }
         ]
       }
     ]
