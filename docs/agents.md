@@ -94,6 +94,7 @@ git worktree add ../media_hub-<lot> -b <branche> main
 
 - **Ils ne commitent pas et n'ouvrent pas de PR** : c'est toi (ou la conversation principale) qui décides.
 - **Entre 23 h et 6 h, une confirmation est demandée** avant de lancer `hub-server`, `hub-ui`, `hub-deploy` ou `hub-tester` : le hook `.claude/hooks/confirm-night.py` (déclaré dans `.claude/settings.json`, sur le lancement d'un agent) lit l'heure de la machine ; `hub-architect` et `hub-reviewer`, en lecture seule, partent sans question.
+- **Ils ne peuvent pas contourner les garde-fous git** : le hook `.claude/hooks/guard-git.py` (déclaré sur l'outil Bash) refuse push forcé, push vers `main`, `--no-verify`, `git branch -D`, `git add -A`, commit sur `main` et `gh pr merge`, pour eux comme pour la conversation principale.
 - **Ils ne voient pas ta télé ni ton NAS.** Ils testent sur une médiathèque factice ; la lecture réelle (codecs, HDR, son) et le déploiement restent à essayer sur place, et ils doivent le dire dans leur compte rendu.
 - **Les tests sautés ne comptent pas.** Sans Playwright ou ffmpeg, `tests/test_ui.py` est ignoré ; les agents doivent le signaler au lieu d'annoncer « tout passe ».
 - **`media_library` doit être à côté de `media_hub`** (ou désigné par `HUB_REPO`), sinon aucun test ne démarre.
