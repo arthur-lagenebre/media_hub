@@ -123,6 +123,8 @@
     'Reprendre': 'Resume',
     'Nouveautés': 'Recently added',
     'Pas encore vu': 'Not watched yet',
+    'Tu as masqué tous les rayons de l’accueil : Paramètres > Préférences, pour les remettre': 'You have hidden every shelf on the home page: Settings > Preferences, to bring them back',
+    'Rien à reprendre ni à découvrir pour l’instant': 'Nothing to resume or discover for now',
 
     // --- Bibliothèque ---
     'Ajouts récents': 'Recently added',
@@ -446,12 +448,10 @@
     'Tout mettre à jour': 'Update all',
     'Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.': 'Rescans all five libraries; only modified files are re-read.',
     'Mise à jour lancée': 'Update started',
-    'Films manquants (bibliothèques de films)': 'Missing movies (movie libraries)',
     'Films des personnes (TMDB)': 'People’s movies (TMDB)',
+    'Films manquants': 'Missing movies',
     'Demande à TMDB les films des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Les identifiants viennent de « Enrichir (TMDB) » : lance-le d’abord une fois.': 'Asks TMDB for the movies of this library’s actors, to see on each person’s page the ones that are not in your library. The ids come from “Enrich (TMDB)”: run it once first.',
-    'Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque.': 'Asks TMDB for the movies of this library’s directors and actors, to see on each person’s page the ones that are not in your library.',
-    'Demande à TMDB les films des réalisateurs et des acteurs de premier plan, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Compte une heure ou plus la première fois (un appel par personne, puis les affiches) ; une personne déjà connue depuis moins d’un mois n’est pas redemandée.': 'Asks TMDB for the movies of the directors and the leading actors, to see on each person’s page the ones that are not in your library. Allow an hour or more the first time (one call per person, then the posters); a person already known for less than a month is not asked again.',
-    'Recherche des films manquants lancée : bibliothèques de films': 'Search for missing movies started: movie libraries',
+    'Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Compte une heure ou plus la première fois (un appel par personne, puis les affiches) ; une personne déjà connue depuis moins d’un mois n’est pas redemandée.': 'Asks TMDB for the movies of this library’s directors and actors, to see on each person’s page the ones that are not in your library. Allow an hour or more the first time (one call per person, then the posters); a person already known for less than a month is not asked again.',
     'mis à jour {when}': 'updated {when}',
     'dossier introuvable': 'folder not found',
     'Enrichir (TMDB)': 'Enrich (TMDB)',
@@ -557,7 +557,7 @@
     '(toi)': '(you)',
     'créé le {date}': 'created {date}',
     'Droits': 'Permissions',
-    'Droits de {name} : consulter, lecture, télécharger': 'Permissions of {name}: browse, playback, download',
+    'Droits de {name} : consulter, lecture, télécharger, envoyer': 'Permissions of {name}: browse, playback, download, upload',
     'Mot de passe': 'Password',
     'Changer le mot de passe de {name}': 'Change the password of {name}',
     'Supprimer le compte de {name}': 'Delete the account of {name}',
@@ -634,11 +634,18 @@
     'Les fichiers que les comptes ont envoyés. Rien n’y est rangé dans une bibliothèque : télécharge-les, puis range-les toi-même.': 'The files the accounts have uploaded. None is filed in a library: download them, then file them yourself.',
     'La boîte de réception est vide.': 'The inbox is empty.',
     'Télécharger {name}': 'Download {name}',
-    'Peut envoyer des fichiers': 'Can upload files',
     'Peut envoyer des fichiers : toujours': 'Can upload files: always',
-    'Peut envoyer des fichiers : {name}': 'Can upload files: {name}',
-    '{name} peut envoyer des fichiers': '{name} can now upload files',
-    '{name} ne peut plus envoyer de fichiers': '{name} can no longer upload files'
+    'Envoyer des fichiers': 'Upload files',
+    'Envoyer des fichiers : {upload}': 'Upload files: {upload}',
+    'oui': 'yes',
+    'non': 'no',
+    'Oui': 'Yes',
+    'Non': 'No',
+    'Rien n’a été enregistré. Droits de bibliothèque : {rights}. Envoyer des fichiers : {upload}': 'Nothing was saved. Library permissions: {rights}. Upload files: {upload}',
+    '« Envoyer des fichiers » est enregistré, mais pas les droits de bibliothèque : {error}': '“Upload files” is saved, but the library permissions are not: {error}',
+    'Les droits de bibliothèque n’ont pas été enregistrés : {error}': 'The library permissions were not saved: {error}',
+    'Les droits de bibliothèque sont enregistrés, mais pas « Envoyer des fichiers » : {error}': 'The library permissions are saved, but “Upload files” is not: {error}',
+    '« Envoyer des fichiers » n’a pas été enregistré : {error}': '“Upload files” was not saved: {error}'
   };
 
   // Ce que le serveur écrit. Les libellés de bibliothèque viennent de la configuration (« Films », « Séries »…) : un nom que l'on a choisi soi-même reste tel quel.
