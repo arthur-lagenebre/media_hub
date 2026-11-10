@@ -477,7 +477,7 @@ class Inbox:
         for entry in _entries(path.parent):
             found = Path(entry.path)
             try:
-                if os.path.samefile(found, path):
+                if os.path.samestat(os.lstat(found), os.lstat(path)):         # sans suivre les liens : une jonction ne se confond pas avec sa cible, quel que soit l'ordre de `scandir`
                     return found if is_folder_name(entry.name) and self._is_real_folder(found) and self._confined(found, account) else None
             except OSError:
                 continue

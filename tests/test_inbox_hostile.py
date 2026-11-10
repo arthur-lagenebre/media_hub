@@ -223,6 +223,20 @@ class TestOnlyListedNamesAreServed(SubCase):
             self.assertEqual(self.status(self.inbox.remove, "alice", "x.mkv", "a/b"), 404)
         self.assertEqual(self.inbox.path_of("alice", "x.mkv", "a/b").read_bytes(), b"secret")
 
+    def test_a_link_standing_for_a_folder_never_lets_an_upload_end_in_the_real_folder_whatever_the_scan_order(self):
+        """Un nom qui existe déjà sans que `_child` l'ait vu (l'alias 8.3 d'une jonction : ici `lien` lui-même) : `_twin` compare sans suivre les liens, le résultat ne dépend pas de l'ordre de `scandir`."""
+        (self.alice / "reel").mkdir(parents=True)
+        self.link(self.alice / "reel", self.alice / "lien")
+        real = inbox._entries
+        blind = lambda self, account, parent, segment: None            # `_child` ne voit pas le nom : on arrive à `mkdir`, qui échoue
+        for order in (False, True):
+            with mock.patch.object(inbox.Inbox, "_child", blind), mock.patch.object(inbox, "_entries", lambda folder: sorted(real(folder), key=lambda e: e.name, reverse=order)):
+                with mock.patch.object(sys, "stderr", io.StringIO()), self.assertRaises(InboxError) as caught:
+                    self.send("x.mkv", "lien")
+            self.assertEqual(caught.exception.status, 409, order)
+            self.assertEqual(tree(self.alice), ["lien/", "reel/"], order)
+
+
 @unittest.skipUnless(WINDOWS, "les noms courts 8.3 n'existent que sous Windows")
 class TestShortNames(SubCase):
     """NTFS donne à « Dossier Long » le nom court `DOSSIE~1` et ouvre les deux : le hub ne doit ni écrire ailleurs ni écraser à travers l'un."""
@@ -286,6 +300,15 @@ class TestShortNames(SubCase):
             self.assertEqual(self.status(self.inbox.remove, "alice", short), 404, short)
         self.assertEqual((self.alice / "Un film en cours.mkv.part").read_bytes(), b"en cours")
         self.assertEqual(self.inbox.path_of("alice", "Un film fini avec un long nom.mkv").read_bytes(), b"fini aussi")
+
+    def test_the_short_name_of_a_junction_is_a_409_not_the_real_folder_next_to_it(self):
+        (self.alice / "A reel").mkdir(parents=True)
+        self.link(self.alice / "A reel", self.alice / "Lien long nom")
+        short = self.alias_of(self.alice / "Lien long nom")
+        with mock.patch.object(sys, "stderr", io.StringIO()), self.assertRaises(InboxError) as caught:
+            self.send("x.mkv", short)
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(tree(self.alice), ["A reel/", "Lien long nom/"])
 
     def test_a_short_name_that_is_a_file_is_a_clear_409_and_nothing_is_written(self):
         (self.alice / "Un fichier avec un long nom.mkv").parent.mkdir(parents=True)
