@@ -26,6 +26,6 @@ L'utilisateur fusionne lui-même ses PR (voir `/ship`). Ce skill fait le rangeme
 ## Garde-fous
 
 - Pas de `--force`, pas de `-D`, pas de `git push origin --delete`, pas de réécriture d'historique.
-- Une seule branche est supprimée : celle de la PR fusionnée. Les autres branches locales ne sont pas touchées, même si elles ont l'air mortes (pour un nettoyage général, c'est « refresh branches »).
+- Une seule branche est supprimée : celle de la PR fusionnée. Les autres branches locales ne sont pas touchées, même si elles ont l'air mortes (pour un nettoyage général, c'est `/refresh`).
 - Tu ne fusionnes jamais une PR toi-même, même si la CI est verte.
 - Tu ne crées ni ne pousses jamais d'étiquette (`git tag`, `git push origin v…`) : tu proposes la commande, c'est l'utilisateur qui la lance.
