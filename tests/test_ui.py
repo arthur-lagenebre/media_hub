@@ -3855,13 +3855,13 @@ class InboxUiCase(unittest.TestCase):
         req = urllib.request.Request(self.base + "/api/users", headers={"Authorization": "Bearer " + self.token("admin")})
         return {u["name"]: u for u in json.load(urllib.request.urlopen(req))["users"]}
 
-    def put(self, name, filename, data=b"contenu", mtime=None):
-        """Un fichier dans la boîte de `name`, par l'API."""
-        req = urllib.request.Request(self.base + "/api/inbox?name=" + urllib.parse.quote(filename), data=data, method="POST",
-                                     headers={"Authorization": "Bearer " + self.token(name), "Content-Type": "application/octet-stream"})
+    def put(self, name, filename, data=b"contenu", mtime=None, dir=None):
+        """Un fichier dans la boîte de `name` (dans son sous-dossier `dir`, s'il y en a un), par l'API."""
+        url = self.base + "/api/inbox?name=" + urllib.parse.quote(filename) + ("&dir=" + urllib.parse.quote(dir) if dir else "")
+        req = urllib.request.Request(url, data=data, method="POST", headers={"Authorization": "Bearer " + self.token(name), "Content-Type": "application/octet-stream"})
         stored = json.load(urllib.request.urlopen(req))
         if mtime:
-            os.utime(self.box / stored["account"] / stored["name"], (mtime, mtime))
+            os.utime(self.box / stored["account"] / stored["dir"] / stored["name"], (mtime, mtime))
         return stored
 
     def member(self, name):
@@ -3891,7 +3891,7 @@ class InboxUiCase(unittest.TestCase):
 
     def send(self, page, *files):
         """Choisit des fichiers `(nom, octets)` comme le ferait la personne avec le bouton « Choisir des fichiers »."""
-        page.set_input_files("#views > .view:visible input[type=file]", [{"name": n, "mimeType": "application/octet-stream", "buffer": b} for n, b in files])
+        page.set_input_files("#views > .view:visible input[type=file]:not([webkitdirectory])", [{"name": n, "mimeType": "application/octet-stream", "buffer": b} for n, b in files])
 
     def sends(self, page, state=""):
         return page.locator("#views > .view:visible .send" + (f'[data-state="{state}"]' if state else ""))
@@ -4314,7 +4314,7 @@ class InboxUiCase(unittest.TestCase):
         page = self.upload_page(lang="en")
         self.assertEqual(page.locator('#nav [data-nav="#/upload"]').get_attribute("aria-label"), "Upload")
         self.assertEqual(page.locator("#views > .view:visible h1").inner_text(), "Upload")
-        self.assertEqual(page.locator("#views > .view:visible .drop .btn").inner_text(), "Choose files")
+        self.assertEqual(page.locator("#views > .view:visible .drop .btn").all_inner_texts(), ["Choose files", "Send a folder"])
         self.assertIn("Space used", page.locator("#views > .view:visible .usedline").inner_text())
         self.assertEqual(page.locator("#views > .view:visible .mine .empty").inner_text(), "You haven’t uploaded anything yet.")
         self.send(page, ("virus.exe", b"MZ" * 100), ("Film.mkv", b"f" * 3000))
@@ -4463,6 +4463,497 @@ class InboxUiCase(unittest.TestCase):
     def test_a_phone_gets_no_drag_and_drop_wording(self):
         page = self.upload_page(device="phone", width=390)
         self.assertEqual(page.locator("#views > .view:visible .dropline").inner_text(), "Choisis les fichiers à envoyer depuis cet appareil.")
+
+    # --- Envoyer un dossier --------------------------------------------------------------
+    def make_folder(self, name, files):
+        """Un vrai dossier sur le disque de la machine d'essai, tel que la personne le choisirait : `files` associe un chemin relatif à son contenu."""
+        root = Path(tempfile.mkdtemp(dir=self.tmp)) / name
+        for relative, data in files.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        return root
+
+    def pick_folder(self, page, root):
+        page.set_input_files("#views > .view:visible input[webkitdirectory]", str(root))
+
+    def dialog(self, page):
+        dialog = page.locator(".menu[role=dialog]")
+        dialog.wait_for()
+        return dialog
+
+    def confirm(self, page, label="Envoyer"):
+        """Répond « oui » à la fenêtre ouverte et attend qu'elle se ferme."""
+        dialog = self.dialog(page)
+        dialog.get_by_role("button", name=label, exact=True).click()
+        dialog.wait_for(state="detached")
+
+    def tree(self, account="alice"):
+        """Tous les fichiers du dossier du compte dans la boîte, sous-dossiers compris, en chemins relatifs."""
+        base = self.box / account
+        return sorted(p.relative_to(base).as_posix() for p in base.rglob("*") if p.is_file()) if base.is_dir() else []
+
+    def folders(self, page, state=""):
+        return page.locator("#views > .view:visible .send.folder" + (f'[data-state="{state}"]' if state else ""))
+
+    def posts(self, page):
+        """Les adresses des envois (POST /api/inbox) que la page fait à partir de maintenant."""
+        found = []
+        page.on("request", lambda r: found.append(urllib.parse.unquote(r.url)) if r.method == "POST" and "/api/inbox" in r.url else None)
+        return found
+
+    def line(self, folder):
+        """Le texte d'état de la ligne d'un dossier."""
+        return folder.locator(":scope > .what > span").inner_text()
+
+    def test_a_folder_with_a_subfolder_is_sent_one_file_at_a_time(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        root = self.make_folder("Film", {"a.mkv": b"a" * 3000, "Bonus/b.mkv": b"b" * 2000, "Bonus/Coupes/c.srt": b"c" * 1000})
+        self.pick_folder(page, root)
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator("h3").inner_text(), "Envoyer ce dossier ?")
+        self.assertEqual(dialog.locator(".lead").inner_text(), "Envoyer le dossier « Film » : 3 fichiers (5,9 Ko).")
+        self.assertEqual(dialog.locator(".skipped").count(), 0)                           # rien d'écarté : pas de liste à déplier
+        page.wait_for_timeout(300)
+        self.assertEqual(posts, [])                                                       # rien ne part avant la confirmation
+        self.confirm(page)
+        folder = self.folders(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(folder.count(), 1)                                               # une ligne par dossier, pas une par fichier
+        self.assertEqual(self.sends(page).count(), 1)
+        self.assertEqual(folder.locator(":scope > .what > b").inner_text(), "Film")
+        self.assertEqual(self.line(folder), "3 / 3 fichiers · 5,9 Ko · Envoyé")
+        self.assertEqual(self.tree(), sorted(["Film/a.mkv", "Film/Bonus/b.mkv", "Film/Bonus/Coupes/c.srt"]))
+        self.assertEqual(self.stored(), ["Film"])
+        self.assertEqual(sorted(u.split("name=")[1] for u in posts), sorted(["a.mkv&dir=Film", "b.mkv&dir=Film/Bonus", "c.srt&dir=Film/Bonus/Coupes"]))
+        details = folder.locator(":scope > .sendfiles")
+        self.assertTrue(details.is_hidden())                                              # replié : les fichiers se voient à la demande
+        folder.locator(":scope > button[data-key^=files-]").click()
+        self.assertTrue(details.is_visible())
+        children = details.locator(".sendfile")
+        self.assertEqual([children.nth(i).locator("b").inner_text() for i in range(3)], ["a.mkv", "Bonus/b.mkv", "Bonus/Coupes/c.srt"])
+        self.assertEqual(details.locator(".sendfile[data-state=done]").count(), 3)
+        rows = page.locator("#views > .view:visible .mine-file")
+        self.wait_for(lambda: rows.count() == 3)                                           # « Mes envois » suit, avec le sous-dossier de chacun
+        listed = sorted(rows.nth(i).locator("b").inner_text() + " @ " + rows.nth(i).get_attribute("data-dir") for i in range(3))
+        self.assertEqual(listed, ["a.mkv @ Film", "b.mkv @ Film/Bonus", "c.srt @ Film/Bonus/Coupes"])
+        self.assertIn("Film/Bonus/Coupes", rows.filter(has_text="c.srt").locator(".what > span").inner_text())
+
+    def test_files_a_folder_cannot_send_are_left_out_and_counted(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        root = self.make_folder("Saison", {
+            "01.mkv": b"1" * 2000, "02.mkv": b"2" * 2000, "Un/Deux/Trois/ok.mkv": b"o",                          # 4 niveaux avec « Saison » : accepté
+            "notes.txt": b"n", "virus.exe": b"MZ",                                                                 # des types que le serveur refuse
+            ".cache/x.mkv": b"x", "Thumbs.db": b"t", "desktop.ini": b"d", ".DS_Store": b"d", ".cache.mkv": b"h",   # cachés
+            "Un/Deux/Trois/Quatre/Cinq/profond.mkv": b"p",                                                         # trop profond
+            "vide.mkv": b""})
+        self.pick_folder(page, root)
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator(".lead").inner_text(),
+                         "Envoyer le dossier « Saison » : 3 fichiers (3,9 Ko), 9 ignorés (types non acceptés, fichiers cachés, dossiers trop profonds, fichiers vides).")
+        toggle = dialog.locator("button[data-key=skipped]")
+        self.assertEqual(toggle.inner_text(), "Voir les fichiers ignorés")
+        skipped = dialog.locator(".skipped")
+        self.assertTrue(skipped.is_hidden())
+        toggle.click()
+        self.assertTrue(skipped.is_visible())
+        self.assertEqual(toggle.inner_text(), "Masquer les fichiers ignorés")
+        lines = skipped.locator("li").all_inner_texts()
+        self.assertEqual(len(lines), 9)
+        self.assertIn("Saison/notes.txt — type non accepté", lines)
+        self.assertIn("Saison/virus.exe — type non accepté", lines)
+        self.assertIn("Saison/.cache/x.mkv — fichier caché", lines)
+        self.assertIn("Saison/Thumbs.db — fichier caché", lines)
+        self.assertIn("Saison/Un/Deux/Trois/Quatre/Cinq/profond.mkv — trop profond (4 niveaux au plus)", lines)
+        self.assertIn("Saison/vide.mkv — fichier vide", lines)
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.line(self.folders(page)), "3 / 3 fichiers · 3,9 Ko · Envoyé")
+        self.assertEqual(self.tree(), ["Saison/01.mkv", "Saison/02.mkv", "Saison/Un/Deux/Trois/ok.mkv"])
+        self.assertEqual(len(posts), 3)                                                                            # les écartés ne sont même pas tentés
+
+    def test_a_long_list_of_left_out_files_is_cut_short(self):
+        page = self.upload_page()
+        self.pick_folder(page, self.make_folder("Vrac", {"a.mkv": b"a", **{f"x{n:03d}.txt": b"x" for n in range(130)}}))
+        dialog = self.dialog(page)
+        dialog.locator("button", has_text="Voir les fichiers ignorés").click()
+        lines = dialog.locator(".skipped li").all_inner_texts()
+        self.assertEqual(len(lines), 101)
+        self.assertEqual(lines[-1], "… et 30 autres")
+
+    def test_cancelling_the_confirmation_sends_nothing(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        self.pick_folder(page, self.make_folder("Film", {"a.mkv": b"a" * 3000}))
+        dialog = self.dialog(page)
+        dialog.get_by_role("button", name="Annuler", exact=True).click()
+        dialog.wait_for(state="detached")
+        page.wait_for_timeout(300)
+        self.assertEqual(posts, [])
+        self.assertEqual(self.folders(page).count(), 0)
+        self.assertTrue(page.locator("#views > .view:visible .sends").locator("xpath=..").is_hidden())             # le panneau « Envois » reste caché
+        self.assertEqual(self.tree(), [])
+        self.pick_folder(page, self.make_folder("Film", {"a.mkv": b"a" * 3000}))                                   # et on peut choisir de nouveau (même dossier)
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+
+    def test_a_folder_with_nothing_the_server_accepts_says_so(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        self.pick_folder(page, self.make_folder("Papiers", {"notes.txt": b"n", "Scans/photo.png": b"p", ".hidden.mkv": b"h"}))
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator("h3").inner_text(), "Rien à envoyer")
+        self.assertIn("Aucun fichier du dossier « Papiers » ne peut être envoyé (types non acceptés, fichiers cachés)", dialog.inner_text())
+        self.assertEqual(dialog.locator(".btn.primary").inner_text(), "Compris")
+        dialog.locator(".btn.primary").click()
+        dialog.wait_for(state="detached")
+        self.assertEqual(posts, [])
+        self.assertEqual(self.folders(page).count(), 0)
+
+    def test_cancelling_a_folder_in_progress_cancels_what_is_left(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        self.throttle(page, 150_000)
+        self.pick_folder(page, self.make_folder("Album", {f"{n}.flac": b"x" * 300_000 for n in range(1, 5)}))
+        self.confirm(page)
+        self.sending(page)
+        folder = self.folders(page, "send")
+        self.assertRegex(self.line(folder), r"^0 / 4 fichiers · 1,1 Mo · \d+ %")                                   # l'avancement global
+        self.assertEqual(folder.locator(":scope > button:visible").all_inner_texts(), ["Voir les fichiers", "Annuler"])
+        folder.locator(":scope > button", has_text="Annuler").click()
+        self.folders(page, "cancel").wait_for()
+        self.assertEqual(self.line(self.folders(page)), "0 / 4 fichiers · 1,1 Mo · Annulé")
+        self.assertEqual(self.folders(page).locator(":scope > button:visible").all_inner_texts(), ["Voir les fichiers", "Retirer de la liste"])
+        self.assertEqual(page.locator("#views > .view:visible .sendfile[data-state=cancel]").count(), 4)
+        self.throttle(page, -1)
+        page.wait_for_timeout(500)
+        self.assertEqual(len(posts), 1)                                                        # l'annulation n'a pas lancé le suivant
+        self.wait_for(lambda: self.tree() == [])                                               # le serveur a effacé le .part
+        self.wait_for(lambda: self.stored() == [])                                             # et le dossier créé pour lui
+        self.folders(page).locator(":scope > button", has_text="Retirer de la liste").click()
+        self.assertEqual(self.folders(page).count(), 0)
+
+    def test_a_file_that_fails_does_not_stop_the_folder_and_can_be_tried_again_alone(self):
+        page = self.upload_page()
+        calls = []
+
+        def flaky(route):
+            if "name=b.mkv" in route.request.url:
+                calls.append(1)
+                if len(calls) == 1:
+                    route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "écriture impossible : le disque du serveur est peut-être plein"}))
+                    return
+            route.continue_()
+        page.route("**/api/inbox?name=*", flaky)
+        self.pick_folder(page, self.make_folder("Série", {"a.mkv": b"a" * 2000, "b.mkv": b"b" * 2000, "c.mkv": b"c" * 2000}))
+        self.confirm(page)
+        self.folders(page, "error").wait_for()
+        self.assertEqual(self.tree(), ["Série/a.mkv", "Série/c.mkv"])                           # le fichier en erreur n'a pas arrêté les autres
+        folder = self.folders(page)
+        self.assertEqual(self.line(folder), "2 / 3 fichiers · 5,9 Ko · 1 en erreur")
+        self.assertEqual(folder.locator(":scope > button:visible").all_inner_texts(), ["Voir les fichiers", "Réessayer", "Retirer de la liste"])
+        folder.locator(":scope > button[data-key^=files-]").click()
+        failed = folder.locator(".sendfile[data-state=error]")
+        self.assertEqual(failed.count(), 1)
+        self.assertEqual(failed.locator("b").inner_text(), "b.mkv")
+        self.assertIn("le disque du serveur est peut-être plein", failed.locator(".what > span").inner_text())
+        failed.locator("button", has_text="Réessayer").click()                                  # lui seul repart
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Série/a.mkv", "Série/b.mkv", "Série/c.mkv"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.line(folder), "3 / 3 fichiers · 5,9 Ko · Envoyé")
+
+    def test_the_failed_files_of_a_folder_are_retried_together_from_its_line(self):
+        page = self.upload_page()
+        mode = {"fail": True}
+        page.route("**/api/inbox?name=*", lambda route: route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "écriture impossible : le disque du serveur est peut-être plein"})) if mode["fail"] else route.continue_())
+        self.pick_folder(page, self.make_folder("Série", {"a.mkv": b"a" * 2000, "b.mkv": b"b" * 2000}))
+        self.confirm(page)
+        self.folders(page, "error").wait_for()
+        self.assertEqual(self.line(self.folders(page)), "0 / 2 fichiers · 3,9 Ko · 2 en erreur")
+        mode["fail"] = False
+        self.folders(page).locator(":scope > button", has_text="Réessayer").click()
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Série/a.mkv", "Série/b.mkv"])
+
+    def test_names_with_accents_go_through_and_come_back_the_same(self):
+        page = self.upload_page()
+        root = self.make_folder("Été à Paris", {"Épisode 1 – é.mkv": b"e" * 2000, "Bonus ça/Ça va.mkv": b"c" * 2500})
+        self.pick_folder(page, root)
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Été à Paris/Bonus ça/Ça va.mkv", "Été à Paris/Épisode 1 – é.mkv"])
+        self.assertEqual(self.folders(page).locator(":scope > .what > b").inner_text(), "Été à Paris")
+        rows = page.locator("#views > .view:visible .mine-file")
+        self.wait_for(lambda: rows.count() == 2)
+        row = rows.filter(has_text="Ça va.mkv")
+        self.assertEqual(row.get_attribute("data-dir"), "Été à Paris/Bonus ça")
+        self.assertIn("Été à Paris/Bonus ça", row.locator(".what > span").inner_text())
+        admin, inbox = self.admin_inbox()
+        listed = inbox.filter(has_text="Ça va.mkv")
+        with admin.expect_download() as info:
+            listed.locator("a", has_text="Télécharger").click()
+        self.assertEqual(info.value.suggested_filename, "Ça va.mkv")
+        self.assertEqual(Path(info.value.path()).read_bytes(), b"c" * 2500)
+
+    def test_my_uploads_show_the_subfolder_and_deleting_passes_it_along(self):
+        self.put("alice", "a.mkv", b"a" * 2048, mtime=1_700_100_000, dir="Film/Bonus")
+        self.put("alice", "b.mkv", b"b" * 2048, mtime=1_700_000_000, dir="Film")
+        self.put("alice", "c.mkv", b"c" * 2048, mtime=1_699_000_000)
+        page = self.upload_page()
+        deletes = []
+        page.on("request", lambda r: deletes.append(r.url) if r.method == "DELETE" else None)
+        rows = page.locator("#views > .view:visible .mine-file")
+        self.assertEqual(rows.count(), 3)
+        self.assertEqual([rows.nth(i).locator("b").inner_text() for i in range(3)], ["a.mkv", "b.mkv", "c.mkv"])
+        self.assertEqual([rows.nth(i).get_attribute("data-dir") for i in range(3)], ["Film/Bonus", "Film", ""])
+        self.assertTrue(rows.nth(0).locator(".what > span").inner_text().startswith("Film/Bonus · 2 Ko · "))
+        self.assertTrue(rows.nth(2).locator(".what > span").inner_text().startswith("2 Ko · "))                  # à la racine : rien devant
+        rows.nth(0).locator("button", has_text="Supprimer").click()
+        self.assertIn("« Film/Bonus/a.mkv »", self.dialog(page).inner_text())
+        page.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: rows.count() == 2)
+        self.assertTrue(deletes[0].endswith("/api/inbox/alice/a.mkv?dir=Film%2FBonus"), deletes)                  # `?dir=` encodé par encodeURIComponent
+        self.assertFalse((self.box / "alice" / "Film" / "Bonus").exists())                                         # le dossier devenu vide a disparu
+        rows.nth(0).locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: rows.count() == 1)
+        self.assertFalse((self.box / "alice" / "Film").exists())                                                   # et celui qui l'enfermait
+        self.assertEqual(self.tree(), ["c.mkv"])
+        rows.nth(0).locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()
+        page.locator("#views > .view:visible .mine .empty").wait_for()
+        self.assertEqual(self.stored(), [])
+
+    def test_the_administrator_downloads_and_deletes_a_file_of_a_subfolder(self):
+        self.put("alice", "Épisode.mkv", b"dans un sous-dossier", mtime=1_700_100_000, dir="Série/Saison 1")
+        self.put("alice", "Épisode.mkv", b"a la racine", mtime=1_700_000_000)                                       # même nom, ailleurs
+        page, rows = self.admin_inbox()
+        deletes = []
+        page.on("request", lambda r: deletes.append(r.url) if r.method == "DELETE" else None)
+        self.assertEqual(rows.count(), 2)
+        deep = rows.nth(0)
+        self.assertEqual(deep.get_attribute("data-dir"), "Série/Saison 1")
+        self.assertTrue(deep.locator(".what > span").inner_text().startswith("alice · Série/Saison 1 · "), deep.locator(".what > span").inner_text())
+        self.assertTrue(rows.nth(1).locator(".what > span").inner_text().startswith("alice · 11 octets · "))
+        with page.expect_download() as info:
+            deep.locator("a", has_text="Télécharger").click()
+        self.assertEqual(info.value.suggested_filename, "Épisode.mkv")
+        self.assertEqual(Path(info.value.path()).read_bytes(), b"dans un sous-dossier")                              # celui du sous-dossier, pas celui de la racine
+        with page.expect_download() as info:
+            rows.nth(1).locator("a", has_text="Télécharger").click()
+        self.assertEqual(Path(info.value.path()).read_bytes(), b"a la racine")
+        deep.locator("button", has_text="Supprimer").click()
+        self.assertIn("« Série/Saison 1/Épisode.mkv »", self.dialog(page).inner_text())
+        page.locator(".menu .btn.danger").click()
+        self.wait_for(lambda: rows.count() == 1)
+        self.assertEqual(self.tree(), ["Épisode.mkv"])
+        self.assertTrue(deletes[0].endswith("/api/inbox/alice/%C3%89pisode.mkv?dir=S%C3%A9rie%2FSaison%201"), deletes)
+        self.assertFalse((self.box / "alice" / "Série").exists())                                                    # plus rien dans « Série » : le dossier a disparu
+        self.assertEqual(rows.nth(0).get_attribute("data-dir"), "")
+
+    DROP = """(spec) => {
+        function leaf(name, text) { return { isFile: true, isDirectory: false, name: name, file: function (ok) { setTimeout(function () { ok(new File([text], name)); }, 0); } }; }
+        function folder(name, children) {
+            return { isFile: false, isDirectory: true, name: name, createReader: function () {
+                var at = 0;                                    // comme le navigateur : au plus 100 entrées par appel, puis un paquet vide
+                return { readEntries: function (ok) { var batch = children.slice(at, at + 100); at += 100; setTimeout(function () { ok(batch); }, 0); } };
+            } };
+        }
+        function build(node) { return node.children ? folder(node.name, node.children.map(build)) : leaf(node.name, node.text); }
+        var specs = Array.isArray(spec) ? spec : [spec], el = document.querySelector('#views > .view.upload:not([style*="none"])');
+        var dt = { types: ['Files'], files: specs.map(function (s) { return new File(s.children ? [] : [s.text], s.name); }),
+                   items: specs.map(function (s) { var entry = s.children ? build(s) : { isFile: true, isDirectory: false, name: s.name }; return { webkitGetAsEntry: function () { return entry; } }; }) };
+        var event = new Event('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(event, 'dataTransfer', { value: dt });
+        el.dispatchEvent(event);
+    }"""
+
+    def test_a_folder_dropped_on_the_page_is_read_to_the_end(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        big = {"name": "Série", "children": [{"name": f"e{n:03d}.srt", "text": "sous-titre"} for n in range(125)] + [{"name": "Extras", "children": [{"name": f"x{n}.mkv", "text": "extra"} for n in range(5)]}]}
+        page.evaluate(self.DROP, big)
+        dialog = self.dialog(page)
+        self.assertIn("130 fichiers", dialog.locator(".lead").inner_text())                  # au-delà des 100 premiers : le parcours a relu jusqu'au paquet vide
+        dialog.get_by_role("button", name="Annuler", exact=True).click()
+        dialog.wait_for(state="detached")
+        self.assertEqual(posts, [])
+        page.evaluate(self.DROP, {"name": "Mini", "children": [{"name": "m1.srt", "text": "un"}, {"name": "Sous", "children": [{"name": "m2.srt", "text": "deux"}]}]})
+        self.assertIn("Envoyer le dossier « Mini » : 2 fichiers", self.dialog(page).locator(".lead").inner_text())
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.tree(), ["Mini/Sous/m2.srt", "Mini/m1.srt"])
+
+    def test_several_folders_dropped_with_a_file_are_confirmed_one_after_the_other(self):
+        page = self.upload_page()
+        page.evaluate(self.DROP, [{"name": "Un", "children": [{"name": "a.srt", "text": "a"}]}, {"name": "Deux", "children": [{"name": "b.srt", "text": "b"}]}, {"name": "seul.srt", "text": "s"}])
+        self.sends(page, "done").first.wait_for()                                             # le fichier isolé part tout de suite
+        titles = []
+        for _ in range(2):
+            dialog = self.dialog(page)
+            titles.append(dialog.locator(".lead").inner_text().split(" : ")[0])
+            dialog.get_by_role("button", name="Envoyer", exact=True).click()
+            page.wait_for_timeout(300)                                                        # (la fenêtre suivante prend aussitôt la place de celle-ci)
+        self.assertEqual(sorted(titles), ["Envoyer le dossier « Deux »", "Envoyer le dossier « Un »"])
+        self.wait_for(lambda: self.folders(page, "done").count() == 2)
+        self.assertEqual(self.tree(), ["Deux/b.srt", "Un/a.srt", "seul.srt"])
+
+    def test_a_browser_without_folder_support_has_no_folder_button(self):
+        page = self.session("alice")
+        page.context.add_init_script("delete HTMLInputElement.prototype.webkitdirectory")
+        page.reload()
+        page.wait_for_selector("#nav .link", state="attached")
+        page.goto(self.base + "/#/upload")
+        self.shown(page, "#/upload")
+        page.wait_for_selector("#views > .view:visible .used .usedline")
+        self.assertEqual(page.evaluate("'webkitdirectory' in document.createElement('input')"), False)
+        self.assertEqual(page.locator("#views > .view:visible .drop .btn").all_inner_texts(), ["Choisir des fichiers"])
+        self.assertEqual(page.locator("#views > .view:visible input[type=file]").count(), 1)
+        self.assertEqual(page.locator("#toast").inner_text(), "")                              # et pas un mot d'erreur
+        self.send(page, ("Suite.mkv", b"s" * 3000))                                            # les fichiers un à un marchent comme avant
+        self.sends(page, "done").first.wait_for()
+
+    def test_the_server_refusals_of_a_folder_file_are_shown_on_that_file(self):
+        page = self.upload_page()
+        page.evaluate("Hub.upload.retry = 200")
+        refusals = {
+            "a.mkv": (400, "segment de dossier vide, « . » ou « .. » refusé"),
+            "b.mkv": (409, "trop de sous-dossiers dans ton dossier (1000 au plus)"),
+            "c.mkv": (415, "type de fichier refusé : « .exe »"),
+            "e.mkv": (409, "« Série » : un fichier ou un lien porte déjà ce nom"),
+        }
+        busy = []
+
+        def refuse(route):
+            name = route.request.url.split("name=")[1].split("&")[0]
+            if name in refusals:
+                status, message = refusals[name]
+                route.fulfill(status=status, content_type="application/json", body=json.dumps({"error": message}))
+            elif name == "d.mkv" and not busy:                                                  # 429 : déjà deux envois en cours, la file patiente
+                busy.append(1)
+                route.fulfill(status=429, content_type="application/json", body=json.dumps({"error": "trop d'envois en cours : réessaie dans un moment"}))
+            else:
+                route.continue_()
+        page.route("**/api/inbox?name=*", refuse)
+        self.pick_folder(page, self.make_folder("Série", {f"{c}.mkv": c.encode() * 1000 for c in "abcde"}))
+        self.confirm(page)
+        self.folders(page, "error").wait_for()
+        folder = self.folders(page)
+        self.assertEqual(self.line(folder), "1 / 5 fichiers · 4,9 Ko · 4 en erreur")
+        self.assertEqual(self.tree(), ["Série/d.mkv"])                                          # le 429 a patienté puis le fichier est passé
+        self.assertEqual(busy, [1])
+        folder.locator(":scope > button[data-key^=files-]").click()
+        said = {folder.locator(".sendfile").nth(i).locator("b").inner_text(): folder.locator(".sendfile").nth(i).locator(".what > span").inner_text() for i in range(5)}
+        self.assertEqual(said["a.mkv"], "segment de dossier vide, « . » ou « .. » refusé")
+        self.assertEqual(said["b.mkv"], "trop de sous-dossiers dans ton dossier (1000 au plus)")
+        self.assertEqual(said["c.mkv"], "type de fichier refusé : « .exe »")
+        self.assertEqual(said["e.mkv"], "« Série » : un fichier ou un lien porte déjà ce nom")
+        self.assertTrue(said["d.mkv"].startswith("Envoyé"))
+
+    def test_a_file_in_the_place_of_a_subfolder_is_a_409_on_the_real_server(self):
+        page = self.upload_page()
+        self.send(page, ("Dossier.zip", b"z" * 2000))                                          # un fichier occupe déjà le nom
+        self.sends(page, "done").first.wait_for()
+        self.pick_folder(page, self.make_folder("Dossier.zip", {"a.mkv": b"a" * 2000}))
+        self.confirm(page)
+        self.folders(page, "error").wait_for()
+        self.folders(page).locator(":scope > button[data-key^=files-]").click()
+        self.assertIn("« Dossier.zip » : un fichier ou un lien porte déjà ce nom", self.folders(page).locator(".sendfile .what > span").inner_text())
+        self.assertEqual(self.tree(), ["Dossier.zip"])
+
+    def test_leaving_the_page_during_a_folder_asks_first_and_cancels_the_rest(self):
+        page = self.upload_page()
+        posts = self.posts(page)
+        self.throttle(page, 150_000)
+        self.pick_folder(page, self.make_folder("Album", {f"{n}.flac": b"x" * 300_000 for n in range(1, 4)}))
+        self.confirm(page)
+        self.sending(page)
+        page.locator("#nav .brand").click()
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator("h3").inner_text(), "Quitter la page ?")
+        dialog.get_by_role("button", name="Annuler", exact=True).click()
+        dialog.wait_for(state="detached")
+        self.assertEqual(self.folders(page, "send").count(), 1)                                 # le dossier continue
+        page.locator("#nav .brand").click()
+        page.locator(".menu .btn.danger", has_text="Quitter et annuler").click()
+        self.shown(page, "#/")
+        self.throttle(page, -1)
+        self.wait_for(lambda: self.tree() == [])
+        page.wait_for_timeout(300)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(self.tree(), [])
+
+    def test_the_folder_dialog_and_the_folder_line_are_in_english(self):
+        page = self.upload_page(lang="en")
+        self.assertEqual(page.locator("#views > .view:visible .drop .btn").all_inner_texts(), ["Choose files", "Send a folder"])
+        self.pick_folder(page, self.make_folder("Film", {"a.mkv": b"a" * 3000, "notes.txt": b"n", "Thumbs.db": b"t"}))
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator("h3").inner_text(), "Send this folder?")
+        self.assertEqual(dialog.locator(".lead").inner_text(), "Send the folder “Film”: 1 file (2.9 KB), 2 skipped (unsupported types, hidden files).")
+        dialog.locator("button", has_text="Show the skipped files").click()
+        self.assertEqual(sorted(dialog.locator(".skipped li").all_inner_texts()), ["Film/Thumbs.db — hidden file", "Film/notes.txt — unsupported type"])
+        self.confirm(page, "Upload")
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.line(self.folders(page)), "1 / 1 file · 2.9 KB · Uploaded")
+        self.assertEqual(self.folders(page).locator(":scope > button:visible").all_inner_texts(), ["Show the files", "Remove from the list"])
+        self.pick_folder(page, self.make_folder("Papiers", {"notes.txt": b"n"}))
+        dialog = self.dialog(page)
+        self.assertEqual(dialog.locator("h3").inner_text(), "Nothing to send")
+        self.assertIn("None of the files in the folder “Papiers” can be sent (unsupported types): there is nothing to send.", dialog.inner_text())
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    def test_the_server_refusals_of_a_folder_file_are_in_english(self):
+        page = self.upload_page(lang="en")
+        refusals = {
+            "a.mkv": (400, "segment de dossier vide, « . » ou « .. » refusé"),
+            "b.mkv": (400, "dossiers trop profonds : 4 niveaux au plus"),
+            "c.mkv": (409, "trop de sous-dossiers dans ton dossier (1000 au plus)"),
+            "d.mkv": (409, "« Film » : un fichier ou un lien porte déjà ce nom"),
+            "e.mkv": (400, "« \\ » n'est pas un séparateur de dossiers : sépare-les par « / » (?dir=…)"),
+            "f.mkv": (409, "« Film » existe déjà sous un autre nom ou n'est pas un dossier ordinaire : choisis un autre nom"),
+            "g.mkv": (503, "la boîte de réception du serveur est inutilisable : préviens l'administrateur"),
+        }
+
+        def refuse(route):
+            status, message = refusals[route.request.url.split("name=")[1].split("&")[0]]
+            route.fulfill(status=status, content_type="application/json", body=json.dumps({"error": message}))
+        page.route("**/api/inbox?name=*", refuse)
+        self.pick_folder(page, self.make_folder("Film", {f"{c}.mkv": c.encode() * 100 for c in "abcdefg"}))
+        self.confirm(page, "Upload")
+        self.folders(page, "error").wait_for()
+        folder = self.folders(page)
+        self.assertEqual(self.line(folder), "0 / 7 files · 700 bytes · 7 failed")
+        folder.locator(":scope > button[data-key^=files-]").click()
+        said = {folder.locator(".sendfile").nth(i).locator("b").inner_text(): folder.locator(".sendfile").nth(i).locator(".what > span").inner_text() for i in range(7)}
+        self.assertEqual(said, {
+            "a.mkv": "empty folder segment, “.” or “..” refused",
+            "b.mkv": "folders nested too deep: 4 levels at most",
+            "c.mkv": "too many subfolders in your folder (1000 at most)",
+            "d.mkv": "“Film”: a file or a link already has this name",
+            "e.mkv": "“\\” isn’t a folder separator: separate them with “/” (?dir=…)",
+            "f.mkv": "“Film” already exists under another name or isn’t an ordinary folder: pick another name",
+            "g.mkv": "the server’s inbox is unusable: tell the administrator",
+        })
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    def test_a_folder_name_with_html_and_url_characters_is_text_and_survives_the_links(self):
+        page = self.upload_page()
+        nasty = "a &amp; b #1 %41 'q' é"                                                            # (Windows refuse « < » dans un nom de dossier : l'entité fait le même travail)
+        self.pick_folder(page, self.make_folder(nasty, {"a.mkv": b"a" * 2000, "x&y/b.mkv": b"b" * 2000}))
+        dialog = self.dialog(page)
+        self.assertIn(nasty, dialog.locator(".lead").inner_text())
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.assertEqual(self.folders(page).locator(":scope > .what > b").inner_text(), nasty)       # du texte, jamais du HTML
+        self.assertEqual(self.tree(), sorted([nasty + "/a.mkv", nasty + "/x&y/b.mkv"]))              # `dir` bien encodé dans l'adresse
+        rows = page.locator("#views > .view:visible .mine-file")
+        self.wait_for(lambda: rows.count() == 2)
+        rows.filter(has_text="b.mkv").locator("button", has_text="Supprimer").click()
+        page.locator(".menu .btn.danger").click()                                                    # et dans celle de la suppression
+        self.wait_for(lambda: self.tree() == [nasty + "/a.mkv"])
 
 
 if __name__ == "__main__":

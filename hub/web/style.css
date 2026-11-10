@@ -298,6 +298,9 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .menu.stacked .btns .btn { margin: 0 0 0.4rem; }
 /* form : des champs */
 .menu.form { width: min(34rem, 92vw); overflow-y: auto; }
+/* confirm : l'envoi d'un dossier, avec la liste dépliable de ce qu'on laisse de côté */
+.menu.sendfolder { overflow-y: auto; }
+.menu.sendfolder .skipped { margin: 0.4rem 0.6rem 0.2rem; padding-left: 1.2rem; font-size: 0.85rem; color: var(--mute); overflow-wrap: anywhere; list-style: disc; }
 .menu.form .flab { display: block; padding: 0 0.6rem; margin-bottom: 0.4rem; color: var(--mute); font-size: 0.9rem; }
 .menu.form .flab .field { display: block; margin: 0.2rem 0 0; }
 .menu.form .field.big { font-size: 1.05rem; padding: 0.5rem 0.9rem; }
@@ -491,9 +494,14 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .used .usedline { margin: 0 0 0.35rem; font-weight: 650; }
 .meter { height: 0.5rem; margin-top: 0.45rem; background: var(--s2); border-radius: 0.3rem; overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--accent); transition: width 0.15s; }
-.send .what b, .mine-file .what b, .inbox-file .what b { overflow-wrap: anywhere; }
-.send.cancel .what b { color: var(--mute); text-decoration: line-through; }
-.send .what .warn { color: #ffa595; }
+.send .what b, .sendfile .what b, .mine-file .what b, .inbox-file .what b { overflow-wrap: anywhere; }
+.send.cancel > .what b, .sendfile.cancel > .what b { color: var(--mute); text-decoration: line-through; }
+.send .what .warn, .sendfile .what .warn { color: #ffa595; }
+.drop .btn { margin: 0.25rem 0.3rem; }                                  /* « Choisir des fichiers » et « Envoyer un dossier » côte à côte, l'un sous l'autre sur un écran étroit */
+/* Un dossier envoyé : une ligne, dont les fichiers se déplient dessous (un cran en retrait, un trait à gauche) */
+.send.folder .sendfiles { flex: 1 0 100%; margin: 0.6rem 0 0 0.4rem; padding-left: 0.9rem; border-left: 0.15rem solid var(--line); }
+.sendfile { padding: 0.5rem 0; }
+.sendfile:first-child { border-top: 0; }
 .panel .empty { margin: 0.2rem 0; }
 .chip.switch { margin: 0 0 0 0.6rem; }
 .chip.switch .mark { visibility: hidden; margin-right: 0.35em; }
