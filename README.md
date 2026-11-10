@@ -171,7 +171,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/sagas`, `POST /api/sagas`, `POST /api/sagas/add`, `GET /api/sagas/films` | sagas composées à la main (`sagas.json`, administrateur seulement) : lire, tout remplacer (avec la `version` lue, pour ne pas écraser un autre), ajouter des films, cacher un film des manquants (`POST /api/sagas/ignore`), chercher des films à y mettre ; `GET /img/film/<tmdb>` : l'affiche d'un film manquant |
 | `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete\|rights` | comptes (administrateur seulement) : lister (avec leurs droits par bibliothèque), créer, régler ce qu'un compte voit et télécharge, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
 | `POST /api/user/<id>/upload` | (administrateur) `{"upload": true}` : donne ou retire le droit d'envoyer dans la boîte de réception (400 pour un administrateur, qui envoie toujours) |
-| `POST /api/inbox?name=[&dir=]`, `GET /api/inbox`, `GET /api/inbox/<dossier>/<nom>[?dir=]`, `DELETE /api/inbox/<dossier>/<nom>[?dir=]` | boîte de réception (voir [Boîte de réception](#boîte-de-réception-les-envois)) : envoyer un fichier en corps brut (`Content-Length` obligatoire), lister (`?mine=1` : seulement les siens), télécharger (administrateur) et supprimer (administrateur, ou son propre fichier) |
+| `POST /api/inbox?name=&dir=`, `GET /api/inbox`, `GET /api/inbox/<dossier>/<nom>?dir=`, `DELETE /api/inbox/<dossier>/<nom>?dir=` | boîte de réception (voir [Boîte de réception](#boîte-de-réception-les-envois)) : envoyer un fichier en corps brut (`Content-Length` obligatoire), lister (`?mine=1` : seulement les siens), télécharger (administrateur) et supprimer (administrateur, ou son propre fichier) |
 | `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
 | `POST /api/me/signout-others` | chacun déconnecte ses autres appareils, sans changer de mot de passe (`{"current": "…"}`) ; la session de l'appelant est renouvelée |
 | Authentification (dès qu'un compte existe) | trois façons de se présenter : cookie `hub=<compte>.<mac>` (navigateur, posé par `/api/login`) ; en-tête `Authorization: Bearer <token>` (toutes les routes) ; `?token=<media_token>` dans l'URL, **uniquement** sur `/media/`, `/img/`, `/book/` et `/api/subs/` (balises `<img>` / `<video>` / `<track>`, Cast), nulle part ailleurs sur `/api/`. Le jeton de média est distinct du jeton de session et propre au compte : une URL de pochette qui fuit n'ouvre ni le scan ni le nettoyage, et ne donne que ce que ce compte peut voir. Le jeton est masqué dans le journal. Changer un mot de passe ferme les sessions de ce compte et révoque aussi son jeton de média |
@@ -195,7 +195,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 1980 tests : 1681 serveur + 299 interface
+python -m unittest discover -s tests          # 2072 tests : 1773 serveur + 299 interface
 ```
 
 `tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 299 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
