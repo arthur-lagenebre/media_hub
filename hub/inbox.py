@@ -723,7 +723,7 @@ class Inbox:
         for account in self._account_folders():
             emptied = []
             for folder, _, entries in self._tree(account):
-                gone = sum(_discard(e.path) for e in entries if e.name.endswith(PART) and (info := _stat_file(e)) is not None and info.st_mtime < limit)
+                gone = sum(_discard(e.path) for e in entries if e.name.lower().endswith(PART) and (info := _stat_file(e)) is not None and info.st_mtime < limit)
                 removed += gone
                 if gone:
                     emptied.append(folder)

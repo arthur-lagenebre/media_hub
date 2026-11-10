@@ -394,6 +394,23 @@ class TestWalks(SubCase):
         self.assertEqual(self.inbox.sweep(), 2)
         self.assertEqual(tree(self.alice), ["x/", "x/a.mkv", "x/recent.mkv.part"])
 
+    def test_the_sweep_removes_an_abandoned_part_in_any_case_and_the_folder_it_empties(self):
+        self.send("a.mkv", "x")
+        (self.alice / "y").mkdir()
+        for path in (self.alice / "x" / "vieux.mkv.PART", self.alice / "y" / "vieux.mkv.Part"):
+            path.write_bytes(b"x")
+        self.assertEqual(self.inbox.sweep(now=time.time() + 3 * inbox.STALE), 2)
+        self.assertEqual(tree(self.alice), ["x/", "x/a.mkv"])                     # « y » n'avait plus que ce reste : il part avec lui
+
+    def test_the_sweep_removes_only_plain_files_named_part_not_a_folder_or_a_link(self):
+        self.send("a.mkv", "x")
+        (self.alice / "x" / "dossier.PART").mkdir()
+        (self.alice / "x" / "dossier.PART" / "garde.mkv").write_bytes(b"x")
+        (self.alice / "cible").mkdir()
+        self.link(self.alice / "cible", self.alice / "x" / "lien.PART")
+        self.assertEqual(self.inbox.sweep(now=time.time() + 3 * inbox.STALE), 0)
+        self.assertEqual(tree(self.alice), ["cible/", "x/", "x/a.mkv", "x/dossier.PART/", "x/dossier.PART/garde.mkv", "x/lien.PART/"])
+
     def test_the_sweep_never_removes_the_account_folder(self):
         (self.alice).mkdir(parents=True)
         (self.alice / "vieux.mkv.part").write_bytes(b"x")
