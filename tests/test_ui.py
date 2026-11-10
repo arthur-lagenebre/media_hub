@@ -1997,9 +1997,13 @@ class TestActionsMenu(UiCase):
         self.card("films", "Inception").locator(".qbtn").click()
         self.choose("Voir")
         self.page.wait_for_url("**#/play/*")
+        self.page.wait_for_function("() => { var c = window.Hub.current(); return !!c && c.hash.indexOf('#/play/') === 0 && c.el.style.display !== 'none'; }")      # l'adresse change avant la page : sans attendre, le retour sur la liste peut la trouver déjà affichée et ne pas la rafraîchir
         self.assertNotIn("t=0", self.page.url)
         self.api("/api/item/" + self.item("films", "Inception")["id"] + "/seen", {"done": True})
-        self.card("films", "Inception").locator(".qbtn").click()
+        # De retour sur la liste (sans rechargement), la grille d'avant s'affiche d'abord, puis la réponse de /api/library la remplace : on attend la pastille « vu », sinon le clic tombe sur la carte périmée, dont le menu n'offre pas « Revoir »
+        card = self.card("films", "Inception")
+        card.locator(".badge.done").wait_for()
+        card.locator(".qbtn").click()
         self.choose("Revoir")
         self.page.wait_for_url("**#/play/*t=0")
 
