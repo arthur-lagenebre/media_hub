@@ -197,7 +197,7 @@ class Inbox:
             if current and is_folder_name(current):
                 self._mkdir(current)
                 return current
-            if is_folder_name(uid) and self._is_real_folder(self.root / uid):
+            if is_folder_name(uid) and self._is_real_folder(self.root / uid) and not self._held_by_other(uid, uid):
                 return self._record(uid, uid)
             taken = self._taken()
             for candidate in self._numbered(clean_folder(row["name"])):
@@ -216,6 +216,11 @@ class Inbox:
                         (self.root / candidate).rmdir()
                     raise
         raise InboxError(409, "trop de dossiers de même nom dans la boîte")
+
+    def _held_by_other(self, uid, name):
+        """Un autre compte que `uid` tient-il déjà le dossier `name` dans la base (à la casse et à la forme Unicode près) ? Alors ce dossier n'est pas à `uid`, même s'il porte son identifiant."""
+        rows = self.db.query("SELECT inbox_dir FROM users WHERE id<>? AND inbox_dir IS NOT NULL AND inbox_dir<>''", (uid,))
+        return any(_same(r["inbox_dir"]) == _same(name) for r in rows)
 
     def _mkdir(self, name):
         """Le dossier d'un compte qui en a déjà un nom : il est recréé s'il a disparu (effacé à la main)."""
@@ -329,6 +334,8 @@ class Inbox:
             old = self.root / uid
             if (current is not None and current != uid) or not is_folder_name(uid) or not self._is_real_folder(old):
                 return 0                              # déjà renommé, ou rien d'ancien à renommer
+            if self._held_by_other(uid, uid):
+                return 0                              # ce dossier est celui d'un autre compte (nommé comme cet identifiant), pas l'ancien de celui-ci
             if current is None:
                 self._record(uid, uid)               # l'ancien dossier est déjà celui du compte, tel quel : si la suite échoue, la base le dit
             taken = self._taken() - {_same(uid)}

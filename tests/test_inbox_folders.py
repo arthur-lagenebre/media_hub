@@ -220,6 +220,32 @@ class TestAccountFolder(FolderCase):
         self.assertEqual(self.recorded(uid), "default")
         self.assertEqual(sorted(f["name"] for f in self.inbox.listing(uid)), ["ancien.mkv", "neuf.mkv"])
 
+    def test_an_old_folder_named_after_the_identifier_is_not_taken_when_another_account_holds_that_name(self):
+        """L'administrateur d'identifiant `default` et un second compte NOMMÉ « default » : celui-ci envoie d'abord et obtient `default/` ; l'administrateur n'y est pas admis."""
+        guest = self.user("default", "bb")
+        self.assertEqual(self.put("a.mkv", account=guest)["account"], "default")
+        boss = self.user("admin", "default", role="admin")
+        self.assertEqual(self.put("b.mkv", account=boss)["account"], "admin")
+        self.assertEqual((self.recorded(guest), self.recorded(boss)), ("default", "admin"))
+        self.assertEqual(self.dirs(), ["admin", "default"])
+        self.assertEqual([f["name"] for f in self.inbox.listing(guest)], ["a.mkv"])
+        self.assertEqual([f["name"] for f in self.inbox.listing(boss)], ["b.mkv"])
+
+    def test_an_old_folder_is_not_taken_either_when_the_other_account_holds_it_with_another_case(self):
+        holder = self.user("DEFAULT", "bb", inbox_dir="DEFAULT")
+        (self.tmp / "inbox" / "default").mkdir(parents=True)                            # sur NTFS ou SMB : le même dossier que « DEFAULT »
+        boss = self.user("admin", "default", role="admin")
+        self.assertEqual(self.inbox.folder_for(boss), "admin")
+        self.assertEqual((self.recorded(holder), self.recorded(boss)), ("DEFAULT", "admin"))
+
+    def test_a_hexadecimal_old_folder_is_not_taken_when_another_account_holds_that_name(self):
+        uid = "3f9a1c0e5b7d2a46"
+        holder = self.user(uid.upper(), "bb", inbox_dir=uid.upper())
+        (self.tmp / "inbox" / uid).mkdir(parents=True)
+        owner = self.user("Léa", uid)
+        self.assertEqual(self.inbox.folder_for(owner), "Léa")
+        self.assertEqual(self.recorded(holder), uid.upper())
+
     def test_accounts_cleaned_to_the_same_name_at_once_never_share_a_folder(self):
         ids = [self.user("a" + ch + "b", str(n)) for n, ch in enumerate(':?*|<>"/\\')]
         got, start = [], threading.Barrier(len(ids))
@@ -401,6 +427,25 @@ class TestMigration(FolderCase):
         self.assertEqual(self.inbox.folder_for("bb"), "default")
         self.assertEqual(self.dirs(), ["Arthur", "default"])
         self.assertEqual((self.tmp / "inbox" / "Arthur" / "film.mkv").read_bytes(), b"film.mkv")
+
+    def test_the_folder_another_account_holds_in_the_base_is_not_renamed_after_the_account_whose_identifier_it_bears(self):
+        """Le compte « default » (nom libre) tient `default/` dans la base ; l'administrateur d'identifiant `default` n'a rien : migrate ne déplace pas le dossier du premier chez le second."""
+        self.legacy("default", "admin")
+        add_user(self.db, "bb", "default", inbox_dir="default")
+        self.assertEqual(self.inbox.migrate(), 0)
+        self.assertEqual(self.dirs(), ["default"])
+        self.assertEqual((self.tmp / "inbox" / "default" / "film.mkv").read_bytes(), b"film.mkv")
+        self.assertEqual((self.recorded("bb"), self.recorded("default")), ("default", None))
+        self.assertEqual(self.inbox.migrate(), 0)
+        self.assertEqual([f["name"] for f in self.inbox.listing("bb")], ["film.mkv"])
+        self.assertEqual(self.inbox.folder_for("default"), "admin")                  # l'administrateur aura son propre dossier au premier envoi
+
+    def test_the_same_with_another_case_and_with_a_hexadecimal_identifier(self):
+        self.legacy("3f9a1c0e5b7d2a46", "Léa")
+        add_user(self.db, "bb", "3F9A1C0E5B7D2A46", inbox_dir="3F9A1C0E5B7D2A46")
+        self.assertEqual(self.inbox.migrate(), 0)
+        self.assertEqual(self.dirs(), ["3f9a1c0e5b7d2a46"])
+        self.assertEqual((self.recorded("bb"), self.recorded("3f9a1c0e5b7d2a46")), ("3F9A1C0E5B7D2A46", None))
 
     def test_a_link_or_a_junction_named_like_an_identifier_is_not_followed_or_renamed(self):
         outside = self.tmp / "dehors"
