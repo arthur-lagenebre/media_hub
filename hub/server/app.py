@@ -1419,15 +1419,21 @@ def library_filters(q, kind, ranks, of, in_custom, seen):
         tests.append(partial(has_genre, genre=genre))
     if needle:
         tests.append(partial(matches_needle, needle=needle, in_custom=in_custom))
+    state = asked_state(q, kind)
+    if state:
+        tests.append(lambda row: watch_state(row, seen) == state)
+    return tests
+
+
+def asked_state(q, kind):
+    """L'état que demande `filter` (`todo`, `progress` ou `done`, l'ancien `unseen` valant `todo`), ou "" s'il n'y en a pas. 400 pour un filtre inconnu, et pour la musique : on n'« a pas vu » un album, plutôt qu'une liste qui a l'air filtrée, un refus."""
     asked = q.get("filter", "")
     state = {"unseen": "todo"}.get(asked, asked)
     if state and state not in WATCH_STATES:
         raise HttpError(400, f"filtre inconnu : {asked}")
     if state and kind == "music":
-        raise HttpError(400, "ce filtre n'existe pas pour la musique")          # on n'« a pas vu » un album : plutôt qu'une liste qui a l'air filtrée, un refus
-    if state:
-        tests.append(lambda row: watch_state(row, seen) == state)
-    return tests
+        raise HttpError(400, "ce filtre n'existe pas pour la musique")
+    return state
 
 
 def library_order(kind, q, ranks, artists=False):
