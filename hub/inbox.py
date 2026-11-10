@@ -123,6 +123,16 @@ def _overlap(box, other):
     return "inside_it" if common == one else "inside" if common == two else ""
 
 
+def _is_mount(path):
+    """Vrai si `path` est un point de montage, faux si c'est un simple dossier ; None quand la plate-forme ne permet pas de le savoir (Windows : seule la racine d'un lecteur en est un) ou que le système échoue."""
+    if os.name == "nt":
+        return None
+    try:
+        return os.path.ismount(path)
+    except OSError:
+        return None
+
+
 def _entries(folder):
     try:
         with os.scandir(folder) as found:
@@ -327,7 +337,7 @@ class Inbox:
 
     # --- Démarrage : vérifier la boîte, migrer les anciens dossiers --------------
     def check(self):
-        """Au démarrage : la boîte existe (créée au besoin), le serveur peut y écrire, et elle ne recoupe ni HUB_DATA ni une bibliothèque. None si tout va bien, sinon le message à montrer à l'administrateur (`announce` y met « ATTENTION : ») : un chemin non inscriptible ou mal choisi se dit au démarrage, pas au premier envoi."""
+        """Au démarrage : la boîte existe (créée au besoin), le serveur peut y écrire, elle ne recoupe ni HUB_DATA ni une bibliothèque, et, donnée hors de HUB_DATA, c'est bien un volume monté. None si tout va bien, sinon le message à montrer à l'administrateur (`announce` y met « ATTENTION : ») : un chemin non inscriptible ou mal choisi se dit au démarrage, pas au premier envoi."""
         found = self._overlaps()
         if self._in_library():
             return " ".join(found)          # le hub n'écrit jamais dans la médiathèque : ni dossier ni fichier d'essai tant que la boîte la recoupe
@@ -338,8 +348,17 @@ class Inbox:
                 pass
         except OSError as e:
             problems.append(f"la boîte de réception ({self.root}) n'est pas utilisable : {e.strerror or e} ; les envois seront refusés (vérifie HUB_INBOX et les droits d'écriture du conteneur).")
+        if self._unmounted():
+            problems.append(f"HUB_INBOX ({self.root}) est donné hors de HUB_DATA mais n'est pas un point de montage : si le dataset n'est pas monté sur ce chemin dans le yaml, les envois s'écrivent dans le conteneur lui-même et seront perdus au redéploiement. "
+                            "(Un sous-dossier d'un volume monté est normal : ignore ce message.)")
         problems.extend(found)
         return " ".join(problems) or None
+
+    def _unmounted(self):
+        """Vrai si la boîte est hors de HUB_DATA (donc donnée par HUB_INBOX : le défaut y est toujours) et n'est pas un point de montage. Faux quand on ne sait pas (pas de HUB_DATA connu, Windows)."""
+        if self.data is None or _overlap(self.root, Path(self.data)):
+            return False
+        return _is_mount(self.root) is False
 
     def _in_library(self):
         """Vrai si la boîte est une bibliothèque, en contient une ou est dans l'une d'elles."""

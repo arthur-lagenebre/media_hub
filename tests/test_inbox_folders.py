@@ -583,10 +583,12 @@ class TestCheckOverlaps(FolderCase):
         self.data, self.films = self.base / "data", self.base / "srv" / "Films"
         self.films.mkdir(parents=True)
 
-    def check(self, box, libraries=None):
+    def check(self, box, libraries=None, mounted=True):
+        """`mounted` : ce que `_is_mount` répond (vrai : un volume monté ; faux : un simple dossier du conteneur ; None : la plate-forme ne sait pas le dire), pour que les essais ne dépendent pas du système où ils tournent."""
         libs = [types.SimpleNamespace(label="Films", path=self.films)] if libraries is None else libraries
         cfg = types.SimpleNamespace(inbox=box, data=self.data, libraries=libs, inbox_keep_free=0, inbox_max_uploads=2)
-        return Inbox(cfg, self.db).check()
+        with mock.patch.object(inbox, "_is_mount", return_value=mounted):
+            return Inbox(cfg, self.db).check()
 
     def test_the_default_inbox_under_the_data_folder_says_nothing(self):
         self.assertIsNone(self.check(self.data / "inbox"))
@@ -634,6 +636,46 @@ class TestCheckOverlaps(FolderCase):
     def test_an_unusable_inbox_that_overlaps_nothing_is_still_said(self):
         (self.base / "fichier").write_bytes(b"x")
         self.assertIn("n'est pas utilisable", self.check(self.base / "fichier" / "boite"))
+
+    def test_an_explicit_inbox_outside_the_data_folder_that_is_not_a_mount_point_warns_that_uploads_would_be_lost(self):
+        message = self.check(self.base / "HubReception", mounted=False)
+        self.assertIn("HUB_INBOX", message)
+        self.assertIn("point de montage", message)
+        self.assertIn("redéploiement", message)
+        self.assertTrue((self.base / "HubReception").is_dir())                         # un avertissement, pas un blocage : la boîte reste utilisable
+
+    def test_a_mount_point_or_a_platform_that_cannot_tell_says_nothing(self):
+        self.assertIsNone(self.check(self.base / "HubReception", mounted=True))
+        self.assertIsNone(self.check(self.base / "HubReception", mounted=None))
+
+    def test_the_default_inbox_under_the_data_folder_is_not_expected_to_be_a_mount_point(self):
+        self.assertIsNone(self.check(self.data / "inbox", mounted=False))
+        self.assertIsNone(self.check(self.data / "autre" / "boite", mounted=False))
+
+    def test_a_config_without_data_does_not_ask_whether_the_inbox_is_a_mount_point(self):
+        with mock.patch.object(inbox, "_is_mount", return_value=False):
+            self.assertIsNone(Inbox(types.SimpleNamespace(inbox=self.base / "HubReception", inbox_keep_free=0, inbox_max_uploads=2), self.db).check())
+
+    def test_the_not_mounted_warning_and_an_unusable_inbox_are_both_said(self):
+        (self.base / "fichier").write_bytes(b"x")
+        message = self.check(self.base / "fichier" / "boite", mounted=False)
+        self.assertIn("n'est pas utilisable", message)
+        self.assertIn("point de montage", message)
+
+    def test_is_mount_asks_the_system_but_gives_no_answer_on_windows_or_when_the_system_fails(self):
+        ismount = mock.Mock(return_value=True)
+        posix = types.SimpleNamespace(name="posix", path=types.SimpleNamespace(ismount=ismount))
+        with mock.patch.object(inbox, "os", posix):
+            self.assertIs(inbox._is_mount(self.base), True)
+            ismount.return_value = False
+            self.assertIs(inbox._is_mount(self.base), False)
+            ismount.side_effect = OSError(5, "I/O error")
+            self.assertIsNone(inbox._is_mount(self.base))
+        ismount.reset_mock(side_effect=True)
+        windows = types.SimpleNamespace(name="nt", path=types.SimpleNamespace(ismount=ismount))
+        with mock.patch.object(inbox, "os", windows):
+            self.assertIsNone(inbox._is_mount(self.base))
+        ismount.assert_not_called()
 
     def test_a_config_without_data_or_libraries_is_checked_as_before(self):
         self.assertIsNone(Inbox(types.SimpleNamespace(inbox=self.base / "HubReception", inbox_keep_free=0, inbox_max_uploads=2), self.db).check())
