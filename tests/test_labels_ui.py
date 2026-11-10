@@ -253,7 +253,7 @@ class TestRenameDialog(RenameCase):
         box = self.open_rename()
         box.locator("input").evaluate("e => e.blur()")
         for key in ("ArrowDown", "ArrowDown", "ArrowDown", "ArrowUp", "ArrowUp"):
-            self.press(key)
+            self.page.keyboard.press(key)                                                                                    # le focus bouge à l'instant de la touche
             inside = self.page.evaluate("document.querySelector('.veil .menu').contains(document.activeElement)")
             self.assertTrue(inside, f"le focus est sorti de la fenêtre après {key}")
 
@@ -325,15 +325,29 @@ class TestRenamedNameLayout(RenameCase):
     def overflow(self):
         return self.page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
 
+    def settled(self):
+        """Attend que la mise en page ne bouge plus : largeur et hauteur de la page et largeur de la barre identiques sur quatre images d'affichage de suite (rien à voir avec un délai fixe)."""
+        self.page.evaluate("""() => new Promise(done => {
+            var last = '', same = 0;
+            (function tick() {
+              var m = [document.documentElement.scrollWidth, document.documentElement.scrollHeight, document.getElementById('nav').scrollWidth].join(':');
+              same = m === last ? same + 1 : 0; last = m;
+              if (same >= 4) done(); else requestAnimationFrame(tick);
+            })();
+          })""")
+
     def check(self, name, width):
         self.page.set_viewport_size({"width": width, "height": 800})
         self.api("/api/library/series/label", {"label": name})
         self.hide_home_shelves()
-        for hash in ("#/", "#/l/series", "#/settings?tab=gestion", "#/search"):
+        ready = {"#/": ".libtile[data-lib=series]", "#/l/series": "h1", "#/settings?tab=gestion": "[data-key=libs-toggle]", "#/search": "input[type=search]"}
+        for hash, signal in ready.items():
             self.open(hash)
-            self.page.wait_for_timeout(150)
+            self.view(signal).wait_for()                                                                                   # la page est construite
             if hash.startswith("#/settings"):
                 self.view("[data-key=libs-toggle]").click()
+                self.view(".line[data-lib=series]").wait_for()
+            self.settled()
             self.assertLessEqual(self.overflow(), 0, f"{name[:6]}… défile en largeur à {width}px sur {hash}")
         self.open("#/")
         self.view(".libtile[data-lib=series]").wait_for()
