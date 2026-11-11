@@ -118,7 +118,7 @@ class Jobs:
     def cleanup(self, apply):
         def run(log):
             return clean_junk(self.cfg.libraries, apply, log)
-        return self._submit("Nettoyage · fichiers parasites" + ("" if apply else " (simulation)"), run)
+        return self._submit("Fichiers parasites · " + ("Nettoyage" if apply else "Compter"), run)
 
     def snapshot(self, with_log=False):
         return [j.public(with_log) for j in list(self.history)]
