@@ -296,14 +296,21 @@ class FakeShow:
 
 
 class TestEnrichShow(TempCase):
-    def run_show(self, meta, tmdb=None):
+    def run_show(self, meta, tmdb=None, show_id=42):
         lib = types.SimpleNamespace(id="series", path=self.tmp / "lib")
         self.db.replace_library("series", [item("s1", "series", "show", meta=meta)], [])
         row = self.db.one("SELECT * FROM items WHERE id=?", ("s1",))
         tmdb = tmdb or FakeShow()
-        with mock.patch.object(enrich.lookup, "resolve_show_id", return_value=42) as resolve:
+        with mock.patch.object(enrich.lookup, "resolve_show_id", return_value=show_id) as resolve:
             found = enrich.enrich_show(tmdb, self.tmp / "posters", self.db, lib, row)
         return found, resolve, tmdb, lib
+
+    def test_a_show_tmdb_does_not_find_is_not_asked_for_and_nothing_is_kept(self):
+        tmdb = FakeShow()
+        tmdb.series = mock.Mock(side_effect=AssertionError("la fiche d'une série introuvable n'est pas demandée"))
+        found, _, _, lib = self.run_show({"folder": "Inconnue"}, tmdb, show_id=None)
+        self.assertIsNone(found)
+        self.assertEqual((tmdb.saved, self.db.kv_get(enrich.show_key(lib, {"id": "s1"}))), ([], None))          # ni affiche ni fiche gardée
 
     def test_a_pinned_identifier_is_given_to_the_search_and_none_otherwise(self):
         _, resolve, tmdb, lib = self.run_show({"folder": "Dark", "tmdb_pinned": 123})
