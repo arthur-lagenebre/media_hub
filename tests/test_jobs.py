@@ -184,7 +184,7 @@ class TestTasks(JobsCase):
                 self.wait(job)
                 labels.add(job.label)
         self.assertEqual(labels, {"Mise à jour · Films", "Mise à jour · tout", "Enrichissement TMDB · Films", "Sagas TMDB · Films", "Fiches artistes · Films",
-                                  "Nettoyage · fichiers parasites (simulation)", "Nettoyage · fichiers parasites"})
+                                  "Fichiers parasites · Compter", "Fichiers parasites · Nettoyage"})
 
     def test_a_scan_of_everything_scans_each_library(self):
         libs = [types.SimpleNamespace(label="A"), types.SimpleNamespace(label="B")]

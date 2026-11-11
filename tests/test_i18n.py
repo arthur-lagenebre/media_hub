@@ -162,7 +162,8 @@ class TestDictionary(unittest.TestCase):
         from_media_library = {"Romans", "Livre dont vous êtes héros", "Manuels", "Autres", "BD", "Site officiel", "Groupe", "Artiste solo", "Orchestre", "Chœur", "Personnage",
                               "depuis {year}", "né en {year}", "jusqu'en {year}", "Wikipédia"}
         assembled = {                 # écrits en plusieurs morceaux dans le code : on vérifie les morceaux
-            "Nettoyage · fichiers parasites (simulation)": ["Nettoyage · fichiers parasites", " (simulation)"],
+            "Fichiers parasites · Compter": ["Fichiers parasites · ", "Compter"],
+            "Fichiers parasites · Nettoyage": ["Fichiers parasites · ", "Nettoyage"],
             "  {name} : {n} film(s), {absent} absent(s), {coming} pas encore sorti(s)": ["film(s), ", "absent(s)", "pas encore sorti(s)"],
             "  {name} : fiche vide": ["fiche vide"],
             "{found} fichier(s) de ce genre, {removed} effacé(s).": ["fichier(s) de ce genre", "effacé(s)."],
