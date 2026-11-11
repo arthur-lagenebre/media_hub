@@ -1858,7 +1858,7 @@ class TestLogin(unittest.TestCase):
                 page.fill("input[type=password]", "secret")
                 page.keyboard.press("Enter")
                 page.wait_for_selector("#nav .link")
-                self.assertEqual(page.locator("#nav .link").count(), 5)
+                self.assertEqual(page.locator("#nav .link").count(), 4)
                 browser.close()
             run.stop()
         finally:
@@ -1908,14 +1908,14 @@ class TestRightsInTheUi(unittest.TestCase):
                 admin.locator(".menu .btn", has_text="Enregistrer").click()
                 admin.locator(f'[data-user="{alice["id"]}"] [data-rights]', has_text="Consulter : Films").wait_for()
                 self.assertIn("Télécharger : Séries", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
-                self.assertIn("Lecture : Films, Animations, Musique", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
+                self.assertIn("Lecture : Films, Musique", admin.locator(f'[data-rights="{alice["id"]}"]').inner_text())
                 self.assertEqual(admin.locator('[data-user="default"] [data-key^="rights-"]').count(), 0)       # un administrateur n'a pas de droits à régler
                 saved = {u["name"]: u["rights"] for u in self.api(base, "/api/users", token=token)["users"]}["alice"]
                 self.assertEqual((saved["films"], saved["series"], saved["livres"]), ({"view": True, "play": True, "download": False}, {"view": True, "play": False, "download": True},
                                                                                   {"view": False, "play": False, "download": False}))
                 page = browser.new_page()
                 self.sign_in(page, base, "alice", "motdepasse12")
-                self.assertEqual(page.locator("#nav .link").count(), 4)                   # les livres ont disparu
+                self.assertEqual(page.locator("#nav .link").count(), 3)                   # les livres ont disparu
                 state = self.api(base, "/api/token", {"user": "alice", "password": "motdepasse12"})["token"]
                 film = next(i for i in self.api(base, "/api/library/films", token=state)["items"] if i["title"] == "Inception")["id"]
                 dark = next(i for i in self.api(base, "/api/library/series", token=state)["items"] if i["title"] == "Dark")["id"]
@@ -2419,8 +2419,8 @@ class TestHeroImage(UiCase):
             self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
 
 
-class TestAnimationShortcut(UiCase):
-    """Les films d'animation sont dans Films (genre « Animation ») : un raccourci depuis la page Animations, et un genre posé par l'adresse."""
+class TestGenreFromAddress(UiCase):
+    """Un genre posé par l'adresse (`#/l/films?genre=Animation`) : filtre la bibliothèque s'il existe, retombe sur « Tous » sinon, et se retire avec les filtres."""
 
     @classmethod
     def add_media(cls, root):
@@ -2428,32 +2428,6 @@ class TestAnimationShortcut(UiCase):
 
     def genre_button(self):
         return self.view(".tools .btn.flt").first
-
-    def titles(self):
-        return self.view(".grid .card").evaluate_all("els => els.map(e => e.title)")
-
-    def test_the_link_on_the_animations_page_leads_to_the_movies_with_the_genre_set(self):
-        self.open("#/l/animations")
-        self.view(".grid .card").first.wait_for()
-        link = self.view(".related a.f")
-        self.assertEqual(link.inner_text(), "Films d’animation")
-        link.click()
-        self.shown("#/l/films?genre=Animation")                                            # l'adresse change avant la page : sans cette attente, on lirait encore Animations
-        self.until(lambda: self.titles() == ["Coco"])          # puis la grille de Films : la page Animations (Frieren) reste à l'écran le temps que Films réponde, une première carte ne suffit pas
-        self.assertEqual(self.genre_button().inner_text(), "Genre : Animation")
-        self.assertEqual(self.titles(), ["Coco"])
-        self.press("Escape")
-        self.shown("#/l/animations")                                                       # Retour revient à Animations
-
-    def test_the_link_is_on_the_row_of_the_filters_pushed_to_the_right_and_pressed_from_the_keyboard(self):
-        self.open("#/l/animations")
-        self.view(".grid .card").first.wait_for()
-        link, sort = self.view(".tools .related a.f").bounding_box(), self.view(".tools .btn.flt").last.bounding_box()          # le genre est caché quand la bibliothèque n'en a pas : le tri et le statut sont toujours là
-        self.assertLess(abs((link["y"] + link["height"] / 2) - (sort["y"] + sort["height"] / 2)), sort["height"])          # sur la même ligne que les filtres
-        self.assertGreater(link["x"], sort["x"] + sort["width"] + 40)                                                    # et décalé : à droite d'eux, pas collé
-        self.view(".related a.f").focus()
-        self.press("Enter", wait=600)
-        self.assertTrue(self.page.url.endswith("#/l/films?genre=Animation"))
 
     def test_a_genre_the_library_does_not_have_falls_back_to_all(self):
         self.open("#/l/films?genre=Inconnu")
@@ -2469,16 +2443,6 @@ class TestAnimationShortcut(UiCase):
         self.view("input[type=search]").fill("zzzz")
         self.view("button", has_text="Retirer les filtres").click()                       # n'existe qu'une fois la liste vide relue : le clic l'attend
         self.until(lambda: self.genre_button().inner_text() == "Genre : Tous" and self.view(".grid .card").count() > 1, tries=100)      # la liste est relue, puis les boutons repeints
-
-    def test_only_the_animations_page_has_the_link_and_only_for_an_account_that_sees_the_movies(self):
-        for lib in ("films", "series", "musique"):
-            self.open("#/l/" + lib)
-            self.view(".tools").first.wait_for()
-            self.assertEqual(self.view(".related").count(), 0, lib)
-        self.open("#/")
-        self.page.evaluate("Hub.libs = Hub.libs.filter(function (l) { return l.id !== 'films'; }); location.hash = '#/l/animations';")      # un compte sans le droit de voir Films : la bibliothèque n'existe pas pour lui
-        self.view(".tools").first.wait_for()
-        self.assertEqual(self.view(".related").count(), 0)
 
 
 class TestPersonPage(UiCase):
@@ -2752,12 +2716,11 @@ class TestPersonMissingUi(UiCase):
     def test_a_category_has_its_own_button_for_the_people_of_its_series(self):
         self.give_a_voice_to_the_show()
         self.open_libraries_detail()
-        for lib in ("films", "series", "animations"):
-            self.assertEqual(self.view(f"[data-key=people-{lib}]").count(), 1, lib)                  # films, séries et animations : une catégorie chacune
+        for lib in ("films", "series"):
+            self.assertEqual(self.view(f"[data-key=people-{lib}]").count(), 1, lib)                  # films et séries : une catégorie chacune
         self.assertEqual(self.view("[data-key=people-musique], [data-key=people-livres]").count(), 0)
         self.assertEqual(self.view("[data-key=people-films]").inner_text().strip(), "Films manquants")                  # d'après le genre de la bibliothèque : films...
-        for lib in ("series", "animations"):
-            self.assertEqual(self.view(f"[data-key=people-{lib}]").inner_text().strip(), "Films des personnes (TMDB)")       # ...séries et animations (genre « shows »)
+        self.assertEqual(self.view("[data-key=people-series]").inner_text().strip(), "Films des personnes (TMDB)")       # ...séries (genre « shows »)
         self.assertIn("Les identifiants viennent de", self.view("[data-key=people-series]").get_attribute("title"))
         self.assertTrue(self.view("[data-key=people-series]").evaluate("e => e.classList.contains('f')"))
         with mock.patch("hub.enrich.Tmdb", FakePersonTmdb):
@@ -3252,11 +3215,11 @@ class TestHome(UiCase):
     def test_each_card_has_a_dot_in_the_colour_of_its_library_and_no_word_for_its_kind(self):
         self.open()
         self.view(".shelf.latest .card").first.wait_for()
-        for lib, colour in (("films", "rgb(242, 180, 65)"), ("series", "rgb(76, 195, 176)"), ("animations", "rgb(255, 122, 168)"), ("musique", "rgb(255, 138, 92)"), ("livres", "rgb(155, 209, 107)")):
+        for lib, colour in (("films", "rgb(242, 180, 65)"), ("series", "rgb(76, 195, 176)"), ("musique", "rgb(255, 138, 92)"), ("livres", "rgb(155, 209, 107)")):
             card = self.view(f".shelf.latest .card[data-lib={lib}]").first
             card.wait_for()
             self.assertEqual(card.locator(".s .dot").evaluate("el => getComputedStyle(el).backgroundColor"), colour, lib)
-            self.assertNotRegex(card.locator(".s").inner_text(), r"^(Film|Série|Animation|Album|Livre)\b", lib)               # le point dit la bibliothèque : pas de mot en plus
+            self.assertNotRegex(card.locator(".s").inner_text(), r"^(Film|Série|Album|Livre)\b", lib)               # le point dit la bibliothèque : pas de mot en plus
 
     def test_the_mix_keeps_the_newest_first_and_stops_at_the_number_asked(self):
         self.open()
@@ -3294,7 +3257,7 @@ class TestHomeUnseen(UiCase):
     def setUp(self):
         super().setUp()
         db = self.run_.hub.db
-        for lib in ("films", "series", "animations"):                                                          # de quoi remplir un rayon dans chacune, au-delà des nouveautés
+        for lib in ("films", "series"):                                                          # de quoi remplir un rayon dans chacune, au-delà des nouveautés
             items = [dict(r) for r in db.query("SELECT * FROM items WHERE lib=?", (lib,))]
             entries = [dict(r) for r in db.query("SELECT * FROM entries WHERE lib=?", (lib,))]
             old = [{**items[0], "id": f"vieux{lib}{n:03d}", "title": f"Vieux {lib} {n:03d}", "sort": f"vieux {lib} {n:03d}", "grp": "", "added": 100 + n, "meta": "{}"} for n in range(100)]
@@ -3316,7 +3279,7 @@ class TestHomeUnseen(UiCase):
         self.open()
         self.view(".shelf.unseen .card").first.wait_for()
         wanted = [l["label"] for l in self.libraries() if "unseen" in l and l["unseen"]]
-        self.assertGreater(len(wanted), 1)                                                                  # films, séries, animations : pas un seul rayon pour tout
+        self.assertGreater(len(wanted), 1)                                                                  # films, séries : pas un seul rayon pour tout
         self.assertEqual(self.view(".shelf h2").all_inner_texts(), ["Nouveautés"] + ["Pas encore vu · " + label for label in wanted])
         self.assertEqual(self.view(".shelf.unseen").evaluate_all("els => els.map(e => e.getAttribute('data-lib'))"), [l["id"] for l in self.libraries() if l.get("unseen")])
         self.assertEqual(self.view(".shelf.unseen[data-lib=films] h2 a").get_attribute("href"), "#/l/films")      # le titre mène à la bibliothèque
@@ -3505,7 +3468,7 @@ class TestHomeWithNoShelf(UiCase):
     def test_a_home_with_nothing_to_resume_or_discover_says_so(self):
         self.hide("home_latest")                                                                                     # « Pas encore vu » est affiché, mais tout est vu
         seen = []
-        for lib in ("films", "series", "animations"):
+        for lib in ("films", "series"):
             for item in self.api(f"/api/library/{lib}")["items"]:
                 self.api(f"/api/item/{item['id']}/seen", {"done": True})
                 seen.append(item["id"])

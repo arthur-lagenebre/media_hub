@@ -1,4 +1,4 @@
-"""Films et séries (donc animations) : lus dans les tags Matroska que Metadata.py a écrits.
+"""Films et séries : lus dans les tags Matroska que Metadata.py a écrits.
 
 Un film bien étiqueté se suffit : titre, date de sortie, synopsis, genres, casting, saga, identifiant TMDB. Un fichier qui ne l'est pas garde son nom (« Inception (2010) ») : il apparaît quand même, sans synopsis. La lecture se fait en Python pur (ebml.py) ; ffprobe n'est appelé qu'à la lecture d'un film, pour savoir comment le jouer (voir media/probe.py).
 """

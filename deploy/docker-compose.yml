@@ -85,6 +85,5 @@ services:
       # Musique sans « :ro » aussi pour les photos d'artistes : « Valider » écrit artist.webp dans le dossier de l'artiste (sinon : erreur 500, la photo n'est pas enregistrée).
       - ${MEDIA}/Films:/srv/Films:ro
       - ${MEDIA}/Series:/srv/Series:ro
-      - ${MEDIA}/Animations:/srv/Animations:ro
       - ${MEDIA}/Musique:/srv/Musique:ro
       - ${MEDIA}/Livres:/srv/Livres:ro

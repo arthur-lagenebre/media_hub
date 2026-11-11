@@ -70,7 +70,7 @@ class Running:
         """`password` : HUB_PASSWORD (amorçage du compte administrateur), `admin` : HUB_ADMIN ; `reuse` : redémarre sur la médiathèque et la base déjà là (rien n'est refabriqué)."""
         self.root = Path(root)
         if reuse:
-            names = {"films": "Films", "series": "Series", "animations": "Animations", "musique": "Musique", "livres": "Livres"}
+            names = {"films": "Films", "series": "Series", "musique": "Musique", "livres": "Livres"}
             self.libs = {lib: self.root / "srv" / name for lib, name in names.items()}
         else:
             self.libs = fixtures.build_library(self.root / "srv")
@@ -138,10 +138,10 @@ class ServerCase(unittest.TestCase):
 
 
 class TestBrowse(ServerCase):
-    def test_state_lists_the_five_libraries(self):
+    def test_state_lists_the_four_libraries(self):
         status, data = self.api.json("/api/state")
         self.assertEqual(status, 200)
-        self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "animations", "musique", "livres"])
+        self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "musique", "livres"])
         self.assertTrue(all(l["count"] > 0 for l in data["libraries"]))
         self.assertEqual(data["ffmpeg"], bool(FFMPEG))
 
@@ -3137,7 +3137,7 @@ class TestApiContract(ContractBase):
         self.has(data, {"version": str, "api": int, "libraries": list, "ffmpeg": bool, "ffprobe": bool, "tmdb": bool, "auth": bool, "busy": bool, "streams": int, "max_streams": int}, "state")
         self.assertEqual(data["api"], 1)
         self.assertTrue(data["auth"])
-        self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "animations", "musique", "livres"])
+        self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "musique", "livres"])
         for lib in data["libraries"]:
             self.has(lib, {"id": str, "label": str, "default_label": str, "kind": str, "count": int, "scanned": (int, NULL), "exists": bool}, f"state.libraries[{lib['id']}]")
             self.assertIn(lib["kind"], LIBRARY_KINDS)
@@ -3148,7 +3148,7 @@ class TestApiContract(ContractBase):
         self.addCleanup(self.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (film,))
         data = self.get("/api/home")
         self.has(data, {"continue": list, "libraries": list}, "home")
-        self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "animations", "musique", "livres"])
+        self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "musique", "livres"])
         for lib in data["libraries"]:
             self.has(lib, {"id": str, "label": str, "kind": str, "count": int, "recent": list}, f"home.libraries[{lib['id']}]")
             self.assertTrue(lib["recent"], lib["id"])
@@ -3162,7 +3162,7 @@ class TestApiContract(ContractBase):
         self.served(card["file"], "home.continue.file")
 
     def test_library(self):
-        for lib in ("films", "series", "animations", "musique", "livres"):
+        for lib in ("films", "series", "musique", "livres"):
             data = self.get(f"/api/library/{lib}")
             self.has(data, {"library": dict, "total": int, "offset": int, "items": list, "genres": list}, f"library[{lib}]")
             self.has(data["library"], {"id": str, "label": str, "kind": str}, f"library[{lib}].library")
@@ -3431,7 +3431,7 @@ class TestDocumentedRoutes(unittest.TestCase):
 class TestRights(AccountsCase):
     """Les droits par compte : pour chaque bibliothèque, voir et télécharger. Sans réglage tout est permis ; l'administrateur a tout."""
 
-    LIBS = ("films", "series", "animations", "musique", "livres")
+    LIBS = ("films", "series", "musique", "livres")
 
     def setUp(self):
         super().setUp()
@@ -3462,7 +3462,7 @@ class TestRights(AccountsCase):
         self.watch(self.alice, self.episodes[0]["id"], 600)
         self.grant(self.alice, {"films": {"play": False}, "livres": {"play": False}, "series": {"play": False}})
         libs = {lib["id"]: (lib["play"], lib["download"]) for lib in self.alice.json("/api/state")[1]["libraries"]}
-        self.assertEqual(libs, {"films": (False, True), "series": (False, True), "animations": (True, True), "musique": (True, True), "livres": (False, True)})
+        self.assertEqual(libs, {"films": (False, True), "series": (False, True), "musique": (True, True), "livres": (False, True)})
         film, volume, episode, mine = self.film_files[0]["id"], self.volumes[0]["id"], self.episodes[0]["id"], self.alice.session["media_token"]
         for path in (f"/api/item/{self.inception}", f"/api/item/{self.naruto}", "/api/library/livres", f"/img/item/{self.naruto}"):
             self.assertEqual(self.alice.get(path)[0], 200, path)                                    # voir : le catalogue reste ouvert
@@ -3489,7 +3489,7 @@ class TestRights(AccountsCase):
         self.assertEqual(answer["rights"]["livres"], {"view": False, "play": False, "download": False})        # sans « voir », pas de « télécharger »
         self.assertEqual(answer["rights"]["musique"], {"view": True, "play": True, "download": True})
         libs = {lib["id"]: lib["download"] for lib in self.alice.json("/api/state")[1]["libraries"]}
-        self.assertEqual(libs, {"films": False, "series": True, "animations": True, "musique": True})             # livres a disparu, avec le même jeton
+        self.assertEqual(libs, {"films": False, "series": True, "musique": True})             # livres a disparu, avec le même jeton
         self.assertEqual([lib["id"] for lib in self.bob.json("/api/state")[1]["libraries"]], list(self.LIBS))     # les autres comptes ne bougent pas
 
     def test_without_view_a_library_is_closed_everywhere(self):
@@ -3605,7 +3605,7 @@ class TestRights(AccountsCase):
         self.assertEqual(self.count("SELECT COUNT(*) AS n FROM rights WHERE user_id=?", self.alice.account["id"]), 0)
 
     def test_the_administrator_sees_and_downloads_everything(self):
-        self.assertEqual([lib["download"] for lib in self.admin.json("/api/state")[1]["libraries"]], [True] * 5)
+        self.assertEqual([lib["download"] for lib in self.admin.json("/api/state")[1]["libraries"]], [True] * 4)
         self.assertEqual(self.admin.get(f"/media/{self.volumes[0]['id']}/file?download=1")[0], 200)
         mine = next(u for u in self.admin.json("/api/users")[1]["users"] if u["id"] == "default")
         self.assertTrue(all(r == {"view": True, "play": True, "download": True} for r in mine["rights"].values()))

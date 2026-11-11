@@ -1141,7 +1141,7 @@ def person_extras(hub, person, libs):
 
 @route("POST", r"/api/enrich/people")
 def api_enrich_people(h, m, q):
-    """Demande à TMDB les films des réalisateurs et acteurs (`{"lib": "<id>", "force": false}`) : les réalisateurs et les acteurs de premier plan, pour que `/api/person` dise ce qui manque à chacun. Sans `lib` : les bibliothèques de films ; avec : cette bibliothèque (films, séries ou animations), une tâche par catégorie. Administrateur seulement ; tâche de fond (202, `job`) : une heure ou plus la première fois, une personne connue depuis moins d'un mois n'est pas redemandée (sauf `force`)."""
+    """Demande à TMDB les films des réalisateurs et acteurs (`{"lib": "<id>", "force": false}`) : les réalisateurs et les acteurs de premier plan, pour que `/api/person` dise ce qui manque à chacun. Sans `lib` : les bibliothèques de films ; avec : cette bibliothèque (films ou séries), une tâche par catégorie. Administrateur seulement ; tâche de fond (202, `job`) : une heure ou plus la première fois, une personne connue depuis moins d'un mois n'est pas redemandée (sauf `force`)."""
     require_admin(h)
     body = h.body_json()
     hub = h.hub
@@ -1153,7 +1153,7 @@ def api_enrich_people(h, m, q):
             raise HttpError(400, 'bibliothèque attendue : {"lib": "<identifiant>"}')
         lib = library_or_404(hub, body["lib"])
         if lib.kind not in ("movies", "shows"):
-            raise HttpError(400, "les films manquants des personnes ne concernent que les bibliothèques de films, de séries et d'animations")
+            raise HttpError(400, "les films manquants des personnes ne concernent que les bibliothèques de films et de séries")
         libs, label = [lib], labels.shown(hub.db, lib)
     h.send_json({"job": hub.jobs.enrich_people(libs, label, bool(body.get("force"))).public()}, 202)
 
@@ -2390,12 +2390,12 @@ POSTER_TYPES = ("movie", "show")
 
 
 def poster_item(h, ident):
-    """L'item dont on change l'affiche (administrateur) : un film, une série ou une animation."""
+    """L'item dont on change l'affiche (administrateur) : un film ou une série."""
     require_admin(h)
     item = h.hub.item(ident)
     if item["type"] not in POSTER_TYPES:
         h.discard_body()
-        raise HttpError(400, "seuls un film, une série ou une animation ont une affiche à changer")
+        raise HttpError(400, "seuls un film ou une série ont une affiche à changer")
     return item
 
 
@@ -2426,12 +2426,12 @@ TMDB_RESULTS = 10
 
 
 def tmdb_show(h, ident):
-    """(série, bibliothèque, client TMDB, dossier des affiches) pour choisir sa fiche TMDB (administrateur) ; 400 pour autre chose qu'une série ou une animation, ou sans clé TMDB."""
+    """(série, bibliothèque, client TMDB, dossier des affiches) pour choisir sa fiche TMDB (administrateur) ; 400 pour autre chose qu'une série, ou sans clé TMDB."""
     require_admin(h)
     item = h.hub.item(ident)
     if item["type"] != "show":
         h.discard_body()
-        raise HttpError(400, "seules une série ou une animation ont une fiche TMDB à choisir")
+        raise HttpError(400, "seule une série a une fiche TMDB à choisir")
     lib = library_or_404(h.hub, item["lib"])
     try:
         client, posters = enrich.tmdb_client(h.hub.cfg)
@@ -2462,7 +2462,7 @@ def api_item_tmdb_search(h, m, q):
 
 @route("POST", r"/api/item/(\w+)/tmdb")
 def api_item_tmdb(h, m, q):
-    """Fixe la fiche TMDB d'une série ou d'une animation (`{"tmdb": 4615}`, ou l'adresse de sa fiche) et l'enrichit à nouveau. Le choix reste dans la base du hub : la médiathèque n'est pas touchée. Administrateur seulement."""
+    """Fixe la fiche TMDB d'une série (`{"tmdb": 4615}`, ou l'adresse de sa fiche) et l'enrichit à nouveau. Le choix reste dans la base du hub : la médiathèque n'est pas touchée. Administrateur seulement."""
     item, lib, client, posters = tmdb_show(h, m.group(1))
     found = TMDB_SHOW_RE.match(str(h.body_json().get("tmdb", "")).strip())
     if not found:
@@ -2763,7 +2763,7 @@ def api_enrich(h, m, q):
         h.send_json({"job": h.hub.jobs.enrich_artists(lib, bool(body.get("force"))).public()}, 202)
         return
     if lib.kind not in ("shows", "movies"):
-        raise HttpError(400, "l'enrichissement ne concerne que les films (sagas), les séries, les animations et la musique")
+        raise HttpError(400, "l'enrichissement ne concerne que les films (sagas), les séries et la musique")
     if not h.hub.cfg.tmdb_key:
         raise HttpError(400, "pas de clé TMDB : renseigne TMDB_KEY sur le serveur")
     jobs = h.hub.jobs

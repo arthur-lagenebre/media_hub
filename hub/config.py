@@ -36,7 +36,6 @@ KINDS = ("movies", "shows", "music", "books")
 DEFAULTS = (
     ("films", "Films", "movies", ("Films", "Movies")),
     ("series", "Séries", "shows", ("Series", "Séries", "TV_Shows")),
-    ("animations", "Animations", "shows", ("Animations", "Anime", "Animation")),
     ("musique", "Musique", "music", ("Musique", "Music")),
     ("livres", "Livres", "books", ("Livres", "Books")),
 )

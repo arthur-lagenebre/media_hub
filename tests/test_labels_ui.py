@@ -16,7 +16,7 @@ import urllib.request
 from tests.test_server import Running
 from tests.test_ui import UiCase, sync_playwright
 
-IDS = ("films", "series", "animations", "musique", "livres")
+IDS = ("films", "series", "musique", "livres")
 TRICKY = '<b>x</b> &amp; "q" \'a\''                 # du HTML, une entité, deux sortes de guillemets : tout doit s'afficher tel quel
 LONG_WORD = "Supercalifragilisticexpialidocious" + "123456"         # 40 caractères sans une espace
 WIDE_CAPS = "W" * 40                                         # les plus larges majuscules, 40 fois
@@ -115,7 +115,7 @@ class TestRenameDialog(RenameCase):
         self.page.wait_for_selector(".veil", state="detached")
         self.page.locator("#toast.on", has_text="Bibliothèque renommée : Feuilletons").wait_for()
         self.until(lambda: "Feuilletons" in self.nav_texts())
-        self.assertEqual(self.nav_texts(), ["Films", "Feuilletons", "Animations", "Musique", "Livres"])                 # la barre, au même rang
+        self.assertEqual(self.nav_texts(), ["Films", "Feuilletons", "Musique", "Livres"])                 # la barre, au même rang
         self.assertEqual(self.api("/api/state")["libraries"][1]["id"], "series")                                       # l'identifiant, lui, n'a pas bougé
         self.assertEqual(self.view(".line[data-lib=series] .what b").inner_text(), "Feuilletons")                     # le détail de la page Gestion
         self.assertEqual(self.view("[data-key=rename-series]").get_attribute("aria-label"), "Renommer la bibliothèque Feuilletons")
@@ -150,7 +150,7 @@ class TestRenameDialog(RenameCase):
         self.page.wait_for_selector(".veil", state="detached")
         self.page.locator("#toast.on", has_text="Nom d’origine rétabli : Séries").wait_for()
         self.until(lambda: "Séries" in self.nav_texts())
-        self.assertEqual(self.nav_texts(), ["Films", "Séries", "Animations", "Musique", "Livres"])
+        self.assertEqual(self.nav_texts(), ["Films", "Séries", "Musique", "Livres"])
         self.assertEqual(self.labels()["series"], "Séries")
         self.assertEqual(self.open_rename().locator("[data-key=form-alt]").count(), 0)                                  # rétabli : plus rien à rétablir
 
@@ -381,9 +381,9 @@ class TestRenamedNameInEnglish(RenameCase):
     def test_a_chosen_name_equal_to_a_dictionary_key_is_not_translated_and_the_original_is(self):
         self.hide_home_shelves()
         self.api("/api/library/films/label", {"label": "Paramètres"})                                                      # « Settings » dans le dictionnaire
-        self.api("/api/library/animations/label", {"label": "Séries télé"})
+        self.api("/api/library/livres/label", {"label": "Séries télé"})
         self.open("#/")
-        self.assertEqual(self.nav_texts(), ["Paramètres", "TV shows", "Séries télé", "Music", "Books"])                  # films : choisi, tel quel ; séries, musique, livres : d'origine, traduits
+        self.assertEqual(self.nav_texts(), ["Paramètres", "TV shows", "Music", "Séries télé"])                  # films et livres : choisis, tels quels ; séries, musique : d'origine, traduits
         self.view(".libtile[data-lib=films]").wait_for()
         self.assertEqual(self.view(".libtile[data-lib=films] b").inner_text(), "Paramètres")
         self.assertEqual(self.view(".libtile[data-lib=series] b").inner_text(), "TV shows")
@@ -526,8 +526,8 @@ class TestRenameOfAnOrdinaryAccount(unittest.TestCase):
             page.locator(".menu .btn", has_text="Annuler").click()
             summary = page.locator(f'[data-rights="{self.alice}"]')
             summary.wait_for()
-            self.assertIn(f"Consulter : Films, {TRICKY}, Animations, Musique", summary.inner_text())                           # la liste des comptes
-            self.assertIn("Télécharger : Films, Animations, Musique", summary.inner_text())                                    # ...sans le nom choisi quand le droit manque
+            self.assertIn(f"Consulter : Films, {TRICKY}, Musique", summary.inner_text())                           # la liste des comptes
+            self.assertIn("Télécharger : Films, Musique", summary.inner_text())                                    # ...sans le nom choisi quand le droit manque
             self.assertEqual(summary.locator("b").count(), 0)
             browser.close()
 

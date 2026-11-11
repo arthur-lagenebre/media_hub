@@ -31,7 +31,7 @@ Navigateur de bureau, administrateur, clé TMDB réglée.
 - [ ] *Gestion* > « Détail par bibliothèque » > « Films manquants » de la bibliothèque de films. **Mesures à noter : la durée, et la taille de `HUB_DATA/tmdb`** (`du -sh` sur le NAS). L'estimation de [deploy/README.md](../deploy/README.md) est « une heure ou plus la première fois, plusieurs centaines de Mo », non mesurée.
 - [ ] Ouvrir la page d'un réalisateur (`#/person?n=`), puis celle d'un acteur : **attendu :** les films manquants en cases grisées, du plus récent au plus ancien.
 - [ ] Sur une personne pas encore enrichie : « Chercher ses films manquants ». **Attendu :** les cases grisées apparaissent.
-- [ ] Un bouton par bibliothèque (« Films des personnes (TMDB) ») sur une bibliothèque de séries ou d'animations. **Attendu :** une catégorie à la fois, sans toucher aux autres.
+- [ ] Un bouton par bibliothèque (« Films des personnes (TMDB) ») sur une bibliothèque de séries. **Attendu :** une catégorie à la fois, sans toucher aux autres.
 
 ### Piles d'affiches à cache froid
 
@@ -126,7 +126,7 @@ La liseuse en double page.
 
 Android TV, Fire TV, webOS. La télé n'est pas prioritaire : cette séance peut attendre, ou ne jamais avoir lieu.
 
-- [ ] **À la télécommande :** les sagas, l'éditeur de sagas, le sélecteur de films, les cartes grisées, le bouton « … » des films, des sagas, des séries et des animations, les photos d'artistes, la liseuse et le lecteur.
+- [ ] **À la télécommande :** les sagas, l'éditeur de sagas, le sélecteur de films, les cartes grisées, le bouton « … » des films, des sagas et des séries, les photos d'artistes, la liseuse et le lecteur.
 - [ ] **Pop-up :** Gauche / Droite passent d'un bouton à l'autre.
 - [ ] **Films manquants** d'une personne, à la télécommande.
 - [ ] **Liseuse en double page :** le focus des boutons « Double page » et « Décaler d'une page ».

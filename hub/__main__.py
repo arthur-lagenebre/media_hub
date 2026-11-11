@@ -115,7 +115,7 @@ def announce(cfg, hub):
     for lib in cfg.libraries:
         print(f"  {labels.shown(hub.db, lib):<12} {lib.kind:<7} {lib.path}" + ("" if lib.path.is_dir() else "  (dossier introuvable)"), flush=True)
     if not cfg.libraries:
-        print("  aucune bibliothèque : monte tes dossiers sous HUB_SRV (Films, Series, Animations, Musique, Livres) ou décris-les dans HUB_LIBRARIES.", file=sys.stderr)
+        print("  aucune bibliothèque : monte tes dossiers sous HUB_SRV (Films, Series, Musique, Livres) ou décris-les dans HUB_LIBRARIES.", file=sys.stderr)
     problem = hub.inbox.check()
     if problem:
         print(f"  ATTENTION : {problem}", file=sys.stderr)

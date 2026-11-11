@@ -1,4 +1,4 @@
-/* Le bouton « … » : voir / revoir et vu / non vu, sur les cartes des films, des sagas, des séries et des animations, et sur chaque épisode.
+/* Le bouton « … » : voir / revoir et vu / non vu, sur les cartes des films, des sagas et des séries, et sur chaque épisode.
    Le même menu s'ouvre au clic sur le bouton, au clic droit et à la touche « Menu » de la télécommande. */
 (function () {
   'use strict';
@@ -142,7 +142,7 @@
     var tools = [picker, H.button(H.t('Changer l’affiche'), 'edit', { 'data-key': 'poster', onclick: function () { picker.click(); } })];
     return tools;
   };
-  // --- Changer la fiche TMDB (administrateur, séries et animations) ----------------------------
+  // --- Changer la fiche TMDB (administrateur, séries) ----------------------------
   // Quand la recherche sur le nom du dossier tombe sur un homonyme. Le choix reste dans la base du hub : la médiathèque n'est pas touchée.
   // On cherche par le nom, ou on colle l'adresse de la fiche sur themoviedb.org (la façon sûre de tomber sur la bonne). `d` : la fiche (/api/item) ; `done` est appelé une fois la fiche changée.
   var TMDB_URL = /^https?:\/\/(www\.)?themoviedb\.org\/tv\/\d+/i;
