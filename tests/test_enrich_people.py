@@ -147,16 +147,16 @@ class TestEnrichPeople(TempCase):
         self.assertEqual(sorted(p.name for p in (self.tmp / "tmdb").iterdir()), ["film-50.jpg", "film-60.jpg"])
 
     def test_a_film_we_have_in_a_library_of_series_is_not_downloaded_either(self):
-        shows = types.SimpleNamespace(id="anim", kind="shows")
+        shows = types.SimpleNamespace(id="tele", kind="shows")
         self.db.replace_library("films", [film(2, ["Réal"], [], {"Réal": 100})], [])               # le film 1 n'est plus là...
-        self.db.replace_library("anim", [item("a1", "show", lib="anim")], [base.entry("e1", "a1", lib="anim", meta={"info": {"tmdb": "movie/1"}})])          # ... il est rangé dans Animations
+        self.db.replace_library("tele", [item("a1", "show", lib="tele")], [base.entry("e1", "a1", lib="tele", meta={"info": {"tmdb": "movie/1"}})])          # ... il est rangé dans une bibliothèque de séries
         _, tmdb, _, _ = self.run_pass({"person/100/movie_credits": self.credits["person/100/movie_credits"]}, libs=(LIB, shows))
         self.assertEqual(tmdb.saved, ["/p50.jpg"])
 
     def test_a_film_we_have_in_another_library_than_the_one_of_the_pass_is_not_downloaded_either(self):
-        shows = types.SimpleNamespace(id="anim", kind="shows")
-        self.db.replace_library("anim", [item("a1", "show", lib="anim", meta={"actors": [{"name": "A", "role": ""}], "person_ids": {"A": 201}})], [])
-        self.db.replace_library("films", [film(1, [], [], {})], [])                                          # le film 1 est dans Films ; la passe ne porte que sur Animations
+        shows = types.SimpleNamespace(id="tele", kind="shows")
+        self.db.replace_library("tele", [item("a1", "show", lib="tele", meta={"actors": [{"name": "A", "role": ""}], "person_ids": {"A": 201}})], [])
+        self.db.replace_library("films", [film(1, [], [], {})], [])                                          # le film 1 est dans Films ; la passe ne porte que sur la bibliothèque de séries
         _, tmdb, _, _ = self.run_pass({"person/201/movie_credits": self.credits["person/201/movie_credits"]}, libs=(shows,), all_libs=(LIB, shows))
         self.assertEqual(tmdb.saved, ["/p60.jpg"])
 

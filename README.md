@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue)
 ![Dépendances](https://img.shields.io/badge/dépendances-aucune-brightgreen)
 
-Le serveur de la médiathèque : **films, séries, animations, musique, livres**, depuis le NAS, dans un navigateur ou sur la télé (Android TV, Google TV, Fire TV). Même idée que Plex ou Jellyfin, mais sur mesure : rien à installer côté client, aucune dépendance pip (Pillow est facultatif), un seul processus Python.
+Le serveur de la médiathèque : **films, séries, musique, livres**, depuis le NAS, dans un navigateur ou sur la télé (Android TV, Google TV, Fire TV). Même idée que Plex ou Jellyfin, mais sur mesure : rien à installer côté client, aucune dépendance pip (Pillow est facultatif), un seul processus Python.
 
 ```text
 media_library   l'atelier : nettoie, renomme, convertit, étiquette (écrit dans les fichiers, ne produit aucune page)
@@ -18,7 +18,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 | Bibliothèque | Contenu lu | Lecture |
 | --- | --- | --- |
 | Films | `.mkv` (titre, synopsis, casting, jaquette embarqués par `Metadata.py`), sagas regroupées en une vignette (bouton « Sagas ») | vidéo, sous-titres, reprise |
-| Séries, Animations | dossiers série / saison / épisode, affiche TMDB (avec `TMDB_KEY`) | vidéo, épisode suivant |
+| Séries | dossiers série / saison / épisode, affiche TMDB (avec `TMDB_KEY`) | vidéo, épisode suivant |
 | Musique | `.flac`, `.mp3`, … regroupés en albums, pochette = `cover.{ext}` du dossier ; une image `1997 - OK Computer.jpg` dans le dossier de l'artiste déclare un album manquant (grisé, sur sa fiche seulement) ; la photo de l'artiste est `artist.webp` dans son dossier (voir [Photos d'artistes](#photos-dartistes)) | barre audio qui continue pendant la navigation |
 | Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens de lecture par série, double page, thèmes |
 
@@ -49,7 +49,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_h
 
 | Variable | Rôle | Défaut |
 | --- | --- | --- |
-| `HUB_SRV` | racine des bibliothèques (`Films`, `Series`, `Animations`, `Musique`, `Livres`) | `/srv` |
+| `HUB_SRV` | racine des bibliothèques (`Films`, `Series`, `Musique`, `Livres`) | `/srv` |
 | `HUB_LIBRARIES` | fichier JSON `[{"id","label","kind","path"}]` pour d'autres dossiers ; `kind` : `movies`, `shows`, `music`, `books` | dossiers connus sous `HUB_SRV` |
 | `HUB_DATA` | base SQLite, cache d'images et `sagas.json` (les sagas que l'on compose soi-même, voir ci-dessous) | `./data` |
 | `HUB_REPO` | dossier `media_library` | `../media_library`, `/app/media_library` |
@@ -122,7 +122,7 @@ Seul l'administrateur lance les mises à jour (scan, enrichissement, nettoyage),
 
 ### Droits par bibliothèque
 
-Pour chaque compte (sauf l'administrateur, qui a tout) et chaque bibliothèque (Films, Séries, Animations, Musique, Livres…), l'administrateur dit si la personne peut **consulter** (`view`), la **lire** en ligne (« Lecture », `play`) et la **télécharger** (`download`), dans *Paramètres* > *Comptes* > *Droits*, ou en ligne de commande :
+Pour chaque compte (sauf l'administrateur, qui a tout) et chaque bibliothèque (Films, Séries, Musique, Livres…), l'administrateur dit si la personne peut **consulter** (`view`), la **lire** en ligne (« Lecture », `play`) et la **télécharger** (`download`), dans *Paramètres* > *Comptes* > *Droits*, ou en ligne de commande :
 
 ```bash
 python -m hub user rights <nom>                                       # ce que le compte voit et télécharge
@@ -158,7 +158,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/home`, `/api/state`, `/api/search?q=` | accueil (`unseen` de chaque bibliothèque vidéo : 48 éléments au plus que le compte n'a pas touchés, dans l'ordre de son réglage `home_unseen_sort`, appliqué avant la coupe ; l'interface retire ceux de « Nouveautés » puis en garde 24 au plus), bibliothèques, recherche (`results` : les titres ; `people` : 8 personnes au plus dont le nom contient le texte, avec leur nombre de titres) |
 | `GET /api/person?name=<nom>` | ce qu'une personne a réalisé ou joué (films et séries des bibliothèques que le compte voit) : `name` (graphie la plus fréquente), `roles` (`director`, `actor`), `results` (par bibliothèque, du plus récent au plus ancien). Nom comparé tel quel, sans accents ni casse (« Chris Evans » ne ramène pas « Chris Evans Jr »), inconnu : `results` vide ; absent ou de plus de 200 caractères : 400. `enrichable` (le nom désigne une seule personne, qui a un identifiant TMDB, et il y a une clé TMDB) et `missing` (ses films, d'après TMDB, qu'aucune bibliothèque visible n'a ; absent s'il est vide). **Homonymes** : l'index se fait par le nom, deux personnes de même nom sont confondues (et ne sont pas enrichissables) |
 | `POST /api/enrich/person` | (administrateur) `{"name", "force"?}` : demande à TMDB les films d'une personne (réalisés, ou joués parmi les premiers rôles), gardés un mois ; tâche de fond. 400 sans clé TMDB ou sans identifiant unique pour ce nom, 404 nom inconnu |
-| `POST /api/enrich/people` | (administrateur) `{"lib"?, "force"?}` : la même demande à TMDB pour les réalisateurs et les acteurs (réalisateurs et acteurs de premier plan, une seule personne par nom), en tâche de fond ; sans `lib` les bibliothèques de films (bouton « Films manquants (tout le monde) » dans *Paramètres* > *Gestion*), avec `lib` une catégorie : films, séries ou animations (bouton « Films des personnes (TMDB) » de chaque bibliothèque, dans « Détail par bibliothèque »). Pour les séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ». Une personne connue depuis moins d'un mois n'est pas redemandée. 400 sans clé TMDB |
+| `POST /api/enrich/people` | (administrateur) `{"lib"?, "force"?}` : la même demande à TMDB pour les réalisateurs et les acteurs (réalisateurs et acteurs de premier plan, une seule personne par nom), en tâche de fond ; sans `lib` les bibliothèques de films (bouton « Films manquants (tout le monde) » dans *Paramètres* > *Gestion*), avec `lib` une catégorie : films ou séries (bouton « Films des personnes (TMDB) » de chaque bibliothèque, dans « Détail par bibliothèque »). Pour les séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ». Une personne connue depuis moins d'un mois n'est pas redemandée. 400 sans clé TMDB |
 | `GET/POST /api/me/settings` | réglages d'affichage du compte, gardés sur le serveur (corps `{"réglage": "valeur"}`, 400 si inconnu) ; `home_unseen_sort` : `random` (défaut), `rating` (note TMDB montrée ; sans note à la fin) ou `added` (plus récent d'abord), l'ordre du rayon « Pas encore vu » |
 | `GET /api/library/<id>?q&genre&sort&filter&offset&limit` | liste d'une bibliothèque (`filter=todo\|progress\|done` : à voir = aucun fichier entamé, en cours, terminés = tous vus ; `unseen`, ancien nom de `todo` ; une autre valeur : 400 « filtre inconnu » ; sur la musique : 400 « ce filtre n'existe pas pour la musique »), avec les genres (les 60 plus fréquents, par ordre alphabétique) ; musique : `artists` et `albums`, le décompte de ce que les filtres laissent (en vue artistes, un artiste trouvé garde tous ses albums) ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
 | `POST /api/library/<id>/label` | (administrateur) `{"label"}` : renomme l'**affichage** d'une bibliothèque (1 à 40 caractères, sans caractère de contrôle ; refusé en 400 s'il est celui d'une autre bibliothèque, affiché ou d'origine, à la casse et aux accents près) ; un objet sans `label`, `null` ou un texte vide rétablit le nom d'origine, mais un corps qui n'est pas un objet JSON (vide, illisible, liste…) est refusé en 400 `le corps doit être un objet JSON`. L'identifiant ne change jamais. Rend `{"id", "label", "default_label", "kind"}` ; `GET /api/state` donne aussi `default_label`. 403 pour un compte `user`, 404 si l'identifiant est inconnu. Pas d'ajout ni de retrait de bibliothèque depuis l'interface (voir [docs/decisions.md](docs/decisions.md)) |

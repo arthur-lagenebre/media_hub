@@ -245,8 +245,8 @@ def write_video(path, seconds=3, vcodec="libx264", acodec="aac", container=None,
 
 
 def build_library(root):
-    """Les cinq bibliothèques d'essai sous `root` ; rend {id: chemin}."""
-    films, series, anim, musique, livres = (root / n for n in ("Films", "Series", "Animations", "Musique", "Livres"))
+    """Les quatre bibliothèques d'essai sous `root` ; rend {id: chemin}."""
+    films, series, musique, livres = (root / n for n in ("Films", "Series", "Musique", "Livres"))
     synopsis = "Un voleur s'introduit dans les rêves."
     write_mkv(films / "Inception (2010)" / "Inception (2010).mkv", movie_blocks("Inception", synopsis, "2010-07-21", "movie/27205", "Science-Fiction, Action", ["Christopher Nolan"], ["Leonardo DiCaprio (Cobb)", "Elliot Page (Ariadne)"]), cover=PNG, minutes=148)
     write_mkv(films / "_DC" / "1 - Man of Steel.mkv", movie_blocks("Man of Steel", "Superman.", "2013-06-12", "movie/49521", "Action", collection="Saga DCEU", part=1), minutes=143)
@@ -256,7 +256,6 @@ def build_library(root):
         write_mkv(series / "Dark" / "Saison 1" / f"{n:02d} - {title}.mkv", episode_blocks("Dark", 1, n, title, text, f"2017-12-0{n}"), cover=PNG if n == 1 else None, minutes=50)
     write_mkv(series / "Dark" / "Saison 2" / "01 - Retour.mkv", episode_blocks("Dark", 2, 1, "Retour", "", "2019-06-21"), minutes=52)
     (series / "Dark" / "folder.png").write_bytes(PNG)
-    write_mkv(anim / "Frieren" / "Saison 1" / "01 - Le voyage.mkv", episode_blocks("Frieren", 1, 1, "Le voyage", "Elfe.", "2023-09-29"), minutes=24)
     for n, title in enumerate(("Discovery", "Intro"), 1):
         pass
     for n, title in enumerate(("One More Time", "Aerodynamic", "Digital Love"), 1):
@@ -266,4 +265,4 @@ def build_library(root):
     write_cbz(livres / "Manga" / "Naruto" / "Tome 02.cbz", Series="Naruto", Number="2", Count="3", Writer="Kishimoto")
     write_cbz(livres / "Artbook" / "The Art of Dune" / "Tome 01.cbz", Series="The Art of Dune", Number="1")
     write_epub(livres / "Romans" / "Dumas" / "Le Comte de Monte-Cristo.epub", "Le Comte de Monte-Cristo", "Alexandre Dumas")
-    return {"films": films, "series": series, "animations": anim, "musique": musique, "livres": livres}
+    return {"films": films, "series": series, "musique": musique, "livres": livres}

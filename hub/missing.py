@@ -67,7 +67,7 @@ def film_of_entry(meta_text):
 
 
 def owned_films(db, libs):
-    """{identifiant TMDB} des films que ces bibliothèques `libs` (objets Library) ont : ceux des bibliothèques de films, et les fichiers étiquetés « movie/<n> » des bibliothèques de séries (un long-métrage rangé dans Animations y est un élément « série » : seule l'étiquette de son fichier dit que c'est un film)."""
+    """{identifiant TMDB} des films que ces bibliothèques `libs` (objets Library) ont : ceux des bibliothèques de films, et les fichiers étiquetés « movie/<n> » des bibliothèques de séries (un long-métrage rangé dans une bibliothèque de séries y est un élément « série » : seule l'étiquette de son fichier dit que c'est un film)."""
     owned = set()
     for lib in libs:
         if lib.kind == "movies":

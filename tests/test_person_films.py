@@ -358,7 +358,7 @@ class PersonCase(base.RouteCase):
         self.root_cookie = self.hub.cookie(accounts.create(self.db, "root", "motdepasse12"))
         bob = accounts.create(self.db, "bob", "motdepasse12")
         known = {lib.id for lib in self.hub.cfg.libraries}
-        accounts.set_rights(self.db, bob["id"], known, {lib: {"view": False} for lib in ("prive", "anim") if lib in known})          # « Animations », quand il y en a une, lui est cachée aussi
+        accounts.set_rights(self.db, bob["id"], known, {lib: {"view": False} for lib in ("prive", "tele") if lib in known})          # « Téléfilms », quand il y en a une, lui est cachée aussi
         return self.hub.cookie(bob)
 
 
@@ -387,32 +387,32 @@ class TestMissingInThePerson(PersonCase):
         self.db.replace_library("lib", [item("m5", title="Cinq", meta={"tmdb": "5", "actors": [{"name": "Penélope Cruz"}], "person_ids": {"Penélope Cruz": CRUZ}})], [])
         self.assertEqual([m["tmdb"] for m in self.person()[1]["missing"]], [1, 6])
 
-    def animation(self, *infos):
-        """Une bibliothèque de type « séries » (Animations) qui range un item par fichier, chacun avec l'étiquette TMDB `infos[n]` (ce que le scan garde de ses tags)."""
-        lib = config.Library("anim", "Animations", "shows", self.root / "anim")
+    def telefilms(self, *infos):
+        """Une bibliothèque de type « séries » (« Téléfilms ») qui range un item par fichier, chacun avec l'étiquette TMDB `infos[n]` (ce que le scan garde de ses tags)."""
+        lib = config.Library("tele", "Téléfilms", "shows", self.root / "tele")
         lib.path.mkdir()
         self.hub.cfg.libraries.append(lib)
-        self.db.replace_library("anim", [item(f"a{n}", "show", lib="anim", title=f"Animé {n}") for n, _ in enumerate(infos)],
-                                [base.entry(f"e{n}", f"a{n}", lib="anim", meta={"info": info}) for n, info in enumerate(infos)])
+        self.db.replace_library("tele", [item(f"a{n}", "show", lib="tele", title=f"Téléfilm {n}") for n, _ in enumerate(infos)],
+                                [base.entry(f"e{n}", f"a{n}", lib="tele", meta={"info": info}) for n, info in enumerate(infos)])
 
     def test_a_film_kept_in_a_library_of_series_counts_as_owned(self):
-        self.animation({"tmdb": "movie/5"})
+        self.telefilms({"tmdb": "movie/5"})
         self.assertEqual([m["tmdb"] for m in self.person()[1]["missing"]], [6])
 
     def test_a_tag_that_is_not_a_film_does_not(self):
-        self.animation({"tmdb": "tv/5"}, {"tmdb": "5"}, {"tmdb": 5}, {"title": "sans étiquette"}, {"tmdb": "movie/abc"})
+        self.telefilms({"tmdb": "tv/5"}, {"tmdb": "5"}, {"tmdb": 5}, {"title": "sans étiquette"}, {"tmdb": "movie/abc"})
         self.assertEqual([m["tmdb"] for m in self.person()[1]["missing"]], [5, 6])
 
     def test_such_a_film_in_a_library_the_account_cannot_see_is_missing_for_it(self):
-        self.animation({"tmdb": "movie/5"})
+        self.telefilms({"tmdb": "movie/5"})
         bob = self.bob()
         self.assertEqual([m["tmdb"] for m in self.person(headers=bob)[1]["missing"]], [4, 5, 6])
         self.assertEqual([m["tmdb"] for m in self.person(headers=self.root_cookie)[1]["missing"]], [6])
 
     def test_an_unreadable_entry_of_a_library_of_series_is_skipped(self):
-        self.animation({"tmdb": "movie/5"}, {"tmdb": "movie/6"})
+        self.telefilms({"tmdb": "movie/5"}, {"tmdb": "movie/6"})
         self.db.execute("UPDATE entries SET meta='movie/6 mais pas du json' WHERE id='e1'")
-        self.db.execute("INSERT INTO entries(id,item_id,lib,rel,kind,title,summary,meta) VALUES('e9','a0','anim','x','video','','','\"movie/6\"')")          # du JSON, mais pas un objet
+        self.db.execute("INSERT INTO entries(id,item_id,lib,rel,kind,title,summary,meta) VALUES('e9','a0','tele','x','video','','','\"movie/6\"')")          # du JSON, mais pas un objet
         self.assertEqual([m["tmdb"] for m in self.person()[1]["missing"]], [6])
 
     def test_the_key_is_absent_when_nothing_is_missing(self):

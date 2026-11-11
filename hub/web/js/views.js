@@ -256,7 +256,7 @@
     if (sub) sub.insertBefore(h('i', { class: 'dot' }), sub.firstChild);
     return card;
   }
-  // « Pas encore vu » : un rayon par bibliothèque que le serveur dit avoir un `unseen` (films, séries, animations… et toute bibliothèque vidéo ajoutée plus tard), dans l'ordre des bibliothèques.
+  // « Pas encore vu » : un rayon par bibliothèque que le serveur dit avoir un `unseen` (films, séries… et toute bibliothèque vidéo ajoutée plus tard), dans l'ordre des bibliothèques.
   // Chaque rayon : ce que le serveur propose, sans ce que `taken` (les nouveautés montrées) affiche déjà, `shown` au plus (le réglage du compte, 12 par défaut) ; une bibliothèque sans rien à proposer n'a pas de rayon.
   var UNSEEN_SHOWN = 12;
   H.unseen = function (libraries, taken, shown) {
@@ -312,7 +312,7 @@
         if (!total) {
           el.appendChild(h('div', { class: 'blank' },
             h('h1', null, H.t('Ta médiathèque est vide pour l’instant')),
-            h('p', null, !H.isAdmin() ? H.t('Rien n’est encore indexé : l’administrateur doit lancer une mise à jour de la médiathèque.') : H.libs.length ? H.t('Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.') : H.t('Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Animations, Musique, Livres), ou décris-les avec HUB_LIBRARIES.')),
+            h('p', null, !H.isAdmin() ? H.t('Rien n’est encore indexé : l’administrateur doit lancer une mise à jour de la médiathèque.') : H.libs.length ? H.t('Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.') : H.t('Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Musique, Livres), ou décris-les avec HUB_LIBRARIES.')),
             H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/settings?tab=gestion', 'data-autofocus': '1' }, H.t('Ouvrir les paramètres')) : null));
           clearTimeout(timer);
           timer = setTimeout(function () { if (document.body.contains(el) && !document.hidden) load(); }, 4000);
@@ -368,9 +368,7 @@
     // Où en est le compte : une liste comme « Genre » et « Tri » ; sa valeur est celle de `filter=` de l'API, vide pour tout montrer.
     var bState = H.button('', null, { class: 'flt wide', onclick: pickState });
     var bLists = H.button(H.t('Playlists'), 'queue', { onclick: function () { H.go('#/playlists'); } });
-    // Les films d'animation sont dans Films, avec le genre « Animation » : un raccourci depuis la page Animations, si le compte voit Films ; il se range à droite de la rangée des filtres
-    var related = libId === 'animations' && H.lib('films') ? h('div', { class: 'related' }, h('a', { class: 'chip f', href: '#/l/films?genre=Animation' }, H.t('Films d’animation'))) : null;
-    var tools = h('div', { class: 'tools' }, search, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bState, kind === 'music' ? bLists : null, related, count);
+    var tools = h('div', { class: 'tools' }, search, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bState, kind === 'music' ? bLists : null, count);
     var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': H.t('Accès rapides'), hidden: true });
     var empty = h('div', { class: 'blank', hidden: true });
     var el = h('section', { class: 'library' }, h('h1', null, lib ? H.libLabel(lib) : H.t('Bibliothèque')), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
@@ -382,7 +380,7 @@
       label(bSort, H.t('Tri'), (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
       label(bState, H.t('Statut'), (stateChoices(kind).filter(function (c) { return c[0] === st.state; })[0] || stateChoices(kind)[0])[1]);
       bGenre.hidden = !facets.genres.length;
-      var word = { movies: 'film', shows: lib && lib.id === 'animations' ? 'animation' : 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
+      var word = { movies: 'film', shows: 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
       var music = kind === 'music' && typeof facets.albums === 'number';          // la musique compte toujours les artistes et les albums de ce que les filtres laissent, quelle que soit la vue
       count.textContent = !total ? '' : music ? H.plural(facets.artists, 'artiste') + ' · ' + H.plural(facets.albums, 'album') : sagaMode() && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word);
     }
@@ -1024,7 +1022,7 @@
       H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast(r.removed > 1 ? H.t('Covers à relire : {name} ({n} vignettes oubliées)', { name: H.libLabel(l), n: r.removed }) : H.t('Covers à relire : {name} ({n} vignette oubliée)', { name: H.libLabel(l), n: r.removed })); })
         .catch(function (e) { H.toast(e.message, 5000); });
     }
-    // Les films des personnes d'une bibliothèque de films ou de séries (animations comprises) : une tâche de fond par bibliothèque, qui n'a de sens qu'avec une clé TMDB.
+    // Les films des personnes d'une bibliothèque de films ou de séries : une tâche de fond par bibliothèque, qui n'a de sens qu'avec une clé TMDB.
     // Pour des films, c'est « Films manquants » ; pour des séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ».
     function categoryButton(l) {
       if (!state.tmdb || (l.kind !== 'movies' && l.kind !== 'shows')) return null;

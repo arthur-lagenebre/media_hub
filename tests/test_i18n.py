@@ -267,12 +267,6 @@ class TestEnglishInTheBrowser(UiCase):
         self.assertEqual(self.view(".count").inner_text(), "1 artist · 1 album")
         self.assertEqual(self.missing(), [])
 
-    def test_the_animation_shortcut_is_in_english(self):
-        self.open("#/l/animations")
-        self.view(".grid .card").first.wait_for()
-        self.assertEqual(self.view(".related a").inner_text(), "Animated movies")
-        self.assertEqual(self.missing(), [])
-
     def test_counts_follow_the_english_plural_rule(self):
         self.open()
         self.assertEqual(self.page.evaluate("[Hub.plural(0, 'film'), Hub.plural(1, 'film'), Hub.plural(2, 'film'), Hub.plural(1, 'série'), Hub.plural(3, 'série')]"),
@@ -309,7 +303,7 @@ class TestEnglishInTheBrowser(UiCase):
         self.assertEqual(self.view(".blank p").inner_text(), "unknown item")
 
     def test_the_main_pages_have_every_text(self):
-        for path in ("#/", "#/l/films", "#/l/series", "#/l/animations", "#/l/musique", "#/l/livres", "#/search", "#/playlists", "#/sagas",
+        for path in ("#/", "#/l/films", "#/l/series", "#/l/musique", "#/l/livres", "#/search", "#/playlists", "#/sagas",
                      "#/settings?tab=gestion", "#/settings?tab=preferences", "#/settings?tab=comptes"):
             with self.subTest(path=path):
                 self.open(path)
