@@ -1178,13 +1178,12 @@
         h('span', null, H.t('Ce produit utilise l’API TMDB mais n’est ni approuvé ni certifié par TMDB.'))));
       body.appendChild(server);
     }
-    // Supprimer les fichiers parasites ne s'annule pas : on demande, en rappelant ce que la dernière simulation en a compté.
-    // « Compter » relance une simulation depuis la fenêtre et en met le nombre à jour sans la fermer.
+    // Supprimer les fichiers parasites ne s'annule pas : on demande d'abord.
+    // « Compter » lance un comptage depuis la fenêtre et en affiche le nombre sans la fermer ; rien n'est affiché avant.
     function confirmCleanup() {
-      var sim = jobs.filter(function (j) { return j.status === 'done' && j.result && j.label.indexOf('simulation') >= 0; })[0];
       var counting = false;
-      function said(found) { return found === 1 ? H.t('La dernière simulation en a compté 1.') : H.t('La dernière simulation en a compté {n}.', { n: found }); }
-      var count = h('p', { class: 'lead', role: 'status' }, sim ? said(sim.result.found) : H.t('Aucune simulation faite : lance « Compter » pour savoir combien il y en a.'));
+      function said(found) { return H.t('Fichiers trouvés : {n}.', { n: found }); }
+      var count = h('p', { class: 'lead', role: 'status', hidden: true });
       var sample = h('ul', { class: 'sample', 'aria-label': H.t('Les premiers fichiers qui seraient supprimés') });
       function listed(result) {          // les premiers fichiers que la simulation a nommés, et combien d'autres
         H.clear(sample);
@@ -1192,10 +1191,9 @@
         names.forEach(function (name) { sample.appendChild(h('li', null, name)); });
         if (result && result.found > names.length) sample.appendChild(h('li', { class: 'more' }, H.t('… et {n} autre(s)', { n: result.found - names.length })));
       }
-      listed(sim && sim.result);
       var recount = H.button(H.t('Compter'), null, { 'data-key': 'junk-recount', 'aria-label': H.t('Compter de nouveau les fichiers parasites'), onclick: function () {
         if (counting) return;
-        counting = true; count.textContent = H.t('Comptage en cours…'); listed(null);
+        counting = true; count.hidden = false; count.textContent = H.t('Comptage en cours…'); listed(null);
         function wait(id) {
           return H.api('/api/jobs').then(function (r) {
             var job = r.jobs.filter(function (j) { return j.id === id; })[0];

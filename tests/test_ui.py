@@ -1546,7 +1546,7 @@ class TestCleanupConfirmation(UiCase):
         dialog.locator("button.danger", has_text="Supprimer définitivement").wait_for()
         dialog.locator("button", has_text="Annuler").click()
         self.page.wait_for_timeout(300)
-        self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if "Nettoyage" in j["label"] and "simulation" not in j["label"]])          # annuler ne lance rien
+        self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if j["label"] == "Fichiers parasites · Nettoyage"])          # annuler ne lance rien
 
     def test_the_dialog_lists_the_first_files_it_would_delete(self):
         junk = []
@@ -1559,7 +1559,7 @@ class TestCleanupConfirmation(UiCase):
         self.view("[data-key=junk-del]").click()
         dialog = self.page.locator(".menu.confirm", has_text="Supprimer les fichiers parasites ?")
         dialog.locator("[data-key=junk-recount]").click()
-        dialog.locator("p.lead", has_text="a compté").wait_for()
+        dialog.locator("p.lead", has_text="Fichiers trouvés").wait_for()
         names = dialog.locator(".sample li").all_inner_texts()
         self.assertEqual(sorted(names), ["Films/Inception (2010)/Thumbs.db", "Films/Inception (2010)/desktop.ini"])
         self.assertEqual(self.api("/api/jobs?log=1")["jobs"][0]["result"]["found"], 2)
@@ -1570,10 +1570,10 @@ class TestCleanupConfirmation(UiCase):
         self.view("[data-key=junk-del]").click()
         dialog = self.page.locator(".menu.confirm", has_text="Supprimer les fichiers parasites ?")
         dialog.locator("[data-key=junk-recount]").click()
-        dialog.locator("p.lead", has_text="a compté").wait_for()
-        self.assertRegex(dialog.locator("p.lead").last.inner_text(), r"en a compté \d+\.")
+        dialog.locator("p.lead", has_text="Fichiers trouvés").wait_for()
+        self.assertRegex(dialog.locator("p.lead").last.inner_text(), r"Fichiers trouvés : \d+\.")
         self.assertTrue(dialog.is_visible())                                                              # la fenêtre reste ouverte
-        self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if "Nettoyage" in j["label"] and "simulation" not in j["label"]])          # compter n'efface rien
+        self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if j["label"] == "Fichiers parasites · Nettoyage"])          # compter n'efface rien
 
 class TestMusicQueueAndPlaylists(UiCase):
     def open_music(self):
