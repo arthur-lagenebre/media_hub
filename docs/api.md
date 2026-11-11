@@ -80,10 +80,11 @@ Trois façons de se présenter :
 ### `GET /api/state`
 
 ```json
-{"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true, "play": true, "download": true}],
+{"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "default_label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true, "play": true, "download": true}],
  "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin", "can_upload": true}, "settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"}, "busy": false, "streams": 0, "max_streams": 2}
 ```
 
+- `libraries[].label` : le nom **affiché** de la bibliothèque (celui que l'administrateur a choisi avec `POST /api/library/<id>/label`, voir plus bas, sinon `default_label`) ; `libraries[].default_label` : son nom d'origine (celui de la configuration), où revenir. **L'identifiant `id` ne change jamais** : droits, préférences et données s'y accrochent ; un client s'en sert comme clé et n'écrit que `label`. Le même `label` s'écrit dans `GET /api/home`, `/api/search`, `/api/person`, `library` de `GET /api/library/<id>`, `/api/item/<id>` et `/api/artist/…`, et dans l'intitulé des tâches (`Mise à jour · Feuilletons`). Les droits d'un compte (`GET /api/users`) sont indexés par identifiant : le client y met les libellés de `/api/state`.
 - `libraries[].kind` : `movies` | `shows` | `music` | `books`. `scanned` : horodatage du dernier scan, ou `null`. `exists` : le dossier est présent.
 - `ffmpeg` / `ffprobe` : disponibles sur le serveur (sans eux : lecture directe seulement).
 - `libraries` ne contient que les bibliothèques que **le compte de la requête voit** ; `libraries[].play` et `libraries[].download` disent s'il peut y lire en ligne et y télécharger (`true` pour un administrateur et sur un serveur ouvert). Un client masque ses boutons de lecture ou de téléchargement quand ils valent `false`. `continue` (accueil) ne propose rien des bibliothèques où le compte ne peut pas lire.
@@ -151,6 +152,38 @@ Corps `{"lib": "<id>", "force": false}` (`lib` facultatif). **Administrateur seu
 - **Affiches** : pas d'affiche pour les films qu'on a déjà **au moment de la passe**, sur l'ensemble des bibliothèques (ceux des bibliothèques de films, et les fichiers étiquetés `movie/<n>` d'une bibliothèque de séries) ; seuls les films qui manquent en ont une. Conséquence : un film retiré de la médiathèque après la passe, ou que seule une bibliothèque cachée à un compte possède, apparaît grisé **sans affiche** (la lettre du titre) tant que la personne n'est pas redemandée (30 jours, ou `force` dans la requête : l'interface n'en envoie pas). La page d'une personne enrichie une par une (`POST /api/enrich/person`) garde, elle, l'affiche de tous ses films.
 - **Compte rendu** : `result` = `{"people": <à parcourir>, "asked": <interrogées>, "fresh": <déjà connues>, "failed": <refusées par TMDB>, "films": <retenus>}`. Une personne que TMDB refuse est comptée en échec sans arrêter la passe ; une clé refusée l'arrête (`status: "failed"`). Le journal garde un résumé et une ligne toutes les 100 personnes, plus au plus 40 lignes d'échec ou d'affiche manquante (les suivantes sont comptées sans être écrites). **TMDB injoignable** : après 15 échecs de suite la tâche s'arrête en échec (`TMDB injoignable : …`), plutôt que de rester des heures sur un réseau coupé ; relancée, elle reprend où elle en était.
 - Le résultat se lit sur la page de chaque personne (`GET /api/person`, `missing`) ; il n'y a pas de liste générale.
+
+### `POST /api/library/<id>/label` — renommer l'affichage d'une bibliothèque
+
+Corps : un **objet JSON**, `{"label": "<texte>"}`. Administrateur seulement. Un corps vide, illisible (JSON ou UTF-8 invalide) ou qui n'est pas un objet (liste, nombre, texte, `null`, formulaire) est refusé en **400** et ne rétablit rien ; seul un objet valide sans `label` (`{}`), `{"label": null}` ou `{"label": ""}` rétablit le nom d'origine. Ne change **que le nom affiché** : l'identifiant (`films`, `series`…), les droits, les éléments, les scans, la progression et les préférences ne bougent pas. On ne peut ni ajouter ni supprimer une bibliothèque par l'API (les dossiers se montent côté serveur : voir `HUB_SRV` et `HUB_LIBRARIES`).
+
+```json
+POST /api/library/series/label     {"label": "Feuilletons"}
+200 {"id": "series", "label": "Feuilletons", "default_label": "Séries", "kind": "shows"}
+
+POST /api/library/series/label     {"label": ""}            (ou {"label": null}, ou {})
+200 {"id": "series", "label": "Séries", "default_label": "Séries", "kind": "shows"}
+```
+
+- **Texte** : le texte est mis en forme composée (NFC : « é » écrit en deux caractères devient un seul, et ne compte que pour un), puis les espaces de début et de fin sont retirés (ceux du milieu sont gardés) ; les accents et tous les alphabets sont permis, 1 à 40 caractères. Un texte vide (ou fait d'espaces) ou absent (`null`, ou pas de `label` dans un objet valide) **rétablit le nom d'origine** et efface la surcharge ; retaper le nom d'origine (même en deux caractères) fait de même. La réponse rend le libellé retenu (`label`, donc sans les espaces de bout) : l'afficher tel quel.
+- **Doublon** : un nom déjà porté par **une autre** bibliothèque est refusé, à la casse et aux accents près (`séries`, `SERIES` valent `Séries`), aux formes de compatibilité Unicode près (`ＦＩＬＭＳ` en pleine largeur, ligature `ﬃ`) et aux espaces près (espace insécable, doubles espaces), qu'il soit son nom affiché ou son nom d'origine (on ne peut donc pas prendre le nom d'origine d'une bibliothèque renommée : elle pourrait vouloir y revenir). Le nom que s'est choisi une bibliothèque **absente de la configuration** (dossier non monté) est tout aussi réservé : elle le retrouvera à son retour. **Limite** : les homoglyphes d'un autre alphabet (un « Ѕ » cyrillique pour un « S ») ne sont pas détectés. Changer seulement la casse du nom d'une bibliothèque pour elle-même (`FILMS`) est permis.
+- **Codes** :
+
+| Code | `error` |
+| --- | --- |
+| 200 | la bibliothèque, à jour |
+| 400 | `« <nom> » est déjà le nom d'une autre bibliothèque` (`<nom>` : le nom de l'autre, tel qu'il s'affiche ou d'origine) |
+| 400 | `le libellé fait 40 caractères au plus` (plus de 40 caractères, après nettoyage) |
+| 400 | `le libellé ne doit contenir ni caractère de contrôle ni caractère de mise en forme` (tabulation, saut de ligne, caractère nul, espace de largeur nulle, marque de sens d'écriture, séparateur de ligne ou de paragraphe, `U+FEFF`…) |
+| 400 | `le libellé doit être un texte` (nombre, liste, objet, booléen) |
+| 400 | `le corps doit être un objet JSON` (corps vide, illisible, ou qui n'est pas un objet) |
+| 413 | `corps trop gros` (plus de 1 Mo) |
+| 401 | `connexion requise` |
+| 403 | `réservé à l'administrateur` |
+| 404 | `bibliothèque inconnue` |
+
+- **Conservation** : le nom choisi est gardé dans la base du hub (clé `library-labels` de `kv`) ; il survit aux redémarrages et aux scans. Un nom gardé qui n'est pas sûr à afficher (écrit à la main : trop long, avec un caractère de contrôle, espace de bout, non composé) est ignoré : le nom d'origine s'affiche. Si la bibliothèque disparaît de la configuration (dossier démonté, `HUB_LIBRARIES` changé) puis revient, son nom choisi revient avec elle. Les tâches déjà lancées ou terminées gardent l'intitulé qu'elles avaient.
+- Les autres comptes voient le nouveau nom à leur prochaine requête (rien n'est poussé) : un client relit `GET /api/state`.
 
 ## Objets communs
 

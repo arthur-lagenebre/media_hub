@@ -99,9 +99,13 @@ L'ordre de la liste est l'ordre de la saga ; la place d'un film dans la liste es
 L'interface existe en **français** (par défaut) et en **anglais**. Le choix est dans *Paramètres > Préférences > Interface > Langue*, **par navigateur** (comme la taille du texte) : la page se recharge dans l'autre langue, et la page de connexion suit (elle a aussi un lien *English* / *Français*). Rien ne change pour qui ne touche à rien.
 
 - **Traduit** : tous les textes de l'interface, les messages d'erreur du serveur, les noms des bibliothèques par défaut (*Films* devient *Movies*, *Musique* devient *Music*), les noms des tâches et leur journal, les raisons d'une conversion, les libellés des pistes audio et des sous-titres, le pays et la durée de vie d'un artiste.
-- **Pas traduit** : ce que disent les fichiers et les services (titres, synopsis, genres, résumé Wikipédia en français, noms de dossiers comme `Films` ou `Series`), et le nom d'une bibliothèque que l'on a donné soi-même dans `HUB_LIBRARIES`.
+- **Pas traduit** : ce que disent les fichiers et les services (titres, synopsis, genres, résumé Wikipédia en français, noms de dossiers comme `Films` ou `Series`), et le nom d'une bibliothèque que l'on a donné soi-même, dans `HUB_LIBRARIES` ou en la renommant dans l'interface (voir ci-dessous) : un nom choisi s'écrit tel quel, même s'il ressemble à un mot du dictionnaire ; seul le nom d'origine (`default_label`) se traduit, par `H.libLabel` ([views.js](hub/web/js/views.js)).
 - **Où c'est écrit** : le texte français du code sert de clé (`H.t('Paramètres')`) ; l'anglais est dans [hub/web/js/lang-en.js](hub/web/js/lang-en.js), avec les mêmes `{noms}` pour les valeurs. Une clé sans traduction reste en français (en anglais, `Hub.missing` la liste, et un test vérifie qu'il n'y en a pas). Les messages du serveur y sont traduits d'après un modèle (« fichier trop gros (au plus {limit} Mo) ») : un test vérifie que chaque modèle est bien le texte du code Python, donc **quand tu changes un message du serveur, change aussi sa clé dans `lang-en.js`**.
 - **Une langue de plus** : un fichier `lang-xx.js` sur le modèle de `lang-en.js` (`H.dict.xx`, `H.srv.xx`), son entrée dans `H.langs` ([i18n.js](hub/web/js/i18n.js)) et `LOGIN_LANGS` ([app.py](hub/server/app.py)).
+
+## Renommer une bibliothèque
+
+L'administrateur change le nom **affiché** d'une bibliothèque dans *Paramètres > Gestion > Bibliothèques* (déplier « Détail par bibliothèque », bouton *Renommer*) : un champ prérempli (40 caractères au plus), *Enregistrer*, et *Rétablir « nom d'origine »* quand le nom a été changé. Un refus du serveur (nom déjà pris par une autre bibliothèque, trop long) s'affiche dans la fenêtre, qui reste ouverte. La barre du haut, l'accueil, les titres de page, la recherche, les droits et les intitulés de tâche suivent sans recharger la page. L'identifiant (`films`, `series`…), lui, ne change jamais ; on ne peut ni ajouter ni supprimer de bibliothèque depuis l'interface (voir [docs/decisions.md](docs/decisions.md)). Un compte ordinaire ne voit ni l'onglet Gestion ni ce bouton.
 
 ## Comptes
 
@@ -157,6 +161,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `POST /api/enrich/people` | (administrateur) `{"lib"?, "force"?}` : la même demande à TMDB pour les réalisateurs et les acteurs (réalisateurs et acteurs de premier plan, une seule personne par nom), en tâche de fond ; sans `lib` les bibliothèques de films (bouton « Films manquants (tout le monde) » dans *Paramètres* > *Gestion*), avec `lib` une catégorie : films, séries ou animations (bouton « Films des personnes (TMDB) » de chaque bibliothèque, dans « Détail par bibliothèque »). Pour les séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ». Une personne connue depuis moins d'un mois n'est pas redemandée. 400 sans clé TMDB |
 | `GET/POST /api/me/settings` | réglages d'affichage du compte, gardés sur le serveur (corps `{"réglage": "valeur"}`, 400 si inconnu) ; `home_unseen_sort` : `random` (défaut), `rating` (note TMDB montrée ; sans note à la fin) ou `added` (plus récent d'abord), l'ordre du rayon « Pas encore vu » |
 | `GET /api/library/<id>?q&genre&sort&filter&offset&limit` | liste d'une bibliothèque (`filter=todo\|progress\|done` : à voir = aucun fichier entamé, en cours, terminés = tous vus ; `unseen`, ancien nom de `todo` ; une autre valeur : 400 « filtre inconnu » ; sur la musique : 400 « ce filtre n'existe pas pour la musique »), avec les genres (les 60 plus fréquents, par ordre alphabétique) ; musique : `artists` et `albums`, le décompte de ce que les filtres laissent (en vue artistes, un artiste trouvé garde tous ses albums) ; `sagas=1` (films) regroupe les sagas, `group=` en liste les films (`sort=part`), `section=` (livres) filtre par section et renvoie les `sections` avec leur compte |
+| `POST /api/library/<id>/label` | (administrateur) `{"label"}` : renomme l'**affichage** d'une bibliothèque (1 à 40 caractères, sans caractère de contrôle ; refusé en 400 s'il est celui d'une autre bibliothèque, affiché ou d'origine, à la casse et aux accents près) ; un objet sans `label`, `null` ou un texte vide rétablit le nom d'origine, mais un corps qui n'est pas un objet JSON (vide, illisible, liste…) est refusé en 400 `le corps doit être un objet JSON`. L'identifiant ne change jamais. Rend `{"id", "label", "default_label", "kind"}` ; `GET /api/state` donne aussi `default_label`. 403 pour un compte `user`, 404 si l'identifiant est inconnu. Pas d'ajout ni de retrait de bibliothèque depuis l'interface (voir [docs/decisions.md](docs/decisions.md)) |
 | `GET/POST /api/playlists`, `GET /api/playlist/<id>`, `POST /api/playlist/<id>/add\|remove\|move\|rename\|delete` | playlists musicales (stockées dans la base ; une piste déplacée disparaît sans casser la liste) |
 | `GET /api/item/<id>` | fiche : épisodes, pistes, tomes, sagas, casting, progression |
 | `POST /api/play/<entry>` | plan de lecture (url, pistes audio, sous-titres, reprise, suivant) |
@@ -195,10 +200,10 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 2209 tests : 1859 serveur + 350 interface
+python -m unittest discover -s tests          # 2312 tests : 1938 serveur + 374 interface
 ```
 
-`tests/test_ui.py` (et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 350 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et `tests/test_labels_ui.py`, et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 374 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
 
 ### Intégration continue (GitHub Actions)
 

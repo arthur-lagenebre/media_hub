@@ -17,6 +17,7 @@ from hub import config
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
 
+from hub.db import Database  # noqa: E402
 from hub.server import jobs  # noqa: E402
 
 
@@ -34,7 +35,9 @@ class Waiting:
 
 class JobsCase(unittest.TestCase):
     def setUp(self):
-        self.jobs = jobs.Jobs(types.SimpleNamespace(libraries=[]), None)
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        self.jobs = jobs.Jobs(types.SimpleNamespace(libraries=[]), Database(root / "hub.db"))          # une vraie base : les intitulés lisent les libellés
 
     def wait(self, job, status="done"):
         for _ in range(500):

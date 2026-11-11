@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import time
 
+from .. import labels
 from . import books, music, video
 
 SCANNERS = {"movies": video.scan_movies, "shows": video.scan_shows, "music": music.scan_music, "books": books.scan_books}
@@ -23,16 +24,16 @@ def scan_library(db, lib, log=print):
     """Scanne une bibliothèque. Retourne un dictionnaire de bilan."""
     started = time.time()
     if not lib.path.is_dir():
-        log(f"[{lib.label}] dossier introuvable : {lib.path}")
+        log(f"[{labels.shown(db, lib)}] dossier introuvable : {lib.path}")
         return {"lib": lib.id, "error": "dossier introuvable", "items": 0, "entries": 0}
     known = db.known_entries(lib.id)
     items, entries, counts = SCANNERS[lib.kind](lib, known, enriched_for(db, lib.id))
     if not items and known:
-        log(f"[{lib.label}] ATTENTION : plus aucun élément alors que la bibliothèque en avait {len(known)} : volume démonté ? La progression de lecture est gardée.")
+        log(f"[{labels.shown(db, lib)}] ATTENTION : plus aucun élément alors que la bibliothèque en avait {len(known)} : volume démonté ? La progression de lecture est gardée.")
     db.replace_library(lib.id, items, entries)
     for key, value in getattr(counts, "kv", {}).items():
         db.kv_set(key, value)
     seconds = round(time.time() - started, 1)
-    log(f"[{lib.label}] {len(items)} élément(s), {len(entries)} fichier(s) ({counts.read} lu(s), {counts.reused} repris) en {seconds} s")
+    log(f"[{labels.shown(db, lib)}] {len(items)} élément(s), {len(entries)} fichier(s) ({counts.read} lu(s), {counts.reused} repris) en {seconds} s")
     db.kv_set(f"scanned:{lib.id}", int(time.time()))
     return {"lib": lib.id, "items": len(items), "entries": len(entries), "read": counts.read, "reused": counts.reused, "seconds": seconds}

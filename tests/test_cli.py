@@ -174,7 +174,7 @@ class Console(io.StringIO):
 
 
 def fake_config(tmp, **over):
-    lib = types.SimpleNamespace(label="Films", kind="movies", path=Path(tmp) / "Films")
+    lib = types.SimpleNamespace(id="films", label="Films", kind="movies", path=Path(tmp) / "Films")
     return types.SimpleNamespace(**{"bind": "127.0.0.1", "port": 8080, "libraries": [lib], "ffmpeg": "/usr/bin/ffmpeg", "repo": tmp, "password": "", **over})
 
 
@@ -185,7 +185,7 @@ class TestAnnounce(unittest.TestCase):
 
     def said(self, cfg, auth=True, inbox_problem=None):
         out, err = Console(), io.StringIO()
-        hub = types.SimpleNamespace(auth=lambda: auth, inbox=types.SimpleNamespace(check=lambda: inbox_problem))
+        hub = types.SimpleNamespace(db=Database(Path(self.tmp) / "hub.db"), auth=lambda: auth, inbox=types.SimpleNamespace(check=lambda: inbox_problem))
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             cli.announce(cfg, hub)
         self.console = out

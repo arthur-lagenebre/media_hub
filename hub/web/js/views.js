@@ -6,6 +6,37 @@
   H.libs = [];
   H.lib = function (id) { return H.libs.filter(function (l) { return l.id === id; })[0] || null; };
 
+  // --- Le nom d'une bibliothèque -------------------------------------------------------
+  // L'identifiant (`films`) ne change jamais ; le libellé affiché (`label`) est celui de la configuration (`default_label`, « Séries ») ou, si l'administrateur l'a changé, son nom à lui.
+  // Seul le nom d'origine se traduit (« Séries » → « TV shows ») ; un nom choisi vient de la personne et s'écrit tel quel (même s'il est, par hasard, une clé du dictionnaire : « Paramètres »).
+  // /api/state donne `default_label` ; /api/home, /api/search, /api/person n'en ont pas : on le retrouve par l'identifiant dans H.libs (le nom d'origine ne change jamais).
+  function originalName(lib) {
+    if (typeof lib.default_label === 'string') return lib.default_label;
+    var known = lib.id ? H.lib(lib.id) : null;
+    return known && typeof known.default_label === 'string' ? known.default_label : null;
+  }
+  // Vrai si ce nom a été choisi (ce n'est pas celui d'origine). Faux quand on ne peut pas le savoir.
+  H.libRenamed = function (lib) { var d = lib ? originalName(lib) : null; return d !== null && lib.label !== d; };
+  // LE point de passage de tout libellé de bibliothèque affiché : traduit le nom d'origine, rend un nom choisi tel quel (et, sans moyen de savoir, tel quel aussi : mieux vaut du français que le texte d'un autre).
+  H.libLabel = function (lib) {
+    if (!lib) return '';
+    var d = originalName(lib);
+    return d !== null && lib.label === d ? H.tr(lib.label) : lib.label;
+  };
+  // Ce texte est-il le nom choisi d'une bibliothèque ? i18n.js s'en sert pour ne pas traduire un nom choisi cité dans un message du serveur (« Mise à jour · Feuilletons »).
+  H.isChosenLabel = function (text) { return H.libs.some(function (l) { return l.label === text && H.libRenamed(l); }); };
+  // Remplace la liste des bibliothèques (relue de /api/state). Si un nom a changé : la barre du haut est refaite et les pages gardées en réserve sont jetées (Retour les refait avec le bon nom).
+  function libsKey(list) { return JSON.stringify(list.map(function (l) { return [l.id, l.label]; })); }
+  H.setLibs = function (list) {
+    var changed = H.libs.length > 0 && libsKey(list) !== libsKey(H.libs);
+    H.libs = list;
+    if (!changed) return;
+    H.nav.build();
+    var top = H.current();
+    H.nav.mark(top ? (top.view.nav || top.hash) : '#/');
+    H.dropParked();
+  };
+
   // --- Barre du haut ----------------------------------------------------------
   // Le compte peut déposer des fichiers dans la boîte de réception (droit « Envoyer »). Jamais sur une télévision : choisir des fichiers à la télécommande ne marche pas.
   H.canUpload = function () { var me = H.session.user; return !!(me && me.can_upload) && H.device !== 'tv'; };
@@ -16,7 +47,8 @@
       nav.appendChild(h('a', { class: 'brand f', href: '#/', 'data-nav': '#/' }, H.icon('home'), h('span', { class: 'name' }, H.t('Médiathèque'))));
       var links = h('nav', { class: 'links' });
       H.libs.forEach(function (l) {
-        links.appendChild(h('a', { class: 'link f', href: '#/l/' + l.id, 'data-nav': '#/l/' + l.id, 'data-lib': l.id }, h('i', { class: 'dot' }), H.tr(l.label)));
+        var name = H.libLabel(l);
+        links.appendChild(h('a', { class: 'link f', href: '#/l/' + l.id, 'data-nav': '#/l/' + l.id, 'data-lib': l.id, title: H.libRenamed(l) ? name : null }, h('i', { class: 'dot' }), h('span', { class: 'txt' }, name)));
       });
       nav.appendChild(links);
       nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': H.t('Recherche') }, H.icon('search')));
@@ -241,7 +273,7 @@
   // Le rayon d'une bibliothèque : son titre est un lien vers elle, précédé du point de sa couleur (comme dans la recherche).
   function libraryShelf(cls, title, lib, items) {
     return h('section', { class: 'shelf ' + cls, 'data-lib': lib.id },
-      h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + H.tr(lib.label))),
+      h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + H.libLabel(lib))),
       h('div', { class: 'grid' }, items.map(function (it) { return H.card(it, false); })));
   }
   // La pochette d'une tuile de bibliothèque : celle de son dernier ajout (pour un artiste, celle de son album), ou rien.
@@ -256,7 +288,7 @@
     var cover = tileCover(lib), thumb = h('span', { class: 'thumb', 'aria-hidden': 'true' });
     if (cover) thumb.appendChild(h('img', { src: cover, alt: '', loading: 'lazy', decoding: 'async', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } }));
     return h('a', { class: 'libtile f', href: '#/l/' + lib.id, 'data-lib': lib.id, 'data-key': 'lib-' + lib.id }, thumb,
-      h('span', { class: 'what' }, h('b', null, h('i', { class: 'dot' }), H.tr(lib.label)), h('span', null, H.plural(lib.count, 'élément'))));
+      h('span', { class: 'what' }, h('b', null, h('i', { class: 'dot' }), H.libLabel(lib)), h('span', null, H.plural(lib.count, 'élément'))));
   }
   // Quand aucun rayon n'est affiché : une phrase (les rayons sont masqués dans les réglages, ou il n'y a rien à proposer), puis les bibliothèques en tuiles ; la première prend le focus.
   function libraryTiles(libraries) {
@@ -329,7 +361,7 @@
     var grid = h('div', { class: 'grid' + (kind === 'music' ? ' sq' : '') });
     var sentinel = h('div', { class: 'sentinel' });
     var count = h('span', { class: 'count' });
-    var search = h('input', { class: 'f field', type: 'search', placeholder: H.t('Filtrer {name}', { name: lib ? H.tr(lib.label).toLowerCase() : '' }), 'aria-label': H.t('Filtrer'),
+    var search = h('input', { class: 'f field', type: 'search', placeholder: H.t('Filtrer {name}', { name: lib ? (H.libRenamed(lib) ? H.libLabel(lib) : H.libLabel(lib).toLowerCase()) : '' }), 'aria-label': H.t('Filtrer'),
       oninput: function () { clearTimeout(search.t); search.t = setTimeout(function () { st.q = search.value; reset(); }, 280); },
       onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search.blur(); H.focus.set(grid.querySelector('.f')); } } });
     var bGenre = H.button('', null, { class: 'flt wide', onclick: pickGenre }), bSort = H.button('', null, { class: 'flt wide', onclick: pickSort });
@@ -341,7 +373,7 @@
     var tools = h('div', { class: 'tools' }, search, bGenre, kind === 'music' ? null : bSort, kind === 'music' ? null : bState, kind === 'music' ? bLists : null, related, count);
     var quick = h('div', { class: 'chips quick', role: 'group', 'aria-label': H.t('Accès rapides'), hidden: true });
     var empty = h('div', { class: 'blank', hidden: true });
-    var el = h('section', { class: 'library' }, h('h1', null, lib ? H.tr(lib.label) : H.t('Bibliothèque')), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
+    var el = h('section', { class: 'library' }, h('h1', null, lib ? H.libLabel(lib) : H.t('Bibliothèque')), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
 
     // « Genre : Tous » : le nom du filtre en gras, sa valeur en poids normal ; la largeur du bouton est fixée par le CSS (.flt), la valeur trop longue est coupée
     function label(btn, name, value) { btn.title = H.t('{name} :', { name: name }) + ' ' + value; H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('b', null, H.t('{name} :', { name: name })), ' ', h('span', { class: 'val' }, value)])); }
@@ -813,7 +845,7 @@
   // Un rayon par bibliothèque qui a des résultats (la recherche et la page d'une personne).
   function shelves(results) {
     return results.map(function (g) {
-      return h('section', { class: 'shelf', 'data-lib': g.id }, h('h2', null, h('a', { class: 'f head', href: '#/l/' + g.id }, H.tr(g.label))), h('div', { class: 'grid' + (g.kind === 'music' ? ' sq' : '') }, g.items.map(function (it) { return H.card(it, g.kind === 'music'); })));
+      return h('section', { class: 'shelf', 'data-lib': g.id }, h('h2', null, h('a', { class: 'f head', href: '#/l/' + g.id }, H.libLabel(g))), h('div', { class: 'grid' + (g.kind === 'music' ? ' sq' : '') }, g.items.map(function (it) { return H.card(it, g.kind === 'music'); })));
     });
   }
   // La rangée « Personnes » de la recherche : une pastille par personne, vers sa page.
@@ -989,7 +1021,7 @@
       if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
     }
     function refreshCovers(l) {
-      H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast(r.removed > 1 ? H.t('Covers à relire : {name} ({n} vignettes oubliées)', { name: H.tr(l.label), n: r.removed }) : H.t('Covers à relire : {name} ({n} vignette oubliée)', { name: H.tr(l.label), n: r.removed })); })
+      H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast(r.removed > 1 ? H.t('Covers à relire : {name} ({n} vignettes oubliées)', { name: H.libLabel(l), n: r.removed }) : H.t('Covers à relire : {name} ({n} vignette oubliée)', { name: H.libLabel(l), n: r.removed })); })
         .catch(function (e) { H.toast(e.message, 5000); });
     }
     // Les films des personnes d'une bibliothèque de films ou de séries (animations comprises) : une tâche de fond par bibliothèque, qui n'a de sens qu'avec une clé TMDB.
@@ -998,7 +1030,7 @@
       if (!state.tmdb || (l.kind !== 'movies' && l.kind !== 'shows')) return null;
       var shows = l.kind === 'shows';
       return H.button(shows ? H.t('Films des personnes (TMDB)') : H.t('Films manquants'), null, { 'data-key': 'people-' + l.id, title: shows ? H.t('Demande à TMDB les films des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Les identifiants viennent de « Enrichir (TMDB) » : lance-le d’abord une fois.') : H.t('Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Compte une heure ou plus la première fois (un appel par personne, puis les affiches) ; une personne déjà connue depuis moins d’un mois n’est pas redemandée.'),
-        onclick: function () { start('/api/enrich/people', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.tr(l.label) })); } });
+        onclick: function () { start('/api/enrich/people', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.libLabel(l) })); } });
     }
     // Les cinq bibliothèques tiennent sur une ligne tant qu'on ne les déplie pas : « Tout mettre à jour » suffit presque toujours.
     function libsPanel() {
@@ -1009,15 +1041,31 @@
       if (!libsOpen) return libs;
       state.libraries.forEach(function (l) {
         libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
-          h('div', { class: 'what' }, h('b', null, H.tr(l.label)), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · ' + H.t('mis à jour {when}', { when: ago(l.scanned) }) : H.t('dossier introuvable'))),
-          l.kind === 'shows' ? H.button(H.t('Enrichir (TMDB)'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Enrichissement lancé : {name}', { name: H.tr(l.label) })); } }) : null,
-          l.kind === 'movies' ? H.button(H.t('Sagas (TMDB)'), null, { 'data-key': 'enrich-' + l.id, title: H.t('Cherche chez TMDB les films qui manquent à tes sagas, et la note de chaque film.'), onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.tr(l.label) })); } }) : null,
+          h('div', { class: 'what' }, h('b', null, H.libLabel(l)), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · ' + H.t('mis à jour {when}', { when: ago(l.scanned) }) : H.t('dossier introuvable'))),
+          l.kind === 'shows' ? H.button(H.t('Enrichir (TMDB)'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Enrichissement lancé : {name}', { name: H.libLabel(l) })); } }) : null,
+          l.kind === 'movies' ? H.button(H.t('Sagas (TMDB)'), null, { 'data-key': 'enrich-' + l.id, title: H.t('Cherche chez TMDB les films qui manquent à tes sagas, et la note de chaque film.'), onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.libLabel(l) })); } }) : null,
           categoryButton(l),
-          l.kind === 'music' ? H.button(H.t('Fiches artistes'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Fiches artistes demandées : {name}', { name: H.tr(l.label) })); } }) : null,
+          l.kind === 'music' ? H.button(H.t('Fiches artistes'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Fiches artistes demandées : {name}', { name: H.libLabel(l) })); } }) : null,
           l.kind === 'movies' ? H.button(H.t('Relire les covers'), null, { 'data-key': 'covers-' + l.id, title: H.t('Vide les vignettes gardées : chacune se refait depuis folder.jpg ou la jaquette du .mkv. Les affiches choisies à la main restent.'), onclick: function () { refreshCovers(l); } }) : null,
-          H.button(H.t('Mettre à jour'), 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, H.t('Mise à jour lancée : {name}', { name: H.tr(l.label) })); } })));
+          H.button(H.t('Mettre à jour'), 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, H.t('Mise à jour lancée : {name}', { name: H.libLabel(l) })); } }),
+          H.isAdmin() ? H.button(H.t('Renommer'), 'edit', { 'data-key': 'rename-' + l.id, 'aria-label': H.t('Renommer la bibliothèque {name}', { name: H.libLabel(l) }), onclick: function () { renameLibrary(l); } }) : null));
       });
       return libs;
+    }
+    // Change le nom AFFICHÉ d'une bibliothèque (jamais son identifiant) ; un champ vide, ou « Rétablir », rend le nom d'origine. Le serveur nettoie le nom et refuse un doublon : son message s'affiche dans la fenêtre, qui reste ouverte.
+    function renameLibrary(l) {
+      var current = l.label, renamed = H.libRenamed(l);
+      function save(text) { return H.api('/api/library/' + encodeURIComponent(l.id) + '/label', { label: text }); }
+      H.form({ title: H.t('Renommer la bibliothèque « {name} »', { name: H.libLabel(l) }), ok: H.t('Enregistrer'),
+        lead: [H.t('Seul le nom affiché change : les droits, la progression et les fichiers restent attachés à la bibliothèque.')],
+        fields: [{ key: 'label', label: H.t('Nom affiché (40 caractères au plus)'), type: 'text', maxlength: 40, value: current }],
+        alt: renamed ? { label: H.t('Rétablir « {name} »', { name: H.tr(l.default_label) }), submit: function () { return save(''); } } : null,
+        submit: function (v) { return v.label === current || (!v.label && !renamed) ? Promise.resolve(null) : save(v.label); },          // rien à changer : on ferme sans rien demander au serveur
+        done: function (res) {
+          if (!res) return;
+          H.toast(H.libRenamed(res) ? H.t('Bibliothèque renommée : {name}', { name: res.label }) : H.t('Nom d’origine rétabli : {name}', { name: H.libLabel(res) }));
+          poll().then(function () { H.focus.key(el, 'rename-' + l.id); });          // relit /api/state : la barre, les pages et la grille des droits prennent le nouveau nom (H.setLibs)
+        } });
     }
     // Remplace le panneau des bibliothèques sur place (la page garde son défilement), en rendant le focus à ce qui l'avait.
     function showLibs(key) {
@@ -1240,7 +1288,7 @@
       var libs = (state && state.libraries) || [], rights = u.rights || {}, parts = [];
       function who(perm) {
         var list = libs.filter(function (l) { return !rights[l.id] || rights[l.id][perm]; });
-        return list.length === libs.length ? H.t('tout') : list.length ? list.map(function (l) { return H.tr(l.label); }).join(', ') : H.t('rien');
+        return list.length === libs.length ? H.t('tout') : list.length ? list.map(function (l) { return H.libLabel(l); }).join(', ') : H.t('rien');
       }
       if (libs.length) parts.push(H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') }));
       parts.push(H.t('Envoyer des fichiers : {upload}', { upload: u.can_upload ? H.t('oui') : H.t('non') }));
@@ -1271,7 +1319,7 @@
       var buttons = {}, yes = choice(true, H.t('Oui')), no = choice(false, H.t('Non'));
       (state.libraries || []).forEach(function (l) {
         buttons[l.id] = { view: toggle(l, 'view'), play: toggle(l, 'play'), download: toggle(l, 'download') };
-        rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, H.tr(l.label)), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
+        rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, H.libLabel(l)), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
       });
       rows.appendChild(h('div', { class: 'rrow', 'data-upload-right': '1' }, h('b', null, H.t('Envoyer des fichiers')), yes, no));
       function paint() {
@@ -1412,7 +1460,7 @@
       }).then(function (r) {
         if (closed) return;
         var page = JSON.stringify([r[0], users, usersError]), tasks = JSON.stringify(r[1].jobs);
-        state = r[0]; jobs = r[1].jobs; H.libs = state.libraries;
+        state = r[0]; jobs = r[1].jobs; H.setLibs(state.libraries);
         busy = r[1].busy;
         if (wasBusy && !busy) H.toast(H.t('Terminé'));
         wasBusy = busy;

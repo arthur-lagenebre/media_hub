@@ -17,15 +17,16 @@ from pathlib import Path
 
 from libraries.music import coverfile, wanted
 
-from .. import enrich, scan
+from .. import enrich, labels, scan
 from ..scan.common import is_album_cover
 
 LOG_LINES = 400
 
 
 class Job:
-    def __init__(self, ident, label, func):
+    def __init__(self, ident, label, func, key=None):
         self.id, self.label, self.func = ident, label, func
+        self.key = label if key is None else key          # ce qui reconnaît la même demande (voir Jobs._submit) ; l'intitulé, lui, n'est que ce qu'on affiche
         self.status = "waiting"           # waiting | running | done | failed
         self.log = deque(maxlen=LOG_LINES)
         self.queued = time.time()
@@ -53,12 +54,16 @@ class Jobs:
         self.worker = threading.Thread(target=self._run, name="jobs", daemon=True)
         self.worker.start()
 
-    def _submit(self, label, func):
+    def _submit(self, label, func, key=None):
+        """Met la tâche en file, ou rend celle qui attend ou tourne déjà pour la même demande. La demande est reconnue à `key` (sans lui, à l'intitulé) : l'intitulé porte le libellé affiché
+        d'une bibliothèque, que l'administrateur peut changer ou fixer à « tout » ; il ne doit jamais décider si deux demandes sont la même."""
+        key = label if key is None else key
         with self.lock:
-            if any(j.label == label and j.status in ("waiting", "running") for j in self.history):
-                return next(j for j in self.history if j.label == label and j.status in ("waiting", "running"))
+            same = next((j for j in self.history if j.key == key and j.status in ("waiting", "running")), None)
+            if same:
+                return same
             self.counter += 1
-            job = Job(self.counter, label, func)
+            job = Job(self.counter, label, func, key)
             self.history.appendleft(job)
         self.queue.put(job)
         return job
@@ -77,18 +82,18 @@ class Jobs:
 
     # --- Les tâches --------------------------------------------------------
     def scan(self, lib):
-        return self._submit(f"Mise à jour · {lib.label}", lambda log: scan.scan_library(self.db, lib, log))
+        return self._submit(f"Mise à jour · {labels.shown(self.db, lib)}", lambda log: scan.scan_library(self.db, lib, log), ("scan", lib.id))
 
     def scan_all(self):
         def run(log):
             return [scan.scan_library(self.db, lib, log) for lib in self.cfg.libraries]
-        return self._submit("Mise à jour · tout", run)
+        return self._submit("Mise à jour · tout", run, ("scan-all",))
 
     def enrich(self, lib, force=False):
-        return self._submit(f"Enrichissement TMDB · {lib.label}", self._then_ratings(enrich.enrich_shows, lib, force))
+        return self._submit(f"Enrichissement TMDB · {labels.shown(self.db, lib)}", self._then_ratings(enrich.enrich_shows, lib, force), ("enrich", lib.id))
 
     def enrich_sagas(self, lib, force=False):
-        return self._submit(f"Sagas TMDB · {lib.label}", self._then_ratings(enrich.enrich_sagas, lib, force))
+        return self._submit(f"Sagas TMDB · {labels.shown(self.db, lib)}", self._then_ratings(enrich.enrich_sagas, lib, force), ("sagas", lib.id))
 
     def _then_ratings(self, first, lib, force):
         """La tâche qui fait `first` (fiches des séries, sagas des films) puis la passe des notes TMDB de la même bibliothèque : un seul bilan, les échecs des deux additionnés."""
@@ -100,7 +105,7 @@ class Jobs:
         return run
 
     def enrich_artists(self, lib, force=False):
-        return self._submit(f"Fiches artistes · {lib.label}", lambda log: enrich.enrich_artists(self.cfg, self.db, lib, log, force))
+        return self._submit(f"Fiches artistes · {labels.shown(self.db, lib)}", lambda log: enrich.enrich_artists(self.cfg, self.db, lib, log, force), ("artists", lib.id))
 
     def enrich_person(self, name, person_id, force=False):
         """Les films que TMDB attribue à une personne (`person_id` : son identifiant TMDB ; `name` : pour l'intitulé de la tâche)."""
@@ -108,7 +113,7 @@ class Jobs:
 
     def enrich_people(self, libs, label="bibliothèques de films", force=False):
         """Les films des réalisateurs et des acteurs de premier plan de ces bibliothèques `libs` : voir enrich.enrich_people. `label` : « bibliothèques de films » ou le nom de la catégorie (« Séries »), pour l'intitulé de la tâche : une tâche par catégorie."""
-        return self._submit(f"Films manquants · {label}", lambda log: enrich.enrich_people(self.cfg, self.db, libs, log, force))
+        return self._submit(f"Films manquants · {label}", lambda log: enrich.enrich_people(self.cfg, self.db, libs, log, force), ("people", tuple(lib.id for lib in libs)))
 
     def cleanup(self, apply):
         def run(log):

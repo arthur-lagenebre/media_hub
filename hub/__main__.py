@@ -15,7 +15,7 @@ import argparse
 import getpass
 import sys
 
-from . import __version__, accounts, config
+from . import __version__, accounts, config, labels
 
 
 def read_secret(prompt):
@@ -113,7 +113,7 @@ def announce(cfg, hub):
     """Ce que le serveur dit au démarrage : l'adresse, les bibliothèques, et ce qui manque ou expose (sur la sortie d'erreur)."""
     print(f"media_hub {__version__} : http://{cfg.bind}:{cfg.port}", flush=True)
     for lib in cfg.libraries:
-        print(f"  {lib.label:<12} {lib.kind:<7} {lib.path}" + ("" if lib.path.is_dir() else "  (dossier introuvable)"), flush=True)
+        print(f"  {labels.shown(hub.db, lib):<12} {lib.kind:<7} {lib.path}" + ("" if lib.path.is_dir() else "  (dossier introuvable)"), flush=True)
     if not cfg.libraries:
         print("  aucune bibliothèque : monte tes dossiers sous HUB_SRV (Films, Series, Animations, Musique, Livres) ou décris-les dans HUB_LIBRARIES.", file=sys.stderr)
     problem = hub.inbox.check()
