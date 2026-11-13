@@ -222,7 +222,7 @@ def summary(row, seen=None, quality=None, opinion=None):
     if seen is not None:
         out["seen"] = seen
     out.update((quality or {}).get(row["id"], {}))
-    if opinion:
+    if opinion and row["type"] in RATED_TYPES:          # une ligne perdue (base copiée, type changé) ne fait paraître d'avis ni sur un album ni sur un livre
         out["rating"] = opinion
     return out
 
@@ -2134,7 +2134,7 @@ def rated_item(h, ident):
     item = h.hub.item(ident)
     if not h.can(item["lib"]):
         raise HttpError(404, "élément inconnu")
-    if item["type"] == "saga":
+    if item["type"] == "saga":                  # garde pour une ligne `items` de type saga, que le scan ne produit pas : une saga calculée n'a pas d'identifiant d'élément et répond 404 plus haut
         raise HttpError(400, "une saga ne se note pas")
     if item["type"] not in RATED_TYPES:
         raise HttpError(400, "cette bibliothèque ne se note pas")
@@ -2143,8 +2143,8 @@ def rated_item(h, ident):
 
 @route("POST", r"/api/item/(\w+)/rating")
 def api_item_rating(h, m, q):
-    """Pose, change ou efface l'avis du compte sur un film ou une série : `{"rating": "up" | "mid" | "down" | null}` (`null` ou clé absente : effacer). Rend `{"id", "rating"}`. 404 pour un élément inconnu ou d'une bibliothèque qu'il ne voit pas, 400 pour un avis inconnu ou un élément qui ne se note pas (musique, livres)."""
-    body = h.body_json()
+    """Pose, change ou efface l'avis du compte sur un film ou une série : `{"rating": "up" | "mid" | "down" | null}` (`null` ou clé absente : effacer). Rend `{"id", "rating"}`. 404 pour un élément inconnu ou d'une bibliothèque qu'il ne voit pas, 400 pour un corps qui n'est pas un objet JSON, un avis inconnu ou un élément qui ne se note pas (musique, livres)."""
+    body = strict_body_dict(h)                 # un corps vide ou illisible est un 400, pas un « effacer » ; lu avant rated_item : un 404 ne dit pas ce que l'élément est
     item = rated_item(h, m.group(1))
     rating = body.get("rating")
     if rating is not None and rating not in RATINGS:

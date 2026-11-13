@@ -564,7 +564,6 @@ class TestRatingNeverLeaks(RatingCase):
         self.assertEqual(reply.status, 401)
         self.assertEqual(self.stored(), [])
 
-    @unittest.expectedFailure       # DÉFAUT CONNU (app.py, `summary` / `api_item`) : l'avis posé par une ligne perdue sort sur la vignette et la fiche d'un album ou d'un livre ; à corriger, puis retirer ce décorateur
     def test_a_stray_row_on_something_that_cannot_be_rated_shows_nowhere(self):
         """Une ligne qui n'aurait pas dû exister (base copiée, élément dont le type a changé) ne doit faire paraître d'avis ni sur un album ni sur un livre."""
         for ident in ("al", "bk", "t1", "e1"):
@@ -584,11 +583,10 @@ class TestRatingRequests(OverHttp):
             self.assertEqual(self.post_raw(f"/api/item/{ident}/rating", {"rating": "up"})[0], 404, ident)
         self.assertEqual(self.stored(), [(self.alice["id"], "m1", "up")])
 
-    @unittest.expectedFailure       # DÉFAUT CONNU (app.py, `api_item_rating` : `h.body_json()` rend {} pour un corps illisible, donc « effacer ») ; corriger avec `strict_body_dict`, puis retirer ce décorateur
     def test_a_body_that_is_not_an_object_never_erases_an_opinion(self):
         """Un client qui se trompe de format (texte, liste, formulaire, octets) reçoit un refus ; son avis n'est pas effacé en silence comme avec un `null`."""
         self.rate(self.alice, "m1", "up")
-        for body in (b"not json", b"[1]", b'"up"', b"up", b"\xff\xfe", b"rating=up", b"{"):
+        for body in (b"", b"not json", b"[1]", b'"up"', b"up", b"\xff\xfe", b"rating=up", b"{"):
             self.assertEqual(self.post_raw("/api/item/m1/rating", body)[0], 400, body)
             self.assertEqual(self.stored(), [(self.alice["id"], "m1", "up")], body)
 
