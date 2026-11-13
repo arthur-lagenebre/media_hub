@@ -51,6 +51,14 @@ class TestSideFiles(unittest.TestCase):
 
     def test_a_folder_that_cannot_be_read_has_none(self):
         self.assertEqual(subs.side_files(self.tmp / "absent" / "Film.mkv"), [])
+        self.assertEqual(subs.siblings(self.tmp / "absent"), [])
+
+    def test_a_folder_already_listed_is_not_read_again(self):
+        self.listing("Film (2020).fr.srt", "Film (2020).en.srt")
+        listed = subs.siblings(self.tmp)
+        (self.tmp / "Film (2020).es.srt").write_text("x", encoding="utf-8")           # arrivé après : la liste donnée fait foi
+        self.assertEqual([s["lang"] for s in subs.side_files(self.video, listed)], ["en", "fr"])
+        self.assertEqual([s["lang"] for s in subs.side_files(self.video)], ["en", "es", "fr"])
 
 
 class TestLanguage(unittest.TestCase):
