@@ -291,5 +291,31 @@ class TestKeyValueDelete(TempCase):
         self.assertEqual((self.db.kv_get("a"), self.db.kv_get("b")), (None, 2))
 
 
+class TestDerived(TempCase):
+    """Ce que le hub tire de la base et garde en mémoire : refait après une écriture de ce dont il dépend, et seulement alors."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.replace_library("lib", [item("a")], [entry("e1", "a", kind="video")])
+        self.builds = []
+
+    def build(self):
+        self.builds.append(1)
+        return len(self.builds)
+
+    def test_kept_until_the_items_change(self):
+        self.assertEqual([self.db.derived("x", self.build) for _ in range(3)], [1, 1, 1])
+        self.db.update_item_meta("a", title="Autre")
+        self.assertEqual(self.db.derived("x", self.build), 2)
+
+    def test_a_new_probe_renews_only_what_reads_the_probes(self):
+        self.assertEqual((self.db.derived("items", self.build), self.db.derived("probes", self.build, probes=True)), (1, 2))
+        self.db.set_probe("e1", {"video": None})
+        self.assertEqual(self.db.derived("items", self.build), 1)                 # ce qui ne lit que les items n'est pas refait à chaque fichier sondé
+        self.assertEqual(self.db.derived("probes", self.build, probes=True), 3)
+        self.db.update_item_meta("a", title="Autre")
+        self.assertEqual(self.db.derived("probes", self.build, probes=True), 4)  # un scan ou un enrichissement le renouvelle aussi
+
+
 if __name__ == "__main__":
     unittest.main()

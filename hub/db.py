@@ -128,6 +128,7 @@ class Database:
         self._local = threading.local()
         self.write_lock = threading.Lock()
         self.items_version = 0                  # monte à chaque écriture de `items` (scan, enrichissement) : voir `derived`
+        self.probes_version = 0                 # monte à chaque sonde ffprobe gardée (set_probe) : seul ce qui lit les sondes en dépend
         self._derived, self._derived_lock = {}, threading.Lock()
         with self.write_lock:
             conn = self.connection()
@@ -138,11 +139,12 @@ class Database:
         with self._derived_lock:
             self.items_version += 1
 
-    def derived(self, name, build):
+    def derived(self, name, build, probes=False):
         """Ce que `build()` tire de la table `items`, gardé en mémoire sous `name` jusqu'à la prochaine écriture des items (scan, enrichissement). Un seul processus écrit dans la base : le compteur suffit.
+        `probes` : `build()` lit aussi les sondes ffprobe ; une nouvelle sonde le renouvelle, sans toucher à ce qui ne lit que les items (l'analyse des vidéos en garde une par fichier).
         La version est lue *avant* de construire : une écriture survenue pendant la construction rend la valeur gardée périmée dès l'appel suivant, jamais l'inverse."""
         with self._derived_lock:
-            version = self.items_version
+            version = (self.items_version, self.probes_version) if probes else (self.items_version,)          # les compteurs ne font que monter : l'ordre des versions suit celui des écritures
             hit = self._derived.get(name)
             if hit is not None and hit[0] == version:
                 return hit[1]
@@ -252,6 +254,8 @@ class Database:
 
     def set_probe(self, entry_id, probe):
         self.execute("UPDATE entries SET probe=? WHERE id=?", (json.dumps(probe), entry_id))
+        with self._derived_lock:
+            self.probes_version += 1
 
     def update_item_meta(self, item_id, **fields):
         """Complète un item (enrichissement TMDB) : `meta` est fusionné, le reste remplace. Seules les colonnes de ITEM_COLUMNS : leur nom entre dans la requête, il ne vient jamais d'ailleurs."""
