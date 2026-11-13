@@ -28,9 +28,9 @@ from tests.test_server import FakeTmdb, Running
 from hub.media import images
 
 try:
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import expect, sync_playwright
 except ImportError:                                  # pragma: no cover
-    sync_playwright = None
+    expect = sync_playwright = None
 
 SUBS = "1\n00:00:02,000 --> 00:00:30,000\nPremier <i>sous-titre</i>\n\n2\n00:00:31,000 --> 00:00:50,000\nSecond\n"
 
@@ -2175,7 +2175,7 @@ class TestActionsMenu(UiCase):
     def test_a_film_unknown_to_tmdb_offers_neither(self):
         self.card("films", "Sans Etiquette").locator(".qbtn").click()
         self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
-        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu", "Télécharger"])
+        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu", "Mon avis", "Télécharger"])
 
     def test_a_show_knows_its_tmdb_page_once_enriched_and_a_saga_never_does(self):
         item = self.item("series", "Dark")
@@ -2208,6 +2208,371 @@ class TestActionsMenu(UiCase):
         self.choose("Marquer comme vu")
         self.until(lambda: all(all(self.done("films", title)) for title in titles))
         self.until(lambda: self.view(".grid .card.saga .badge.done").count() == 1)
+
+
+class TestPersonalRating(UiCase):
+    """« Mon avis » : J'aime / Bof / Je n'aime pas, posé depuis la fiche ou depuis le menu « … » d'une carte, montré par une pastille sur l'affiche (elle prend la place de la coche « Vu », jamais celle de l'avancement),
+    et rangé dans le tri « Mon avis ». Films et séries seulement. Aucune attente à l'aveugle : on attend la réponse de la route ou l'état de la pastille."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.reset)
+
+    def reset(self):
+        for lib, title in (("films", "Inception"), ("films", "Sans Etiquette"), ("series", "Dark")):
+            ident = self.item(lib, title)["id"]
+            self.api(f"/api/item/{ident}/rating", {"rating": None})
+            self.api(f"/api/item/{ident}/seen", {"done": False})
+
+    def close_menu(self):
+        self.page.keyboard.press("Escape")
+        expect(self.page.locator(".menu")).to_have_count(0)
+
+    def posted(self, ident):
+        """Attend la réponse de la route de l'avis de cet élément : `with self.posted(id) as sent: <geste>`, puis `sent.value.status`."""
+        return self.page.expect_response(lambda r: r.url.endswith(f"/api/item/{ident}/rating") and r.request.method == "POST")
+
+    def card(self, lib, title):
+        self.open("#/l/" + lib)
+        card = self.view(f'.card[data-key="{self.item(lib, title)["id"]}"]')
+        card.wait_for()
+        return card
+
+    def rating_menu(self, card):
+        """Ouvre « … » puis « Mon avis » : la fenêtre des avis."""
+        card.locator(".qbtn").click()
+        self.page.locator(".menu .opt", has_text="Mon avis").click()
+        self.page.wait_for_function("() => document.querySelectorAll('.menu').length === 1 && document.querySelector('.menu h3').textContent === 'Mon avis'")
+
+    def pick(self, label):
+        return self.page.locator(".menu .opt").filter(has=self.page.locator(".lbl", has_text=re.compile(f"^{label}$")))
+
+    def rate_from_menu(self, card, ident, label):
+        self.rating_menu(card)
+        with self.posted(ident) as sent:
+            self.pick(label).click()
+        self.assertEqual(sent.value.status, 200)
+
+    def test_a_film_is_rated_from_its_page_changed_and_cleared_by_clicking_it_again(self):
+        film = self.item("films", "Inception")["id"]
+        self.open("#/i/" + film)
+        row = self.view(".myrating")
+        row.wait_for()
+        self.assertEqual(row.locator(".btn").all_inner_texts(), ["J’aime", "Bof", "Je n’aime pas"])
+        expect(row.locator('[aria-pressed="true"]')).to_have_count(0)
+        expect(row.locator('[data-key="rate-clear"]')).to_have_count(0)
+        with self.posted(film) as sent:
+            row.locator('[data-key="rate-up"]').click()
+        self.assertEqual(sent.value.status, 200)
+        expect(row.locator('[data-key="rate-up"]')).to_have_attribute("aria-pressed", "true")
+        expect(row.locator('[data-key="rate-up"]')).to_be_focused()
+        self.assertEqual(self.api("/api/item/" + film)["rating"], "up")
+        with self.posted(film):
+            row.locator('[data-key="rate-mid"]').click()
+        expect(row.locator('[data-key="rate-mid"]')).to_have_attribute("aria-pressed", "true")
+        expect(row.locator('[data-key="rate-up"]')).to_have_attribute("aria-pressed", "false")
+        self.assertEqual(self.api("/api/item/" + film)["rating"], "mid")
+        with self.posted(film):
+            row.locator('[data-key="rate-mid"]').click()                      # l'avis déjà choisi : un second clic l'efface
+        expect(row.locator('[aria-pressed="true"]')).to_have_count(0)
+        expect(row.locator('[data-key="rate-clear"]')).to_have_count(0)
+        self.assertNotIn("rating", self.api("/api/item/" + film))
+
+    def test_the_clear_button_removes_the_rating_and_the_focus_stays_among_the_rating_buttons(self):
+        film = self.item("films", "Inception")["id"]
+        self.api(f"/api/item/{film}/rating", {"rating": "down"})
+        self.open("#/i/" + film)
+        row = self.view(".myrating")
+        expect(row.locator('[data-key="rate-down"]')).to_have_attribute("aria-pressed", "true")
+        with self.posted(film):
+            row.locator('[data-key="rate-clear"]').click()
+        expect(row.locator('[aria-pressed="true"]')).to_have_count(0)
+        expect(row.locator('[data-key="rate-down"]')).to_be_focused()         # « Effacer » a disparu : le focus reste sur le bouton de l'avis qu'on vient de retirer
+        self.assertNotIn("rating", self.api("/api/item/" + film))
+
+    def test_the_rating_buttons_are_reached_with_the_arrow_keys_and_pressed_with_enter(self):
+        film = self.item("films", "Inception")["id"]
+        self.open("#/i/" + film)
+        row = self.view(".myrating")
+        row.locator('[data-key="rate-up"]').focus()
+        self.page.keyboard.press("ArrowRight")
+        expect(row.locator('[data-key="rate-mid"]')).to_be_focused()
+        with self.posted(film) as sent:
+            self.page.keyboard.press("Enter")
+        self.assertEqual(sent.value.status, 200)
+        expect(row.locator('[data-key="rate-mid"]')).to_have_attribute("aria-pressed", "true")
+
+    def test_a_show_is_rated_from_its_page_too(self):
+        dark = self.item("series", "Dark")["id"]
+        self.open("#/i/" + dark)
+        with self.posted(dark):
+            self.view(".myrating").locator('[data-key="rate-down"]').click()
+        expect(self.view(".myrating").locator('[data-key="rate-down"]')).to_have_attribute("aria-pressed", "true")
+        self.assertEqual(self.api("/api/item/" + dark)["rating"], "down")
+
+    def test_the_rating_replaces_the_seen_tick_on_the_poster_and_the_tick_comes_back_when_it_is_cleared(self):
+        film = self.item("films", "Inception")["id"]
+        self.api(f"/api/item/{film}/seen", {"done": True})
+        card = self.card("films", "Inception")
+        expect(card.locator(".badge.done")).to_have_count(1)
+        expect(card.locator(".badge.mine")).to_have_count(0)
+        self.rate_from_menu(card, film, "J’aime")
+        expect(card.locator(".badge.mine")).to_have_count(1)
+        expect(card.locator(".badge.done")).to_have_count(0)
+        expect(card.locator(".badge")).to_have_count(1)
+        self.rating_menu(card)
+        with self.posted(film):
+            self.pick("Effacer").click()
+        expect(card.locator(".badge.mine")).to_have_count(0)
+        expect(card.locator(".badge.done")).to_have_count(1)
+
+    def test_a_film_that_was_not_seen_shows_only_its_rating(self):
+        film = self.item("films", "Inception")["id"]
+        card = self.card("films", "Inception")
+        expect(card.locator(".badge")).to_have_count(0)
+        self.rate_from_menu(card, film, "Bof")
+        expect(card.locator(".badge")).to_have_count(1)
+        expect(card.locator(".badge.mine[data-rating='mid']")).to_have_count(1)
+
+    def test_the_progress_counter_of_a_show_in_progress_is_never_hidden_by_the_rating(self):
+        dark = self.item("series", "Dark")["id"]
+        self.api(f"/api/entry/{self.entries('series', 'Dark')[0]['id']}/seen", {"done": True})
+        card = self.card("series", "Dark")
+        counter = card.locator(".badge:not(.mine):not(.done)")
+        expect(counter).to_have_text(re.compile(r"^1/\d+$"))
+        self.rate_from_menu(card, dark, "J’aime")
+        expect(card.locator(".badge.mine")).to_have_count(1)
+        expect(counter).to_have_text(re.compile(r"^1/\d+$"))                         # toujours là, sous l'avis
+        box = "el => ({top: el.offsetTop, bottom: el.offsetTop + el.offsetHeight, width: el.offsetWidth})"           # la mise en page, pas le rectangle à l'écran : l'affiche grossit au survol, par une transition
+        rate, count = card.locator(".badge.mine").evaluate(box), counter.evaluate(box)
+        self.assertLessEqual(rate["bottom"], count["top"], "l'avancement passe sous l'avis, sans le recouvrir")
+        self.assertGreater(count["width"], 0)
+
+    def test_a_show_seen_to_the_end_gets_its_rating_in_place_of_the_tick(self):
+        dark = self.item("series", "Dark")["id"]
+        self.api(f"/api/item/{dark}/seen", {"done": True})
+        card = self.card("series", "Dark")
+        expect(card.locator(".badge.done")).to_have_count(1)
+        self.rate_from_menu(card, dark, "Je n’aime pas")
+        expect(card.locator(".badge.mine[data-rating='down']")).to_have_count(1)
+        expect(card.locator(".badge")).to_have_count(1)
+
+    def test_the_badge_says_the_rating_in_words_and_is_a_mark_not_a_button(self):
+        film = self.item("films", "Inception")["id"]
+        card = self.card("films", "Inception")
+        for label, value in (("J’aime", "up"), ("Bof", "mid"), ("Je n’aime pas", "down")):
+            self.rate_from_menu(card, film, label)
+            badge = card.locator(".badge.mine")
+            expect(badge).to_have_attribute("aria-label", label)
+            expect(badge).to_have_attribute("title", label)
+            expect(badge).to_have_attribute("data-rating", value)
+        mark = badge.evaluate("el => ({tag: el.tagName, tabindex: el.getAttribute('tabindex'), focusable: el.matches('.f, a, button, [tabindex]'), role: el.getAttribute('role'), pointer: getComputedStyle(el).pointerEvents})")
+        self.assertEqual(mark, {"tag": "SPAN", "tabindex": None, "focusable": False, "role": "img", "pointer": "none"})
+
+    def test_the_three_icons_have_three_different_shapes(self):
+        film = self.item("films", "Inception")["id"]
+        card = self.card("films", "Inception")
+        shapes = []
+        for label in ("J’aime", "Bof", "Je n’aime pas"):
+            self.rate_from_menu(card, film, label)
+            expect(card.locator(".badge.mine")).to_have_attribute("aria-label", label)
+            shapes.append(card.locator(".badge.mine svg path").get_attribute("d"))
+        self.assertEqual(len(set(shapes)), 3)
+        self.assertTrue(all(shapes))
+
+    def test_the_card_menu_offers_my_rating_marks_the_current_one_and_clears_it(self):
+        film = self.item("films", "Inception")["id"]
+        card = self.card("films", "Inception")
+        card.locator(".qbtn").click()
+        mine = self.page.locator(".menu .opt", has_text="Mon avis")
+        expect(mine.locator(".det")).to_have_count(0)                              # pas d'avis : rien à dire
+        mine.click()
+        self.page.wait_for_function("() => document.querySelectorAll('.menu').length === 1 && document.querySelector('.menu h3').textContent === 'Mon avis'")
+        self.assertEqual(self.page.locator(".menu .opt .lbl").all_inner_texts(), ["J’aime", "Bof", "Je n’aime pas", "Effacer"])
+        self.assertTrue(self.pick("Effacer").is_disabled())                        # rien à effacer
+        expect(self.page.locator(".menu .opt.on")).to_have_count(0)
+        with self.posted(film):
+            self.pick("Bof").click()
+        expect(card.locator(".badge.mine")).to_have_attribute("aria-label", "Bof")
+        self.assertEqual(self.api("/api/item/" + film)["rating"], "mid")
+        card.locator(".qbtn").click()
+        expect(self.page.locator(".menu .opt", has_text="Mon avis").locator(".det")).to_have_text("Bof")
+        self.page.locator(".menu .opt", has_text="Mon avis").click()
+        self.page.wait_for_function("() => document.querySelectorAll('.menu').length === 1 && document.querySelector('.menu h3').textContent === 'Mon avis'")
+        expect(self.page.locator(".menu .opt.on .lbl")).to_have_text("Bof")         # l'avis actuel est marqué
+        self.assertFalse(self.pick("Effacer").is_disabled())
+        with self.posted(film):
+            self.pick("Effacer").click()
+        expect(card.locator(".badge.mine")).to_have_count(0)
+        self.assertNotIn("rating", self.api("/api/item/" + film))
+
+    def test_a_show_card_menu_rates_the_whole_show(self):
+        dark = self.item("series", "Dark")["id"]
+        card = self.card("series", "Dark")
+        self.rate_from_menu(card, dark, "J’aime")
+        expect(card.locator(".badge.mine[data-rating='up']")).to_have_count(1)
+        self.assertEqual(self.api("/api/item/" + dark)["rating"], "up")
+
+    def test_a_refused_rating_shows_the_error_and_the_icon_does_not_change(self):
+        film = self.item("films", "Inception")["id"]
+        self.api(f"/api/item/{film}/rating", {"rating": "up"})
+        card = self.card("films", "Inception")
+        expect(card.locator(".badge.mine")).to_have_attribute("aria-label", "J’aime")
+        self.page.route("**/api/item/*/rating", lambda route: route.fulfill(status=400, content_type="application/json", body=json.dumps({"error": "cette bibliothèque ne se note pas"})))
+        self.rating_menu(card)
+        with self.posted(film) as sent:
+            self.pick("Bof").click()
+        self.assertEqual(sent.value.status, 400)
+        expect(self.page.locator("#toast")).to_have_text("cette bibliothèque ne se note pas")
+        self.errors[:] = [e for e in self.errors if "status of 400" not in e]                     # le navigateur journalise la réponse refusée : c'est voulu ici
+        expect(card.locator(".badge.mine")).to_have_attribute("aria-label", "J’aime")
+        self.assertEqual(self.api("/api/item/" + film)["rating"], "up")
+
+    def test_a_refused_rating_from_the_page_shows_the_error_and_keeps_the_buttons(self):
+        film = self.item("films", "Inception")["id"]
+        self.open("#/i/" + film)
+        row = self.view(".myrating")
+        row.wait_for()
+        self.page.route("**/api/item/*/rating", lambda route: route.fulfill(status=404, content_type="application/json", body=json.dumps({"error": "élément inconnu"})))
+        with self.posted(film):
+            row.locator('[data-key="rate-up"]').click()
+        expect(self.page.locator("#toast")).to_have_text("élément inconnu")
+        expect(row.locator('[aria-pressed="true"]')).to_have_count(0)
+
+    def test_the_list_behind_the_page_shows_the_rating_when_one_comes_back(self):
+        film = self.item("films", "Inception")["id"]
+        card = self.card("films", "Inception")
+        card.click()
+        self.shown("#/i/" + film)
+        with self.posted(film):
+            self.view(".myrating").locator('[data-key="rate-up"]').click()
+        expect(self.view(".myrating").locator('[data-key="rate-up"]')).to_have_attribute("aria-pressed", "true")
+        self.page.go_back()
+        self.shown("#/l/films")
+        expect(self.view(f'.card[data-key="{film}"] .badge.mine')).to_have_attribute("aria-label", "J’aime")
+
+    def test_the_cards_of_the_film_inside_its_sagas_show_its_rating_too(self):
+        film = self.item("films", "Man of Steel")["id"]
+        self.addCleanup(self.api, f"/api/item/{film}/rating", {"rating": None})
+        self.open("#/i/" + film)
+        with self.posted(film):
+            self.view(".myrating").locator('[data-key="rate-mid"]').click()
+        expect(self.view(".sagabox .card.now .badge.mine[data-rating=mid]")).to_have_count(1)          # sa propre carte dans la saga de sa fiche
+
+    def test_a_music_album_a_book_a_saga_and_an_episode_have_no_rating_entry(self):
+        self.open("#/l/musique")
+        self.view(".grid .card .qbtn").last.click()
+        self.page.locator(".menu .opt").first.wait_for()
+        self.assertNotIn("Mon avis", self.page.locator(".menu .opt .lbl").all_inner_texts())
+        self.close_menu()
+        self.open("#/l/livres")
+        self.view(".grid .card").first.wait_for()
+        self.assertEqual(self.view(".grid .card .qbtn").count(), 0)                  # les livres n'ont pas de menu « … »
+        self.assertEqual(self.view(".grid .card .badge.mine").count(), 0)
+        self.open("#/l/films")
+        self.view(".grid .card.saga .qbtn").first.click()
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        self.assertNotIn("Mon avis", self.page.locator(".menu .opt .lbl").all_inner_texts())
+        self.close_menu()
+        self.open("#/i/" + self.item("series", "Dark")["id"])
+        self.view(".epmore").first.click()
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        self.assertNotIn("Mon avis", self.page.locator(".menu .opt .lbl").all_inner_texts())
+
+    def test_the_page_of_an_album_a_book_and_the_card_of_a_saga_have_no_rating(self):
+        for lib, title in (("musique", "Discovery"), ("livres", "Naruto")):
+            with self.subTest(title=title):
+                self.open("#/i/" + self.item(lib, title)["id"])
+                self.view(".hero h1").wait_for()
+                self.assertEqual(self.view(".myrating").count(), 0)
+        self.open("#/l/films")
+        self.view(".grid .card.saga").first.wait_for()
+        self.assertEqual(self.view(".grid .card.saga .badge.mine").count(), 0)
+
+    def test_the_sort_by_my_rating_puts_the_liked_first_and_the_disliked_last(self):
+        liked, disliked = self.item("films", "Sans Etiquette")["id"], self.item("films", "Inception")["id"]
+        self.api(f"/api/item/{liked}/rating", {"rating": "up"})
+        self.api(f"/api/item/{disliked}/rating", {"rating": "down"})
+        self.open("#/l/films")
+        self.view(".grid .card").first.wait_for()
+        flt = self.view(".tools .btn.flt")
+        flt.nth(1).click()
+        with self.page.expect_response(lambda r: "/api/library/films" in r.url and "sort=my-rating" in r.url) as sent:
+            self.page.locator(".veil .opt", has_text="Mon avis").click()
+        self.assertEqual(sent.value.status, 200)
+        expect(flt.nth(1)).to_have_text("Tri : Mon avis")
+        wanted = [i["title"] for i in self.api("/api/library/films?sort=my-rating&sagas=1&limit=240")["items"]]
+        self.assertEqual((wanted[0], wanted[-1]), ("Sans Etiquette", "Inception"))
+        expect(self.view(".grid .card .t")).to_have_text(wanted)
+        self.assertEqual(self.view(".grid .card .badge.mine").evaluate_all("els => els.map(e => e.getAttribute('aria-label'))"), ["J’aime", "Je n’aime pas"])
+
+    def test_the_sort_by_my_rating_is_offered_for_films_and_shows_only(self):
+        self.open("#/l/series")
+        self.view(".grid .card").first.wait_for()
+        self.view(".tools .btn.flt").nth(1).click()
+        expect(self.page.locator(".veil .opt", has_text="Mon avis")).to_have_count(1)
+        self.close_menu()
+        self.open("#/l/livres")
+        self.view(".grid .card").first.wait_for()
+        self.view(".tools .btn.flt").nth(1).click()
+        self.page.wait_for_selector(".veil .opt")
+        expect(self.page.locator(".veil .opt", has_text="Mon avis")).to_have_count(0)
+
+
+class TestPersonalRatingIsPrivate(unittest.TestCase):
+    """L'avis est celui d'un compte : un autre compte, devant les mêmes films, n'en voit ni la pastille ni le bouton enfoncé."""
+
+    def api(self, base, path, body=None, token=""):
+        headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})}
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None, headers=headers)
+        return json.load(urllib.request.urlopen(req))
+
+    def sign_in(self, page, base, name, password):
+        page.goto(base + "/login")
+        page.fill("input[name=user]", name)
+        page.fill("input[type=password]", password)
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#nav .link", state="attached")
+
+    @unittest.skipUnless(sync_playwright, "Playwright absent")
+    def test_an_account_does_not_see_the_rating_of_another(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            run = Running(tmp, password="secret")
+            base = f"http://127.0.0.1:{run.port}"
+            admin = self.api(base, "/api/token", {"password": "secret"})["token"]
+            for name in ("alice", "bob"):
+                self.api(base, "/api/users", {"name": name, "password": "motdepasse12"}, admin)
+            token = {name: self.api(base, "/api/token", {"user": name, "password": "motdepasse12"})["token"] for name in ("alice", "bob")}
+            film = next(i for i in self.api(base, "/api/library/films", token=token["alice"])["items"] if i["title"] == "Inception")["id"]
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch()
+                mine, other = browser.new_page(), browser.new_page()
+                self.sign_in(mine, base, "alice", "motdepasse12")
+                self.sign_in(other, base, "bob", "motdepasse12")
+                mine.goto(f"{base}/#/i/{film}")
+                row = mine.locator("#views > .view:visible .myrating")
+                with mine.expect_response(lambda r: r.url.endswith(f"/api/item/{film}/rating") and r.request.method == "POST") as sent:
+                    row.locator('[data-key="rate-up"]').click()
+                self.assertEqual(sent.value.status, 200)
+                expect(row.locator('[data-key="rate-up"]')).to_have_attribute("aria-pressed", "true")
+                mine.goto(f"{base}/#/l/films")
+                expect(mine.locator(f'#views > .view:visible .card[data-key="{film}"] .badge.mine')).to_have_attribute("aria-label", "J’aime")
+                other.goto(f"{base}/#/l/films")
+                card = other.locator(f'#views > .view:visible .card[data-key="{film}"]')
+                expect(card).to_be_visible()
+                expect(card.locator(".badge.mine")).to_have_count(0)                  # la même carte, chez Bob : aucune pastille
+                other.goto(f"{base}/#/i/{film}")
+                row = other.locator("#views > .view:visible .myrating")
+                expect(row.locator(".btn").first).to_be_visible()
+                expect(row.locator('[aria-pressed="true"]')).to_have_count(0)
+                expect(row.locator('[data-key="rate-clear"]')).to_have_count(0)
+                self.assertNotIn("rating", self.api(base, "/api/item/" + film, token=token["bob"]))
+                self.assertEqual(self.api(base, "/api/item/" + film, token=token["alice"])["rating"], "up")
+                browser.close()
+            run.stop()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestDownloads(UiCase):
@@ -3445,6 +3810,25 @@ class TestHomeUnseen(UiCase):
         self.open()
         self.view(".shelf.unseen .card").first.wait_for()
         self.assertNotIn(first, self.view(".shelf.unseen .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))"))
+
+    def test_a_film_the_account_does_not_like_leaves_the_shelf_and_comes_back_when_the_rating_is_cleared(self):
+        self.open()
+        self.view(".shelf.unseen .card").first.wait_for()
+        first = self.view(".shelf.unseen[data-lib=films] .card").first.get_attribute("data-key")
+        self.addCleanup(self.api, f"/api/item/{first}/rating", {"rating": None})
+        self.api(f"/api/item/{first}/rating", {"rating": "down"})
+        self.open()
+        self.view(".shelf.unseen[data-lib=films] .card").first.wait_for()
+        self.assertNotIn(first, self.shown())                                                                # le « pas intéressé » du compte
+        self.assertEqual(len(self.shown()), 12)                                                              # le rayon se remplit avec le suivant
+        self.api(f"/api/item/{first}/rating", {"rating": "mid"})                                              # « Bof » n'exclut rien
+        self.open()
+        self.view(".shelf.unseen[data-lib=films] .card").first.wait_for()
+        self.assertEqual(self.shown()[0], first)
+        self.api(f"/api/item/{first}/rating", {"rating": None})
+        self.open()
+        self.view(".shelf.unseen[data-lib=films] .card").first.wait_for()
+        self.assertEqual(self.shown()[0], first)
 
     def test_each_shelf_is_hidden_on_its_own_by_the_settings_of_the_account(self):
         self.api("/api/me/settings", {"home_unseen": "hide"})
