@@ -46,7 +46,7 @@ from .. import prefs
 from .. import urls
 from .. import sagas as sagafile
 from ..sagas import Sagas
-from ..db import Database, make_id
+from ..db import RATINGS, Database, make_id
 from ..inbox import EXTENSIONS, Inbox, InboxError
 from ..media import badges
 from ..media import books as bookmedia
@@ -211,8 +211,8 @@ def typed_summary(row, meta):
     return out
 
 
-def summary(row, seen=None, quality=None):
-    """La vignette d'un élément. `quality` : ce que rend card_quality ; un film qui y est porte `quality` et `hdr`."""
+def summary(row, seen=None, quality=None, opinion=None):
+    """La vignette d'un élément. `quality` : ce que rend card_quality ; un film qui y est porte `quality` et `hdr`. `opinion` : l'avis du compte sur cet élément (`up`, `mid` ou `down`, le champ `rating` de la vignette), absent de la vignette quand il n'a pas d'avis."""
     meta = safe_json(row["meta"], {})
     out = {"id": row["id"], "type": row["type"], "title": row["title"], "year": row["year"], "grp": row["grp"], "n": row["count"], "letter": row["letter"],
            "added": row["added"], "genres": safe_json(row["genres"], []), "cover": urls.item_cover(row["id"]), **typed_summary(row, meta)}
@@ -222,6 +222,8 @@ def summary(row, seen=None, quality=None):
     if seen is not None:
         out["seen"] = seen
     out.update((quality or {}).get(row["id"], {}))
+    if opinion:
+        out["rating"] = opinion
     return out
 
 
@@ -955,9 +957,10 @@ def seen_counts(hub, profile, lib_id=None):
     return {r["item"]: (r["seen"] or 0, r["touched"]) for r in hub.db.query(sql, params)}
 
 
-def with_seen(row, seen, quality=None):
+def with_seen(row, seen, quality=None, ratings=None):
+    """La vignette d'un élément avec ce que le compte en a vu (`seen`) et l'avis qu'il en a (`ratings` : {id: avis}, voir Database.ratings_for)."""
     done, touched = watched(row, seen)
-    out = summary(row, quality=quality)
+    out = summary(row, quality=quality, opinion=(ratings or {}).get(row["id"]))
     if touched:
         out["seen"] = done
         out["started"] = touched - done
@@ -988,13 +991,13 @@ def dismiss_key(profile, item_id):
     return f"dismiss:{profile}:{item_id}"
 
 
-def progress_card(entry, item, position, total, resume, updated):
+def progress_card(entry, item, position, total, resume, updated, ratings=None):
     card = entry_json(entry)
-    card.update({"item": summary(item), "position": position, "total": total or entry["duration"], "resume": resume, "updated": updated})
+    card.update({"item": summary(item, opinion=(ratings or {}).get(item["id"])), "position": position, "total": total or entry["duration"], "resume": resume, "updated": updated})
     return card
 
 
-def finished_card(hub, profile, row, item):
+def finished_card(hub, profile, row, item, ratings=None):
     """Un fichier fini ne se reprend pas : on propose l'épisode ou le tome qui le suit, s'il y en a un et qu'il n'est pas fini lui aussi. Un film fini n'a rien à proposer."""
     if item["type"] == "movie":
         return None
@@ -1005,20 +1008,20 @@ def finished_card(hub, profile, row, item):
     if progress is not None and progress["done"]:
         return None
     position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
-    return progress_card(following, item, position, total, False, row["updated"])
+    return progress_card(following, item, position, total, False, row["updated"], ratings)
 
 
-def resume_card(hub, profile, row, item):
+def resume_card(hub, profile, row, item, ratings=None):
     """La carte « Reprendre » d'un fichier de la progression, ou None quand il n'y a rien à proposer (fini sans suite, à peine commencé)."""
     if row["done"]:
-        return finished_card(hub, profile, row, item)
+        return finished_card(hub, profile, row, item, ratings)
     if row["position"] < (1 if row["kind"] == "book" else RESUME_MIN):
         return None
-    return progress_card(row, item, row["position"], row["pduration"], True, row["updated"])
+    return progress_card(row, item, row["position"], row["pduration"], True, row["updated"], ratings)
 
 
-def continue_row(hub, profile, libs=None):
-    """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant. `libs` : les bibliothèques où le compte peut lire (None : toutes) ; on ne propose pas de reprendre ce qu'il ne peut pas lire."""
+def continue_row(hub, profile, libs=None, ratings=None):
+    """Ce qu'on a commencé : le film ou l'épisode à reprendre, l'épisode qui suit celui qu'on vient de finir, le tome suivant. `libs` : les bibliothèques où le compte peut lire (None : toutes) ; on ne propose pas de reprendre ce qu'il ne peut pas lire. `ratings` : ses avis, pour la vignette de chaque carte."""
     rows = hub.db.query(
         "SELECT p.entry_id, p.position, p.duration AS pduration, p.done, p.updated, e.* FROM progress p JOIN entries e ON e.id=p.entry_id "
         "WHERE p.profile=? AND e.kind IN ('video','book') ORDER BY p.updated DESC LIMIT 200", (profile,))
@@ -1030,7 +1033,7 @@ def continue_row(hub, profile, libs=None):
         if row["updated"] <= hub.db.kv_get(dismiss_key(profile, row["item_id"]), -1):
             continue
         item = hub.db.one("SELECT * FROM items WHERE id=?", (row["item_id"],))
-        card = resume_card(hub, profile, row, item) if item is not None else None
+        card = resume_card(hub, profile, row, item, ratings) if item is not None else None
         if card is None:
             continue
         out.append(card)
@@ -1043,18 +1046,21 @@ today = missing.today                       # le jour (« 2026-11-04 ») : un no
 UNSEEN = 48                                 # ce que le serveur offre par bibliothèque : le navigateur en retire ce que « Nouveautés » (24) montre déjà, puis coupe à `home_unseen_count` (24 au plus) ; à 24 seulement, les tris « date d'ajout » et « note » (les mieux notés sont souvent les plus récents) vidaient le rayon
 
 
-def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random", quality=None):
+def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random", quality=None, ratings=None):
     """Les films ou les séries d'une bibliothèque que ce compte n'a pas encore touchés (ni vus, ni commencés : aucune progression sur aucun de leurs fichiers ; c'est l'état « à voir » de watch_state), `n` au plus.
 
-    L'ordre est choisi par le réglage `home_unseen_sort` du compte, et appliqué avant la coupe à `n` : `random` (défaut) ne dépend que du compte et du jour (le même toute la journée, un autre demain) ; `rating` : la note TMDB montrée, de la meilleure à la moins bonne (comme le tri « Mieux notés » de la bibliothèque : ce qui a moins de MIN_VOTES votes ou aucune note vient à la fin) ; `added` : le plus récemment ajouté d'abord."""
-    pool = [r for r in rows if r["id"] not in seen]
+    L'ordre est choisi par le réglage `home_unseen_sort` du compte, et appliqué avant la coupe à `n` : `random` (défaut) ne dépend que du compte et du jour (le même toute la journée, un autre demain) ; `rating` : la note TMDB montrée, de la meilleure à la moins bonne (comme le tri « Mieux notés » de la bibliothèque : ce qui a moins de MIN_VOTES votes ou aucune note vient à la fin) ; `added` : le plus récemment ajouté d'abord.
+
+    Un élément que le compte a noté « Je n'aime pas » (`down`, voir `ratings`) n'est pas proposé : c'est son « pas intéressé ». Il reste dans la bibliothèque et dans son filtre « À voir »."""
+    ratings = ratings or {}
+    pool = [r for r in rows if r["id"] not in seen and ratings.get(r["id"]) != "down"]
     if sort == "rating":
         pool.sort(key=rating_key)
     elif sort == "added":
         pool.sort(key=lambda r: (-r["added"], r["sort"], r["id"]))
     else:
         pool.sort(key=lambda r: hashlib.sha1(f"{day}:{profile}:{r['id']}".encode()).hexdigest())
-    return [summary(r, quality=quality) for r in pool[:n]]
+    return [summary(r, quality=quality, opinion=ratings.get(r["id"])) for r in pool[:n]]
 
 
 UNSEEN_KINDS = ("movies", "shows")          # les genres de bibliothèque qui ont un rayon « Pas encore vu » : une nouvelle bibliothèque vidéo d'un de ces genres en a un sans autre réglage
@@ -1063,7 +1069,7 @@ UNSEEN_KINDS = ("movies", "shows")          # les genres de bibliothèque qui on
 @route("GET", r"/api/home")
 def api_home(h, m, q):
     hub = h.hub
-    seen, quality = seen_counts(hub, h.user["id"]), card_quality(hub.db)
+    seen, quality, ratings = seen_counts(hub, h.user["id"]), card_quality(hub.db), hub.db.ratings_for(h.user["id"])
     day, rows = today(), []
     order = prefs.load(hub.db, h.user["id"])["home_unseen_sort"]
     for lib in h.visible_libs():
@@ -1071,12 +1077,12 @@ def api_home(h, m, q):
         if lib.kind == "music":
             recent = recent_music(items, seen, 24)
         else:
-            recent = [with_seen(r, seen, quality) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
+            recent = [with_seen(r, seen, quality, ratings) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
         row = {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind, "recent": recent, "count": len(items)}
         if lib.kind in UNSEEN_KINDS:
-            row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order, quality=quality)
+            row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order, quality=quality, ratings=ratings)
         rows.append(row)
-    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play")), "libraries": rows})
+    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play"), ratings), "libraries": rows})
 
 
 @route("GET", r"/api/search")
@@ -1086,13 +1092,13 @@ def api_search(h, m, q):
         h.send_json({"results": [], "people": []})
         return
     hub = h.hub
-    seen, quality = seen_counts(hub, h.user["id"]), card_quality(hub.db)
+    seen, quality, ratings = seen_counts(hub, h.user["id"]), card_quality(hub.db), hub.db.ratings_for(h.user["id"])
     results = []
     for lib in h.visible_libs():
         found = []
         for row in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY sort", (lib.id,)):
             if needle in fold(row["title"]) or needle in fold(row["grp"]):
-                found.append(with_seen(row, seen, quality))
+                found.append(with_seen(row, seen, quality, ratings))
                 if len(found) >= 40:
                     break
         if found:
@@ -1124,8 +1130,8 @@ def api_person(h, m, q):
     shown = people.spelling(person, [lib.id for lib in libs]) if person else None
     person = person if shown else None              # ce que le compte ne voit pas n'existe pas pour lui
     roles, rows = person_rows(hub.db, person, {lib.id for lib in libs})
-    seen = seen_counts(hub, h.user["id"]) if rows else {}
-    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": person_results(hub.db, libs, rows, seen), **person_extras(hub, person, libs)})
+    seen, ratings = (seen_counts(hub, h.user["id"]), hub.db.ratings_for(h.user["id"])) if rows else ({}, {})
+    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": person_results(hub.db, libs, rows, seen, ratings), **person_extras(hub, person, libs)})
 
 
 def person_rows(db, person, visible):
@@ -1139,7 +1145,7 @@ def person_rows(db, person, visible):
     return roles, rows
 
 
-def person_results(db, libs, rows, seen):
+def person_results(db, libs, rows, seen, ratings=None):
     """Les éléments `rows` groupés par bibliothèque (dans l'ordre de `libs`, sans les bibliothèques vides), du plus récent au plus ancien."""
     quality = card_quality(db)
     results = []
@@ -1147,7 +1153,7 @@ def person_results(db, libs, rows, seen):
         mine = sorted((r for r in rows.values() if r["lib"] == lib.id), key=lambda r: r["sort"])
         mine.sort(key=lambda r: r["year"] or "", reverse=True)          # sans année en dernier ; à égalité, par titre (le tri est stable)
         if mine:
-            results.append({"id": lib.id, "label": labels.shown(db, lib), "kind": lib.kind, "items": [with_seen(r, seen, quality) for r in mine]})
+            results.append({"id": lib.id, "label": labels.shown(db, lib), "kind": lib.kind, "items": [with_seen(r, seen, quality, ratings) for r in mine]})
     return results
 
 
@@ -1215,6 +1221,9 @@ SORTS = {
     "part": (lambda r: release_key(r), False),      # l'ordre d'une saga
     "rating": (lambda r: rating_key(r), False),     # « Mieux notés » : la clé range elle-même du mieux au moins bien noté
 }
+RATED_KINDS = ("movies", "shows")                   # les bibliothèques dont les éléments portent un avis personnel, et où le tri « Mon avis » (`my-rating`) existe
+RATED_TYPES = ("movie", "show")                     # les éléments qui se notent : un film ou une série entière, jamais un épisode, une saga, un album ni un livre
+MY_RATING_RANK = {"up": 0, "mid": 1, "down": 3}     # « Mon avis » : J'aime, Bof, sans avis (2), Je n'aime pas
 # Le tri « Titre » de la musique et des livres range par artiste / collection ; chez un artiste, les albums vont du plus ancien au plus récent, puis par nom (ceux sans année en dernier)
 TITLE_SORTS = {
     "music": lambda r: (fold(r["grp"]) or "￿", r["year"] or "9999", r["sort"]),
@@ -1234,6 +1243,11 @@ def rating_key(row):
     """Le tri « Mieux notés », sans inversion : d'abord ce qui a une note montrée, de la meilleure à la moins bonne, puis le plus de votes ; ensuite le reste ; à égalité, par titre, puis par identifiant : deux films de même titre, de même note et de même nombre de votes gardent le même rang, quel que soit l'ordre dans lequel la base les rend."""
     vote, votes = row_rating(row)
     return (vote is None, -(vote or 0), -votes, row["sort"], row["id"])
+
+
+def my_rating_key(ratings):
+    """Le tri « Mon avis » : `up`, `mid`, sans avis, puis `down` ; à égalité, par titre, puis par identifiant (un ordre total : le même quel que soit l'ordre où la base rend les lignes). Une vignette de saga n'a pas d'avis."""
+    return lambda row: (MY_RATING_RANK.get(ratings.get(row["id"]), 2), row["sort"], row["id"])
 
 
 def release_key(row):
@@ -1475,14 +1489,16 @@ def asked_state(q, kind):
     return state
 
 
-def library_order(kind, q, ranks, artists=False):
-    """(tri, clé, sens) du tri demandé ; la musique n'a qu'un ordre : par artiste (dans la liste des artistes, par leur nom, les inconnus à la fin)."""
+def library_order(kind, q, ranks, artists=False, ratings=None):
+    """(tri, clé, sens) du tri demandé ; la musique n'a qu'un ordre : par artiste (dans la liste des artistes, par leur nom, les inconnus à la fin). `my-rating` (« Mon avis », d'après `ratings`) n'existe que pour les films et les séries : ailleurs c'est un tri inconnu."""
     sort = "title" if kind == "music" else q.get("sort", "title")
     key, reverse = SORTS.get(sort, SORTS["title"])
     if sort == "title" and kind in TITLE_SORTS and not artists:
         key = TITLE_SORTS[kind]
     if sort == "part" and ranks is not None:
         key = lambda r: ranks[r["id"]]
+    if kind in RATED_KINDS:
+        key = {"my-rating": my_rating_key(ratings or {})}.get(sort, key)
     return sort, key, reverse
 
 
@@ -1494,10 +1510,10 @@ def page_bounds(q):
         return 0, 240
 
 
-def library_item(row, seen, quality=None):
+def library_item(row, seen, quality=None, ratings=None):
     if row["type"] == "artist":
         return artist_card(row)
-    return saga_json(row, seen) if row["type"] == "saga" else with_seen(row, seen, quality)
+    return saga_json(row, seen) if row["type"] == "saga" else with_seen(row, seen, quality, ratings)
 
 
 def artist_key(row):
@@ -1538,7 +1554,7 @@ def api_library(h, m, q):
     lib = library_or_404(hub, m.group(1))
     h.require(lib.id)
     rows = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
-    seen = seen_counts(hub, h.user["id"], lib.id)
+    seen, ratings = seen_counts(hub, h.user["id"], lib.id), hub.db.ratings_for(h.user["id"])
     movies = lib.kind == "movies"
     custom = hub.sagas.of_movies(rows) if movies else {}          # les sagas du fichier, voir sagas.py
     extra_names = sagas_of_films(custom)
@@ -1554,12 +1570,12 @@ def api_library(h, m, q):
     ranks, absent = group_ranks(hub, rows, custom, group, movies)
     tests = library_filters(q, lib.kind, ranks, of, extra_names, seen)
     chosen = [row for row in rows if all(test(row) for test in tests)]
-    sort, key, reverse = library_order(lib.kind, q, ranks, artists)
+    sort, key, reverse = library_order(lib.kind, q, ranks, artists, ratings)
     chosen.sort(key=key, reverse=reverse)
     offset, limit = page_bounds(q)
     page = chosen[offset:offset + limit]
     out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "total": len(chosen), "offset": offset,
-           "items": [library_item(r, seen, card_quality(hub.db)) for r in page],          # la table ne connaît que des films : une autre bibliothèque n'y trouve rien
+           "items": [library_item(r, seen, card_quality(hub.db), ratings) for r in page],          # la table ne connaît que des films : une autre bibliothèque n'y trouve rien
            "genres": genre_menu(genres)}
     if group and sort == "part":
         number_films(out["items"], ranks, offset + 1)
@@ -1608,22 +1624,22 @@ ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "arti
                   "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "disc_titles", "release_types", "season_summaries", "doubts")
 
 
-def tagged_saga(hub, item, movies, seen, info):
+def tagged_saga(hub, item, movies, seen, info, ratings=None):
     """(films, manquants) de la saga de l'étiquette d'un film : numérotés d'après la collection TMDB quand on la connaît, sinon par date de sortie."""
     tagged = sorted((r for r in movies if r["grp"] == item["grp"]), key=release_key)
     ranks, absent = missing.tagged(item["grp"], tagged, info, set(hub.sagas.ignored()))
     if ranks is not None:
         tagged.sort(key=lambda r: ranks[r["id"]])
-    return number_films([with_seen(r, seen, card_quality(hub.db)) for r in tagged], ranks), absent
+    return number_films([with_seen(r, seen, card_quality(hub.db), ratings) for r in tagged], ranks), absent
 
 
-def file_saga(name, films, listed, seen, owned, info, quality=None):
+def file_saga(name, films, listed, seen, owned, info, quality=None, ratings=None):
     """Une saga de `sagas.json` : ses films numérotés d'après leur place dans la liste, et ceux de la liste qu'on n'a pas."""
-    numbered = number_films([with_seen(f, seen, quality) for f, _ in films], {f["id"]: rank for f, rank in films})
+    numbered = number_films([with_seen(f, seen, quality, ratings) for f, _ in films], {f["id"]: rank for f, rank in films})
     return {"name": name, "films": numbered, "missing": missing.listed(listed.get(name, []), owned, info)}
 
 
-def movie_sagas(hub, item, lib, user):
+def movie_sagas(hub, item, lib, user, ratings=None):
     """Ses sagas : celle de l'étiquette d'abord (`saga`, gardée pour les clients d'avant `sagas`), puis celles du fichier (sagas.py), chacune avec les films qui la composent et ceux qui lui manquent."""
     movies = hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (item["lib"],))
     seen = seen_counts(hub, user, lib.id)
@@ -1632,11 +1648,11 @@ def movie_sagas(hub, item, lib, user):
     info, owned = (missing.load(hub.db), sagafile.by_tmdb(movies)) if item["grp"] or mine else (None, None)          # TMDB ne sert que s'il y a une saga
     out, sagas = {}, []
     if item["grp"]:
-        out["saga"], absent = tagged_saga(hub, item, movies, seen, info)
+        out["saga"], absent = tagged_saga(hub, item, movies, seen, info, ratings)
         if item["grp"] not in custom:                   # une saga du fichier de même nom la remplace : c'est elle que ce nom désigne dans la grille
             sagas.append({"name": item["grp"], "films": out["saga"], "missing": absent})
     listed = dict(hub.sagas.all())
-    sagas += [file_saga(name, films, listed, seen, owned, info, card_quality(hub.db)) for name, films in mine.items()]
+    sagas += [file_saga(name, films, listed, seen, owned, info, card_quality(hub.db), ratings) for name, films in mine.items()]
     sagas = visible_sagas(sagas)
     if sagas:
         out["sagas"] = sagas
@@ -1682,7 +1698,8 @@ def api_item(h, m, q):
     rows = sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (item["id"],)), key=order_key)
     progress = hub.db.progress_for(h.user["id"], [r["id"] for r in rows])
     meta = safe_json(item["meta"], {})
-    out = summary(item)
+    ratings = hub.db.ratings_for(h.user["id"])
+    out = summary(item, opinion=ratings.get(item["id"]))
     out.update({"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
     out.update({key: meta[key] for key in ITEM_META_KEYS if meta.get(key) not in (None, "", [])})
     links = album_links(meta) if item["type"] == "album" else video_links(item, meta)
@@ -1697,7 +1714,7 @@ def api_item(h, m, q):
         if by_season:
             out["season_badges"] = by_season
     if item["type"] == "movie":
-        out.update(movie_sagas(hub, item, lib, h.user["id"]))
+        out.update(movie_sagas(hub, item, lib, h.user["id"], ratings))
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
     h.send_json(out)
@@ -2110,6 +2127,30 @@ def api_progress(h, m, q):
         done = done or (duration > 0 and position / duration > 0.8)
     h.hub.db.save_progress(h.user["id"], entry["id"], duration if done and entry["kind"] != "book" else position, duration, done)
     h.send_json({"ok": True, "done": done})
+
+
+def rated_item(h, ident):
+    """L'élément `ident` pour poser un avis : 404 quand il n'existe pas ou que le compte ne voit pas sa bibliothèque (on ne les distingue pas : le refus ne dit rien d'une bibliothèque cachée), 400 quand ce n'est pas un film ni une série."""
+    item = h.hub.item(ident)
+    if not h.can(item["lib"]):
+        raise HttpError(404, "élément inconnu")
+    if item["type"] == "saga":
+        raise HttpError(400, "une saga ne se note pas")
+    if item["type"] not in RATED_TYPES:
+        raise HttpError(400, "cette bibliothèque ne se note pas")
+    return item
+
+
+@route("POST", r"/api/item/(\w+)/rating")
+def api_item_rating(h, m, q):
+    """Pose, change ou efface l'avis du compte sur un film ou une série : `{"rating": "up" | "mid" | "down" | null}` (`null` ou clé absente : effacer). Rend `{"id", "rating"}`. 404 pour un élément inconnu ou d'une bibliothèque qu'il ne voit pas, 400 pour un avis inconnu ou un élément qui ne se note pas (musique, livres)."""
+    body = h.body_json()
+    item = rated_item(h, m.group(1))
+    rating = body.get("rating")
+    if rating is not None and rating not in RATINGS:
+        raise HttpError(400, f"avis inconnu : {str(rating)[:40]}")
+    h.hub.db.set_rating(h.user["id"], item["id"], rating)
+    h.send_json({"id": item["id"], "rating": rating})
 
 
 @route("POST", r"/api/item/(\w+)/dismiss")
