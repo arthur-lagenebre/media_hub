@@ -125,10 +125,11 @@ def scan_music(lib, known, enriched=None):
     releases = library.scan(lib.path)
     reused = read = 0
     items, entries = [], []
-    homes = artist_dirs(releases)
     for release in releases:
         more_reused, more_read = _read_tracks(release, known)
         reused, read = reused + more_reused, read + more_read
+    homes = artist_dirs(releases)        # une fois les tags lus : avant, l'artiste d'un album est celui du nom de son dossier (AC_DC pour AC/DC)
+    for release in releases:
         item = _album_item(lib, release, homes)
         items.append(item)
         entries += _album_entries(lib, item, release)
