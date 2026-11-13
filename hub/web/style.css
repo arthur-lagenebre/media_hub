@@ -193,6 +193,14 @@ body.mouse .people .chip:focus:not(:hover) { background: var(--s2); color: var(-
 .chip.ghost { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--mute); }
 .chip.ghost.done { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 .chip.ghost .ic { margin-right: 0.2rem; }
+/* Badges de qualité et de langues (fiche d'un film, saison d'une série) : des étiquettes, pas des boutons ; elles passent à la ligne plutôt que de déborder. */
+.tags { display: flex; flex-wrap: wrap; align-items: center; margin: 0.6rem 0 0; font-size: 0.8rem; line-height: 1.2; }
+.tgrp { display: inline-flex; flex-wrap: wrap; align-items: center; margin: 0.15rem 0; }
+.tlab { color: var(--mute); font-weight: 600; margin-right: 0.4rem; }
+.tag { border: 1px solid var(--line); border-radius: 0.3rem; padding: 0.1rem 0.4rem; margin-right: 0.3rem; font-weight: 700; letter-spacing: 0.03em; white-space: nowrap; }
+.tags .sep { color: var(--mute); margin: 0 0.55rem 0 0.25rem; }
+.stags .tags { margin: 0 0 0.9rem; }
+html[data-device="phone"] .tags { font-size: 0.85rem; }
 .seasonsum { max-width: 52rem; line-height: 1.55; color: var(--mute); margin: 0 0 0.9rem; }
 .ep { display: flex; align-items: center; width: 100%; text-align: left; background: var(--s1); border: 0; border-radius: 0.7rem; padding: 0.7rem; margin-bottom: 0.65rem; color: inherit; cursor: pointer; }
 .ep .thumb { flex: 0 0 12rem; margin-right: 1rem; }

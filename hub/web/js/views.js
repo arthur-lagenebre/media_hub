@@ -552,6 +552,30 @@
     };
     function metaLine(d) { return (META[d.type] || META.books)(d).filter(Boolean).join(' · '); }
 
+    // Les badges d'un fichier ou d'une saison (voir docs/api.md) : « 4K HDR · Audio FR EN · Sous-titres EN ». Ce que l'API ne donne pas (fichier pas encore sondé) n'apparaît pas,
+    // une liste vide masque son groupe ; rien du tout : null. Ce ne sont que des étiquettes : ni lien, ni bouton, ni focus.
+    var QUALITY = { '4k': '4K', fullhd: 'Full HD', hd: 'HD', sd: 'SD' };
+    function tagGroup(label, values) {
+      return values.length ? h('span', { class: 'tgrp' }, label ? h('span', { class: 'tlab' }, label) : null, values.map(function (v) { return h('span', { class: 'tag' }, v); })) : null;
+    }
+    function langCodes(list) { return (Array.isArray(list) ? list : []).filter(function (c) { return typeof c === 'string' && c; }).map(function (c) { return c.toUpperCase(); }); }
+    function qualityTags(b) {
+      if (!b) return null;
+      var picture = [];
+      if (typeof b.quality === 'string' && b.quality) picture.push(QUALITY[b.quality] || b.quality.toUpperCase());
+      if (b.hdr === true) picture.push('HDR');
+      var groups = [tagGroup('', picture), tagGroup(H.t('Audio'), langCodes(b.audio)), tagGroup(H.t('Sous-titres'), langCodes(b.subs))].filter(Boolean);
+      if (!groups.length) return null;
+      var row = h('div', { class: 'tags' });
+      groups.forEach(function (g, i) {
+        if (i) row.appendChild(h('span', { class: 'sep', 'aria-hidden': 'true' }, '·'));
+        row.appendChild(g);
+      });
+      return row;
+    }
+    // Ceux d'un film : le premier de ses fichiers que le serveur a sondé (une version en plusieurs parties a les mêmes).
+    function movieTags(d) { return d.type === 'movie' ? qualityTags(d.entries.filter(function (e) { return e.quality || e.audio || e.subs; })[0]) : null; }
+
     // Un nom de la fiche (réalisateur, acteur) qui ouvre la page de la personne. `kind` distingue le même nom cité deux fois sur la fiche (clé de focus).
     function personLink(name, kind, children) {
       return h('a', { class: 'f who', href: personHref(name), 'data-key': 'who-' + kind + '-' + name }, children || name);
@@ -628,7 +652,7 @@
     // Le texte à droite de l'image : titre, ligne grise, note TMDB, genres, crédits, résumé, doutes TMDB, boutons.
     function infoBlock(d, view) {
       var genres = (d.genres || []).join(', ');
-      var info = h('div', { class: 'info' }, h('h1', null, d.title), h('p', { class: 'meta' }, metaLine(d)));
+      var info = h('div', { class: 'info' }, h('h1', null, d.title), h('p', { class: 'meta' }, metaLine(d)), movieTags(d));
       if (d.tmdb_rating) info.appendChild(scoreRow(d));
       if (genres) info.appendChild(h('p', { class: 'genres' }, genres));
       credits(d).forEach(function (node) { info.appendChild(node); });
@@ -732,7 +756,7 @@
       var sec = h('section', { class: 'episodes' });
       var seasons = d.seasons && d.seasons.length ? d.seasons : [1];
       if (season === null || seasons.indexOf(season) < 0) season = firstSeason(d, seasons);
-      var list = h('div', { class: 'eps' }), blurb = h('p', { class: 'seasonsum' }), bSeason = null;
+      var list = h('div', { class: 'eps' }), blurb = h('p', { class: 'seasonsum' }), tags = h('div', { class: 'stags' }), bSeason = null;
       function seasonDone() { return d.entries.filter(function (e) { return e.season === season; }).every(function (e) { return e.progress && e.progress.done; }); }
       function fill() {
         if (bSeason) {          // le bouton annonce ce qu'il va faire de la saison affichée
@@ -743,6 +767,9 @@
         H.clear(list);
         var text = (d.season_summaries || {})[String(season)] || '';
         blurb.textContent = text; blurb.hidden = !text;
+        var row = qualityTags((d.season_badges || {})[String(season)]);           // ceux de la saison affichée : rien tant qu'aucun de ses épisodes n'est sondé
+        H.clear(tags).hidden = !row;
+        if (row) tags.appendChild(row);
         d.entries.filter(function (e) { return (e.season === null || e.season === undefined ? 1 : e.season) === season; }).forEach(function (e) { list.appendChild(episodeRow(d, e)); });
       }
       var chips = h('div', { class: 'chips' });
@@ -755,7 +782,7 @@
         bSeason = h('button', { class: 'chip f ghost', 'data-key': 'sv', onclick: function () { setSeen(!seasonDone(), season); } });
         chips.appendChild(bSeason);
       }
-      sec.appendChild(chips); sec.appendChild(blurb); sec.appendChild(list);
+      sec.appendChild(chips); sec.appendChild(tags); sec.appendChild(blurb); sec.appendChild(list);
       fill();
       return sec;
     }
