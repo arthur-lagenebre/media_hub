@@ -437,6 +437,9 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .card.wanted .poster { opacity: 0.4; filter: grayscale(1); }
 .card.wanted .t { color: var(--mute); }
 .card .part { position: absolute; left: 0.4rem; top: 0.4rem; min-width: 1.5rem; text-align: center; background: rgba(0, 0, 0, 0.78); padding: 0.05rem 0.4rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 700; }
+/* La qualité d'un film sur son affiche (« 4K HDR ») : en haut à gauche, sous le numéro de la saga quand il y en a un ; la droite est à la coche et à « En cours ». */
+.card .qual { position: absolute; left: 0.4rem; top: 0.4rem; z-index: 3; background: rgba(0, 0, 0, 0.78); padding: 0.05rem 0.35rem; border-radius: 0.3rem; font-size: 0.7rem; font-weight: 800; letter-spacing: 0.03em; white-space: nowrap; }
+.card .qual.below { top: 1.8rem; }
 .card.now .poster { box-shadow: 0 0 0 0.18rem var(--accent); }
 .sagabox h2 { display: flex; align-items: baseline; }
 .sagabox h2 .n { margin-left: 0.8rem; color: var(--mute); font-size: 0.9rem; font-weight: 500; }

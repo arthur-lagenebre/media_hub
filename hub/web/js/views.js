@@ -161,6 +161,15 @@
       html: '<svg viewBox="0 0 36 36" aria-hidden="true"><circle class="tr" cx="18" cy="18" r="15.9155"/><circle class="val" cx="18" cy="18" r="15.9155" stroke-dasharray="' + pct + ' 100"/></svg>' +
             '<span class="v" aria-hidden="true">' + pct + '<sup>%</sup></span>' });
   };
+  // La qualité d'image d'un fichier, d'une saison ou d'un film (`quality`, `hdr` : voir docs/api.md) : ['4K', 'HDR'], ['Full HD'], ou [] quand l'API n'en dit rien.
+  // Une valeur que ce client ne connaît pas s'affiche en majuscules. La fiche en fait son premier groupe de badges, la vignette d'un film son cartouche.
+  var QUALITY = { '4k': '4K', fullhd: 'Full HD', hd: 'HD', sd: 'SD' };
+  H.pictureTags = function (b) {
+    var out = [];
+    if (typeof b.quality === 'string' && b.quality) out.push(QUALITY[b.quality] || b.quality.toUpperCase());
+    if (b.hdr === true) out.push('HDR');
+    return out;
+  };
   H.card = function (it, withGroup, withPart) {
     if (it.type === 'saga') return sagaCard(it);
     if (it.type === 'artist') return artistCard(it);
@@ -177,7 +186,10 @@
     else if (it.seen || it.started) pic.appendChild(h('span', { class: 'badge' }, it.type === 'movie' ? H.t('En cours') : (it.seen || 0) + '/' + total));
     if (square && H.music) pic.appendChild(H.music.cardTools(it));
     if (it.type === 'movie' || it.type === 'show') { pic.appendChild(H.actions.tools(it)); H.actions.bind(a, it); }
-    if (withPart && it.part !== undefined && it.part !== null) pic.appendChild(h('span', { class: 'part' }, it.part));
+    var numbered = withPart && it.part !== undefined && it.part !== null;
+    if (numbered) pic.appendChild(h('span', { class: 'part' }, it.part));
+    var picture = it.type === 'movie' ? H.pictureTags(it) : [];                       // la qualité d'un film (voir docs/api.md), sous son numéro dans une saga ; ni langues, ni focus
+    if (picture.length) pic.appendChild(h('span', { class: 'qual' + (numbered ? ' below' : '') }, picture.join(' ')));
     if (it.tmdb_rating) pic.appendChild(H.scoreRing(it));
     a.appendChild(pic);
     a.appendChild(h('div', { class: 't' }, it.title));
@@ -554,17 +566,13 @@
 
     // Les badges d'un fichier ou d'une saison (voir docs/api.md) : « 4K HDR · Audio FR EN · Sous-titres EN ». Ce que l'API ne donne pas (fichier pas encore sondé) n'apparaît pas,
     // une liste vide masque son groupe ; rien du tout : null. Ce ne sont que des étiquettes : ni lien, ni bouton, ni focus.
-    var QUALITY = { '4k': '4K', fullhd: 'Full HD', hd: 'HD', sd: 'SD' };
     function tagGroup(label, values) {
       return values.length ? h('span', { class: 'tgrp' }, label ? h('span', { class: 'tlab' }, label) : null, values.map(function (v) { return h('span', { class: 'tag' }, v); })) : null;
     }
     function langCodes(list) { return (Array.isArray(list) ? list : []).filter(function (c) { return typeof c === 'string' && c; }).map(function (c) { return c.toUpperCase(); }); }
     function qualityTags(b) {
       if (!b) return null;
-      var picture = [];
-      if (typeof b.quality === 'string' && b.quality) picture.push(QUALITY[b.quality] || b.quality.toUpperCase());
-      if (b.hdr === true) picture.push('HDR');
-      var groups = [tagGroup('', picture), tagGroup(H.t('Audio'), langCodes(b.audio)), tagGroup(H.t('Sous-titres'), langCodes(b.subs))].filter(Boolean);
+      var groups = [tagGroup('', H.pictureTags(b)), tagGroup(H.t('Audio'), langCodes(b.audio)), tagGroup(H.t('Sous-titres'), langCodes(b.subs))].filter(Boolean);
       if (!groups.length) return null;
       var row = h('div', { class: 'tags' });
       groups.forEach(function (g, i) {

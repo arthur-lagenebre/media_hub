@@ -501,7 +501,8 @@ class TestQualityTags(UiCase):
                   ("Dark", 1, 1): probe_summary(1920, 1080, True, ("ger", "fre"), ("fre", "eng")),
                   ("Dark", 1, 2): probe_summary(1920, 800, False, ("ger",), ("fre",)),
                   ("Vidéo Série", 1, 1): probe_summary(1280, 720, False, ("und",)),
-                  ("Vidéo Série", 1, 2): probe_summary(1280, 720)}
+                  ("Vidéo Série", 1, 2): probe_summary(1280, 720),
+                  ("Man of Steel", None, None): probe_summary(3840, 2160)}
         for (title, season, number), probe in probes.items():
             entry = next(e for (t, s, n), e in rows.items() if t == title and (season is None or (s, n) == (season, number)))
             db.set_probe(entry, probe)
@@ -576,6 +577,49 @@ class TestQualityTags(UiCase):
                 self.assertFalse(self.page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth"))
                 size = self.view(".hero .tags .tag").first.evaluate("el => parseFloat(getComputedStyle(el).fontSize)")
                 self.assertGreaterEqual(size, 12)                                         # lisible, même sur un téléphone
+
+    # --- Sur la vignette d'un film : la qualité seule, sur l'affiche ---------
+    def card(self, lib, title):
+        return self.view(f".card[data-key='{self.item(lib, title)['id']}']")
+
+    def test_a_film_card_shows_its_quality_on_its_poster(self):
+        self.open("#/l/films")
+        self.card("films", "Direct").wait_for()
+        self.assertEqual(self.card("films", "Direct").locator(".poster .qual").inner_text(), "4K HDR")
+        self.assertEqual(self.card("films", "Long").locator(".qual").count(), 0)                 # pas sondé : rien
+        self.assertEqual(self.view(".qual :is(a, button, [tabindex], .f)").count(), 0)          # une étiquette : rien à atteindre
+        self.open("#/l/series")
+        self.card("series", "Dark").wait_for()
+        self.assertEqual(self.view(".card .qual").count(), 0)                                    # une série n'en porte pas sur sa vignette
+
+    def test_the_quality_stays_clear_of_the_part_and_of_the_progress(self):
+        film = self.item("films", "Man of Steel")["id"]
+        self.api("/api/progress", {"entry": self.entries("films", "Man of Steel")[0]["id"], "position": 300, "duration": 8000})
+        self.addCleanup(lambda: self.api("/api/item/" + film + "/seen", {"done": False}))
+        self.open("#/saga/films?g=Saga%20DCEU")
+        card = self.view(f".card[data-key='{film}']")
+        card.locator(".qual").wait_for()
+        boxes = [card.locator(sel).bounding_box() for sel in (".part", ".qual", ".badge")]
+        self.assertTrue(all(boxes), boxes)
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1:]:
+                apart = a["x"] + a["width"] <= b["x"] or b["x"] + b["width"] <= a["x"] or a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"]
+                self.assertTrue(apart, (a, b))
+
+    def test_the_card_quality_fits_on_every_device(self):
+        for device, width in (("phone", 360), ("tablet", 800), ("tv", 1920), ("pc", 1280)):
+            with self.subTest(device=device):
+                context = self.browser.new_context(viewport={"width": width, "height": 800})
+                self.addCleanup(context.close)
+                context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+                self.page = context.new_page()
+                self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                self.open("#/l/films")
+                chip = self.card("films", "Direct").locator(".qual")
+                chip.wait_for()
+                box, poster = chip.bounding_box(), self.card("films", "Direct").locator(".poster").bounding_box()
+                self.assertLessEqual(box["x"] + box["width"], poster["x"] + poster["width"] / 2 + 0.5)        # dans la moitié gauche : la coche ou « En cours » ont la droite
+                self.assertGreaterEqual(chip.evaluate("el => parseFloat(getComputedStyle(el).fontSize)"), 11)
 
 
 class TestVideoPlayer(UiCase):

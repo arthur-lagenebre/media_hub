@@ -179,6 +179,53 @@ def probed(width=1920, height=1080, hdr=False, audio=("fre",), subs=()):
 BADGES = ("quality", "hdr", "audio", "subs")
 
 
+class TestCardQuality(RouteCase):
+    """La qualité d'image sur la vignette d'un film (grille, accueil, recherche, sagas de la fiche) : celle de son premier fichier sondé ; rien sinon."""
+
+    def setUp(self):
+        super().setUp()
+        self.fill([item("m1", title="Alpha", meta={"directors": ["Ann Réal"], "tmdb": "movie/11"}), item("m2", title="Beta", meta={"directors": ["Ann Réal"], "tmdb": "movie/12"}), item("m3", title="Gamma", grp="Saga"), item("m4", title="Delta", grp="Saga"), item("s1", "show", title="Serie")],
+                  [entry("v1", "m1"), entry("v2", "m2"), entry("v3a", "m3", rel="m3/b.mkv"), entry("v3b", "m3", rel="m3/a.mkv"), entry("v4", "m4"), entry("e1", "s1", season=1, number=1)])
+        self.db.set_probe("v1", json.loads(probed(3840, 1600, True)))
+        self.db.set_probe("v3a", json.loads(probed(1920, 1080)))
+        self.db.set_probe("v3b", json.loads(probed(1280, 720)))                      # a.mkv vient avant b.mkv : c'est lui qui compte
+        self.db.set_probe("v4", {"video": None, "audio": [], "subs": []})           # pas d'image : pas de qualité
+        self.db.set_probe("e1", json.loads(probed(3840, 2160)))                     # une série : pas sur sa vignette
+
+    def cards(self, items):
+        return {c["title"]: {k: c[k] for k in ("quality", "hdr") if k in c} for c in items}
+
+    def test_the_library_grid(self):
+        self.assertEqual(self.cards(self.get("/api/library/lib").json()["items"]),
+                         {"Alpha": {"quality": "4k", "hdr": True}, "Beta": {}, "Gamma": {"quality": "hd", "hdr": False}, "Delta": {}, "Serie": {}})
+
+    def test_a_file_probed_later_shows_up_at_once(self):
+        self.get("/api/library/lib")
+        self.db.set_probe("v2", json.loads(probed(720, 576)))                      # lu par le lecteur, ou par la tâche « Analyse des vidéos »
+        self.assertEqual(self.cards(self.get("/api/library/lib").json()["items"])["Beta"], {"quality": "sd", "hdr": False})
+
+    def test_the_home_the_search_and_the_sagas_of_a_film(self):
+        home = self.get("/api/home").json()["libraries"][0]
+        self.assertEqual(self.cards(home["recent"])["Alpha"], {"quality": "4k", "hdr": True})
+        self.assertEqual(self.cards(home["unseen"])["Alpha"], {"quality": "4k", "hdr": True})
+        found = self.get("/api/search?q=alpha").json()["results"][0]["items"]
+        self.assertEqual(self.cards(found), {"Alpha": {"quality": "4k", "hdr": True}})
+        saga = self.get("/api/item/m4").json()["saga"]
+        self.assertEqual(self.cards(saga), {"Gamma": {"quality": "hd", "hdr": False}, "Delta": {}})
+        films = self.get("/api/person?name=" + quote("Ann Réal")).json()["results"][0]["items"]
+        self.assertEqual(self.cards(films), {"Alpha": {"quality": "4k", "hdr": True}, "Beta": {}})
+
+    def test_a_saga_of_the_sagas_file_too(self):
+        self.hub.sagas.add("Liste", [11, 12])
+        listed = next(s for s in self.get("/api/item/m2").json()["sagas"] if s["name"] == "Liste")
+        self.assertEqual(self.cards(listed["films"]), {"Alpha": {"quality": "4k", "hdr": True}, "Beta": {}})
+
+    def test_the_saga_cards_have_none(self):
+        sagas = [c for c in self.get("/api/library/lib?sagas=1").json()["items"] if c["type"] == "saga"]
+        self.assertEqual(len(sagas), 1)
+        self.assertNotIn("quality", sagas[0])
+
+
 class TestItemBadges(RouteCase):
     """Qualité d'image et langues sur la fiche : seulement pour les fichiers déjà sondés."""
 

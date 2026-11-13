@@ -211,7 +211,8 @@ def typed_summary(row, meta):
     return out
 
 
-def summary(row, seen=None):
+def summary(row, seen=None, quality=None):
+    """La vignette d'un élément. `quality` : ce que rend card_quality ; un film qui y est porte `quality` et `hdr`."""
     meta = safe_json(row["meta"], {})
     out = {"id": row["id"], "type": row["type"], "title": row["title"], "year": row["year"], "grp": row["grp"], "n": row["count"], "letter": row["letter"],
            "added": row["added"], "genres": safe_json(row["genres"], []), "cover": urls.item_cover(row["id"]), **typed_summary(row, meta)}
@@ -220,7 +221,25 @@ def summary(row, seen=None):
         out["tmdb_rating"], out["tmdb_votes"] = rating["vote"], rating["votes"]
     if seen is not None:
         out["seen"] = seen
+    out.update((quality or {}).get(row["id"], {}))
     return out
+
+
+CARD_QUALITY_SQL = ("SELECT e.item_id, e.season, e.disc, e.number, e.rel, json_extract(e.probe, '$.video.width') AS width, json_extract(e.probe, '$.video.height') AS height, "
+                    "json_extract(e.probe, '$.video.hdr') AS hdr FROM entries e JOIN items i ON i.id = e.item_id "
+                    "WHERE i.type = 'movie' AND e.kind = 'video' AND e.probe IS NOT NULL AND json_valid(e.probe)")
+
+
+def card_quality(db):
+    """{id d'un film: {quality, hdr}} : la qualité d'image de son premier fichier sondé qui a une image (l'ordre de la fiche), pour sa vignette. Les films sans fichier sondé n'y sont pas.
+    Lu en une requête et gardé en mémoire jusqu'au prochain scan ou à la prochaine sonde (voir Database.derived)."""
+    def build():
+        rows = sorted((r for r in db.query(CARD_QUALITY_SQL) if r["width"] is not None), key=order_key)
+        first = {}
+        for row in rows:
+            first.setdefault(row["item_id"], row)
+        return {ident: {"quality": badges.quality(row["width"], row["height"]), "hdr": bool(row["hdr"])} for ident, row in first.items()}
+    return db.derived("card-quality", build, probes=True)
 
 
 def entry_json(row, progress=None):
@@ -936,9 +955,9 @@ def seen_counts(hub, profile, lib_id=None):
     return {r["item"]: (r["seen"] or 0, r["touched"]) for r in hub.db.query(sql, params)}
 
 
-def with_seen(row, seen):
+def with_seen(row, seen, quality=None):
     done, touched = watched(row, seen)
-    out = summary(row)
+    out = summary(row, quality=quality)
     if touched:
         out["seen"] = done
         out["started"] = touched - done
@@ -1024,7 +1043,7 @@ today = missing.today                       # le jour (« 2026-11-04 ») : un no
 UNSEEN = 48                                 # ce que le serveur offre par bibliothèque : le navigateur en retire ce que « Nouveautés » (24) montre déjà, puis coupe à `home_unseen_count` (24 au plus) ; à 24 seulement, les tris « date d'ajout » et « note » (les mieux notés sont souvent les plus récents) vidaient le rayon
 
 
-def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random"):
+def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random", quality=None):
     """Les films ou les séries d'une bibliothèque que ce compte n'a pas encore touchés (ni vus, ni commencés : aucune progression sur aucun de leurs fichiers ; c'est l'état « à voir » de watch_state), `n` au plus.
 
     L'ordre est choisi par le réglage `home_unseen_sort` du compte, et appliqué avant la coupe à `n` : `random` (défaut) ne dépend que du compte et du jour (le même toute la journée, un autre demain) ; `rating` : la note TMDB montrée, de la meilleure à la moins bonne (comme le tri « Mieux notés » de la bibliothèque : ce qui a moins de MIN_VOTES votes ou aucune note vient à la fin) ; `added` : le plus récemment ajouté d'abord."""
@@ -1035,7 +1054,7 @@ def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random"):
         pool.sort(key=lambda r: (-r["added"], r["sort"], r["id"]))
     else:
         pool.sort(key=lambda r: hashlib.sha1(f"{day}:{profile}:{r['id']}".encode()).hexdigest())
-    return [summary(r) for r in pool[:n]]
+    return [summary(r, quality=quality) for r in pool[:n]]
 
 
 UNSEEN_KINDS = ("movies", "shows")          # les genres de bibliothèque qui ont un rayon « Pas encore vu » : une nouvelle bibliothèque vidéo d'un de ces genres en a un sans autre réglage
@@ -1044,7 +1063,7 @@ UNSEEN_KINDS = ("movies", "shows")          # les genres de bibliothèque qui on
 @route("GET", r"/api/home")
 def api_home(h, m, q):
     hub = h.hub
-    seen = seen_counts(hub, h.user["id"])
+    seen, quality = seen_counts(hub, h.user["id"]), card_quality(hub.db)
     day, rows = today(), []
     order = prefs.load(hub.db, h.user["id"])["home_unseen_sort"]
     for lib in h.visible_libs():
@@ -1052,10 +1071,10 @@ def api_home(h, m, q):
         if lib.kind == "music":
             recent = recent_music(items, seen, 24)
         else:
-            recent = [with_seen(r, seen) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
+            recent = [with_seen(r, seen, quality) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
         row = {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind, "recent": recent, "count": len(items)}
         if lib.kind in UNSEEN_KINDS:
-            row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order)
+            row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order, quality=quality)
         rows.append(row)
     h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play")), "libraries": rows})
 
@@ -1067,13 +1086,13 @@ def api_search(h, m, q):
         h.send_json({"results": [], "people": []})
         return
     hub = h.hub
-    seen = seen_counts(hub, h.user["id"])
+    seen, quality = seen_counts(hub, h.user["id"]), card_quality(hub.db)
     results = []
     for lib in h.visible_libs():
         found = []
         for row in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY sort", (lib.id,)):
             if needle in fold(row["title"]) or needle in fold(row["grp"]):
-                found.append(with_seen(row, seen))
+                found.append(with_seen(row, seen, quality))
                 if len(found) >= 40:
                     break
         if found:
@@ -1122,12 +1141,13 @@ def person_rows(db, person, visible):
 
 def person_results(db, libs, rows, seen):
     """Les éléments `rows` groupés par bibliothèque (dans l'ordre de `libs`, sans les bibliothèques vides), du plus récent au plus ancien."""
+    quality = card_quality(db)
     results = []
     for lib in libs:
         mine = sorted((r for r in rows.values() if r["lib"] == lib.id), key=lambda r: r["sort"])
         mine.sort(key=lambda r: r["year"] or "", reverse=True)          # sans année en dernier ; à égalité, par titre (le tri est stable)
         if mine:
-            results.append({"id": lib.id, "label": labels.shown(db, lib), "kind": lib.kind, "items": [with_seen(r, seen) for r in mine]})
+            results.append({"id": lib.id, "label": labels.shown(db, lib), "kind": lib.kind, "items": [with_seen(r, seen, quality) for r in mine]})
     return results
 
 
@@ -1474,10 +1494,10 @@ def page_bounds(q):
         return 0, 240
 
 
-def library_item(row, seen):
+def library_item(row, seen, quality=None):
     if row["type"] == "artist":
         return artist_card(row)
-    return saga_json(row, seen) if row["type"] == "saga" else with_seen(row, seen)
+    return saga_json(row, seen) if row["type"] == "saga" else with_seen(row, seen, quality)
 
 
 def artist_key(row):
@@ -1539,7 +1559,7 @@ def api_library(h, m, q):
     offset, limit = page_bounds(q)
     page = chosen[offset:offset + limit]
     out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "total": len(chosen), "offset": offset,
-           "items": [library_item(r, seen) for r in page],
+           "items": [library_item(r, seen, card_quality(hub.db)) for r in page],          # la table ne connaît que des films : une autre bibliothèque n'y trouve rien
            "genres": genre_menu(genres)}
     if group and sort == "part":
         number_films(out["items"], ranks, offset + 1)
@@ -1594,12 +1614,12 @@ def tagged_saga(hub, item, movies, seen, info):
     ranks, absent = missing.tagged(item["grp"], tagged, info, set(hub.sagas.ignored()))
     if ranks is not None:
         tagged.sort(key=lambda r: ranks[r["id"]])
-    return number_films([with_seen(r, seen) for r in tagged], ranks), absent
+    return number_films([with_seen(r, seen, card_quality(hub.db)) for r in tagged], ranks), absent
 
 
-def file_saga(name, films, listed, seen, owned, info):
+def file_saga(name, films, listed, seen, owned, info, quality=None):
     """Une saga de `sagas.json` : ses films numérotés d'après leur place dans la liste, et ceux de la liste qu'on n'a pas."""
-    numbered = number_films([with_seen(f, seen) for f, _ in films], {f["id"]: rank for f, rank in films})
+    numbered = number_films([with_seen(f, seen, quality) for f, _ in films], {f["id"]: rank for f, rank in films})
     return {"name": name, "films": numbered, "missing": missing.listed(listed.get(name, []), owned, info)}
 
 
@@ -1616,7 +1636,7 @@ def movie_sagas(hub, item, lib, user):
         if item["grp"] not in custom:                   # une saga du fichier de même nom la remplace : c'est elle que ce nom désigne dans la grille
             sagas.append({"name": item["grp"], "films": out["saga"], "missing": absent})
     listed = dict(hub.sagas.all())
-    sagas += [file_saga(name, films, listed, seen, owned, info) for name, films in mine.items()]
+    sagas += [file_saga(name, films, listed, seen, owned, info, card_quality(hub.db)) for name, films in mine.items()]
     sagas = visible_sagas(sagas)
     if sagas:
         out["sagas"] = sagas
