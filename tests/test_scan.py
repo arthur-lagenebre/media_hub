@@ -322,6 +322,29 @@ class TestScanMusic(TempCase):
         self.assertEqual(counts.read, 1)
         self.assertEqual(json.loads(items["Vieux"]["meta"])["release_types"], ["album"])
 
+    def reissued(self, name, *tags):
+        """Un album « Reedition/<name> » d'une piste éditée en 2016 (DATE) ; `tags` ajoute `(clé, valeur)` (ORIGINALYEAR, ORIGINALDATE)."""
+        path = fixtures.write_flac(self.root / "Reedition" / name / "01 - T.flac", "T", name, "Daft", 1, 1, year="2016-03-25")
+        fixtures.add_tags(path, *tags)
+        return self.scan()
+
+    def test_the_year_of_an_album_is_its_first_release_not_its_edition(self):
+        for name, tags in (("Annee", [("ORIGINALYEAR", "1970")]), ("Date", [("ORIGINALDATE", "1970-05-08")]), ("Aucune", [])):
+            with self.subTest(name):
+                items, _, _ = self.reissued(name, *tags)
+                self.assertEqual(items[name]["year"], "2016" if name == "Aucune" else "1970")
+
+    def test_a_track_kept_from_before_the_date_was_read_is_read_again(self):
+        _, entries, _ = self.reissued("Ancienne", ("ORIGINALYEAR", "1970"))
+        known = known_of(entries.values())
+        meta = json.loads(known["Reedition/Ancienne/01 - T.flac"]["meta"])
+        del meta["info"]["date"]
+        meta["info"]["year"] = "2016"                                                          # l'année d'avant : celle de la date d'édition
+        known["Reedition/Ancienne/01 - T.flac"] = {**known["Reedition/Ancienne/01 - T.flac"], "meta": json.dumps(meta)}
+        items, _, counts = self.scan(known)
+        self.assertEqual(counts.read, 1)
+        self.assertEqual(items["Ancienne"]["year"], "1970")
+
 
 class TestArtistDirs(unittest.TestCase):
     @staticmethod
