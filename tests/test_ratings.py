@@ -259,7 +259,7 @@ class TestMyRatingSort(RatingCase):
     ORDER = ["b", "a", "c1", "c2", "e", "d", "f"]
 
     def films(self, order):
-        rows = {"a": ("Zulu", "up"), "b": ("Alpha", "up"), "c1": ("Same", "mid"), "c2": ("Same", "mid"), "d": ("Beta", None), "e": ("Aleph", None), "f": ("Omega", "down")}
+        rows = {"a": ("Zulu", "up"), "b": ("Alpha", "up"), "c1": ("Same", "mid"), "c2": ("Same", "mid"), "d": ("Beta", None), "e": ("Aleph", None), "f": ("Aardvark", "down")}
         self.fill("films", [item(i, lib="films", title=rows[i][0]) for i in order], [entry("v" + i, i, lib="films") for i in order])
         for ident, (_, value) in rows.items():
             if value:
@@ -280,7 +280,7 @@ class TestMyRatingSort(RatingCase):
 
     def test_it_is_the_order_of_the_account_that_asks(self):
         self.films(["a", "b", "c1", "c2", "d", "e", "f"])
-        self.assertEqual(self.ids(self.bob), ["e", "b", "d", "f", "c1", "c2", "a"])            # Bob n'a rien noté : l'ordre des titres
+        self.assertEqual(self.ids(self.bob), ["f", "e", "b", "d", "c1", "c2", "a"])            # Bob n'a rien noté : l'ordre des titres
 
     def test_a_show_library_sorts_too(self):
         self.fill("series", [item("s1", "show", lib="series", title="Zed"), item("s2", "show", lib="series", title="Abe")], [entry("e1", "s1", lib="series"), entry("e2", "s2", lib="series")])
