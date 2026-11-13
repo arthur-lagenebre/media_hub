@@ -167,6 +167,8 @@ class TestDictionary(unittest.TestCase):
             "  {name} : {n} film(s), {absent} absent(s), {coming} pas encore sorti(s)": ["film(s), ", "absent(s)", "pas encore sorti(s)"],
             "  {name} : fiche vide": ["fiche vide"],
             "{found} fichier(s) de ce genre, {removed} effacé(s).": ["fichier(s) de ce genre", "effacé(s)."],
+            "{probed} vidéo(s) analysée(s).": [" vidéo(s) analysée(s)", "."],
+            "{probed} vidéo(s) analysée(s), {failed} illisible(s).": [" vidéo(s) analysée(s)", ", ", " illisible(s)."],
             "{found} fichier(s) de ce genre (simulation : rien n'a été effacé).": ["fichier(s) de ce genre", " (simulation : rien n'a été effacé)."],
         }
         stale = []
@@ -288,6 +290,10 @@ class TestEnglishInTheBrowser(UiCase):
         self.assertEqual(tr("  Dune : série introuvable sur TMDB"), "  Dune: series not found on TMDB")
         self.assertEqual(tr("12 fichier(s) de ce genre (simulation : rien n'a été effacé)."), "12 file(s) of this kind (dry run: nothing was deleted).")
         self.assertEqual(tr("depuis 1993"), "since 1993")
+        self.assertEqual(tr("Analyse des vidéos"), "Video analysis")
+        self.assertEqual(tr("3 vidéo(s) analysée(s), 1 illisible(s)."), "3 video(s) analysed, 1 unreadable.")
+        self.assertEqual(tr("3 vidéo(s) analysée(s)."), "3 video(s) analysed.")
+        self.assertEqual(tr("  illisible : Films/A (2020)/A.mkv : fichier abîmé"), "  unreadable: Films/A (2020)/A.mkv: fichier abîmé")
         self.assertEqual(tr("Un message que le serveur est seul à connaître"), "Un message que le serveur est seul à connaître")
         self.assertEqual(self.page.evaluate("Hub.tr('')"), "")
 

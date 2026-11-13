@@ -479,6 +479,105 @@ class TestDetailPages(UiCase):
         self.assertEqual(status.inner_text(), "terminée")
 
 
+def probe_summary(width, height, hdr=False, audio=(), subs=()):
+    """Un résumé ffprobe tel que la base le garde : ce que le serveur lit pour les badges (taille, HDR, langues ; « + » au bout d'un code : commentaire ou sous-titres forcés)."""
+    def tracks(codes, flag):
+        return [{"index": i, "lang": c.rstrip("+"), flag: c.endswith("+"), "title": "", "default": i == 0, "codec": "aac", "channels": 2} for i, c in enumerate(codes)]
+    return {"container": "mkv", "duration": 8.0, "bitrate": 1, "size": 1, "video": {"codec": "h264", "profile": "", "width": width, "height": height, "fps": 24, "depth": 8, "pix_fmt": "yuv420p", "hdr": hdr, "bitrate": 1},
+            "audio": tracks(audio, "commentary"), "subs": tracks(subs, "forced")}
+
+
+class TestQualityTags(UiCase):
+    """Les badges de qualité et de langues, sous le titre d'un film et sous les saisons d'une série : seulement ce que l'API donne, rien quand le fichier n'est pas sondé, jamais de focus."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        db = cls.run_.hub.db
+        rows = {(r["title"], r["season"], r["number"]): r["entry"] for r in db.query(
+            "SELECT i.title, e.season, e.number, e.id AS entry FROM entries e JOIN items i ON i.id = e.item_id WHERE e.kind='video'")}
+        db.execute("UPDATE entries SET probe=NULL WHERE kind='video'")                  # rien de sondé, sauf ce qui suit (la tâche du démarrage a sondé ce qu'elle a pu)
+        probes = {("Direct", None, None): probe_summary(3840, 1600, True, ("fre", "eng", "eng+"), ("eng", "fre+", "fra")),
+                  ("Dark", 1, 1): probe_summary(1920, 1080, True, ("ger", "fre"), ("fre", "eng")),
+                  ("Dark", 1, 2): probe_summary(1920, 800, False, ("ger",), ("fre",)),
+                  ("Vidéo Série", 1, 1): probe_summary(1280, 720, False, ("und",)),
+                  ("Vidéo Série", 1, 2): probe_summary(1280, 720)}
+        for (title, season, number), probe in probes.items():
+            entry = next(e for (t, s, n), e in rows.items() if t == title and (season is None or (s, n) == (season, number)))
+            db.set_probe(entry, probe)
+
+    def tags(self, scope=".hero"):
+        """[(libellé du groupe, [badges])] de la rangée de badges de `scope`, ou None s'il n'y en a pas."""
+        row = self.view(f"{scope} .tags")
+        if not row.count() or not row.first.is_visible():
+            return None
+        return row.first.evaluate("el => Array.prototype.map.call(el.querySelectorAll('.tgrp'), g => { var l = g.querySelector('.tlab'); "
+                                  "return [l ? l.textContent : '', Array.prototype.map.call(g.querySelectorAll('.tag'), t => t.textContent)]; })")
+
+    def open_item(self, lib, title, ready=".hero"):
+        self.open("#/i/" + self.item(lib, title)["id"])
+        self.view(ready).first.wait_for()
+
+    def test_a_film_shows_its_quality_hdr_and_languages(self):
+        self.open_item("films", "Direct")
+        self.assertEqual(self.tags(), [["", ["4K", "HDR"]], ["Audio", ["FR", "EN"]], ["Sous-titres", ["EN", "FR"]]])
+        self.assertEqual(self.view(".hero .tags .sep").count(), 2)                       # « · » entre les groupes, pas avant le premier
+
+    def test_a_film_that_is_not_probed_shows_nothing(self):
+        self.open_item("films", "Long")
+        self.assertEqual(self.view(".hero .tags").count(), 0)
+        self.assertEqual(self.view(".hero .meta").count(), 1)
+
+    def test_each_season_shows_what_all_its_probed_episodes_share(self):
+        self.open_item("series", "Dark", ".ep")
+        self.assertEqual(self.tags(".episodes"), [["", ["Full HD"]], ["Audio", ["DE"]], ["Sous-titres", ["FR"]]])
+        self.assertIsNone(self.tags(".hero"))                                            # une série les porte sur ses saisons, pas sous son titre
+        self.view(".chip", has_text="Saison 2").click()
+        self.until(lambda: self.view(".ep").count() == 1)
+        self.assertIsNone(self.tags(".episodes"))                                        # aucun épisode sondé : rien, pas de rangée vide
+        self.view(".chip", has_text="Saison 1").click()
+        self.until(lambda: self.tags(".episodes") is not None)
+
+    def test_an_empty_list_hides_its_group(self):
+        self.open_item("series", "Vidéo Série", ".ep")
+        self.assertEqual(self.tags(".episodes"), [["", ["HD"]]])
+        self.assertEqual(self.view(".episodes .tags .sep").count(), 0)
+
+    def test_the_tags_never_take_the_focus(self):
+        self.open_item("films", "Direct")
+        focusable = "a, button, input, select, textarea, [tabindex], .f"
+        self.assertEqual(self.view(f".hero .tags :is({focusable})").count(), 0)
+        for _ in range(12):
+            self.press("ArrowDown")
+            self.press("ArrowRight")
+            self.assertFalse(self.page.evaluate("!!(document.activeElement && document.activeElement.closest('.tags'))"))
+
+    def test_the_labels_follow_the_language_of_the_page(self):
+        self.context.add_cookies([{"name": "hub_lang", "value": "en", "url": self.base}])
+        self.page.add_init_script("localStorage.setItem('hub.lang', JSON.stringify('en'))")
+        self.open_item("films", "Direct")
+        self.assertEqual(self.tags(), [["", ["4K", "HDR"]], ["Audio", ["FR", "EN"]], ["Subtitles", ["EN", "FR"]]])
+
+    def test_they_fit_on_every_device(self):
+        for device, width in (("phone", 360), ("phone", 390), ("tablet", 800), ("tv", 1920), ("pc", 1280)):
+            with self.subTest(device=device):
+                context = self.browser.new_context(viewport={"width": width, "height": 800})          # un appareil par page : l'appareil retenu ne se change pas en cours de route
+                self.addCleanup(context.close)
+                context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+                self.page = context.new_page()
+                self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                self.open_item("films", "Direct")
+                self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), device)
+                box, column = self.view(".hero .tags").bounding_box(), self.view(".hero .info").bounding_box()
+                self.assertGreater(box["height"], 0)
+                self.assertLessEqual(box["x"] + box["width"], column["x"] + column["width"] + 0.5)           # dans la colonne du texte : ils passent à la ligne plutôt que de déborder
+                last = self.view(".hero .tags .tag").last.bounding_box()
+                self.assertLessEqual(last["x"] + last["width"], column["x"] + column["width"] + 0.5)
+                self.assertFalse(self.page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth"))
+                size = self.view(".hero .tags .tag").first.evaluate("el => parseFloat(getComputedStyle(el).fontSize)")
+                self.assertGreaterEqual(size, 12)                                         # lisible, même sur un téléphone
+
+
 class TestVideoPlayer(UiCase):
     def begin(self, lib, title):
         entry = self.entries(lib, title)[0]["id"]

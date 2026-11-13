@@ -170,6 +170,73 @@ class TestSeenRoutes(RouteCase):
         self.assertEqual(self.post("/api/item/nope/dismiss").status, 404)
 
 
+def probed(width=1920, height=1080, hdr=False, audio=("fre",), subs=()):
+    """Un résumé ffprobe, tel que la base le garde."""
+    tracks = lambda langs: [{"lang": lang, "commentary": False, "forced": False} for lang in langs]      # noqa: E731
+    return json.dumps({"video": {"width": width, "height": height, "hdr": hdr}, "audio": tracks(audio), "subs": tracks(subs)})
+
+
+BADGES = ("quality", "hdr", "audio", "subs")
+
+
+class TestItemBadges(RouteCase):
+    """Qualité d'image et langues sur la fiche : seulement pour les fichiers déjà sondés."""
+
+    def fill(self, items, entries):
+        """Les sondes se posent après coup : replace_library ne garde que celles d'avant."""
+        super().fill(items, [{**e, "probe": None} for e in entries])
+        for e in entries:
+            if e["probe"]:
+                self.db.execute("UPDATE entries SET probe=? WHERE id=?", (e["probe"], e["id"]))
+
+    def entries(self, ident):
+        reply = self.get(f"/api/item/{ident}")
+        self.assertEqual(reply.status, 200)
+        return {e["id"]: {k: e[k] for k in BADGES if k in e} for e in reply.json()["entries"]}
+
+    def test_a_film_that_is_not_probed_yet_has_no_badge(self):
+        self.fill([item("m1")], [entry("v1", "m1")])
+        self.assertEqual(self.entries("m1"), {"v1": {}})
+        self.assertNotIn("season_badges", self.get("/api/item/m1").json())
+
+    def test_a_probed_film_says_its_quality_and_its_languages(self):
+        self.fill([item("m1")], [entry("v1", "m1", probe=probed(3840, 1600, True, ("eng", "fre"), ("fre",)))])
+        self.assertEqual(self.entries("m1"), {"v1": {"quality": "4k", "hdr": True, "audio": ["en", "fr"], "subs": ["fr"]}})
+
+    def test_the_subtitle_files_beside_the_video_count(self):
+        self.fill([item("m1")], [entry("v1", "m1", rel="m1/Film.mkv", probe=probed(subs=("fre",))), entry("v2", "m1", rel="m1/Film - bonus.mkv")])
+        folder = self.lib.path / "m1"
+        folder.mkdir()
+        for name in ("Film.en.srt", "Film.es.forced.srt", "Film - bonus.de.srt", "Autre.it.srt"):
+            (folder / name).write_text("x", encoding="utf-8")
+        found = self.entries("m1")
+        self.assertEqual(found["v1"]["subs"], ["fr", "de", "en"])            # « Film - bonus.de.srt » porte aussi le nom de « Film » : comme dans le lecteur
+        self.assertEqual(found["v2"], {})                                    # pas sondé : rien, même avec un fichier voisin
+
+    def test_a_file_without_an_image_or_a_track_of_music_has_no_badge(self):
+        self.fill([item("m1"), item("al", "album")], [entry("v1", "m1", probe=json.dumps({"video": None, "audio": [], "subs": []})), entry("t1", "al", kind="audio", probe=probed())])
+        self.assertEqual((self.entries("m1"), self.entries("al")), ({"v1": {}}, {"t1": {}}))
+
+    def test_a_season_sums_up_its_probed_episodes(self):
+        self.fill([item("s1", "show", meta={"seasons": [1, 2, 3]})],
+                  [entry("e1", "s1", season=1, number=1, probe=probed(1920, 1080, True, ("jpn", "fre"), ("fre", "eng"))),
+                   entry("e2", "s1", season=1, number=2, probe=probed(1920, 800, False, ("fre", "jpn"), ("fre",))),
+                   entry("e3", "s1", season=1, number=3, probe=probed(1280, 720, False, ("jpn", "fre", "eng"), ("eng", "fre"))),
+                   entry("e4", "s1", season=1, number=4),                                           # pas sondé : ne compte pas
+                   entry("e5", "s1", season=2, number=1, probe=probed(3840, 2160, True, ("eng",))),
+                   entry("e6", "s1", season=3, number=1),                                           # saison sans épisode sondé : absente
+                   entry("e7", "s1", probe=probed(720, 576))])                                      # hors saison
+        out = self.get("/api/item/s1").json()
+        self.assertEqual(out["seasons"], [1, 2, 3])
+        self.assertEqual(out["season_badges"], {"1": {"quality": "fullhd", "hdr": False, "audio": ["ja", "fr"], "subs": ["fr"]},
+                                                "2": {"quality": "4k", "hdr": True, "audio": ["en"], "subs": []}})
+        self.assertEqual(self.entries("s1")["e7"]["quality"], "sd")
+
+    def test_a_show_without_any_probed_episode_has_no_season_badge(self):
+        self.fill([item("s1", "show", meta={"seasons": [1]})], [entry("e1", "s1", season=1, number=1), entry("e2", "s1", probe=probed())])       # e2, sondé, n'est dans aucune saison
+        self.assertNotIn("season_badges", self.get("/api/item/s1").json())
+
+
 class TestPlaylistRoute(RouteCase):
     kind = "music"
 

@@ -48,6 +48,7 @@ from .. import sagas as sagafile
 from ..sagas import Sagas
 from ..db import Database, make_id
 from ..inbox import EXTENSIONS, Inbox, InboxError
+from ..media import badges
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
@@ -1627,6 +1628,32 @@ def visible_sagas(sagas):
     return [{k: v for k, v in s.items() if v or k != "missing"} for s in sagas if len(s["films"]) + len(s["missing"]) > 1]
 
 
+def video_badges(hub, rows):
+    """{id du fichier: {quality, hdr, audio, subs}} pour les vidéos déjà sondées (à la lecture, ou par la tâche « Analyse des vidéos ») : voir badges.of_probe. Les autres n'y sont pas.
+    Les sous-titres posés à côté de la vidéo comptent : chaque dossier n'est lu qu'une fois, même pour une saison entière."""
+    listed, found = {}, {}
+    for row in rows:
+        probe = safe_json(row["probe"], None) if row["kind"] == "video" else None
+        if not probe:
+            continue
+        path = hub.path_of(row)[1]
+        if path.parent not in listed:
+            listed[path.parent] = subtitles.siblings(path.parent)
+        ours = badges.of_probe(probe, subtitles.side_files(path, listed[path.parent]))
+        if ours:
+            found[row["id"]] = ours
+    return found
+
+
+def season_badges(rows, found):
+    """{numéro de saison (une chaîne, comme toute clé JSON): {quality, hdr, audio, subs}} d'après les épisodes sondés (`found` : ce que rend video_badges) ; une saison sans épisode sondé n'y est pas."""
+    seasons = {}
+    for row in rows:
+        if row["season"] is not None and row["id"] in found:
+            seasons.setdefault(str(row["season"]), []).append(found[row["id"]])
+    return {season: badges.of_season(episodes) for season, episodes in seasons.items()}
+
+
 @route("GET", r"/api/item/(\w+)")
 def api_item(h, m, q):
     hub = h.hub
@@ -1641,10 +1668,14 @@ def api_item(h, m, q):
     links = album_links(meta) if item["type"] == "album" else video_links(item, meta)
     if links:
         out["links"] = links
-    out["entries"] = [entry_json(r, progress.get(r["id"])) for r in rows]
+    found = video_badges(hub, rows)
+    out["entries"] = [{**entry_json(r, progress.get(r["id"])), **found.get(r["id"], {})} for r in rows]
     out["resume"] = resume_target(rows, progress)
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
+        by_season = season_badges(rows, found)
+        if by_season:
+            out["season_badges"] = by_season
     if item["type"] == "movie":
         out.update(movie_sagas(hub, item, lib, h.user["id"]))
     if item["type"] == "album":

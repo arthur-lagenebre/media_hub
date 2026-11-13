@@ -19,14 +19,19 @@ def language(code):
     return LANG_NAMES.get((code or "").lower(), code or "")
 
 
-def side_files(video):
-    """[{'index', 'path', 'label', 'lang', 'forced'}] : les fichiers de sous-titres qui portent le nom de la vidéo (« Film.fr.forced.srt »)."""
-    video = Path(video)
+def siblings(folder):
+    """Les fichiers de sous-titres d'un dossier, triés sans tenir compte de la casse ; aucun si le dossier ne se lit pas."""
     try:
-        siblings = sorted(video.parent.iterdir(), key=lambda p: p.name.casefold())
+        return sorted((p for p in Path(folder).iterdir() if p.suffix.lower() in SIDE_EXTS), key=lambda p: p.name.casefold())
     except OSError:
         return []
-    paths = [p for p in siblings if p.suffix.lower() in SIDE_EXTS and p.name.casefold().startswith(video.stem.casefold())]
+
+
+def side_files(video, listed=None):
+    """[{'index', 'path', 'label', 'lang', 'forced'}] : les fichiers de sous-titres qui portent le nom de la vidéo (« Film.fr.forced.srt »).
+    `listed` : ce que `siblings` a rendu pour son dossier, quand on l'a déjà (une saison entière : le dossier n'est lu qu'une fois)."""
+    video = Path(video)
+    paths = [p for p in (siblings(video.parent) if listed is None else listed) if p.name.casefold().startswith(video.stem.casefold())]
     found = []
     for path in paths:
         label, lang, forced = describe_side(path.stem[len(video.stem):].strip(" ._-"))

@@ -462,9 +462,10 @@ class TestJobs(ServerCase):
         self.assertEqual(status, 202)
         self.run_.wait_jobs()
         self.assertEqual(self.items("series")["total"], before + 1)
-        jobs = self.api.json("/api/jobs?log=1")[1]
-        self.assertEqual(jobs["jobs"][0]["status"], "done")
-        self.assertIn("Séries", "\n".join(jobs["jobs"][0]["log"]))
+        jobs = self.api.json("/api/jobs?log=1")[1]["jobs"]                               # la plus récente d'abord
+        self.assertEqual([j["label"] for j in jobs[:2]], ["Analyse des vidéos", "Mise à jour · Séries"])        # le nouveau fichier n'est pas encore sondé : l'analyse suit le scan
+        self.assertEqual([j["status"] for j in jobs[:2]], ["done", "done"])
+        self.assertIn("Séries", "\n".join(jobs[1]["log"]))
 
     def test_cleanup_simulation_then_apply(self):
         junk = self.run_.libs["films"] / "Inception (2010)" / "Thumbs.db"
@@ -2404,7 +2405,8 @@ class TestAccountPermissions(AccountsCase):
         for method, path, body in self.restricted():
             status, _, data = self.bob.request(method, path, body=body)
             self.assertEqual((status, json.loads(data)), (403, {"error": "réservé à l'administrateur"}), path)
-        self.assertEqual(len(self.bob.json("/api/jobs")[1]["jobs"]), len(self.hub.cfg.libraries))      # seuls les scans du démarrage : rien de lancé depuis
+        started = [j["label"] for j in self.bob.json("/api/jobs")[1]["jobs"] if j["label"] != "Analyse des vidéos"]          # l'analyse qui suit les scans du démarrage n'est pas de bob
+        self.assertEqual(len(started), len(self.hub.cfg.libraries))                       # seuls les scans du démarrage : rien de lancé depuis
         self.assertTrue(junk.exists())
         self.assertEqual([u["name"] for u in self.admin.json("/api/users")[1]["users"]], ["admin", "bob"])
         self.assertEqual(self.admin.get("/api/state")[0], 200)                            # le compte de l'administrateur est intact : même jeton, même mot de passe
