@@ -51,7 +51,7 @@ def _read_tracks(release, known):
     for track in release.tracks:
         row = known.get(track.rel)
         cached = json.loads(row["meta"]).get("info") if unchanged(row, track.size, track.mtime) else None
-        if cached and all(key in cached for key in ("artists", "disc_title", "release_types")):          # une piste gardée d'avant la lecture d'un de ces champs est relue, une fois
+        if cached and all(key in cached for key in ("artists", "disc_title", "release_types", "date")):          # une piste gardée d'avant la lecture d'un de ces champs est relue, une fois
             track.info = cached
             reused += 1
         else:
