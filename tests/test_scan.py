@@ -164,6 +164,11 @@ class TestScanMusic(TempCase):
         self.assertEqual((meta["artist"], meta["folder"], meta["artist_dir"], meta["discs"], meta["duration"]), ("Daft", "Daft/2001 - Disco", "Daft", 1, 2.0))
         self.assertEqual((meta["has_cover"], meta["cover_file"]), (True, "cover.png"))
 
+    def test_the_artist_folder_is_found_when_its_name_differs_from_the_tag(self):
+        fixtures.write_flac(self.root / "AC_DC" / "1980 - Back in Black" / "01 - Hells Bells.flac", "Hells Bells", "Back in Black", "AC/DC", 1, 1)
+        meta = json.loads(self.scan()[0]["Back in Black"]["meta"])
+        self.assertEqual((meta["artist"], meta["artist_dir"]), ("AC/DC", "AC_DC"))
+
     def test_an_album_at_the_root_is_identified_by_a_dot(self):
         solo = self.scan()[0]["Single"]
         self.assertEqual(solo["id"], make_id("musique", "."))
