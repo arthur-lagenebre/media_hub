@@ -1559,7 +1559,7 @@ def api_library(h, m, q):
     offset, limit = page_bounds(q)
     page = chosen[offset:offset + limit]
     out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "total": len(chosen), "offset": offset,
-           "items": [library_item(r, seen, card_quality(hub.db) if movies else None) for r in page],
+           "items": [library_item(r, seen, card_quality(hub.db)) for r in page],          # la table ne connaît que des films : une autre bibliothèque n'y trouve rien
            "genres": genre_menu(genres)}
     if group and sort == "part":
         number_films(out["items"], ranks, offset + 1)
