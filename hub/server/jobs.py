@@ -1,6 +1,6 @@
-"""Tâches de fond : scan d'une bibliothèque, enrichissement TMDB, nettoyage. Une seule à la fois, dans l'ordre d'arrivée.
+"""Tâches de fond : scan d'une bibliothèque, analyse des vidéos (ffprobe), enrichissement TMDB, nettoyage. Une seule à la fois, dans l'ordre d'arrivée.
 
-Rien ne se lance tout seul (sauf le premier scan d'une bibliothèque vide, et le rescan périodique si HUB_AUTOSCAN_HOURS le demande) : le bouton « Mettre à jour » de l'interface est le déclencheur habituel.
+Rien ne se lance tout seul (sauf le premier scan d'une bibliothèque vide, le rescan périodique si HUB_AUTOSCAN_HOURS le demande, et l'analyse des vidéos pas encore sondées après chaque scan) : le bouton « Mettre à jour » de l'interface est le déclencheur habituel.
 """
 
 from __future__ import annotations
@@ -18,9 +18,11 @@ from pathlib import Path
 from libraries.music import coverfile, wanted
 
 from .. import enrich, labels, scan
+from ..media import probe as prober
 from ..scan.common import is_album_cover
 
 LOG_LINES = 400
+PROBE_LABEL = "Analyse des vidéos"
 
 
 class Job:
@@ -51,15 +53,17 @@ class Jobs:
         self.history = deque(maxlen=30)
         self.counter = 0
         self.lock = threading.Lock()
+        self.unreadable = set()            # les vidéos que ffprobe n'a pas su lire (voir probe_key) : pas redemandées à chaque scan, seulement au redémarrage ou quand le fichier change
         self.worker = threading.Thread(target=self._run, name="jobs", daemon=True)
         self.worker.start()
 
-    def _submit(self, label, func, key=None):
+    def _submit(self, label, func, key=None, again=False):
         """Met la tâche en file, ou rend celle qui attend ou tourne déjà pour la même demande. La demande est reconnue à `key` (sans lui, à l'intitulé) : l'intitulé porte le libellé affiché
-        d'une bibliothèque, que l'administrateur peut changer ou fixer à « tout » ; il ne doit jamais décider si deux demandes sont la même."""
+        d'une bibliothèque, que l'administrateur peut changer ou fixer à « tout » ; il ne doit jamais décider si deux demandes sont la même.
+        `again` : la tâche en cours se remet elle-même en file, derrière celles qui attendent (voir probe) ; elle ne doit pas se reconnaître."""
         key = label if key is None else key
         with self.lock:
-            same = next((j for j in self.history if j.key == key and j.status in ("waiting", "running")), None)
+            same = None if again else next((j for j in self.history if j.key == key and j.status in ("waiting", "running")), None)
             if same:
                 return same
             self.counter += 1
@@ -82,12 +86,31 @@ class Jobs:
 
     # --- Les tâches --------------------------------------------------------
     def scan(self, lib):
-        return self._submit(f"Mise à jour · {labels.shown(self.db, lib)}", lambda log: scan.scan_library(self.db, lib, log), ("scan", lib.id))
+        return self._submit(f"Mise à jour · {labels.shown(self.db, lib)}", self._then_probe(lambda log: scan.scan_library(self.db, lib, log)), ("scan", lib.id))
 
     def scan_all(self):
         def run(log):
             return [scan.scan_library(self.db, lib, log) for lib in self.cfg.libraries]
-        return self._submit("Mise à jour · tout", run, ("scan-all",))
+        return self._submit("Mise à jour · tout", self._then_probe(run), ("scan-all",))
+
+    def _then_probe(self, first):
+        """La tâche qui fait `first` (un scan) puis met en file l'analyse des vidéos, s'il en reste à sonder et que ffprobe est là : une tâche à part, pour que le scan rende la main tout de suite."""
+        def run(log):
+            result = first(log)
+            if self.cfg.ffprobe and unprobed(self.cfg, self.db, self.unreadable):
+                self.probe()
+            return result
+        return run
+
+    def probe(self, again=False):
+        """L'analyse des vidéos pas encore sondées (voir probe_videos). Elle peut durer (une médiathèque entière la première fois) : dès qu'une autre tâche attend, elle s'arrête entre deux fichiers
+        et se remet en file derrière elle. Ce qui est sondé est déjà dans la base : la reprise ne refait rien."""
+        def run(log):
+            result = probe_videos(self.cfg, self.db, log, self.unreadable, stop=lambda: not self.queue.empty())
+            if result["interrupted"]:
+                self.probe(again=True)
+            return result
+        return self._submit(PROBE_LABEL, run, ("probe",), again)
 
     def enrich(self, lib, force=False):
         return self._submit(f"Enrichissement TMDB · {labels.shown(self.db, lib)}", self._then_ratings(enrich.enrich_shows, lib, force), ("enrich", lib.id))
@@ -125,6 +148,55 @@ class Jobs:
 
     def busy(self):
         return any(j.status in ("waiting", "running") for j in self.history)
+
+
+def probe_key(row):
+    """Ce qui reconnaît un fichier tel qu'il était quand ffprobe a échoué : changé (taille, date), il sera réessayé."""
+    return row["id"], row["size"], row["mtime"]
+
+
+def unprobed(cfg, db, unreadable=()):
+    """[(ligne, chemin)] des vidéos des bibliothèques configurées que personne n'a encore sondées (ni à la lecture, ni ici), sans celles que ffprobe n'a pas su lire."""
+    libs = {lib.id: lib for lib in cfg.libraries}
+    rows = db.query("SELECT id, lib, rel, size, mtime FROM entries WHERE kind='video' AND probe IS NULL ORDER BY lib, rel")
+    return [(row, Path(libs[row["lib"]].path) / row["rel"]) for row in rows if row["lib"] in libs and probe_key(row) not in unreadable]
+
+
+def probe_one(ffprobe, db, row, path, log):
+    """Sonde un fichier et garde son résumé dans la base ; faux (et une ligne au journal) si ffprobe ne sait pas le lire."""
+    try:
+        db.set_probe(row["id"], prober.run_ffprobe(ffprobe, path))
+        return True
+    except (prober.ProbeError, ValueError) as e:            # ValueError : une réponse de ffprobe qui n'est pas du JSON, ou un nombre qui n'en est pas un
+        log(f"  illisible : {row['rel']} : {e}")
+        return False
+
+
+def probe_videos(cfg, db, log, unreadable, stop=lambda: False):
+    """Sonde (ffprobe) les vidéos qui ne l'ont pas encore été, une par une : la fiche en tire qualité d'image et langues sans attendre la première lecture. Rend {probed, failed, left, interrupted}.
+
+    Un fichier illisible est dit au journal, noté dans `unreadable` et n'arrête rien ; sans ffprobe, rien n'est sondé et rien n'échoue. `stop()` est demandé avant chaque fichier : vrai, on s'arrête là (`interrupted`)."""
+    todo = unprobed(cfg, db, unreadable)
+    if not todo:
+        log("Aucune vidéo à analyser.")
+        return {"probed": 0, "failed": 0, "left": 0, "interrupted": False}
+    if not cfg.ffprobe:
+        log("ffprobe est introuvable : les vidéos ne sont pas analysées (installe ffmpeg sur le serveur, voir deploy/README.md).")
+        return {"probed": 0, "failed": 0, "left": len(todo), "interrupted": False}
+    log(f"{len(todo)} vidéo(s) à analyser.")
+    probed = failed = 0
+    for row, path in todo:
+        if stop():
+            left = len(todo) - probed - failed
+            log(f"Interrompue : {probed} vidéo(s) analysée(s), il en reste {left} ; la suite après la tâche qui attend.")
+            return {"probed": probed, "failed": failed, "left": left, "interrupted": True}
+        if probe_one(cfg.ffprobe, db, row, path, log):
+            probed += 1
+        else:
+            unreadable.add(probe_key(row))
+            failed += 1
+    log(f"{probed} vidéo(s) analysée(s)" + (f", {failed} illisible(s)." if failed else "."))
+    return {"probed": probed, "failed": failed, "left": 0, "interrupted": False}
 
 
 JUNK = ("thumbs.db", "desktop.ini", ".ds_store", "albumartsmall.jpg")

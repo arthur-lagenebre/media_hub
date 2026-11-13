@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import shutil
 import tempfile
 import threading
@@ -18,7 +19,9 @@ fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
 
 from hub.db import Database  # noqa: E402
+from hub.media.probe import ProbeError  # noqa: E402
 from hub.server import jobs  # noqa: E402
+from tests.test_server_views import entry, item  # noqa: E402
 
 
 class Waiting:
@@ -37,7 +40,7 @@ class JobsCase(unittest.TestCase):
     def setUp(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, True)
-        self.jobs = jobs.Jobs(types.SimpleNamespace(libraries=[]), Database(root / "hub.db"))          # une vraie base : les intitulés lisent les libellés
+        self.jobs = jobs.Jobs(types.SimpleNamespace(libraries=[], ffprobe=""), Database(root / "hub.db"))          # une vraie base : les intitulés lisent les libellés
 
     def wait(self, job, status="done"):
         for _ in range(500):
@@ -188,11 +191,195 @@ class TestTasks(JobsCase):
 
     def test_a_scan_of_everything_scans_each_library(self):
         libs = [types.SimpleNamespace(label="A"), types.SimpleNamespace(label="B")]
-        jobs_ = jobs.Jobs(types.SimpleNamespace(libraries=libs), "base")
+        jobs_ = jobs.Jobs(types.SimpleNamespace(libraries=libs, ffprobe=""), "base")
         with mock.patch.object(jobs.scan, "scan_library", side_effect=lambda db, lib, log: lib.label) as scanned:
             job = jobs_.scan_all()
             self.wait(job)
         self.assertEqual((job.result, scanned.call_count), (["A", "B"], 2))
+
+
+SUMMARY = {"container": "mkv", "duration": 10.0, "bitrate": 1, "size": 1, "video": {"codec": "h264", "width": 1920, "height": 1080, "hdr": False}, "audio": [], "subs": []}
+
+
+def probe_cfg(root, ffprobe="ffprobe"):
+    """Des réglages avec une bibliothèque « lib » sous `root`, et ffprobe (un nom : les tests ne le lancent pas)."""
+    lib = types.SimpleNamespace(id="lib", label="Films", path=root / "lib", kind="movies")
+    return types.SimpleNamespace(libraries=[lib], ffprobe=ffprobe)
+
+
+def videos(db, *names, lib="lib", **over):
+    """Un film par nom dans la bibliothèque, pas encore sondé."""
+    db.replace_library(lib, [item(n, lib=lib) for n in names], [entry(f"{n}-v", n, lib=lib, **over) for n in names])
+
+
+def probe_column(db):
+    return {r["id"]: r["probe"] for r in db.query("SELECT id, probe FROM entries")}
+
+
+class TestProbeVideos(unittest.TestCase):
+    """La sonde des vidéos que personne n'a encore lues : une par une, sans jamais échouer pour un fichier."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.db = Database(self.root / "hub.db")
+        self.cfg = probe_cfg(self.root)
+        self.log, self.unreadable = [], set()
+
+    def run_probe(self, answer=None, stop=lambda: False):
+        with mock.patch.object(jobs.prober, "run_ffprobe", side_effect=answer or (lambda ffprobe, path: SUMMARY)) as called:
+            result = jobs.probe_videos(self.cfg, self.db, self.log.append, self.unreadable, stop)
+        return result, [call.args for call in called.call_args_list]
+
+    def test_only_the_videos_without_a_summary_are_probed(self):
+        self.db.replace_library("lib", [item("a"), item("b"), item("c", "album")],
+                                [entry("a-v", "a"), entry("b-v", "b", probe=json.dumps({"vu": 1})), entry("c-t", "c", kind="audio")])
+        self.db.execute("UPDATE entries SET probe=? WHERE id='b-v'", (json.dumps({"vu": 1}),))          # replace_library ne garde que les sondes d'avant
+        result, calls = self.run_probe()
+        self.assertEqual(result, {"probed": 1, "failed": 0, "left": 0, "interrupted": False})
+        self.assertEqual(calls, [("ffprobe", self.root / "lib" / "a" / "a-v")])
+        self.assertEqual(probe_column(self.db), {"a-v": json.dumps(SUMMARY), "b-v": json.dumps({"vu": 1}), "c-t": None})
+        self.assertEqual(self.log, ["1 vidéo(s) à analyser.", "1 vidéo(s) analysée(s)."])
+
+    def test_nothing_to_probe_says_so(self):
+        result, calls = self.run_probe()
+        self.assertEqual((result, calls, self.log), ({"probed": 0, "failed": 0, "left": 0, "interrupted": False}, [], ["Aucune vidéo à analyser."]))
+
+    def test_a_second_run_has_nothing_left_to_do(self):
+        videos(self.db, "a", "b")
+        self.run_probe()
+        result, calls = self.run_probe()
+        self.assertEqual((result["probed"], calls), (0, []))
+
+    def test_an_unreadable_file_is_said_and_the_next_ones_are_probed(self):
+        videos(self.db, "a", "b", "c")
+
+        def answer(ffprobe, path):
+            if path.name == "a-v":
+                raise ProbeError("fichier abîmé")
+            if path.name == "b-v":
+                raise ValueError("réponse illisible")
+            return SUMMARY
+
+        result, calls = self.run_probe(answer)
+        self.assertEqual(result, {"probed": 1, "failed": 2, "left": 0, "interrupted": False})
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.log[1:], ["  illisible : a/a-v : fichier abîmé", "  illisible : b/b-v : réponse illisible", "1 vidéo(s) analysée(s), 2 illisible(s)."])
+        self.assertEqual(probe_column(self.db), {"a-v": None, "b-v": None, "c-v": json.dumps(SUMMARY)})
+
+    def test_an_unreadable_file_is_not_tried_again_until_it_changes(self):
+        videos(self.db, "a")
+        self.run_probe(mock.Mock(side_effect=ProbeError("abîmé")))
+        result, calls = self.run_probe()
+        self.assertEqual((result["probed"], calls), (0, []))
+        videos(self.db, "a", mtime=2)                              # le fichier a été remplacé
+        result, calls = self.run_probe()
+        self.assertEqual((result["probed"], len(calls)), (1, 1))
+
+    def test_without_ffprobe_nothing_is_probed_and_nothing_fails(self):
+        videos(self.db, "a", "b")
+        self.cfg.ffprobe = ""
+        result, calls = self.run_probe()
+        self.assertEqual((result, calls), ({"probed": 0, "failed": 0, "left": 2, "interrupted": False}, []))
+        self.assertEqual(self.log, ["ffprobe est introuvable : les vidéos ne sont pas analysées (installe ffmpeg sur le serveur, voir deploy/README.md)."])
+
+    def test_it_stops_between_two_files_when_asked(self):
+        videos(self.db, "a", "b", "c")
+        asked = []
+        result, calls = self.run_probe(stop=lambda: asked.append(1) or len(asked) > 1)          # oui à la deuxième question : après le premier fichier
+        self.assertEqual(result, {"probed": 1, "failed": 0, "left": 2, "interrupted": True})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.log[-1], "Interrompue : 1 vidéo(s) analysée(s), il en reste 2 ; la suite après la tâche qui attend.")
+        self.assertEqual(self.run_probe()[0], {"probed": 2, "failed": 0, "left": 0, "interrupted": False})       # la reprise finit le travail
+
+    def test_the_files_of_a_library_that_is_no_longer_configured_are_left_alone(self):
+        videos(self.db, "a", lib="partie")
+        result, calls = self.run_probe()
+        self.assertEqual((result["left"], calls, self.log), (0, [], ["Aucune vidéo à analyser."]))
+
+
+class TestProbeJob(unittest.TestCase):
+    """La sonde dans la file : lancée par un scan, elle laisse passer la tâche qui attend et reprend après."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.db = Database(self.root / "hub.db")
+        self.cfg = probe_cfg(self.root)
+        self.jobs = jobs.Jobs(self.cfg, self.db)
+
+    def idle(self):
+        for _ in range(500):
+            if not self.jobs.busy():
+                return
+            threading.Event().wait(0.01)
+        self.fail("la file ne se vide pas")
+
+    def labels(self):
+        return [j.label for j in reversed(self.jobs.history)]
+
+    def scan(self):
+        with mock.patch.object(jobs.scan, "scan_library", return_value={}), mock.patch.object(jobs.prober, "run_ffprobe", return_value=SUMMARY):
+            self.jobs.scan(self.cfg.libraries[0])
+            self.idle()
+
+    def test_a_scan_is_followed_by_the_probe_of_what_is_not_probed_yet(self):
+        videos(self.db, "a", "b")
+        self.scan()
+        self.assertEqual(self.labels(), ["Mise à jour · Films", "Analyse des vidéos"])
+        self.assertEqual(self.jobs.history[0].result, {"probed": 2, "failed": 0, "left": 0, "interrupted": False})
+        self.assertEqual(set(probe_column(self.db).values()), {json.dumps(SUMMARY)})
+
+    def test_a_scan_of_everything_too(self):
+        videos(self.db, "a")
+        with mock.patch.object(jobs.scan, "scan_library", return_value={}), mock.patch.object(jobs.prober, "run_ffprobe", return_value=SUMMARY):
+            self.jobs.scan_all()
+            self.idle()
+        self.assertEqual(self.labels(), ["Mise à jour · tout", "Analyse des vidéos"])
+
+    def test_a_scan_with_nothing_left_to_probe_starts_nothing(self):
+        self.scan()
+        self.assertEqual(self.labels(), ["Mise à jour · Films"])
+        videos(self.db, "a")
+        self.scan()
+        self.scan()
+        self.assertEqual(self.labels(), ["Mise à jour · Films", "Mise à jour · Films", "Analyse des vidéos", "Mise à jour · Films"])
+
+    def test_a_scan_without_ffprobe_starts_nothing(self):
+        videos(self.db, "a")
+        self.cfg.ffprobe = ""
+        self.scan()
+        self.assertEqual(self.labels(), ["Mise à jour · Films"])
+
+    def test_the_probe_asked_by_hand_does_not_fail_without_ffprobe(self):
+        videos(self.db, "a")
+        self.cfg.ffprobe = ""
+        job = self.jobs.probe()
+        self.idle()
+        self.assertEqual((job.status, job.result["left"]), ("done", 1))
+
+    def test_it_gives_way_to_a_waiting_job_and_resumes_after_it(self):
+        videos(self.db, "a", "b", "c")
+        first, go = threading.Event(), threading.Event()
+        order = []
+
+        def answer(ffprobe, path):
+            order.append(path.name)
+            first.set()
+            go.wait(10)
+            return SUMMARY
+
+        with mock.patch.object(jobs.prober, "run_ffprobe", side_effect=answer):
+            probe = self.jobs.probe()
+            first.wait(10)
+            self.assertIs(self.jobs.probe(), probe)                                  # déjà en cours : pas une seconde
+            self.jobs._submit("autre", lambda log: order.append("autre"))            # une tâche arrive pendant le premier fichier
+            go.set()
+            self.idle()
+        self.assertEqual(order, ["a-v", "autre", "b-v", "c-v"])
+        self.assertEqual(self.labels(), ["Analyse des vidéos", "autre", "Analyse des vidéos"])
+        self.assertEqual(probe.result, {"probed": 1, "failed": 0, "left": 2, "interrupted": True})
+        self.assertEqual(self.jobs.history[0].result, {"probed": 2, "failed": 0, "left": 0, "interrupted": False})
 
 
 class TestIsJunk(unittest.TestCase):
