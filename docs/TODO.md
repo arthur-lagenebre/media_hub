@@ -38,7 +38,7 @@ Les essais que les tests ne peuvent pas faire (NAS, Funnel, téléphone, tablett
 
 ## Routes ajoutées, à relier à l'interface
 
-- [ ] `POST /api/item/<id>/rating` (lot 7, l'avis personnel) : la route, le champ `rating` des vignettes et de la fiche, le tri `my-rating` et l'exclusion des `down` du rayon « Pas encore vu » sont faits côté serveur ; **l'interface reste à faire** (boutons J'aime / Bof / Je n'aime pas sur la fiche, pastille sur la vignette, tri « Mon avis » du menu de tri, libellés `lang-en.js`). Les recommandations collectives viennent plus tard (lot 9, agrégées et anonymes, voir [decisions.md](decisions.md)).
+Rien pour l'instant : une route ajoutée au serveur est reliée à l'interface dans le même lot, ou notée ici tant qu'elle ne l'est pas.
 
 ## Idées mises de côté
 
