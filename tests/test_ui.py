@@ -6027,10 +6027,8 @@ class InboxUiCase(unittest.TestCase):
         self.assertFalse((self.box / "Léa" / "Été" / "Saison 1").exists())                              # le sous-dossier vidé a disparu, pas celui qui garde un fichier
 
 
-class TestRequestsInTheUi(unittest.TestCase):
-    """Les demandes de films dans le navigateur : demander depuis la case grisée d'une saga ou d'une personne, rejoindre, retirer, « Mes demandes », le rayon de l'accueil, l'onglet de l'administrateur et le droit « Peut demander ».
-
-    Un serveur avec comptes (`admin` / `secret`, `alice` et `bob`) pour toute la classe ; « Saga DCEU » attend deux films (« Film intermédiaire », 1000, et « Wonder Woman », 297762),
+class RequestsUiCase(unittest.TestCase):
+    """Le serveur des tests de demandes (sans test à lui) : un serveur avec comptes (`admin` / `secret`, `alice` et `bob`) pour toute la classe ; « Saga DCEU » attend deux films (« Film intermédiaire », 1000, et « Wonder Woman », 297762),
     « Réal Demande » en a réalisé un qu'on n'a pas (« Absent Personne », 9500). Les demandes sont effacées entre deux tests.
     """
     PASSWORD = "motdepasse12"
@@ -6152,6 +6150,10 @@ class TestRequestsInTheUi(unittest.TestCase):
 
     def key(self, page):
         return page.evaluate("document.activeElement && document.activeElement.getAttribute('data-key')")
+
+
+class TestRequestsInTheUi(RequestsUiCase):
+    """Les demandes de films dans le navigateur : demander depuis la case grisée d'une saga ou d'une personne, rejoindre, retirer, « Mes demandes », le rayon de l'accueil, l'onglet de l'administrateur et le droit « Peut demander »."""
 
     # --- Demander -------------------------------------------------------------
     def test_a_missing_film_of_a_saga_is_requested_with_a_message_and_the_card_follows(self):
@@ -6590,6 +6592,407 @@ class TestRequestsInTheUi(unittest.TestCase):
         self.rows(admin).first.wait_for()
         self.assertIn("1 requester", self.rows(admin).inner_text())
         self.assertEqual(admin.evaluate("Hub.missing"), [])
+
+
+class FakeRequestTmdb:
+    """TMDB pour la recherche des demandes (voir hub/request_search.py) : quatre films et une série, trouvés quand leur titre contient le texte cherché.
+    `error` est levée à chaque appel ; la recherche de « lent » attend que `slow` soit posé (il l'est d'emblée). Les affiches sont de vraies images."""
+    FILMS = {4001: {"id": 4001, "title": "Le Grand Voyage", "release_date": "1999-05-02", "overview": "Un très long voyage <b>en</b> voiture, de Paris à Lisbonne. " * 5, "poster_path": "/gv.jpg"},
+             4002: {"id": 4002, "title": "Le Grand Retour", "release_date": "2099-01-01", "overview": "Pas encore sorti.", "poster_path": "/gr.jpg"},
+             4100: {"id": 4100, "title": "Le Film Lent", "release_date": "2010-01-01", "overview": "", "poster_path": None},
+             4200: {"id": 4200, "title": "Le Film Rapide", "release_date": "2011-01-01", "overview": "", "poster_path": None},
+             9101: {"id": 9101, "title": "Film Personne", "release_date": "2001-01-01", "overview": "Déjà dans la médiathèque.", "poster_path": None}}
+    SHOWS = {5001: {"id": 5001, "name": "La Grande Série", "first_air_date": "2015-09-01", "overview": "Une série.", "poster_path": "/gs.jpg"}}
+
+    def __init__(self):
+        import threading
+        self.error, self.slow, self.calls = None, threading.Event(), []
+        self.slow.set()
+
+    def get(self, endpoint, language=None):
+        from urllib.error import HTTPError
+        from libraries.video.tmdb import TmdbError
+        self.calls.append(endpoint)
+        if self.error is not None:
+            raise self.error
+        path, _, query = endpoint.partition("?")
+        text = urllib.parse.unquote(query.partition("=")[2]).casefold()
+        if text == "lent":
+            self.slow.wait(20)
+        if path in ("search/movie", "search/tv"):
+            table, name = (self.FILMS, "title") if path == "search/movie" else (self.SHOWS, "name")
+            return {"results": [dict(v) for v in table.values() if text in v[name].casefold()]}
+        kind, _, n = path.partition("/")
+        table = {"movie": self.FILMS, "tv": self.SHOWS}.get(kind, {})
+        if n.isdigit() and int(n) in table:
+            return dict(table[int(n)])
+        error = TmdbError("introuvable sur TMDB (HTTP 404)")
+        error.__cause__ = HTTPError("https://api.themoviedb.org/3/x", 404, "Not Found", {}, None)
+        raise error
+
+    def save_image(self, image_path, size, dest):
+        Path(dest).write_bytes(fixtures.PNG)
+
+
+class TestRequestSearchInTheUi(RequestsUiCase):
+    """Demander un film ou une série que la médiathèque n'a pas : la page « Demander un film ou une série » (#/request), qui cherche dans TMDB par le serveur (TMDB simulé : FakeRequestTmdb),
+    ses entrées (« Nouvelle demande » dans « Mes demandes », « Pas trouvé ? » dans la recherche), ses erreurs, la télécommande, l'anglais, et les affiches qui arrivent après la demande."""
+    PAGE = "#/request"
+
+    def setUp(self):
+        super().setUp()
+        from hub import request_search
+        hub = self.hub
+        self.tmdb = FakeRequestTmdb()
+        patcher = mock.patch.object(request_search, "Tmdb", lambda *args, **kwargs: self.tmdb)          # la tâche « Affiches des demandes » : jamais le vrai TMDB
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(setattr, hub.cfg, "tmdb_key", "")
+        self.addCleanup(setattr, hub, "finder", hub.finder)
+        hub.cfg.tmdb_key = "fake"
+        hub.finder = request_search.Finder(hub.cfg, make=lambda cfg: self.tmdb)          # neuf à chaque test : la cadence (30 par minute) et la mémoire repartent de zéro
+        self.addCleanup(self.run_.wait_jobs)                                             # la tâche des affiches finit avant que TMDB simulé et la clé ne s'en aillent
+        self.addCleanup(self.tmdb.slow.set)
+
+    # --- Aides ---------------------------------------------------------------
+    def searched(self, page):
+        """Attend la réponse à `GET /api/requests/search` déclenchée dans le bloc `with`."""
+        return page.expect_response(lambda r: "/api/requests/search" in r.url)
+
+    def search(self, page, text):
+        """Tape `text` dans le champ de la page et rend la réponse du serveur (la recherche part d'elle-même, sans Entrée)."""
+        with self.searched(page) as info:
+            self.view(page, "input[type=search]").fill(text)
+        return info.value
+
+    def hits(self, page):
+        return self.view(page, ".rqhit")
+
+    def hit(self, page, title):
+        return self.hits(page).filter(has_text=title)
+
+    def ask_for(self, name, kind, tmdb):
+        return self.call(name, "/api/requests", {"kind": kind, "tmdb": tmdb})
+
+    @staticmethod
+    def refuse(status, message):
+        """Un gestionnaire de `page.route` qui répond `status` avec ce message d'erreur, sans passer par le serveur."""
+        def handler(route):
+            route.fulfill(status=status, content_type="application/json", body=json.dumps({"error": message}))
+        return handler
+
+    def focused_key(self, page, key):
+        page.wait_for_function("k => document.activeElement && document.activeElement.getAttribute('data-key') === k", arg=key)
+
+    def library_search(self, page, text):
+        """Cherche `text` dans la recherche habituelle de la médiathèque (#/search) et attend que la page ait répondu."""
+        self.open(page, "#/search")
+        with page.expect_response(lambda r: "/api/search?" in r.url):
+            self.view(page, "input[type=search]").fill(text)
+        self.view(page, ".results > *").first.wait_for()
+
+    # --- Chercher et demander --------------------------------------------------------
+    def test_a_film_is_found_requested_with_a_message_and_its_button_follows(self):
+        page = self.session("alice")
+        self.open(page, "#/requests")
+        self.view(page, "[data-key=req-new]").click()
+        self.shown(page, self.PAGE)
+        self.assertEqual(self.view(page, "h1").inner_text(), "Demander un film ou une série")
+        reply = self.search(page, "grand")
+        self.assertIn("q=grand", reply.url)
+        self.assertNotIn("kind=", reply.url)                                                                 # « Les deux » : films et séries
+        hits = self.hits(page)
+        expect(hits).to_have_count(3)
+        self.assertEqual(hits.locator(".rqkind").all_inner_texts(), ["Film", "Film", "Série"])               # les films d'abord, la sorte en toutes lettres
+        voyage = self.hit(page, "Le Grand Voyage")
+        self.assertEqual(voyage.locator(".rqtitle").inner_text(), "Le Grand Voyage")
+        self.assertIn("1999", voyage.inner_text())
+        summary = voyage.locator(".rqsum")
+        self.assertIn("<b>en</b>", summary.inner_text())                                                     # le résumé vient de TMDB : du texte, pas du HTML
+        self.assertEqual(summary.locator("b").count(), 0)
+        self.assertEqual(summary.evaluate("e => getComputedStyle(e).webkitLineClamp"), "2")
+        self.assertIn("À venir", self.hit(page, "Le Grand Retour").inner_text())
+        self.assertNotIn("À venir", voyage.inner_text())
+        self.assertEqual(self.view(page, ".rqhit img, .rqhit .poster").count(), 0)                           # pas d'affiche dans les résultats
+        searches = []
+        page.on("request", lambda r: searches.append(r.url) if "/api/requests/search" in r.url else None)
+        button = voyage.locator("button")
+        self.assertEqual(button.inner_text().strip(), "Demander")
+        button.click()
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertTrue(box.evaluate("e => e.classList.contains('form')"))                                  # la fenêtre des cases grisées
+        self.assertEqual(box.locator("h3").inner_text(), "Demander « Le Grand Voyage »")
+        self.assertEqual(box.locator("input").get_attribute("maxlength"), "200")
+        box.locator("input").fill("Pour le week-end")
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 201)
+        box.wait_for(state="detached")
+        voyage.locator("button", has_text="Demandé").wait_for()                                             # le bouton suit, sans relancer la recherche
+        self.focused_key(page, "rq-movie-4001")
+        self.assertEqual(searches, [])
+        self.assertEqual([(r["kind"], r["tmdb"], r["note"], r["title"]) for r in self.mine("alice")], [("movie", 4001, "Pour le week-end", "Le Grand Voyage")])
+
+    def test_a_series_is_found_with_the_series_choice_and_requested_without_a_message(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.search(page, "grand")
+        expect(self.hits(page)).to_have_count(3)
+        choice = self.view(page, "[data-key=rq-kind]")
+        self.assertIn("Les deux", choice.inner_text())
+        choice.click()
+        menu = self.dialog(page)
+        self.assertTrue(menu.evaluate("e => e.classList.contains('choice')"))                                # une liste comme « Tri » ou « Genre »
+        self.assertEqual([t.strip() for t in menu.locator(".opt").all_inner_texts()], ["Les deux", "Films", "Séries"])
+        with self.searched(page) as info:                                                                    # changer de sorte relance la recherche
+            menu.locator(".opt", has_text="Séries").click()
+        self.assertIn("kind=show", info.value.url)
+        self.assertIn("Séries", choice.inner_text())
+        expect(self.hits(page)).to_have_count(1)
+        hit = self.hit(page, "La Grande Série")
+        self.assertEqual(hit.locator(".rqkind").inner_text(), "Série")
+        hit.locator("button").click()
+        box = self.dialog(page)
+        self.assertIn("la série", box.locator(".lead").inner_text())
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 201)
+        hit.locator("button", has_text="Demandé").wait_for()
+        self.assertEqual([(r["kind"], r["tmdb"], r["note"], r["title"]) for r in self.mine("alice")], [("show", 5001, "", "La Grande Série")])
+
+    def test_a_title_asked_by_another_is_asked_too_and_a_declined_one_has_no_button(self):
+        self.ask("bob", 4001, "Le message de Bob")
+        declined = self.ask("bob", 4002)["id"]
+        self.call("admin", f"/api/requests/{declined}/status", {"status": "declined", "reason": "Pas encore sorti"})
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.search(page, "grand")
+        voyage = self.hit(page, "Le Grand Voyage")
+        voyage.locator(".rqstate", has_text="Déjà demandé").wait_for()
+        self.assertEqual(voyage.locator("button").inner_text().strip(), "Demander aussi")
+        retour = self.hit(page, "Le Grand Retour")
+        self.assertIn("Refusé", retour.inner_text())
+        self.assertEqual(retour.locator("button, a, .f").count(), 0)                                        # rien à faire : rien à viser
+        self.assertNotIn("bob", page.locator("body").inner_text().lower())
+        voyage.locator("button").click()
+        with self.sent(page) as info:
+            self.dialog(page).locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 200)                                                            # rejointe, pas créée
+        voyage.locator("button", has_text="Demandé").wait_for()
+        self.assertEqual(voyage.locator(".rqstate").count(), 0)
+        voyage.locator("button").click()                                                                     # « Demandé » : retirer la sienne, comme sur une case grisée
+        box = self.dialog(page)
+        self.assertEqual(box.locator("h3").inner_text(), "Retirer ta demande ?")
+        with page.expect_response(lambda r: r.url.endswith("/delete")):
+            box.locator(".btn.danger").click()
+        voyage.locator("button", has_text="Demander aussi").wait_for()                                      # Bob la demande toujours
+        self.assertEqual(self.mine("alice"), [])
+
+    def test_a_title_already_in_the_library_is_opened_not_requested(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.search(page, "personne")
+        hit = self.hit(page, "Film Personne")
+        link = hit.locator("a", has_text="Ouvrir")
+        link.wait_for()
+        self.assertTrue(link.evaluate("e => e.classList.contains('f')"))
+        self.assertEqual(hit.locator("button").count(), 0)
+        link.click()
+        page.wait_for_function("location.hash.indexOf('#/i/') === 0")
+        page.locator("#views > .view:visible h1", has_text="Film Personne").wait_for()
+
+    # --- Erreurs, états ---------------------------------------------------------------
+    def test_errors_are_said_in_french_and_the_results_stay(self):
+        from libraries.video.tmdb import TmdbError
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.search(page, "grand")
+        expect(self.hits(page)).to_have_count(3)
+        say = self.view(page, ".rqsay")
+        for status, message in ((429, "trop de recherches : réessaie dans 12 s"), (503, "le serveur est occupé, réessaie dans un instant")):
+            page.route("**/api/requests/search*", self.refuse(status, message))
+            self.assertEqual(self.search(page, f"grand {status}").status, status)
+            expect(say).to_have_text(message)
+            expect(self.hits(page)).to_have_count(3)                                                         # les résultats d'avant restent
+            page.unroute("**/api/requests/search*")
+        self.tmdb.error = TmdbError("panne")
+        self.assertEqual(self.search(page, "voyage").status, 502)
+        expect(say).to_have_text("TMDB ne répond pas, réessaie plus tard")
+        expect(self.hits(page)).to_have_count(3)
+        self.tmdb.error = None
+        self.assertEqual(self.search(page, "voyages").status, 200)
+        expect(say).to_have_text("Aucun titre trouvé dans TMDB pour « voyages ».")
+        expect(self.hits(page)).to_have_count(0)
+        self.view(page, "input[type=search]").fill("v")
+        expect(say).to_have_text("Tape au moins deux lettres.")
+
+    def test_a_slow_search_never_replaces_the_one_typed_after_it(self):
+        self.tmdb.slow.clear()
+        page = self.session("alice")
+        # Un témoin, dans la page, de chaque réponse lue par l'interface, posé une fois ses `then` passés : le signal qu'une réponse périmée est arrivée et a été ignorée.
+        page.evaluate("""() => { window.readSearches = []; var text = Response.prototype.text;
+            Response.prototype.text = function () { var url = this.url; return text.call(this).then(function (t) { setTimeout(function () { window.readSearches.push(url); }, 0); return t; }); }; }""")
+        self.open(page, self.PAGE)
+        with page.expect_request(lambda r: "q=lent" in r.url):
+            self.view(page, "input[type=search]").fill("lent")
+        expect(self.view(page, ".rqsay")).to_have_text("Recherche…")                                         # l'état de chargement
+        self.search(page, "rapide")
+        expect(self.hits(page)).to_have_count(1)
+        self.tmdb.slow.set()
+        page.wait_for_function("window.readSearches.some(function (u) { return u.indexOf('q=lent') >= 0; })")
+        self.assertEqual(self.hits(page).locator(".rqtitle").all_inner_texts(), ["Le Film Rapide"])
+        self.assertEqual(self.view(page, "input[type=search]").input_value(), "rapide")
+
+    # --- Entrées ----------------------------------------------------------------------
+    def test_not_found_in_the_library_leads_to_the_request_page_with_the_text(self):
+        page = self.session("alice")
+        self.library_search(page, "Grand Voyage")
+        link = self.view(page, "[data-key=req-notfound]")
+        expect(link).to_have_text("Pas trouvé ? Demander « Grand Voyage »")
+        self.assertTrue(link.evaluate("e => e.classList.contains('f')"))
+        with self.searched(page) as info:
+            link.click()
+        self.shown(page, "#/request?q=Grand%20Voyage")
+        self.assertIn("q=Grand%20Voyage", info.value.url)
+        self.assertEqual(self.view(page, "input[type=search]").input_value(), "Grand Voyage")
+        expect(self.hits(page)).to_have_count(1)
+        self.library_search(page, "Inception")                                                               # quand la recherche trouve, rien
+        self.assertEqual(self.view(page, "[data-key=req-notfound]").count(), 0)
+
+    def test_without_a_tmdb_key_nothing_leads_to_the_request_page(self):
+        self.hub.cfg.tmdb_key = ""
+        self.ask("alice", 1000)
+        page = self.session("alice")
+        self.assertFalse(page.evaluate("Hub.session.requestSearch"))
+        self.open(page, "#/requests")
+        self.rows(page).first.wait_for()
+        self.assertEqual(self.view(page, "[data-key=req-new]").count(), 0)
+        self.library_search(page, "Grand Voyage")
+        self.assertEqual(self.view(page, "[data-key=req-notfound]").count(), 0)
+        self.open(page, self.PAGE)
+        expect(self.view(page, "p")).to_contain_text("n’est pas configurée sur ce serveur")
+        self.assertEqual(self.view(page, "input").count(), 0)
+        self.assertEqual(self.tmdb.calls, [])
+
+    def test_without_the_right_to_request_the_page_is_closed_and_no_entry_leads_there(self):
+        from hub import accounts
+        accounts.set_can_request(self.hub.db, self.bob["id"], False)
+        page = self.session("bob")
+        self.assertFalse(page.evaluate("Hub.session.requestSearch"))
+        self.open(page, "#/requests")
+        self.view(page, ".reqempty").wait_for()
+        self.assertEqual(self.view(page, "[data-key=req-new]").count(), 0)
+        self.library_search(page, "Grand Voyage")
+        self.assertEqual(self.view(page, "[data-key=req-notfound]").count(), 0)
+        self.open(page, self.PAGE)
+        expect(self.view(page, "p")).to_contain_text("retiré le droit de demander")
+        self.assertEqual(self.view(page, "input").count(), 0)
+        self.assertEqual(page.context.request.get(self.base + "/api/requests/search?q=grand").status, 403)
+        self.assertEqual(self.tmdb.calls, [])
+
+    # --- Télécommande, téléphone, anglais ---------------------------------------------------
+    def test_the_remote_alone_searches_requests_and_back_climbs_one_level(self):
+        page = self.session("alice", device="tv")
+        self.open(page, "#/requests")
+        self.view(page, ".reqempty").wait_for()
+        self.focused_key(page, "req-search")
+        page.keyboard.press("ArrowUp")
+        self.focused_key(page, "req-new")
+        page.keyboard.press("Enter")
+        self.shown(page, self.PAGE)
+        self.focused_key(page, "rq-kind")                                                                   # sur la télé, le champ n'ouvre pas le clavier tout seul
+        self.assertNotEqual(page.evaluate("getComputedStyle(document.activeElement).outlineStyle"), "none")   # le focus se voit
+        page.keyboard.press("Enter")
+        menu = self.dialog(page)
+        menu.wait_for()
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        menu.wait_for(state="detached")
+        self.focused_key(page, "rq-kind")
+        self.assertIn("Films", self.view(page, "[data-key=rq-kind]").inner_text())
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_function("document.activeElement && document.activeElement.type === 'search'")
+        with self.searched(page) as info:
+            page.keyboard.type("grand")
+            page.keyboard.press("Enter")
+        self.assertIn("kind=movie", info.value.url)
+        self.focused_key(page, "rq-movie-4001")                                                             # Entrée mène au premier résultat
+        expect(self.hits(page)).to_have_count(2)
+        page.keyboard.press("ArrowDown")
+        self.focused_key(page, "rq-movie-4002")
+        page.keyboard.press("ArrowUp")
+        self.focused_key(page, "rq-movie-4001")
+        page.keyboard.press("Enter")
+        self.dialog(page).wait_for()
+        page.wait_for_function("document.activeElement && document.activeElement.tagName === 'INPUT' && !!document.activeElement.closest('.veil')")
+        page.keyboard.press("Escape")
+        page.wait_for_function("document.activeElement && document.activeElement.tagName !== 'INPUT'")
+        page.keyboard.press("Escape")
+        self.dialog(page).wait_for(state="detached")
+        self.focused_key(page, "rq-movie-4001")
+        page.keyboard.press("ArrowUp")
+        page.wait_for_function("document.activeElement && !!document.activeElement.closest('.tools')")
+        if self.key(page) == "rq-kind":
+            page.keyboard.press("ArrowLeft")
+        page.wait_for_function("document.activeElement && document.activeElement.type === 'search'")
+        page.keyboard.press("Escape")                                                                        # Retour sort d'abord du champ…
+        self.focused_key(page, "rq-kind")
+        self.assertTrue(page.evaluate("location.hash === '#/request'"))
+        page.keyboard.press("Escape")                                                                        # … puis remonte d'une page
+        self.shown(page, "#/requests")
+        self.focused_key(page, "req-new")
+        self.assertEqual(self.mine("alice"), [])
+
+    def test_the_request_page_fits_a_phone(self):
+        page = self.session("alice", device="phone", width=390)
+        self.open(page, self.PAGE)
+        self.search(page, "grand")
+        expect(self.hits(page)).to_have_count(3)
+        self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        self.assertTrue(self.hits(page).locator("button").evaluate_all("els => els.every(e => e.getBoundingClientRect().height >= 32 && e.getBoundingClientRect().right <= 390)"))
+
+    def test_the_request_search_is_in_english(self):
+        from libraries.video.tmdb import TmdbError
+        page = self.session("alice", lang="en")
+        self.open(page, "#/requests")
+        expect(self.view(page, "[data-key=req-new]")).to_have_text("New request")
+        self.open(page, self.PAGE)
+        self.assertEqual(self.view(page, "h1").inner_text(), "Request a movie or a series")
+        self.assertIn("Both", self.view(page, "[data-key=rq-kind]").inner_text())
+        self.search(page, "grand")
+        expect(self.hits(page)).to_have_count(3)
+        self.assertEqual(self.hits(page).locator(".rqkind").all_inner_texts(), ["Movie", "Movie", "Series"])
+        self.assertIn("Coming soon", self.hit(page, "Le Grand Retour").inner_text())
+        self.hit(page, "Le Grand Voyage").locator("button", has_text="Request").click()
+        box = self.dialog(page)
+        self.assertEqual(box.locator("h3").inner_text(), "Request “Le Grand Voyage”")
+        box.locator(".btn", has_text="Cancel").click()
+        box.wait_for(state="detached")
+        self.tmdb.error = TmdbError("panne")
+        self.search(page, "voyage")
+        expect(self.view(page, ".rqsay")).to_have_text("TMDB isn’t responding, try again later")
+        self.tmdb.error = None
+        self.library_search(page, "Grand Voyage")
+        expect(self.view(page, "[data-key=req-notfound]")).to_have_text("Not found? Request “Grand Voyage”")
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    # --- Affiches -----------------------------------------------------------------------
+    def test_the_posters_arrive_in_my_requests_once_the_task_has_run(self):
+        self.ask_for("alice", "movie", 4001)
+        show = self.ask_for("alice", "show", 5001)["id"]
+        self.run_.wait_jobs()                                                                                # « Affiches des demandes », lancée par la création
+        loaded = """() => { var imgs = document.querySelectorAll('#views > .view:not([style*="none"]) .reqrow .rqpic img');
+            return imgs.length === 2 && Array.prototype.every.call(imgs, function (i) { return i.complete && i.naturalWidth > 0; }); }"""
+        for name, hash in (("alice", "#/requests"), ("admin", "#/settings?tab=demandes")):
+            with self.subTest(name=name):
+                page = self.session(name)
+                self.open(page, hash)
+                self.count_rows(page, 2)
+                page.wait_for_function(loaded)
+                sources = self.rows(page).locator(".rqpic img").evaluate_all("els => els.map(e => e.getAttribute('src'))")
+                self.assertTrue(any(s.startswith("/img/film/4001") for s in sources), sources)
+                self.assertTrue(any(s.startswith(f"/img/request/{show}") for s in sources), sources)
 
 
 class TestRecommendationsInTheUi(unittest.TestCase):
