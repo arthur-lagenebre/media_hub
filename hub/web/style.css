@@ -546,7 +546,7 @@ html:not([data-device="pc"]) .card.wanted.ask:hover:not(:focus) .rqbtn:not(.on) 
 .rqhits[aria-busy="true"] { opacity: 0.55; }
 .rqhit .rqhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; }
 .line .what .rqhead span { display: inline-block; font-size: 0.85rem; }
-.rqhit .rqkind { text-transform: capitalize; padding: 0.05rem 0.5rem; border-radius: 1rem; background: var(--s2); color: var(--text); font-weight: 650; }
+.line .what .rqhead .rqkind { text-transform: capitalize; padding: 0.05rem 0.5rem; border-radius: 1rem; background: var(--s2); color: var(--text); font-weight: 650; }
 .rqhit .rqtitle { font-size: 1.1rem; }
 .line .what .rqhead .rqsoon { color: var(--accent); font-weight: 650; }
 .line .what .rqstate { color: var(--text); font-weight: 650; }

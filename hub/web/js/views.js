@@ -1203,7 +1203,7 @@
   // Ce que le compte voit : ses demandes et son message, jamais qui d'autre a demandé le même film.
   H.route(/^\/requests$/, function () {
     var out = h('div', { class: 'panel reqlist' });
-    var intro = h('p', { class: 'intro muted' }, H.t('Les films que tu as demandés à l’administrateur. Le hub ne télécharge rien : l’administrateur ajoute le film s’il le peut.'));
+    var intro = h('p', { class: 'intro muted' }, H.t('Les films et les séries que tu as demandés à l’administrateur. Le hub ne télécharge rien : l’administrateur les ajoute s’il le peut.'));
     var add = H.canSearchRequests() ? h('div', { class: 'tools' }, h('a', { class: 'btn f', href: '#/request', 'data-key': 'req-new' }, H.icon('plus'), h('span', { class: 'lbl' }, H.t('Nouvelle demande')))) : null;
     var el = h('section', { class: 'myrequests' }, h('h1', null, H.t('Mes demandes')), intro, add, out);
     var list = [];
@@ -1618,7 +1618,7 @@
     // « Mes demandes » : la page des demandes du compte, depuis « Mon compte ».
     function myRequestsLine() {
       return h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Mes demandes')),
-        h('span', null, H.canRequest() ? H.t('Les films que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film ; tes demandes déjà faites restent visibles'))),
+        h('span', null, H.canRequest() ? H.t('Les films et les séries que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film ni de série ; tes demandes déjà faites restent visibles'))),
         h('a', { class: 'btn f', href: '#/requests', 'data-key': 'my-requests' }, H.icon('queue'), h('span', { class: 'lbl' }, H.t('Mes demandes'))));
     }
     function accounts(body) {
