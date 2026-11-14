@@ -99,6 +99,7 @@ class UiCase(unittest.TestCase):
         from hub import config
         from hub.server.app import make_server
         cfg = config.load({"HUB_SRV": str(root / "srv"), "HUB_DATA": str(root / "data"), "HUB_REPO": str(fixtures.REPO), "HUB_PORT": "0", "HUB_PASSWORD": password})
+        cfg.tmdb_key = ""       # jamais la vraie clé du .env de media_library (comme Running) : un test qui veut TMDB pose la sienne avec son faux client
         cls.run_.server = make_server(cfg)
         cls.run_.hub = cls.run_.server.hub
         cls.run_.port = cls.run_.server.server_address[1]
@@ -173,6 +174,11 @@ class UiCase(unittest.TestCase):
 
 
 class TestNavigation(UiCase):
+    def test_the_ui_server_never_holds_a_tmdb_key(self):
+        """Jamais la clé du .env de media_library : aucun test de l'interface ne peut joindre le vrai TMDB."""
+        self.assertEqual(self.run_.hub.cfg.tmdb_key, "")
+        self.assertFalse(self.api("/api/state")["tmdb"])
+
     def test_home_shelves_and_remote_navigation(self):
         self.open()
         self.view(".shelf").first.wait_for()
