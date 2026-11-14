@@ -388,6 +388,57 @@ La liste, `used`, le nettoyage des `.part` et la suppression parcourent les sous
 
 **Lire et supprimer.** `<dossier>` est le nom du dossier du compte (`account`, par exemple `Léa Dupont`), `<nom>` le nom du fichier tel que la liste le donne ; l'un et l'autre sont encodés dans l'URL (`L%C3%A9a%20Dupont`). Le dossier est celui de la base (`users.inbox_dir`) : il garde son nom si le compte est renommé, et celui d'un compte supprimé reste lisible par l'administrateur. Un chemin qui sort de la boîte (`..`, `%2e%2e`, séparateur, octet nul, nom caché, nom réservé de Windows, `.part`, lien symbolique, jonction Windows) répond 404 `fichier introuvable`. Un compte qui supprime ne peut viser que son dossier, par son nom exact. Le téléchargement et la liste complète sont réservés à l'administrateur (403 `réservé à l'administrateur`).
 
+## Demandes
+
+Un compte demande un film ou une série qui n'est pas dans la médiathèque ; l'administrateur lit la liste et l'ajoute lui-même (ou refuse). **Le hub ne télécharge rien** et n'écrit pas dans la médiathèque : une demande n'est qu'une liste d'attente. Additif : `API_VERSION` reste 1. Une demande désigne son élément par l'identifiant TMDB (`kind` : `movie` ou `show`), une seule demande par élément ; chaque compte qui la fait s'y joint. Pas de notification hors du hub.
+
+**Qui voit quoi.** Chacun voit ses demandes (avec son message). D'une demande faite par un **autre** compte, il ne sait que « déjà demandé » (`request.mine: false` sur une case grisée, ou le code 200 au lieu de 201 quand il la rejoint) : ni nom, ni nombre, ni message. Seul l'administrateur voit les demandeurs et leurs messages.
+
+**Le droit « Peut demander »** (`can_request`) est **donné par défaut** à tout compte, y compris ceux d'avant la migration ; l'administrateur le retire (`POST /api/user/<id>/request`) et demande toujours lui-même.
+
+| Route | Qui | Corps | Réponse |
+| --- | --- | --- | --- |
+| `POST /api/requests` | un compte qui peut demander | `{"kind": "movie" \| "show", "tmdb": <entier>, "note": "…", "title": "…", "year": "AAAA"}` ; `note`, `title`, `year` facultatifs | **201** (nouvelle demande) ou **200** (le compte rejoint une demande existante, ou l'avait déjà faite : rien n'est doublé ni changé, son premier message reste) : `{"id": <entier>, "kind", "tmdb", "status", "mine": true}`. Voir les codes plus bas |
+| `GET /api/requests?mine=1` | tout compte | | `{"requests": [<ma demande>]}` : les demandes du compte, de la plus récente à la plus ancienne |
+| `GET /api/requests[?status=pending\|added\|declined]` | administrateur | | `{"requests": [<demande>]}` : toutes les demandes, de la plus récente à la plus ancienne, `status` en garde une sorte. 403 `réservé à l'administrateur` pour un autre compte (même avec `?mine=0`) ; 400 `statut inconnu (pending, added ou declined)` |
+| `POST /api/requests/<id>/delete` | tout compte (la sienne) ; administrateur (toutes) | `{}` | `{"ok": true}`. Un compte **quitte** la liste des demandeurs (le dernier parti, la demande disparaît) ; l'administrateur **supprime la demande entière**, quels qu'en soient les demandeurs. 404 `demande inconnue` pour une demande inconnue ou qui n'est pas celle du compte (les deux répondent pareil) |
+| `POST /api/requests/<id>/status` | administrateur | `{"status": "added" \| "declined" \| "pending", "reason": "…"}` (`reason` : motif d'un refus, facultatif, 200 caractères au plus, ignoré pour un autre statut) | `<demande>` à jour. Remet `ack` à 0 pour tous ses demandeurs. 400 `statut inconnu (pending, added ou declined)`, 400 `motif trop long (200 caractères au plus)`, 400 `le corps doit être un objet JSON`, 404 `demande inconnue`, 403 `réservé à l'administrateur` |
+| `POST /api/requests/<id>/ack` | tout compte (la sienne) | `{}` | `{"ok": true}` : le compte a vu que sa demande est arrivée, elle quitte `requests_ready` de son accueil. 404 `demande inconnue` (inconnue, ou pas la sienne) |
+| `POST /api/user/<id>/request` | administrateur | `{"request": true}` | `<compte>` avec son droit à jour : donne (`true`) ou retire (`false`) le droit de demander. Les demandes déjà faites restent. Valable à la requête suivante. 400 `« request » vaut vrai ou faux`, 400 `un administrateur peut toujours demander`, 404 `compte inconnu`, 403 `réservé à l'administrateur` |
+
+**Codes de `POST /api/requests`**, dans l'ordre où ils sont vérifiés :
+
+| Code | Message (`error`) | Cas |
+| --- | --- | --- |
+| 401 | `connexion requise` | pas connecté |
+| 403 | `tu n'as pas le droit de demander des films ni des séries` | l'administrateur a retiré ce droit au compte |
+| 413 | `corps trop gros` | corps de plus de 1 Mo, comme partout |
+| 400 | `le corps doit être un objet JSON` | corps vide, illisible ou qui n'est pas un objet |
+| 400 | `sorte de demande inconnue (movie ou show)` | `kind` absent ou autre |
+| 400 | `identifiant TMDB attendu : un entier positif` | `tmdb` absent, chaîne, booléen, décimal, nul, négatif, ou 2⁵³ et plus |
+| 400 | `message trop long (200 caractères au plus)`, `message : un texte est attendu` | `note` (espaces de bord retirés) |
+| 400 | `titre trop long (200 caractères au plus)`, `titre : un texte est attendu`, `année attendue : 4 chiffres` | `title`, `year` (un nombre de 4 chiffres est accepté) |
+| 409 | `déjà dans la médiathèque`, avec `"item": "<id de l'élément>"` | l'élément est dans une bibliothèque **que le compte voit** : `{"error": "déjà dans la médiathèque", "item": "ab12…"}` |
+| 409 | `cette demande a été refusée : <motif>` (ou `cette demande a été refusée` sans motif) | l'administrateur l'a refusée : personne ne peut la refaire ni la rejoindre tant qu'il ne l'a pas remise en attente ou supprimée |
+| 409 | `trop de demandes en attente (N)` | le compte a déjà `HUB_REQUEST_MAX` demandes `pending` (N, 20 par défaut) ; rejoindre une demande en attente compte aussi. L'administrateur n'a pas de plafond ; redemander ce qu'on a déjà demandé répond 200 |
+
+**Titre et année.** Le serveur prend ce qu'il sait déjà d'un film (les films décrits pour une saga, `sagainfo`, ou pour la filmographie d'une personne, `personinfo:*`) ; à défaut, ceux du corps. Une série ne se trouve que par le corps.
+
+**Objets.**
+
+- `<ma demande>` : `{"id", "kind", "tmdb", "title", "year", "status", "reason", "created", "updated", "cover", "note", "ack", "asked", "mine": true}` et, quand elle est arrivée dans une bibliothèque **que le compte voit**, `item` (l'identifiant de l'élément à ouvrir). `status` : `pending` (en attente), `added` (ajoutée), `declined` (refusée) ; `reason` : le motif d'un refus (`""` sinon) ; `note` : son message (`""` sans message) ; `ack` : booléen ; `asked` : quand **ce compte** l'a demandée (horodatage Unix), `created` / `updated` : la demande elle-même ; `cover` : l'affiche de l'élément quand il est là et visible (`/img/item/<id>`), sinon celle que l'enrichissement a gardée d'un film absent (`/img/film/<tmdb>`), sinon `""`.
+- `<demande>` (administrateur) : les mêmes champs sans `note`, `ack` ni `asked`, avec `users` : `[{"id", "name", "note", "created"}]` (les demandeurs, dans l'ordre où ils sont arrivés ; `name` vide pour un compte que la base n'a plus) et `mine` (l'administrateur en est-il). `item` est donné dès que l'élément est dans une bibliothèque, quelle qu'elle soit.
+
+**L'état « ajouté » se calcule à la lecture**, sans tâche de fond : une demande `pending` dont l'élément est dans **n'importe quelle bibliothèque** passe à `added` (et y reste, même si le fichier repart) à la première lecture qui le voit (`GET /api/requests`, l'accueil, une case grisée, `/api/state` de l'administrateur). Un film est reconnu par l'étiquette TMDB de son fichier (`movie/<n>`, comme les films manquants des sagas ; un film rangé dans une bibliothèque de séries compte aussi), une série par la fiche TMDB que l'enrichissement lui a trouvée (ou le marqueur `{tmdb-…}` de son dossier). Un film **sans étiquette TMDB** n'est pas reconnu : l'administrateur marque la demande « ajoutée » à la main. Un refus n'est jamais défait par la médiathèque. Une demande arrivée dans une bibliothèque que le demandeur **ne voit pas** est `added` pour lui aussi, sans `item` et sans entrée dans son accueil.
+
+**Ailleurs dans l'API** (champs ajoutés, rien de retiré) :
+
+- `GET /api/state` : `can_request` (booléen : le compte peut-il demander), aussi dans `user` ; `requests_pending` (le nombre de demandes en attente) pour l'administrateur **seulement** (absent pour les autres comptes).
+- `GET /api/home` : `requests_ready`, toujours présent (`[]` le plus souvent) : `[{"id", "kind", "tmdb", "title", "year", "item", "card": <élément>}]`, les demandes du compte arrivées dans une bibliothèque qu'il voit et pas encore acquittées (`POST /api/requests/<id>/ack`), la plus récemment arrivée d'abord ; `card` est la vignette de l'élément, comme celles des rayons.
+- `missing` d'une saga (`GET /api/item/<id>`, `sagas[].missing` ; `GET /api/library/<id>?group=`) et d'une personne (`GET /api/person`) : un film absent qu'un compte a demandé porte `request: {"status": "pending" | "added" | "declined", "mine": true | false}` (absent sinon). `mine: false` : un autre compte l'a demandé, sans dire lequel ni combien.
+- `<compte>` (`GET /api/users`, `POST /api/users`, `POST /api/user/<id>/…`, `POST /api/token`, `user` de `/api/state`) : `can_request`, toujours `true` pour un administrateur.
+- `POST /api/user/<id>/delete` : le compte supprimé quitte ses demandes ; une demande qui n'a plus de demandeur disparaît.
+
 ## Sagas composées à la main
 
 Des listes ordonnées de films, gardées dans `sagas.json` sous `HUB_DATA` (voir le README) ; elles s'ajoutent à la saga de l'étiquette (`saga` et `sagas` d'un film, `group=` d'une bibliothèque). Un film y est désigné par son identifiant TMDB. **Toutes ces routes sont réservées à l'administrateur** (403 `réservé à l'administrateur` sinon).
