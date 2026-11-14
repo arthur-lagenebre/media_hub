@@ -172,10 +172,12 @@
       },
       done: done });
   }
-  // Retirer sa demande (un confirm, Annuler par défaut). La case ne connaît pas l'identifiant de la demande : on le retrouve dans « Mes demandes ».
+  // Retirer sa demande (un confirm, Annuler par défaut). La case porte l'identifiant de sa propre demande (`request.id`) ; s'il manque (un serveur plus ancien), on le retrouve dans « Mes demandes ».
   function withdrawFrom(m, done) {
     H.confirm({ title: H.t('Retirer ta demande ?'), lead: [H.t('« {title} » ne sera plus dans tes demandes.', { title: m.title })], ok: H.t('Retirer'), danger: true,
       submit: function () {
+        var id = m.request && m.request.id;
+        if (typeof id === 'number') return H.api('/api/requests/' + id + '/delete', {});
         return H.api('/api/requests?mine=1').then(function (res) {
           var mine = (res.requests || []).filter(function (r) { return r.kind === 'movie' && r.tmdb === m.tmdb; })[0];
           return mine ? H.api('/api/requests/' + mine.id + '/delete', {}) : null;            // déjà retirée (un autre appareil) : rien à faire
@@ -206,7 +208,7 @@
       'aria-label': act ? askLabel(asked, m.title) : null,
       onclick: act ? function () {
         if (act === 'withdraw') withdrawFrom(m, function () { H.toast(H.t('Demande retirée : {title}', { title: m.title })); changed(null); });
-        else askFor(m, function (res) { H.toast(H.t('Demandé : {title}', { title: m.title })); changed({ status: res.status, mine: true }); });
+        else askFor(m, function (res) { H.toast(H.t('Demandé : {title}', { title: m.title })); changed({ status: res.status, mine: true, id: res.id }); });
       } : null },
       pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, m.note || (m.coming ? H.t('À venir') : H.t('Manquant'))].filter(Boolean).join(' · ')),
       look ? h('div', { class: 'rq' }, look.line ? h('span', { class: 'rqstate' }, look.line) : null,
@@ -445,7 +447,7 @@
         }
         var me = H.session.auth && H.session.user && H.session.user.name;
         el.appendChild(h('h1', { class: 'greeting' }, me ? H.t('Bonjour {name}', { name: me }) : H.t('Bonjour')));
-        var ready = H.setting('home_requests') === 'hide' ? [] : (data.requests_ready || []);          // masquable comme les autres rayons, si le serveur connaît ce réglage
+        var ready = H.setting('home_requests') === 'hide' ? [] : (data.requests_ready || []);          // masquable comme les autres rayons (le serveur rend alors déjà une liste vide)
         if (ready.length) el.appendChild(readyShelf(ready));
         if (data.continue.length) el.appendChild(row(H.t('Reprendre'), null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
@@ -1440,10 +1442,10 @@
       { key: 'home_unseen_sort', title: H.t('Pas encore vu : trier par'), note: H.t('Sur la page d’accueil'),
         choices: [{ label: H.t('Au hasard'), detail: H.t('Un ordre qui change chaque jour'), value: 'random' }, { label: H.t('Note TMDB'), detail: H.t('Les mieux notés d’abord, ceux sans note à la fin'), value: 'rating' },
           { label: H.t('Date d’ajout'), detail: H.t('Les plus récemment ajoutés d’abord'), value: 'added' }] },
-      { key: 'home_requests', title: H.t('Tes demandes sont arrivées'), note: H.t('Sur la page d’accueil'), choices: ON_OFF, optional: true }];        // `optional` : montré seulement si le serveur connaît ce réglage
+      { key: 'home_requests', title: H.t('Tes demandes sont arrivées'), note: H.t('Sur la page d’accueil'), choices: ON_OFF }];
     function displayPanel() {
-      var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Affichage'))), known = H.session.settings || {};
-      DISPLAY.filter(function (setting) { return !setting.optional || Object.prototype.hasOwnProperty.call(known, setting.key); }).forEach(function (setting) {
+      var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Affichage')));
+      DISPLAY.forEach(function (setting) {
         var current = H.setting(setting.key), shown = setting.choices.filter(function (c) { return c.value === current; })[0] || setting.choices[0];
         panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, setting.title), h('span', null, setting.note + ' : ' + shown.label)),
           H.button(H.t('Changer'), 'edit', { 'data-key': 'display-' + setting.key, onclick: function () {
