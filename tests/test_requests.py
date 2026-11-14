@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import shutil
+import math
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -82,11 +84,15 @@ class RequestCase(unittest.TestCase):
     def set_status(self, rid, status, reason=None, who=None):
         return self.post(who or self.boss, f"/api/requests/{rid}/status", {"status": status, **({"reason": reason} if reason is not None else {})})
 
+    def arrive(self, lib, arrivals, kind="movie"):
+        """Ces films (ou séries) `arrivals` ([(élément, identifiant TMDB)]) arrivent d'un coup dans la bibliothèque `lib`."""
+        rows = [dict(r) for r in self.db.query("SELECT * FROM items WHERE lib=?", (lib,))]
+        new = [item(ident, kind, lib=lib, title=f"Arrivé {tmdb}", meta={"tmdb": f"movie/{tmdb}"} if kind == "movie" else {"tmdb": tmdb}) for ident, tmdb in arrivals]
+        self.fill(lib, rows + new, [dict(r) for r in self.db.query("SELECT * FROM entries WHERE lib=?", (lib,))])
+
     def own(self, lib, ident, tmdb, kind="movie"):
         """Le film (ou la série) `tmdb` arrive dans la bibliothèque `lib`, sous l'élément `ident`."""
-        rows = [dict(r) for r in self.db.query("SELECT * FROM items WHERE lib=?", (lib,))]
-        meta = {"tmdb": f"movie/{tmdb}"} if kind == "movie" else {"tmdb": tmdb}
-        self.fill(lib, rows + [item(ident, kind, lib=lib, title=f"Arrivé {tmdb}", meta=meta)], [dict(r) for r in self.db.query("SELECT * FROM entries WHERE lib=?", (lib,))])
+        self.arrive(lib, [(ident, tmdb)], kind)
 
     def saga_missing(self, who):
         sagas = self.get(who, "/api/item/m1").json()["sagas"]
@@ -95,15 +101,56 @@ class RequestCase(unittest.TestCase):
     def person_missing(self, who):
         return {f["tmdb"]: f.get("request") for f in self.get(who, "/api/person?name=" + quote("Jeanne Dupont")).json()["missing"]}
 
-    def reads_of(self, who, target):
-        """Combien de lectures des demandes (tables `requests` et `request_users`) pendant la requête."""
+    def statements_of(self, who, target):
+        """Les requêtes SQL passées pendant cet appel (le gestionnaire tourne dans ce fil : sa connexion est la nôtre)."""
         statements, conn = [], self.db.connection()
         conn.set_trace_callback(statements.append)
         try:
             self.assertEqual(self.get(who, target).status, 200, target)
         finally:
             conn.set_trace_callback(None)
-        return sum("request" in s and s.lstrip().upper().startswith("SELECT") for s in statements)
+        return statements
+
+    def reads_of(self, who, target):
+        """Combien de lectures des demandes (tables `requests` et `request_users`) pendant la requête."""
+        return sum("request" in s and s.lstrip().upper().startswith("SELECT") for s in self.statements_of(who, target))
+
+    def together(self, jobs):
+        """Les appels `jobs` ([(méthode, adresse, corps, en-têtes)]), chacun dans son fil, lâchés au même signal ; [(gestionnaire, réponse)] dans l'ordre."""
+        barrier, out = threading.Barrier(len(jobs)), [None] * len(jobs)
+
+        def run(i, job):
+            try:
+                barrier.wait(timeout=30)
+                out[i] = call(self.hub, *job)
+            except Exception as e:      # un fil qui échoue se voit au rendu, pas dans un fil perdu
+                out[i] = e
+        threads = [threading.Thread(target=run, args=(i, job)) for i, job in enumerate(jobs)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        self.assertEqual([o for o in out if not isinstance(o, tuple)], [])
+        return out
+
+    def snapshot(self):
+        """Tout ce que les demandes (et le droit de demander) ont en base : deux instantanés égaux, rien n'a changé."""
+        return {table: [tuple(r) for r in self.db.query(f"SELECT * FROM {table} ORDER BY 1, 2")] for table in ("requests", "request_users")} | {
+            "droits": [tuple(r) for r in self.db.query("SELECT id, can_request FROM users ORDER BY id")]}
+
+    def crowd(self, count):
+        """`count` demandes de plus, faites directement en base (poser des centaines de lignes par HTTP n'apprendrait rien de plus) : des films, une série sur sept, une refusée sur onze, chacune par un à trois des comptes (Alice, Bob, l'administrateur et deux comptes disparus). Leurs numéros TMDB suivent ceux d'avant, à partir de 2."""
+        start = self.db.one("SELECT COUNT(*) FROM requests")[0]
+        who, now = [self.alice["id"], self.bob["id"], self.boss["id"], "disparu1", "disparu2"], int(time.time())
+        asked, askers = [], []
+        for n in range(start, start + count):
+            asked.append((n + 1, "show" if n % 7 == 6 else "movie", n + 2, f"Titre {n}", "2001", "declined" if n % 11 == 10 else "pending", now - n, now - n))
+            askers += [(n + 1, who[(n + k) % 5], "", now - n, 0) for k in range(1 + n % 3)]
+        with self.db.write_lock:
+            conn = self.db.connection()
+            conn.executemany("INSERT INTO requests(id, kind, tmdb, title, year, status, created, updated) VALUES(?,?,?,?,?,?,?,?)", asked)
+            conn.executemany("INSERT INTO request_users(request_id, user_id, note, created, ack) VALUES(?,?,?,?,?)", askers)
+            conn.commit()
 
 
 class TestAsking(RequestCase):
@@ -396,6 +443,250 @@ class TestArrival(RequestCase):
         self.assertEqual(len(self.get(self.alice, "/api/home").json()["requests_ready"]), 1)
 
 
+    def test_a_show_turns_added_when_its_sheet_arrives(self):
+        rid = self.ask(self.alice, 1399, "show", title="Une série").json()["id"]
+        self.assertEqual(self.get(self.alice, "/api/home").json()["requests_ready"], [])
+        self.own("series", "s1", 1399, "show")
+        ready = self.get(self.alice, "/api/home").json()["requests_ready"]
+        self.assertEqual([(r["id"], r["kind"], r["tmdb"], r["item"], r["card"]["id"]) for r in ready], [(rid, "show", 1399, "s1", "s1")])
+        self.assertEqual((self.mine(self.alice)[0]["status"], self.mine(self.alice)[0]["item"]), ("added", "s1"))
+
+    def test_an_arrival_in_a_library_the_account_cannot_see_waits_for_one_it_sees(self):
+        rid = self.ask(self.bob, 2).json()["id"]
+        self.own("prive", "p1", 2)
+        self.assertEqual(self.get(self.boss, "/api/state").json()["requests_pending"], 0)
+        self.assertEqual(self.everything()[0]["item"], "p1")                          # l'administrateur voit tout
+        shown = self.mine(self.bob)[0]
+        self.assertEqual(shown["status"], "added")
+        self.assertNotIn("item", shown)
+        self.assertEqual(self.get(self.bob, "/api/home").json()["requests_ready"], [])
+        self.own("films", "m2", 2)                                                    # puis dans une bibliothèque qu'il voit
+        self.assertEqual(self.mine(self.bob)[0]["item"], "m2")
+        self.assertEqual([r["id"] for r in self.get(self.bob, "/api/home").json()["requests_ready"]], [rid])
+
+    def test_an_acknowledged_arrival_does_not_come_back_when_the_film_leaves_and_returns(self):
+        rid = self.ask(self.alice, 2).json()["id"]
+        self.own("films", "m2", 2)
+        self.assertEqual(len(self.get(self.alice, "/api/home").json()["requests_ready"]), 1)
+        self.post(self.alice, f"/api/requests/{rid}/ack")
+        self.fill("films", [dict(r) for r in self.db.query("SELECT * FROM items WHERE id='m1'")])
+        self.own("films", "m2", 2)
+        self.assertEqual((self.get(self.alice, "/api/home").json()["requests_ready"], self.mine(self.alice)[0]["status"]), ([], "added"))
+
+    def test_putting_back_a_request_whose_film_is_there_makes_it_arrive_again_on_the_next_read(self):
+        rid = self.ask(self.alice, 2).json()["id"]
+        self.own("films", "m2", 2)
+        self.mine(self.alice)
+        self.post(self.alice, f"/api/requests/{rid}/ack")
+        reply = self.set_status(rid, "pending")                                       # le film est là : la lecture le voit aussitôt
+        self.assertEqual((reply.status, reply.json()["status"], reply.json()["item"]), (200, "added", "m2"))
+        self.assertEqual([r["id"] for r in self.get(self.alice, "/api/home").json()["requests_ready"]], [rid])
+
+    def test_readers_at_the_same_time_all_see_the_arrival_and_it_is_written_once(self):
+        self.ask(self.alice, 2)
+        self.ask(self.bob, 2)
+        self.own("films", "m2", 2)
+        reads = [("GET", "/api/requests?mine=1", None, self.headers(self.alice)), ("GET", "/api/requests?mine=1", None, self.headers(self.bob)), ("GET", "/api/requests", None, self.headers(self.boss)),
+                 ("GET", "/api/home", None, self.headers(self.alice)), ("GET", "/api/state", None, self.headers(self.boss)), ("GET", "/api/item/m1", None, self.headers(self.bob))]
+        out = self.together(reads)
+        self.assertEqual([reply.status for _, reply in out], [200] * len(reads))
+        self.assertEqual([r["status"] for r in out[0][1].json()["requests"] + out[2][1].json()["requests"]], ["added", "added"])
+        self.assertEqual(self.stored(), sorted([("movie", 2, "added", self.alice["id"]), ("movie", 2, "added", self.bob["id"])]))
+
+
+class TestAtTheSameTime(RequestCase):
+    """Plusieurs fils à la fois, comme le serveur en a : une seule ligne par film, jamais de 500 ni de violation UNIQUE remontée."""
+
+    def asks(self, who, tmdb):
+        return ("POST", "/api/requests", {"kind": "movie", "tmdb": tmdb}, self.headers(who))
+
+    def orphans(self):
+        """Des demandeurs sans demande, ou des demandes sans demandeur."""
+        return ([tuple(r) for r in self.db.query("SELECT request_id FROM request_users WHERE request_id NOT IN (SELECT id FROM requests)")],
+                [tuple(r) for r in self.db.query("SELECT id FROM requests WHERE id NOT IN (SELECT request_id FROM request_users)")])
+
+    def test_accounts_asking_the_same_film_at_once_share_one_request(self):
+        for tmdb in range(100, 108):
+            out = self.together([self.asks(who, tmdb) for who in (self.alice, self.bob, self.boss)])
+            self.assertEqual(sorted(reply.status for _, reply in out), [200, 200, 201], tmdb)          # un seul crée, les autres rejoignent
+            self.assertEqual(len({reply.json()["id"] for _, reply in out}), 1, tmdb)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 8)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM request_users")[0], 24)
+
+    def test_the_same_account_asking_twice_at_once_is_one_request_and_one_row(self):
+        for tmdb in range(100, 106):
+            out = self.together([self.asks(self.alice, tmdb), self.asks(self.alice, tmdb)])
+            self.assertEqual(sorted(reply.status for _, reply in out), [200, 201], tmdb)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 6)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM request_users")[0], 6)
+
+    def test_the_ceiling_holds_when_one_account_asks_many_films_at_once(self):
+        self.hub.cfg.request_max = 2
+        out = self.together([self.asks(self.alice, tmdb) for tmdb in range(100, 106)])
+        self.assertEqual(sorted(reply.status for _, reply in out), [201, 201, 409, 409, 409, 409])
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM request_users WHERE user_id=?", (self.alice["id"],))[0], 2)
+        self.assertIn(self.ask(self.bob, 100).status, (200, 201))                                    # le plafond de l'une n'est pas celui de l'autre
+
+    def test_leaving_and_joining_at_once_never_leaves_an_orphan(self):
+        for tmdb in range(100, 108):
+            rid = self.ask(self.alice, tmdb).json()["id"]
+            out = self.together([("POST", f"/api/requests/{rid}/delete", {}, self.headers(self.alice)), self.asks(self.bob, tmdb)])
+            self.assertEqual((out[0][1].status, out[1][1].status in (200, 201)), (200, True), tmdb)
+            self.assertEqual(self.orphans(), ([], []), tmdb)
+        self.assertEqual(self.stored(), [("movie", n, "pending", self.bob["id"]) for n in range(100, 108)])      # Bob l'a, quel qu'ait été l'ordre
+
+
+class TestDamagedBodies(RequestCase):
+    """Sur chaque route qui écrit, un corps qui n'est pas ce qu'on attend n'efface ni ne change rien."""
+    OBJECT = {"error": "le corps doit être un objet JSON"}
+    BODIES = {"vide": b"", "pas du json": b"pas du json", "liste": b"[1]", "nombre": b"42", "texte": b'"texte"', "null": b"null", "UTF-8 invalide": b'\xff\xfe{"kind": "movie"}',
+              "tronqué": b'{"kind": "movie", "tmdb"'}
+    DEEP = b"[" * 200_000                                   # du JSON emboîté sans fin : l'analyse déborde la pile
+
+    def setUp(self):
+        super().setUp()
+        self.rid = self.ask(self.alice, 2, note="Pour Noël").json()["id"]
+        self.ask(self.bob, 2)
+        self.declined = self.ask(self.alice, 3).json()["id"]
+        self.set_status(self.declined, "declined", "non")
+        self.post(self.bob, f"/api/requests/{self.rid}/ack")
+        self.before = self.snapshot()
+
+    def writes(self):
+        """(compte, adresse) de chaque route d'écriture des demandes."""
+        return [(self.alice, "/api/requests"), (self.boss, f"/api/requests/{self.rid}/status"), (self.boss, f"/api/user/{self.alice['id']}/request"),
+                (self.alice, f"/api/requests/{self.rid}/delete"), (self.alice, f"/api/requests/{self.rid}/ack")]
+
+    def test_a_body_that_is_not_an_object_is_a_400_and_changes_nothing(self):
+        expected = {"/api/requests": self.OBJECT, f"/api/requests/{self.rid}/status": self.OBJECT, f"/api/user/{self.alice['id']}/request": {"error": "« request » vaut vrai ou faux"}}
+        for who, target in self.writes()[:3]:
+            for name, raw in self.BODIES.items():
+                with self.subTest(target=target, body=name):
+                    _, reply = call(self.hub, "POST", target, raw, self.headers(who))
+                    self.assertEqual((reply.status, reply.json()), (400, expected[target]))
+                    self.assertEqual(self.snapshot(), self.before)
+
+    @unittest.expectedFailure
+    def test_a_body_nested_without_end_is_never_a_500(self):
+        """DÉFAUT CONNU (hub/server/app.py, `safe_json` ligne 87, utilisé par `body_json`) : `safe_json` n'attrape que ValueError, or `json.loads` d'un corps `[[[[…` lève RecursionError : 500 « erreur interne : Stack overflow » au lieu d'un corps ignoré ou d'un 400. Les routes `strict_body_dict` (création, statut) attrapent déjà RecursionError ; celles qui passent par `body_json` (droit « Peut demander », retrait, acquittement, et toutes les autres routes POST) non. Rien n'est modifié en base, mais c'est une 500 sur une entrée d'un client."""
+        failed = []
+        for who, target in self.writes():
+            _, reply = call(self.hub, "POST", target, self.DEEP, self.headers(who))
+            if reply.status >= 500:
+                failed.append((target, reply.status))
+        self.assertEqual(failed, [])
+
+    def test_a_body_too_big_is_a_413_and_changes_nothing(self):
+        for who, target in self.writes():
+            for name, raw, more in (("en-tête", b"", {"Content-Length": str((1 << 20) + 1)}), ("octets", b" " * ((1 << 20) + 1), {})):
+                with self.subTest(target=target, body=name):
+                    _, reply = call(self.hub, "POST", target, raw, {**self.headers(who), **more})
+                    self.assertEqual((reply.status, reply.json()), (413, {"error": "corps trop gros"}))
+                    self.assertEqual(self.snapshot(), self.before)
+
+    def test_an_unreadable_length_is_a_400_and_changes_nothing(self):
+        for who, target in self.writes():
+            for length in ("abc", "-1"):
+                with self.subTest(target=target, length=length):
+                    _, reply = call(self.hub, "POST", target, b"{}", {**self.headers(who), "Content-Length": length})
+                    self.assertEqual(reply.status, 400)
+                    self.assertEqual(self.snapshot(), self.before)
+
+    def test_a_body_of_exactly_one_mebibyte_is_read(self):
+        raw = b'{"kind": "movie", "tmdb": 9}'
+        _, reply = call(self.hub, "POST", "/api/requests", raw + b" " * ((1 << 20) - len(raw)), self.headers(self.alice))
+        self.assertEqual(reply.status, 201)
+
+    def test_fields_of_the_wrong_type_are_a_400_and_change_nothing(self):
+        for body in ({"kind": ["movie"], "tmdb": 9}, {"kind": {}, "tmdb": 9}, {"kind": "movie", "tmdb": {"a": 1}}, {"kind": "movie", "tmdb": 9, "title": 5},
+                     {"kind": "movie", "tmdb": 9, "title": ["x"]}, {"kind": "movie", "tmdb": 9, "year": ["2001"]}, {"kind": "movie", "tmdb": 9, "year": 20.01}, {"kind": "movie", "tmdb": 9, "note": {"a": 1}}):
+            with self.subTest(body=body):
+                self.assertEqual(self.post(self.alice, "/api/requests", body).status, 400)
+                self.assertEqual(self.snapshot(), self.before)
+        for body in ({"status": ["added"]}, {"status": {"a": 1}}, {"status": True}, {"status": "declined", "reason": 5}, {"status": "declined", "reason": ["x"]}, {}):
+            with self.subTest(body=body):
+                self.assertEqual(self.post(self.boss, f"/api/requests/{self.rid}/status", body).status, 400)
+                self.assertEqual(self.snapshot(), self.before)
+
+    def test_a_title_that_is_not_text_is_a_400_in_french(self):
+        reply = self.post(self.alice, "/api/requests", {"kind": "movie", "tmdb": 9, "title": 5})
+        self.assertEqual((reply.status, reply.json()), (400, {"error": "titre : un texte est attendu"}))
+
+    def test_a_refused_caller_changes_nothing_whatever_the_body(self):
+        self.post(self.boss, f"/api/user/{self.alice['id']}/request", {"request": False})
+        before = self.snapshot()
+        for target, who in ((f"/api/requests/{self.rid}/status", self.alice), ("/api/requests", self.alice), (f"/api/user/{self.bob['id']}/request", self.alice)):
+            for name, raw in self.BODIES.items():
+                with self.subTest(target=target, body=name):
+                    _, reply = call(self.hub, "POST", target, raw, self.headers(who))
+                    self.assertEqual(reply.status, 403)
+                    self.assertEqual(self.snapshot(), before)
+
+    def test_without_a_session_every_write_route_is_a_401_and_changes_nothing(self):
+        for _, target in self.writes():
+            with self.subTest(target=target):
+                _, reply = call(self.hub, "POST", target, {"status": "added", "request": False, "kind": "movie", "tmdb": 9})
+                self.assertEqual(reply.status, 401)
+                self.assertEqual(self.snapshot(), self.before)
+
+
+class TestVolume(RequestCase):
+    """Des centaines de demandes : ce que coûte une lecture ne dépend pas de leur nombre."""
+
+    def targets(self):
+        return [(self.boss, "/api/requests"), (self.alice, "/api/requests?mine=1"), (self.alice, "/api/home"), (self.alice, "/api/item/m1"), (self.alice, "/api/library/films?group=Saga"),
+                (self.alice, "/api/person?name=" + quote("Jeanne Dupont")), (self.boss, "/api/state")]
+
+    def counts(self):
+        """{adresse: nombre de requêtes SQL} ; chaque adresse est appelée une fois avant, pour que ce que le serveur garde en mémoire (voir Database.derived) soit prêt."""
+        out = {}
+        for who, target in self.targets():
+            self.statements_of(who, target)
+            out[target] = len(self.statements_of(who, target))
+        return out
+
+    def test_the_number_of_sql_statements_does_not_grow_with_the_requests(self):
+        self.crowd(30)
+        few = self.counts()
+        self.crowd(570)
+        many = self.counts()
+        self.assertEqual(many, few)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 600)
+
+    def test_the_lists_hold_every_request_of_a_crowd(self):
+        self.crowd(600)
+        everything = self.everything()
+        self.assertEqual(len(everything), 600)
+        self.assertEqual(sorted(r["id"] for r in everything), list(range(1, 601)))
+        self.assertTrue(all(r["users"] for r in everything))
+        asked = [self.db.one("SELECT COUNT(*) FROM request_users WHERE user_id=?", (who["id"],))[0] for who in (self.alice, self.bob)]
+        self.assertEqual([len(self.mine(self.alice)), len(self.mine(self.bob))], asked)
+        self.assertEqual(self.get(self.boss, "/api/state").json()["requests_pending"], self.db.one("SELECT COUNT(*) FROM requests WHERE status='pending'")[0])
+        self.assertEqual({tmdb: (mark or {}).get("mine") for tmdb, mark in self.saga_missing(self.alice).items()}, {2: True, 3: False})          # la saga garde ses films absents, et eux seuls
+
+    def test_a_crowd_of_arrivals_is_written_in_chunks_and_read_once(self):
+        self.crowd(700)
+        arriving = [r["tmdb"] for r in self.db.query("SELECT tmdb FROM requests WHERE kind='movie' AND status='pending'")]
+        self.assertGreater(len(arriving), 500)                                                  # de quoi passer la limite d'un paquet
+        self.arrive("films", [(f"n{tmdb}", tmdb) for tmdb in arriving])
+        statements = self.statements_of(self.boss, "/api/requests")
+        self.assertEqual(sum(s.lstrip().upper().startswith("UPDATE REQUESTS") for s in statements), math.ceil(len(arriving) / 500))
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests WHERE kind='movie' AND status='pending'")[0], 0)
+        self.assertEqual(self.get(self.boss, "/api/state").json()["requests_pending"], self.db.one("SELECT COUNT(*) FROM requests WHERE status='pending'")[0])
+
+    def test_the_home_lists_a_crowd_of_arrivals_with_a_few_statements(self):
+        self.crowd(700)
+        self.arrive("films", [(f"n{r['tmdb']}", r["tmdb"]) for r in self.db.query("SELECT tmdb FROM requests WHERE kind='movie'")])
+        expected = self.db.one("SELECT COUNT(*) FROM requests r JOIN request_users u ON u.request_id = r.id WHERE u.user_id=? AND r.kind='movie' AND r.status='pending'", (self.alice["id"],))[0]
+        statements = self.statements_of(self.alice, "/api/home")
+        ready = self.get(self.alice, "/api/home").json()["requests_ready"]
+        self.assertEqual(len(ready), expected)
+        self.assertEqual(len({r["id"] for r in ready}), expected)
+        self.assertLess(sum("request" in s and s.lstrip().upper().startswith("SELECT") for s in statements), 2)
+        self.assertLessEqual(sum(s.lstrip().upper().startswith("UPDATE REQUESTS") for s in statements), 2)
+        self.assertLess(len(statements), 40)
+
+
 class TestReads(RequestCase):
     def test_each_route_reads_the_requests_once(self):
         for n in (2, 3):
@@ -426,29 +717,53 @@ class TestReads(RequestCase):
 class TestWithTheFakeLibrary(unittest.TestCase):
     """La médiathèque factice (tests/fixtures.build_library), scannée pour de vrai : Inception (movie/27205) arrive après la demande."""
 
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / "web").mkdir()
+        self.folders = fixtures.build_library(self.root / "srv")
+        self.films = config.Library("films", "Films", "movies", self.folders["films"])
+        self.hub = MiniHub(self.root, [self.films])
+        self.boss, self.alice = accounts.create(self.hub.db, "boss", PASSWORD), accounts.create(self.hub.db, "alice", PASSWORD)
+
+    def scan(self):
+        scanning.scan_library(self.hub.db, self.films, log=lambda _m: None)
+
+    def files(self):
+        """Tout ce que la médiathèque contient : chemin, taille et date de chaque fichier."""
+        return sorted((str(p.relative_to(self.root)), p.stat().st_size, p.stat().st_mtime_ns) for p in (self.root / "srv").rglob("*") if p.is_file())
+
     def test_a_request_turns_added_after_the_film_is_scanned_in(self):
-        root = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, root, True)
-        (root / "web").mkdir()
-        folders = fixtures.build_library(root / "srv")
-        films = config.Library("films", "Films", "movies", folders["films"])
-        hub = MiniHub(root, [films])
-        alice = accounts.create(hub.db, "boss", PASSWORD) and accounts.create(hub.db, "alice", PASSWORD)
-        cookie = hub.cookie(alice)
-        away = root / "ailleurs"
-        (folders["films"] / "Inception (2010)").rename(away)
-        scanning.scan_library(hub.db, films, log=lambda _m: None)
-        _, reply = call(hub, "POST", "/api/requests", {"kind": "movie", "tmdb": 27205, "title": "Inception", "year": "2010"}, cookie)
+        cookie = self.hub.cookie(self.alice)
+        away = self.root / "ailleurs"
+        (self.folders["films"] / "Inception (2010)").rename(away)
+        self.scan()
+        _, reply = call(self.hub, "POST", "/api/requests", {"kind": "movie", "tmdb": 27205, "title": "Inception", "year": "2010"}, cookie)
         self.assertEqual((reply.status, reply.json()["status"]), (201, "pending"))
-        _, taken = call(hub, "POST", "/api/requests", {"kind": "movie", "tmdb": 49521}, cookie)
+        _, taken = call(self.hub, "POST", "/api/requests", {"kind": "movie", "tmdb": 49521}, cookie)
         self.assertEqual((taken.status, taken.json()["error"]), (409, "déjà dans la médiathèque"))            # Man of Steel est déjà là
-        away.rename(folders["films"] / "Inception (2010)")
-        scanning.scan_library(hub.db, films, log=lambda _m: None)
-        inception = hub.db.one("SELECT id FROM items WHERE title='Inception'")["id"]
-        _, reply = call(hub, "GET", "/api/requests?mine=1", headers=cookie)
+        away.rename(self.folders["films"] / "Inception (2010)")
+        self.scan()
+        inception = self.hub.db.one("SELECT id FROM items WHERE title='Inception'")["id"]
+        _, reply = call(self.hub, "GET", "/api/requests?mine=1", headers=cookie)
         self.assertEqual([(r["tmdb"], r["status"], r.get("item")) for r in reply.json()["requests"]], [(27205, "added", inception)])
-        _, home = call(hub, "GET", "/api/home", headers=cookie)
+        _, home = call(self.hub, "GET", "/api/home", headers=cookie)
         self.assertEqual([r["item"] for r in home.json()["requests_ready"]], [inception])
+
+    def test_requests_never_write_in_the_library(self):
+        self.scan()
+        before = self.files()
+        mine, boss = self.hub.cookie(self.alice), self.hub.cookie(self.boss)
+        _, asked = call(self.hub, "POST", "/api/requests", {"kind": "movie", "tmdb": 603, "title": "Matrix", "year": "1999"}, mine)
+        self.assertEqual(asked.status, 201)
+        rid = asked.json()["id"]
+        call(self.hub, "POST", "/api/requests", {"kind": "movie", "tmdb": 27205}, mine)                      # déjà là : 409
+        for who, method, target, body in ((boss, "POST", f"/api/requests/{rid}/status", {"status": "declined", "reason": "non"}), (boss, "POST", f"/api/requests/{rid}/status", {"status": "added"}),
+                                          (mine, "POST", f"/api/requests/{rid}/ack", {}), (mine, "GET", "/api/requests?mine=1", None), (boss, "GET", "/api/requests", None), (mine, "GET", "/api/home", None),
+                                          (boss, "GET", "/api/state", None), (mine, "POST", f"/api/requests/{rid}/delete", {})):
+            _, reply = call(self.hub, method, target, body, who)
+            self.assertEqual(reply.status, 200, target)
+        self.assertEqual(self.files(), before)
 
 
 class TestMigration(unittest.TestCase):
