@@ -386,6 +386,159 @@ class TestCost(RecommendCase):
         self.assertLess(shelf.index("new"), shelf.index("c_dir"))
 
 
+class TestEmptyAndDegenerate(RecommendCase):
+    """Les comptes et les médiathèques sans matière : une réponse vide, jamais une erreur."""
+
+    def assertEmpty(self, who):
+        reply = self.reply(who)
+        self.assertEqual((reply.status, reply.json()), (200, {"shelves": []}), reply.body)
+
+    def test_an_account_without_any_opinion_or_progress_gets_an_empty_answer(self):
+        self.assertEmpty(self.alice)
+
+    def test_an_account_without_opinion_but_with_two_finished_films_gets_shelves_from_them(self):
+        self.watch(self.alice, "a1")
+        self.watch(self.alice, "a2")
+        self.assertEqual(set(self.by_anchor(self.alice)), {"a1", "a2"})
+
+    def test_an_account_that_finished_everything_has_nothing_left_to_offer(self):
+        self.rate(self.alice, "a1", "a2")
+        for ident in [r["id"] for r in FILMS + SHOWS + SECRET]:
+            self.watch(self.alice, ident)
+        self.assertEmpty(self.alice)
+
+    def test_an_account_that_started_every_neighbour_has_nothing_left_to_offer(self):
+        self.rate(self.alice, "a1", "a2")
+        for ident in [r["id"] for r in FILMS + SHOWS + SECRET if r["id"] not in ("a1", "a2")]:
+            self.watch(self.alice, ident, done=False)
+        self.assertEmpty(self.alice)
+
+    def test_an_empty_hub_answers_an_empty_shelf_list_even_with_opinions_left_behind(self):
+        self.rate(self.alice, "a1", "a2")
+        self.watch(self.alice, "s1")
+        for lib in ("films", "series", "prive"):
+            self.fill(lib, [])
+        self.assertEmpty(self.alice)
+
+    def test_an_empty_library_does_not_disturb_the_others(self):
+        self.rate(self.alice, "s1", "s2")
+        self.fill("films", [])
+        shelves = self.by_anchor(self.alice)
+        self.assertEqual(set(shelves), {"s1", "s2"})
+        self.assertTrue(all(i.startswith("s") for shelf in shelves.values() for i in shelf), shelves)
+
+    def test_an_account_that_cannot_play_any_video_library_gets_an_empty_answer(self):
+        self.rate(self.bob, "a1", "a2", "s1", "s2")
+        accounts.set_rights(self.db, self.bob["id"], {"films", "series", "prive", "musique"}, {lib: {"play": False} for lib in ("films", "series", "prive")})
+        self.assertEmpty(self.bob)
+
+
+class TestUnreadableTags(RecommendCase):
+    """Un `meta` absent, cassé ou d'un autre type que celui qu'écrit le scan : traité comme un élément sans étiquette de personnes, sans casser le reste."""
+
+    BASELINE = ["c_sf2", "c_sf1", "c_sf3", "c_sf4"]                 # l'ordre des films de SF d'Alien quand rien ne les distingue (voir TestOrder)
+    NOT_AN_OBJECT = ["null", "[]", '"texte"', "42", "true"]          # du JSON valide, mais pas un objet
+    NO_PEOPLE = ["", "pas du json", '{"directors": ["Ridley"', "{}",
+                 '{"directors": "Ridley", "actors": "Sigourney"}',                    # des chaînes : on ne les découpe pas en lettres
+                 '{"directors": 42, "actors": 7}',
+                 '{"directors": {"name": "Ridley"}, "actors": {"Sigourney": 1}}',
+                 '{"directors": null, "actors": null}',
+                 '{"directors": [42, null, {"name": "Ridley"}, ["Ridley"], true, "  "], "actors": [null, 3, {"role": "x"}, {"name": 5}, [], ""]}',
+                 '{"tmdb_rating": "8"}', '{"tmdb_rating": null}', '{"tmdb_rating": []}', '{"tmdb_rating": {}}']
+
+    def with_raw_meta(self, ident, raw):
+        rows = {r["id"]: r for r in FILMS}
+        rows[ident] = {**rows[ident], "meta": raw}
+        self.fill("films", list(rows.values()))
+
+    def test_a_candidate_without_readable_people_still_counts_by_its_genres(self):
+        self.rate(self.alice, "a1", "a2")
+        for raw in self.NO_PEOPLE:
+            with self.subTest(meta=raw):
+                self.with_raw_meta("c_sf1", raw)
+                cards = {c["id"]: c for s in self.shelves(self.alice) if s["anchor"]["id"] == "a1" for c in s["items"]}
+                self.assertEqual(cards["c_sf1"]["why"], [{"kind": "genre", "value": "SF"}])
+                self.assertEqual([i for i in cards if i.startswith("c_sf")], self.BASELINE)
+
+    def test_a_candidate_whose_meta_is_not_an_object_is_still_offered(self):
+        """DÉFAUT CONNU : `summary` (app.py:217) relit `meta` avec `safe_json`, qui rend tout JSON valide tel quel ; `.get` plante sur une liste, une chaîne, un nombre ou `null` (500). Le moteur, lui, passe par `people.meta_of`."""
+        self.rate(self.alice, "a1", "a2")
+        for raw in self.NOT_AN_OBJECT:
+            with self.subTest(meta=raw):
+                self.with_raw_meta("c_sf1", raw)
+                cards = {c["id"]: c for s in self.shelves(self.alice) if s["anchor"]["id"] == "a1" for c in s["items"]}
+                self.assertEqual(cards["c_sf1"]["why"], [{"kind": "genre", "value": "SF"}])
+
+    def test_an_anchor_without_readable_people_still_has_a_shelf_by_its_genres(self):
+        self.rate(self.alice, "a1", "a2")
+        for raw in self.NO_PEOPLE + self.NOT_AN_OBJECT:
+            with self.subTest(meta=raw):
+                self.with_raw_meta("a1", raw)
+                shelf = self.by_anchor(self.alice)["a1"]
+                self.assertTrue({"c_sf1", "c_sf2", "c_sf3", "c_sf4"} <= set(shelf), shelf)
+                self.assertNotIn("c_dir", shelf)                    # Ridley n'est plus lisible chez l'ancre
+                self.assertNotIn("c_act", shelf)
+
+    def test_readable_names_among_unreadable_ones_are_kept(self):
+        self.rate(self.alice, "a1", "a2")
+        self.with_raw_meta("c_sf1", json.dumps({"directors": [42, None, "Ridley"], "actors": [None, 3, {"name": "Sigourney"}]}))
+        cards = {c["id"]: c for s in self.shelves(self.alice) if s["anchor"]["id"] == "a1" for c in s["items"]}
+        self.assertEqual(cards["c_sf1"]["why"], [{"kind": "director", "value": "Ridley"}, {"kind": "actor", "value": "Sigourney"}])
+
+    def test_a_film_with_no_tag_at_all_is_an_anchor_without_neighbours_and_never_offered(self):
+        self.fill("films", FILMS + [{**film("bare", "Sans rien"), "meta": "", "genres": "", "year": "", "grp": ""}])
+        self.rate(self.alice, "a1", "a2", "bare")
+        shelves = self.by_anchor(self.alice)
+        self.assertEqual(set(shelves), {"a1", "a2"})
+        self.assertTrue(all("bare" not in shelf for shelf in shelves.values()))
+
+    def test_a_tmdb_rating_with_a_text_vote_does_not_break_the_answer(self):
+        """DÉFAUT CONNU : `shown_rating` (app.py:194) compare `votes` à MIN_VOTES et `quality` (recommend.py:144) soustrait `vote` sans vérifier qu'ils sont des nombres (500)."""
+        self.rate(self.alice, "a1", "a2")
+        for raw in ('{"tmdb_rating": {"vote": "9.0", "votes": 1000}}', '{"tmdb_rating": {"vote": "9.0", "votes": "1000"}}', '{"tmdb_rating": {"vote": [9], "votes": 1000}}'):
+            with self.subTest(meta=raw):
+                self.with_raw_meta("c_sf1", raw)
+                reply = self.reply(self.alice)
+                self.assertEqual(reply.status, 200, reply.body)
+
+
+class TestSameTitles(RecommendCase):
+    """À proximité égale et titre égal, l'identifiant départage : le résultat ne dépend pas de l'ordre d'insertion."""
+
+    def twins(self, ids):
+        return [film(i, "Pareil", genres=["SF"], year="2020") for i in ids]
+
+    def test_identical_titles_are_ordered_by_identifier(self):
+        base = [r for r in FILMS if not r["id"].startswith("c_sf")]
+        self.fill("films", base + self.twins(["t3", "t1", "t4", "t2"]))
+        self.rate(self.alice, "a1", "a2")
+        self.assertEqual([i for i in self.by_anchor(self.alice)["a1"] if i.startswith("t")], ["t1", "t2", "t3", "t4"])
+
+    def test_the_answer_does_not_depend_on_the_order_the_items_were_stored(self):
+        rows = FILMS + self.twins(["t1", "t2", "t3", "t4"]) + [film("g1", "Saga", ["Ridley"], grp="Saga"), film("g2", "Saga", ["Ridley"], grp="Saga")]
+        self.rate(self.alice, "a1", "a2", "t1")
+        self.fill("films", rows)
+        forward = self.shelves(self.alice)
+        self.fill("films", rows[::-1])
+        self.assertEqual(self.shelves(self.alice), forward)
+
+    def test_one_of_two_saga_twins_wins_by_identifier(self):
+        self.fill("films", FILMS + [film("g2", "Saga", ["Ridley"], grp="Saga"), film("g1", "Saga", ["Ridley"], grp="Saga")])
+        self.rate(self.alice, "a1", "a2")
+        shelf = self.by_anchor(self.alice)["a1"]
+        self.assertIn("g1", shelf)
+        self.assertNotIn("g2", shelf)
+
+    def test_two_anchors_with_the_same_title_are_both_offered_in_a_fixed_order(self):
+        rows = [r for r in FILMS if r["id"] != "a2"] + [film("a2", "Alien", ["Nolan"], ["Leo"], ["Thriller"], "2010")]
+        self.fill("films", rows)
+        self.rate(self.alice, "a1", "a2")
+        first = self.shelves(self.alice)
+        self.assertEqual({s["anchor"]["id"] for s in first}, {"a1", "a2"})
+        self.fill("films", rows[::-1])
+        self.assertEqual(self.shelves(self.alice), first)
+
+
 class TestVolume(RecommendCase):
     COUNT = 5000
     BUDGET = 0.5            # secondes : large (la cible est sous 0,1 s), pour qu'un poste lent ne rende pas le test instable
