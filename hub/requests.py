@@ -189,10 +189,10 @@ def ready(db, cfg, uid, visible):
 
 
 def marks(db, cfg, uid, kind="movie"):
-    """{identifiant TMDB: {"status", "mine"}} des demandes de cette sorte : `mine` dit si ce compte en est, rien d'autre (ni qui, ni combien). Une lecture des demandes."""
+    """{identifiant TMDB: {"status", "mine", "id"?}} des demandes de cette sorte : `mine` dit si ce compte en est, rien d'autre (ni qui, ni combien) ; `id` (de quoi la retirer) seulement quand c'est la sienne, jamais pour celle d'un autre. Une lecture des demandes."""
     rows = db.query("SELECT r.id, r.kind, r.tmdb, r.status, r.updated, MAX(u.user_id = ?) AS mine FROM requests r JOIN request_users u ON u.request_id = r.id WHERE r.kind=? GROUP BY r.id", (uid, kind))
     rows, _ = refreshed(db, cfg.libraries, rows)
-    return {r["tmdb"]: {"status": r["status"], "mine": bool(r["mine"])} for r in rows}
+    return {r["tmdb"]: {"status": r["status"], "mine": True, "id": r["id"]} if r["mine"] else {"status": r["status"], "mine": False} for r in rows}
 
 
 # ---------------------------------------------------------------------------

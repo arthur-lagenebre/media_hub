@@ -291,6 +291,28 @@ class TestStatusRace(RequestCase):
         self.assertEqual((reply.status, reply.json()), (404, UNKNOWN))
 
 
+class TestHomeShelf(RequestCase):
+    def test_the_account_hides_the_shelf_of_arrivals_and_nothing_is_computed(self):
+        rid = self.ask(self.alice, 2).json()["id"]
+        self.own("films", "m2", 2)
+        self.assertEqual(self.post(self.alice, "/api/me/settings", {"home_requests": "hide"}).json()["settings"]["home_requests"], "hide")
+        self.assertEqual(self.get(self.alice, "/api/home").json()["requests_ready"], [])               # le champ reste là, vide
+        statements, conn = [], self.db.connection()
+        conn.set_trace_callback(statements.append)
+        try:
+            self.get(self.alice, "/api/home")
+        finally:
+            conn.set_trace_callback(None)
+        self.assertEqual([s for s in statements if "request" in s], [])
+        self.assertEqual(self.post(self.alice, "/api/me/settings", {"home_requests": "show"}).status, 200)
+        self.assertEqual([r["id"] for r in self.get(self.alice, "/api/home").json()["requests_ready"]], [rid])          # rien n'a été acquitté pendant qu'il était caché
+
+    def test_the_shelf_is_shown_by_default_and_only_show_or_hide_is_accepted(self):
+        self.assertEqual(self.get(self.alice, "/api/me/settings").json()["settings"]["home_requests"], "show")
+        reply = self.post(self.alice, "/api/me/settings", {"home_requests": "maybe"})
+        self.assertEqual((reply.status, reply.json()), (400, {"error": "valeur inconnue pour home_requests : maybe"}))
+
+
 class TestWithdrawing(RequestCase):
     def test_each_requester_leaves_and_the_last_one_takes_the_request_away(self):
         rid = self.ask(self.alice, 2).json()["id"]
@@ -367,15 +389,18 @@ class TestRight(RequestCase):
 
 class TestPrivacy(RequestCase):
     def test_an_account_sees_its_requests_and_only_that_someone_else_asked(self):
-        self.ask(self.alice, 2, note="message d'Alice")
+        shared = self.ask(self.alice, 2, note="message d'Alice").json()["id"]
         self.ask(self.bob, 2, note="message de Bob")
         self.ask(self.alice, 3, note="seulement Alice")
         mine = self.mine(self.bob)
         self.assertEqual([(r["tmdb"], r["note"], r["mine"]) for r in mine], [(2, "message de Bob", True)])
-        self.assertEqual(self.saga_missing(self.bob), {2: {"status": "pending", "mine": True}, 3: {"status": "pending", "mine": False}})
-        self.assertEqual(self.person_missing(self.bob), {4: None, 3: {"status": "pending", "mine": False}, 2: {"status": "pending", "mine": True}})
+        ours, theirs = {"status": "pending", "mine": True, "id": shared}, {"status": "pending", "mine": False}          # l'identifiant seulement quand c'est la sienne : rien d'une demande d'autrui
+        self.assertEqual(self.saga_missing(self.bob), {2: ours, 3: theirs})
+        self.assertEqual(self.person_missing(self.bob), {4: None, 3: theirs, 2: ours})
         library = self.get(self.bob, "/api/library/films?group=Saga").json()["missing"]
-        self.assertEqual({f["tmdb"]: f.get("request") for f in library}, {2: {"status": "pending", "mine": True}, 3: {"status": "pending", "mine": False}})
+        self.assertEqual({f["tmdb"]: f.get("request") for f in library}, {2: ours, 3: theirs})
+        for found in (self.saga_missing(self.bob), self.person_missing(self.bob)):
+            self.assertNotIn("id", found[3])
         for target in ("/api/requests?mine=1", "/api/item/m1", "/api/person?name=" + quote("Jeanne Dupont"), "/api/library/films?group=Saga", "/api/home", "/api/state"):
             text = self.get(self.bob, target).body.decode()
             for secret in ("alice", self.alice["id"], "message d'Alice", "seulement Alice"):
