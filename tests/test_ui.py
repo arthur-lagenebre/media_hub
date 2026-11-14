@@ -1644,7 +1644,8 @@ class TestMissingFilmsInTheUi(UiCase):
         self.assertEqual(self.view(".sagaall .part").all_inner_texts(), ["1", "2", "3", "4", "5"])
         self.assertEqual(self.view(".card.wanted").count(), 3)
         self.assertIn("3 manquants", self.view(".info .meta").inner_text())
-        self.assertEqual(self.view(".card.wanted.f").count(), 0)                           # rien à ouvrir : pas dans la navigation à la télécommande
+        self.assertEqual(self.view(".card.wanted[href]").count(), 0)                       # rien à ouvrir ni à lire...
+        self.assertEqual(self.view(".card.wanted.f").count(), 3)                           # ...mais chacun se demande (serveur ouvert : l'administrateur peut demander) : voir TestRequestsInTheUi
 
     def test_a_film_not_out_yet_is_greyed_as_coming_and_is_not_counted_as_missing(self):
         FakeTmdb.movies = {**FakeTmdb.movies, 3000: {"id": 3000, "title": "À venir", "release_date": "2099-06-01", "poster_path": None}}
@@ -3125,13 +3126,12 @@ class TestPersonMissingUi(UiCase):
         self.assertEqual(FakePersonTmdb.calls, ["person/8200/movie_credits"])
         self.assertEqual(self.view("section.missing b").count(), 0)          # « <b>x</b> » est un titre, pas du HTML
 
-    def test_the_greyed_films_have_nothing_to_reach_or_open(self):
+    def test_the_greyed_films_open_nothing_but_each_one_can_be_requested(self):
+        """Rien à ouvrir ni à lire ; le compte peut demander (serveur ouvert : l'administrateur), donc chaque case est un bouton « Demander ». Sans ce droit, elles restent hors d'atteinte : voir TestRequestsInTheUi."""
         self.ask()
-        self.assertEqual(self.view(".card.wanted.f").count(), 0)
         self.assertEqual(self.view(".card.wanted[href], .card.wanted [data-key]").count(), 0)
-        self.view(".shelf .card.f").first.focus()
-        self.press("ArrowDown", "ArrowDown", "ArrowRight", "ArrowDown")
-        self.assertFalse(self.page.evaluate("document.activeElement.classList.contains('wanted')"))
+        self.assertEqual(self.view(".card.wanted.f[role=button]").count(), 3)
+        self.assertEqual(self.view(".card.wanted .rqbtn").all_inner_texts(), ["Demander"] * 3)
         self.assertEqual(self.view(".card.wanted").first.get_attribute("title"), "Absent Un (manquant)")
 
     def test_the_remote_can_press_the_button_and_keeps_the_focus_on_it_after_the_page_is_redrawn(self):
@@ -4155,7 +4155,7 @@ class TestSettings(UiCase):
         self.view(".panel").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Paramètres")
         self.assertEqual(self.page.locator("#nav .tool[data-nav='#/settings']").get_attribute("aria-label"), "Paramètres")
-        self.assertEqual(self.tabs(), ["Gestion", "Boîte de réception", "Préférences", "Comptes"])
+        self.assertEqual(self.tabs(), ["Gestion", "Boîte de réception", "Préférences", "Comptes", "Demandes"])
         self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Gestion")
         self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Tâches", "Serveur"])
 
@@ -5163,7 +5163,7 @@ class InboxUiCase(unittest.TestCase):
         page = self.session("admin", lang="en")
         page.goto(self.base + "/#/settings?tab=inbox")
         page.locator("#views > .view:visible .inbox-file").wait_for()
-        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Management", "Inbox", "Preferences", "Accounts"])
+        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Management", "Inbox", "Preferences", "Accounts", "Requests"])
         self.assertEqual(page.locator("#views > .view:visible .inbox-file .btn").all_inner_texts(), ["Download", "Delete"])
         self.assertEqual(page.locator("#views > .view:visible .inbox .total").inner_text(), "1 file · 2 KB")
         page.goto(self.base + "/#/settings?tab=comptes")
@@ -6025,6 +6025,464 @@ class InboxUiCase(unittest.TestCase):
         self.wait_for(lambda: rows.count() == 1)
         self.assertEqual(self.tree("Léa"), ["Été/Bonus.mkv"])
         self.assertFalse((self.box / "Léa" / "Été" / "Saison 1").exists())                              # le sous-dossier vidé a disparu, pas celui qui garde un fichier
+
+
+class TestRequestsInTheUi(unittest.TestCase):
+    """Les demandes de films dans le navigateur : demander depuis la case grisée d'une saga ou d'une personne, rejoindre, retirer, « Mes demandes », le rayon de l'accueil, l'onglet de l'administrateur et le droit « Peut demander ».
+
+    Un serveur avec comptes (`admin` / `secret`, `alice` et `bob`) pour toute la classe ; « Saga DCEU » attend deux films (« Film intermédiaire », 1000, et « Wonder Woman », 297762),
+    « Réal Demande » en a réalisé un qu'on n'a pas (« Absent Personne », 9500). Les demandes sont effacées entre deux tests.
+    """
+    PASSWORD = "motdepasse12"
+    SAGA = "#/saga/films?g=Saga%20DCEU"
+    PERSON = "#/person?n=R%C3%A9al%20Demande"
+
+    @classmethod
+    def setUpClass(cls):
+        if not (sync_playwright and fixtures.FFMPEG):
+            raise unittest.SkipTest("Playwright ou ffmpeg absent")
+        from hub import accounts, missing
+        cls.tmp = tempfile.mkdtemp()
+        cls.run_ = Running(cls.tmp, password="secret")
+        cls.hub = cls.run_.hub
+        cls.base = f"http://127.0.0.1:{cls.run_.port}"
+        cls.films = Path(cls.tmp) / "srv" / "Films"
+        fixtures.write_mkv(cls.films / "Film Personne (2001)" / "Film Personne (2001).mkv",
+                           fixtures.movie_blocks("Film Personne", "Un.", "2001-01-01", "movie/9101", "Drame", ["Réal Demande"], [], person_ids={"Réal Demande": 8300}))
+        cls.rescan()
+        now = int(time.time())
+        missing.save(cls.hub.db, {"films": {"1000": {"title": "Film intermédiaire", "year": "2014", "date": "2014-01-01", "poster": ""},
+                                            "297762": {"title": "Wonder Woman", "year": "2017", "date": "2017-05-31", "poster": ""}},
+                                  "collections": {"Saga DCEU": {"id": 9000, "films": [49521, 1000, 209112, 297762], "at": now}}})
+        cls.hub.db.kv_set("personinfo:8300", {"at": now, "films": [{"tmdb": 9500, "title": "Absent Personne", "year": "2005", "date": "2005-01-01", "role": "director", "poster": ""}]})
+        cls.alice = accounts.create(cls.hub.db, "alice", cls.PASSWORD)
+        cls.bob = accounts.create(cls.hub.db, "bob", cls.PASSWORD)
+        cls.pw = sync_playwright().start()
+        cls.browser = cls.pw.chromium.launch()
+
+    @classmethod
+    def rescan(cls):
+        cls.hub.jobs.scan(next(lib for lib in cls.hub.cfg.libraries if lib.id == "films"))
+        cls.run_.wait_jobs()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        cls.pw.stop()
+        cls.run_.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        from hub import accounts
+        self.hub.db.execute("DELETE FROM request_users")
+        self.hub.db.execute("DELETE FROM requests")
+        for who in (self.alice, self.bob):
+            accounts.set_can_request(self.hub.db, who["id"], True)
+        self.errors = []
+        self.pages = []
+
+    def tearDown(self):
+        for context in self.pages:
+            context.close()
+        self.hub.cfg.request_max = 20
+        self.assertEqual(self.errors, [], "erreurs JavaScript")
+
+    # --- Aides ---------------------------------------------------------------
+    def session(self, name, lang=None, device=None, width=1280):
+        """Une page connectée en tant que `name` (l'administrateur se connecte avec `secret`)."""
+        context = self.browser.new_context(viewport={"width": width, "height": 900})
+        self.pages.append(context)
+        if lang:
+            context.add_cookies([{"name": "hub_lang", "value": lang, "url": self.base}])
+            context.add_init_script(f"localStorage.setItem('hub.lang', JSON.stringify('{lang}'))")
+        if device:
+            context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+        page = context.new_page()
+        page.on("pageerror", lambda e: self.errors.append(str(e)))
+        page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text else None)
+        page.goto(self.base + "/login")
+        page.fill("input[name=user]", name)
+        page.fill("input[type=password]", "secret" if name == "admin" else self.PASSWORD)
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#nav .link", state="attached")
+        return page
+
+    def token(self, name):
+        req = urllib.request.Request(self.base + "/api/token", data=json.dumps({"user": name, "password": "secret" if name == "admin" else self.PASSWORD}).encode(), headers={"Content-Type": "application/json"})
+        return json.load(urllib.request.urlopen(req))["token"]
+
+    def call(self, name, path, body=None):
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None, headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.token(name)})
+        return json.load(urllib.request.urlopen(req))
+
+    def ask(self, name, tmdb, note=None):
+        return self.call(name, "/api/requests", {"kind": "movie", "tmdb": tmdb, **({"note": note} if note else {})})
+
+    def mine(self, name):
+        return self.call(name, "/api/requests?mine=1")["requests"]
+
+    def view(self, page, selector=""):
+        return page.locator(f"#views > .view:visible {selector}".strip())
+
+    def rows(self, page):
+        return self.view(page, ".reqrow")
+
+    def count_rows(self, page, n):
+        page.wait_for_function("n => document.querySelectorAll('#views > .view:not([style*=\"none\"]) .reqrow').length === n", arg=n)
+
+    def shown(self, page, hash):
+        page.wait_for_function("h => { var c = window.Hub.current(); return !!c && c.hash === h && c.el.style.display !== 'none'; }", arg=hash)
+
+    def open(self, page, hash):
+        page.goto(self.base + "/" + hash)
+        self.shown(page, hash)
+
+    def card(self, page, title):
+        """La case grisée du film `title` (saga ou personne), une fois la page dessinée."""
+        card = page.locator("#views > .view:visible .card.wanted", has_text=title)
+        card.wait_for()
+        return card
+
+    def sent(self, page):
+        """Attend la réponse à `POST /api/requests` déclenchée dans le bloc `with`."""
+        return page.expect_response(lambda r: r.url.endswith("/api/requests") and r.request.method == "POST")
+
+    def dialog(self, page):
+        return page.locator(".veil .menu")
+
+    def key(self, page):
+        return page.evaluate("document.activeElement && document.activeElement.getAttribute('data-key')")
+
+    # --- Demander -------------------------------------------------------------
+    def test_a_missing_film_of_a_saga_is_requested_with_a_message_and_the_card_follows(self):
+        page = self.session("alice")
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        self.assertTrue(card.evaluate("e => e.classList.contains('f')"))                                    # atteignable à la télécommande
+        self.assertEqual(card.locator(".rqbtn").inner_text().strip(), "Demander")
+        card.focus()
+        page.keyboard.press("Enter")
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertTrue(box.evaluate("e => e.classList.contains('form')"))                                  # la famille « form » de docs/popups.md
+        self.assertEqual(box.locator("h3").inner_text(), "Demander « Film intermédiaire »")
+        field = box.locator("input")
+        self.assertEqual(field.get_attribute("maxlength"), "200")
+        field.fill("Pour   dimanche <b>soir</b>")
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 201)
+        box.wait_for(state="detached")
+        card.locator(".rqbtn", has_text="Demandé").wait_for()                                               # la case suit, sans recharger la page
+        page.wait_for_function("document.activeElement && document.activeElement.getAttribute('data-key') === 'req-1000'")      # le focus reste sur la case
+        self.assertEqual([(r["tmdb"], r["note"], r["title"], r["status"]) for r in self.mine("alice")], [(1000, "Pour dimanche <b>soir</b>", "Film intermédiaire", "pending")])
+        self.assertEqual(self.card(page, "Wonder Woman").locator(".rqbtn").inner_text().strip(), "Demander")      # l'autre film n'a pas bougé
+
+    def test_a_missing_film_of_a_person_is_requested_without_a_message(self):
+        page = self.session("alice")
+        self.open(page, self.PERSON)
+        card = self.card(page, "Absent Personne")
+        self.assertEqual(card.locator(".s").inner_text(), "2005 · Réalisateur")
+        card.click()
+        with self.sent(page) as info:
+            self.dialog(page).locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 201)
+        card.locator(".rqbtn", has_text="Demandé").wait_for()
+        self.assertEqual([(r["tmdb"], r["note"]) for r in self.mine("alice")], [(9500, "")])
+
+    def test_the_remote_reaches_the_card_opens_the_window_and_back_closes_it(self):
+        page = self.session("alice", device="tv")
+        self.open(page, self.SAGA)
+        self.card(page, "Film intermédiaire")
+        self.view(page, ".sagaall .card.f:not(.wanted)").first.focus()                                       # Man of Steel, premier de la saga
+        page.keyboard.press("ArrowRight")
+        self.assertEqual(self.key(page), "req-1000")
+        page.keyboard.press("Enter")
+        self.dialog(page).wait_for()
+        page.wait_for_function("document.activeElement && document.activeElement.tagName === 'INPUT'")          # le message, prêt à être tapé
+        page.keyboard.press("Escape")                                                                        # Échap quitte d'abord le champ (comme partout), puis ferme la fenêtre
+        page.wait_for_function("document.activeElement && document.activeElement.tagName !== 'INPUT'")
+        page.keyboard.press("Escape")
+        self.dialog(page).wait_for(state="detached")                                                         # rien n'est demandé
+        page.wait_for_function("document.activeElement && document.activeElement.getAttribute('data-key') === 'req-1000'")
+        self.assertEqual(self.mine("alice"), [])
+
+    def test_joining_a_request_of_another_account_never_shows_who_made_it(self):
+        self.ask("bob", 1000, "Le message de Bob")
+        page = self.session("alice")
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        self.assertEqual(card.locator(".rqstate").inner_text(), "Déjà demandé")
+        self.assertEqual(card.locator(".rqbtn").inner_text().strip(), "Demander aussi")
+        self.assertNotIn("bob", page.locator("body").inner_text().lower())
+        self.assertNotIn("Le message de Bob", page.content())
+        card.click()
+        with self.sent(page) as info:
+            self.dialog(page).locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 200)                                                            # rejointe, pas créée
+        card.locator(".rqbtn", has_text="Demandé").wait_for()
+        self.assertEqual(card.locator(".rqstate").count(), 0)
+        self.open(page, "#/requests")
+        self.rows(page).first.wait_for()
+        self.assertNotIn("bob", self.view(page).inner_text().lower())
+        self.assertNotIn("Le message de Bob", page.content())
+
+    def test_withdrawing_from_the_card_asks_first_and_cancel_keeps_the_request(self):
+        self.ask("alice", 1000)
+        page = self.session("alice")
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        self.assertEqual(card.locator(".rqbtn").inner_text().strip(), "Demandé")
+        card.focus()
+        page.keyboard.press("Enter")
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertTrue(box.evaluate("e => e.classList.contains('confirm')"))
+        self.assertEqual(box.locator("h3").inner_text(), "Retirer ta demande ?")
+        page.wait_for_function("document.activeElement && document.activeElement.textContent.trim() === 'Annuler'")      # Entrée ne retire rien
+        page.keyboard.press("Enter")
+        box.wait_for(state="detached")
+        self.assertEqual(len(self.mine("alice")), 1)
+        card.click()
+        with page.expect_response(lambda r: r.url.endswith("/delete")):
+            self.dialog(page).locator(".btn.danger").click()
+        card.locator(".rqbtn", has_text="Demander").wait_for()
+        self.assertEqual(self.mine("alice"), [])
+
+    def test_the_ceiling_is_said_in_the_window_and_the_card_does_not_change(self):
+        self.hub.cfg.request_max = 1
+        self.ask("alice", 9500)
+        page = self.session("alice")
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        card.click()
+        box = self.dialog(page)
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 409)
+        box.locator(".formerr", has_text="trop de demandes en attente (1)").wait_for()
+        self.assertEqual(box.count(), 1)                                                                    # la fenêtre reste ouverte
+        box.locator(".btn", has_text="Annuler").click()
+        box.wait_for(state="detached")
+        self.assertEqual(card.locator(".rqbtn").inner_text().strip(), "Demander")
+
+    def test_a_film_already_in_the_library_offers_to_open_it(self):
+        inception = next(i for i in self.call("alice", "/api/library/films")["items"] if i["title"] == "Inception")["id"]
+        page = self.session("alice")
+        page.route("**/api/requests", lambda route: route.fulfill(status=409, content_type="application/json", body=json.dumps({"error": "déjà dans la médiathèque", "item": inception})) if route.request.method == "POST" else route.continue_())
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        card.click()
+        box = self.dialog(page)
+        box.locator(".btn.primary").click()
+        box.locator(".formerr", has_text="déjà dans la médiathèque").wait_for()
+        self.assertEqual(card.locator(".rqbtn").inner_text().strip(), "Demander")
+        box.locator("[data-key=req-open]").click()
+        self.shown(page, "#/i/" + inception)
+        self.assertEqual(self.dialog(page).count(), 0)
+
+    def test_a_declined_request_is_shown_without_action(self):
+        rid = self.ask("alice", 1000)["id"]
+        self.call("admin", f"/api/requests/{rid}/status", {"status": "declined", "reason": "Introuvable"})
+        page = self.session("alice")
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        self.assertEqual(card.locator(".rqstate").inner_text(), "Refusé")
+        self.assertEqual(card.locator(".rqbtn").count(), 0)
+        self.assertFalse(card.evaluate("e => e.classList.contains('f') || e.hasAttribute('tabindex')"))     # rien à faire : pas dans la navigation
+
+    def test_without_the_right_the_card_stays_out_of_reach(self):
+        from hub import accounts
+        accounts.set_can_request(self.hub.db, self.bob["id"], False)
+        page = self.session("bob")
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        self.assertEqual(self.view(page, ".card.wanted.f").count(), 0)
+        self.assertEqual(self.view(page, ".card.wanted [data-key], .card.wanted[tabindex], .card.wanted .rq").count(), 0)
+        card.click()
+        self.assertEqual(self.dialog(page).count(), 0)
+
+    # --- Mes demandes ------------------------------------------------------------
+    def test_my_requests_lists_states_reasons_and_messages_and_withdraws(self):
+        self.ask("alice", 1000, "Pour les enfants")
+        rid = self.ask("alice", 9500)["id"]
+        self.call("admin", f"/api/requests/{rid}/status", {"status": "declined", "reason": "Pas en <i>France</i>"})
+        page = self.session("alice")
+        self.open(page, "#/settings?tab=comptes")
+        link = self.view(page, "[data-key=my-requests]")
+        self.assertTrue(link.evaluate("e => e.classList.contains('f')"))
+        link.click()
+        self.shown(page, "#/requests")
+        rows = self.rows(page)
+        rows.first.wait_for()
+        self.assertEqual(self.view(page, "h1").inner_text(), "Mes demandes")
+        self.assertEqual(rows.count(), 2)
+        declined, pending = rows.filter(has_text="Absent Personne"), rows.filter(has_text="Film intermédiaire")
+        self.assertIn("Refusé", declined.inner_text())
+        self.assertIn("Pas en <i>France</i>", declined.inner_text())                                       # le motif est du texte, pas du HTML
+        self.assertEqual(declined.locator("i").count(), 0)
+        self.assertIn("En attente", pending.inner_text())
+        self.assertIn("2014", pending.inner_text())
+        self.assertIn("Pour les enfants", pending.inner_text())
+        pending.locator("button", has_text="Retirer").click()
+        box = self.dialog(page)
+        self.assertTrue(box.evaluate("e => e.classList.contains('confirm')"))
+        box.locator(".btn.danger").click()
+        self.count_rows(page, 1)
+        self.assertEqual([r["tmdb"] for r in self.mine("alice")], [9500])
+        declined.locator("button", has_text="Retirer").click()
+        self.dialog(page).locator(".btn.danger").click()
+        self.view(page, ".reqempty").wait_for()                                                            # l'état vide est expliqué
+        self.assertIn("case grisée", self.view(page, ".reqempty").inner_text())
+        page.keyboard.press("Escape")                                                                       # Retour remonte aux paramètres
+        self.shown(page, "#/settings?tab=comptes")
+
+    # --- L'accueil ---------------------------------------------------------------
+    def test_an_arrived_request_is_on_the_home_until_it_is_opened(self):
+        self.ask("alice", 1000)
+        arrived = self.films / "Film intermédiaire (2014)" / "Film intermédiaire (2014).mkv"
+        fixtures.write_mkv(arrived, fixtures.movie_blocks("Film intermédiaire", "Arrivé.", "2014-01-01", "movie/1000", "Drame"))
+        self.addCleanup(self.rescan)
+        self.addCleanup(shutil.rmtree, arrived.parent, True)
+        self.rescan()
+        page = self.session("alice")
+        shelf = self.view(page, ".shelf.ready")
+        shelf.wait_for()
+        self.assertEqual(shelf.locator("h2").inner_text(), "Tes demandes sont arrivées")
+        card = shelf.locator(".card")
+        self.assertEqual(card.locator(".t").inner_text(), "Film intermédiaire")
+        self.assertTrue(card.evaluate("e => e.classList.contains('f')"))
+        with page.expect_response(lambda r: r.url.endswith("/ack")):
+            card.click()
+        page.wait_for_function("location.hash.indexOf('#/i/') === 0")
+        self.assertTrue(self.mine("alice")[0]["ack"])
+        page.go_back()
+        self.shown(page, "#/")
+        page.wait_for_function("!document.querySelector('#views > .view:not([style*=\"none\"]) .shelf.ready')")
+        self.view(page, ".shelf").first.wait_for()                                                         # les autres rayons restent
+        self.open(page, "#/requests")
+        self.rows(page).locator("a", has_text="Ouvrir").wait_for()                                          # « Mes demandes » mène à l'élément arrivé
+
+    def test_without_an_arrival_the_home_keeps_its_own_shelves(self):
+        page = self.session("bob")
+        self.view(page, ".shelf").first.wait_for()
+        self.assertEqual(self.view(page, ".shelf.ready").count(), 0)
+
+    # --- L'administrateur ----------------------------------------------------------
+    def test_the_administrator_lists_marks_declines_and_deletes_and_the_counter_follows(self):
+        self.ask("alice", 1000, "Alice le veut")
+        self.ask("bob", 1000, "Bob aussi")
+        self.ask("alice", 9500)
+        page = self.session("admin")
+        gear = page.locator("#nav [data-nav='#/settings'] .pend")
+        gear.wait_for()
+        self.assertEqual(gear.inner_text(), "2")
+        self.open(page, "#/settings?tab=demandes")
+        rows = self.rows(page)
+        rows.first.wait_for()
+        self.assertTrue(self.view(page, ".tabs .tab[aria-selected=true]").inner_text().startswith("Demandes"))
+        both = rows.filter(has_text="Film intermédiaire")
+        self.assertIn("2 demandeurs", both.inner_text())
+        self.assertIn("alice", both.inner_text())
+        self.assertIn("Bob aussi", both.inner_text())
+        self.assertIn("En attente", both.inner_text())
+        both.locator("button", has_text="Marquer ajouté").click()
+        both.locator(".rqstatus", has_text="Ajouté").wait_for()
+        page.wait_for_function("(() => { var c = document.querySelector(\"#nav [data-nav='#/settings'] .pend\"); return !!c && c.textContent === '1'; })()")
+        one = rows.filter(has_text="Absent Personne")
+        one.locator("button", has_text="Refuser").click()
+        box = self.dialog(page)
+        self.assertTrue(box.evaluate("e => e.classList.contains('form')"))
+        box.locator("input").fill("Pas disponible")
+        box.locator(".btn.primary").click()
+        one.locator(".rqstatus", has_text="Refusé").wait_for()
+        self.assertIn("Pas disponible", one.inner_text())
+        page.locator("#nav [data-nav='#/settings'] .pend").wait_for(state="detached")
+        self.view(page, "[data-key=rf-declined]").click()                                                  # le filtre « Refusées »
+        self.count_rows(page, 1)
+        self.view(page, "[data-key=rf-all]").click()
+        self.count_rows(page, 2)
+        rows.filter(has_text="Absent Personne").locator("button", has_text="Remettre en attente").click()
+        rows.filter(has_text="Absent Personne").locator(".rqstatus", has_text="En attente").wait_for()
+        rows.filter(has_text="Film intermédiaire").locator("button", has_text="Supprimer").click()
+        box = self.dialog(page)
+        self.assertTrue(box.evaluate("e => e.classList.contains('confirm')"))
+        box.locator(".btn.danger").click()
+        self.count_rows(page, 1)
+        self.assertEqual([(r["tmdb"], r["status"]) for r in self.call("admin", "/api/requests")["requests"]], [(9500, "pending")])
+
+    def test_the_administrator_tab_is_reached_with_the_remote(self):
+        self.ask("alice", 1000)
+        page = self.session("admin", device="tv")
+        self.open(page, "#/settings?tab=demandes")
+        self.rows(page).first.wait_for()
+        self.view(page, "[data-key=rf-all]").focus()
+        page.keyboard.press("ArrowDown")
+        self.assertTrue(page.evaluate("!!document.activeElement.closest('.reqrow')"))                       # les boutons de la demande sont atteignables
+        page.keyboard.press("Enter")                                                                         # « Marquer ajouté »
+        self.rows(page).locator(".rqstatus", has_text="Ajouté").wait_for()
+
+    def test_the_right_to_request_is_set_in_the_rights_box(self):
+        page = self.session("admin")
+        page.goto(self.base + "/#/settings?tab=comptes")
+        line = page.locator(f'[data-user="{self.bob["id"]}"]')
+        line.wait_for()
+        self.assertIn("Peut demander : oui", line.locator("[data-rights]").inner_text())
+        self.assertIn("Peut demander : toujours", page.locator("[data-user] [data-upload]").first.inner_text())
+        page.locator(f'[data-key="rights-{self.bob["id"]}"]').click()
+        box = page.locator(".menu.rightsbox")
+        row = box.locator(".rrow[data-request-right]")
+        self.assertEqual(row.locator("b").inner_text(), "Peut demander")
+        self.assertEqual(box.locator('[data-key="r-request-yes"]').get_attribute("aria-pressed"), "true")
+        box.locator('[data-key="r-request-no"]').click()
+        with page.expect_response(lambda r: r.url.endswith("/request")):
+            box.locator(".btn", has_text="Enregistrer").click()
+        line.locator("[data-rights]", has_text="Peut demander : non").wait_for()
+        self.assertFalse(next(u for u in self.call("admin", "/api/users")["users"] if u["name"] == "bob")["can_request"])
+
+    def test_the_pages_fit_a_phone(self):
+        self.ask("alice", 1000, "Un message assez long pour passer sur deux lignes au moins sur un téléphone étroit")
+        page = self.session("alice", device="phone", width=390)
+        wide = "document.documentElement.scrollWidth <= window.innerWidth"
+        self.open(page, self.SAGA)
+        card = self.card(page, "Wonder Woman")
+        edge = card.evaluate("e => e.getBoundingClientRect().right")
+        self.assertLessEqual(card.locator(".rqbtn").evaluate("e => e.getBoundingClientRect().right"), edge + 1)        # la pastille tient dans la case
+        self.assertTrue(page.evaluate(wide))
+        card.click()
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertLessEqual(box.evaluate("e => e.getBoundingClientRect().right"), 390)
+        box.locator(".btn", has_text="Annuler").click()
+        self.open(page, "#/requests")
+        self.rows(page).first.wait_for()
+        self.assertTrue(page.evaluate(wide))
+        self.assertTrue(self.rows(page).locator("button").evaluate_all("els => els.every(e => e.getBoundingClientRect().height >= 32)"))       # une cible tactile assez grande
+
+    # --- En anglais ----------------------------------------------------------------
+    def test_requests_are_in_english(self):
+        self.hub.cfg.request_max = 1
+        self.ask("alice", 9500)
+        page = self.session("alice", lang="en")
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        self.assertEqual(card.locator(".rqbtn").inner_text().strip(), "Request")
+        card.click()
+        box = self.dialog(page)
+        self.assertEqual(box.locator("h3").inner_text(), "Request “Film intermédiaire”")
+        box.locator(".btn.primary").click()
+        box.locator(".formerr", has_text="too many pending requests (1)").wait_for()
+        box.locator(".btn", has_text="Cancel").click()
+        self.open(page, "#/requests")
+        self.rows(page).first.wait_for()
+        self.assertEqual(self.view(page, "h1").inner_text(), "My requests")
+        self.assertIn("Waiting", self.rows(page).inner_text())                                         # « En attente », comme ailleurs dans l’interface
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+        admin = self.session("admin", lang="en")
+        self.open(admin, "#/settings?tab=demandes")
+        self.rows(admin).first.wait_for()
+        self.assertIn("1 requester", self.rows(admin).inner_text())
+        self.assertEqual(admin.evaluate("Hub.missing"), [])
 
 
 if __name__ == "__main__":
