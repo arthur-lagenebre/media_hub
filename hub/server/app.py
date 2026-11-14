@@ -474,7 +474,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
             self.close_connection = True
         except Exception as e:                        # une requête qui plante ne doit pas arrêter le serveur
-            traceback.print_exc(file=sys.stderr)
+            print(request_search.without_key(traceback.format_exc(), self.hub.cfg.tmdb_key), file=sys.stderr, end="")       # la trace sans la clé TMDB : un message d'exception peut porter l'URL
             self._fail(500, f"erreur interne : {e}")
 
     do_GET = do_HEAD = do_POST = do_DELETE = dispatch

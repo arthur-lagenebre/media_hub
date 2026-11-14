@@ -548,7 +548,9 @@ class TestTheLastResortsHideTheKey(Silent):
         self.assertIn("erreur interne : incident sur", reply.json()["error"])
         self.assertNotIn(KEY.encode(), reply.body)
         self.assertRegex(self.lines(handler)[-1], r"^500 GET /api/jobs : erreur interne : incident sur ")
-        self.assertNotIn(KEY, self.lines(handler)[-1])
+        self.assertIn("Traceback (most recent call last)", handler.stderr)          # la trace reste, pour qui lit le journal
+        self.assertIn("RuntimeError: incident sur", handler.stderr)
+        self.assertNotIn(KEY, handler.stderr)                                       # nulle part : ni la ligne du 500, ni la trace
 
 
 if __name__ == "__main__":
