@@ -6600,6 +6600,9 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.assertEqual(admin.evaluate("Hub.missing"), [])
 
 
+HOSTILE = "<img src=x onerror=window.pwned=1>"          # un titre TMDB, ou un texte cherché, qui serait du HTML actif si l'interface l'insérait tel quel
+
+
 class FakeRequestTmdb:
     """TMDB pour la recherche des demandes (voir hub/request_search.py) : quatre films et une série, trouvés quand leur titre contient le texte cherché.
     `error` est levée à chaque appel ; la recherche de « lent » attend que `slow` soit posé (il l'est d'emblée). Les affiches sont de vraies images."""
@@ -6607,7 +6610,8 @@ class FakeRequestTmdb:
              4002: {"id": 4002, "title": "Le Grand Retour", "release_date": "2099-01-01", "overview": "Pas encore sorti.", "poster_path": "/gr.jpg"},
              4100: {"id": 4100, "title": "Le Film Lent", "release_date": "2010-01-01", "overview": "", "poster_path": None},
              4200: {"id": 4200, "title": "Le Film Rapide", "release_date": "2011-01-01", "overview": "", "poster_path": None},
-             9101: {"id": 9101, "title": "Film Personne", "release_date": "2001-01-01", "overview": "Déjà dans la médiathèque.", "poster_path": None}}
+             9101: {"id": 9101, "title": "Film Personne", "release_date": "2001-01-01", "overview": "Déjà dans la médiathèque.", "poster_path": None},
+             4300: {"id": 4300, "title": HOSTILE, "release_date": "2012-01-01", "overview": "Résumé " + HOSTILE, "poster_path": None}}
     SHOWS = {5001: {"id": 5001, "name": "La Grande Série", "first_air_date": "2015-09-01", "overview": "Une série.", "poster_path": "/gs.jpg"}}
 
     def __init__(self):
@@ -6710,6 +6714,7 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         hits = self.hits(page)
         expect(hits).to_have_count(3)
         self.assertEqual(hits.locator(".rqkind").all_inner_texts(), ["Film", "Film", "Série"])               # les films d'abord, la sorte en toutes lettres
+        self.assertEqual(hits.locator(".rqkind").first.evaluate("e => getComputedStyle(e).color"), page.evaluate("getComputedStyle(document.body).color"))      # la pastille en couleur de texte, pas grisée
         voyage = self.hit(page, "Le Grand Voyage")
         self.assertEqual(voyage.locator(".rqtitle").inner_text(), "Le Grand Voyage")
         self.assertIn("1999", voyage.inner_text())
@@ -6794,6 +6799,26 @@ class TestRequestSearchInTheUi(RequestsUiCase):
             box.locator(".btn.danger").click()
         voyage.locator("button", has_text="Demander aussi").wait_for()                                      # Bob la demande toujours
         self.assertEqual(self.mine("alice"), [])
+
+    def test_a_hostile_title_and_a_hostile_search_stay_text(self):
+        page = self.session("alice")
+        self.library_search(page, HOSTILE)
+        link = self.view(page, "[data-key=req-notfound]")
+        self.assertEqual(link.inner_text().strip(), f"Pas trouvé ? Demander « {HOSTILE} »")
+        with self.searched(page) as info:
+            link.click()
+        self.assertEqual(info.value.status, 200)
+        expect(self.hits(page)).to_have_count(1)
+        hit = self.hits(page).first
+        self.assertEqual(hit.locator(".rqtitle").inner_text(), HOSTILE)
+        self.assertEqual(hit.locator(".rqsum").inner_text(), "Résumé " + HOSTILE)
+        self.assertEqual(self.view(page, "input[type=search]").input_value(), HOSTILE)
+        self.assertEqual(page.locator("img[src=x]").count(), 0)                                             # rien d'injecté, rien d'exécuté
+        self.assertIsNone(page.evaluate("window.pwned"))
+        hit.locator("button").click()
+        self.assertEqual(self.dialog(page).locator("h3").inner_text(), f"Demander « {HOSTILE} »")
+        self.assertEqual(page.locator("img[src=x]").count(), 0)
+        self.assertIsNone(page.evaluate("window.pwned"))
 
     def test_a_title_already_in_the_library_is_opened_not_requested(self):
         page = self.session("alice")
