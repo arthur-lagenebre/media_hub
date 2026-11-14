@@ -961,18 +961,18 @@ class TestSettingsRoutes(RouteCase):
         return self.hub.cookie(who)
 
     def test_the_settings_of_an_account_start_at_the_defaults(self):
-        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"}})
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show"}})
 
     def test_a_choice_is_kept_for_the_account_that_made_it(self):
         reply = self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"}}))
+        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show"}}))
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "artists")
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.alice)).json()["settings"]["music_view"], "albums")
 
     def test_the_state_carries_the_settings_so_the_page_needs_no_second_call(self):
         self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"})
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show"})
 
     def test_a_wrong_setting_is_a_400_with_the_reason(self):
         for body, reason in (({"couleur": "rouge"}, "réglage inconnu"), ({"music_view": "mosaique"}, "valeur inconnue"), ({}, "aucun réglage")):

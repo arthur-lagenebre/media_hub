@@ -54,6 +54,16 @@
       nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': H.t('Recherche') }, H.icon('search')));
       if (H.canUpload()) nav.appendChild(h('a', { class: 'tool f', href: '#/upload', 'data-nav': '#/upload', 'aria-label': H.t('Envoyer'), title: H.t('Envoyer') }, H.icon('upload')));
       nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': H.t('Paramètres') }, H.icon('gear')));
+      H.nav.pending();
+    },
+    // Les demandes en attente, en pastille sur l'entrée des paramètres : /api/state n'en donne le nombre qu'à l'administrateur (0 pour les autres : pas de pastille).
+    pending: function () {
+      var gear = document.querySelector('#nav [data-nav="#/settings"]');
+      if (!gear) return;
+      var n = H.session.pending || 0, old = gear.querySelector('.pend');
+      if (old) gear.removeChild(old);
+      if (n > 0) gear.appendChild(h('span', { class: 'pend', 'aria-hidden': 'true' }, String(n)));
+      gear.setAttribute('aria-label', n > 0 ? H.t('Paramètres · {n} en attente', { n: H.plural(n, 'demande') }) : H.t('Paramètres'));
     },
     mark: function (hash) {
       var back = document.querySelector('#nav .back');
@@ -119,23 +129,102 @@
     H.actions.bind(a, it);
     return a;
   }
-  // Un film qui manque à une saga : son affiche grisée, rien à ouvrir ni à lire (la case n'est donc pas dans la navigation à la télécommande, comme un album manquant).
-  // `hide` (administrateur, film que seule la collection TMDB compte) : un bouton « Ne pas afficher » sous la case.
+  // --- Demander un film absent (voir docs/api.md, « Demandes ») ------------------------------------
+  // Une demande n'est qu'une liste d'attente que l'administrateur lit : le hub ne télécharge rien. `request` d'une case grisée : {status, mine}, absent quand personne ne l'a demandé.
+  H.canRequest = function () { return !!H.session.canRequest; };
+  // Ce que montre la case selon la demande : `line` (l'état, en toutes lettres), `pill` (ce que fait Entrée), `act` (« ask » : demander, « withdraw » : retirer la sienne) ; sans `act`, rien à faire.
+  var ASK = {
+    none: { pill: H.t('Demander'), act: 'ask' },
+    mine: { pill: H.t('Demandé'), act: 'withdraw' },
+    other: { line: H.t('Déjà demandé'), pill: H.t('Demander aussi'), act: 'ask' },        // un autre compte l'a demandé : ni qui, ni combien
+    declined: { line: H.t('Refusé') },
+    added: { line: H.t('Ajouté') }                                                       // arrivé, ou marqué ajouté : rien à faire tant que la page n'est pas rechargée
+  };
+  function askState(r) {
+    if (!r) return 'none';
+    if (r.status === 'added' || r.status === 'declined') return r.status;
+    return r.mine ? 'mine' : 'other';
+  }
+  function askLabel(state, title) {
+    if (state === 'mine') return H.t('Demandé : « {title} ». Retirer ta demande', { title: title });
+    if (state === 'other') return H.t('Déjà demandé : « {title} ». Demander aussi', { title: title });
+    return H.t('Demander « {title} »', { title: title });
+  }
+  // La fenêtre « Demander » (un form : le message facultatif). Le refus du serveur (plafond, refusée, déjà là) reste dans la fenêtre ; un film déjà dans la médiathèque propose de l'ouvrir.
+  // `done(demande)` reçoit la réponse du serveur une fois la fenêtre fermée.
+  function askFor(m, done) {
+    var found = null;
+    var open = H.button(H.t('Ouvrir la fiche'), 'play', { 'data-key': 'req-open', hidden: true, onclick: function () { var id = found; H.overlay.close(function () { H.go('#/i/' + id); }); } });
+    H.form({ title: H.t('Demander « {title} »', { title: m.title }), ok: H.t('Demander'),
+      lead: [H.t('L’administrateur verra ta demande et ajoutera le film s’il le peut. Rien n’est téléchargé tout seul.')],
+      fields: [{ key: 'note', label: H.t('Un mot pour l’administrateur (facultatif, 200 caractères au plus)'), maxlength: 200 }],
+      extra: [open],
+      submit: function (v) {
+        open.hidden = true;
+        var body = { kind: 'movie', tmdb: m.tmdb, title: m.title };
+        if (v.note) body.note = v.note;
+        if (/^\d{4}$/.test(String(m.year || ''))) body.year = String(m.year);
+        return H.api('/api/requests', body).catch(function (e) {
+          found = e.data && typeof e.data.item === 'string' ? e.data.item : null;
+          open.hidden = !found;
+          if (found) H.focus.set(open, true);          // à la télécommande : Entrée ouvre la fiche
+          throw e;
+        });
+      },
+      done: done });
+  }
+  // Une demande déjà retirée ou supprimée ailleurs (404 « demande inconnue ») : le but est atteint, la fenêtre se ferme et la case ou la liste se refait.
+  function goneAlready(e) { if (e && e.status === 404) return null; throw e; }
+  // Retirer sa demande (un confirm, Annuler par défaut). La case porte l'identifiant de sa propre demande (`request.id`) ; s'il manque (un serveur plus ancien), on le retrouve dans « Mes demandes ».
+  function withdrawFrom(m, done) {
+    H.confirm({ title: H.t('Retirer ta demande ?'), lead: [H.t('« {title} » ne sera plus dans tes demandes.', { title: m.title })], ok: H.t('Retirer'), danger: true,
+      submit: function () {
+        var id = m.request && m.request.id;
+        if (typeof id === 'number') return H.api('/api/requests/' + id + '/delete', {}).catch(goneAlready);
+        return H.api('/api/requests?mine=1').then(function (res) {
+          var mine = (res.requests || []).filter(function (r) { return r.kind === 'movie' && r.tmdb === m.tmdb; })[0];
+          return mine ? H.api('/api/requests/' + mine.id + '/delete', {}).catch(goneAlready) : null;            // déjà retirée (un autre appareil) : rien à faire
+        });
+      },
+      done: done });
+  }
+
+  // Un film qui manque à une saga ou à une personne : son affiche grisée, rien à ouvrir ni à lire. Si le compte peut demander, la case se demande :
+  // elle entre dans la navigation à la télécommande (Entrée ouvre « Demander », ou « Retirer ta demande ? ») ; sinon, ou quand il n'y a rien à faire (refusé, ajouté, pas encore sorti), ni focus ni clic.
+  // `opts.hide` (administrateur, film que seule la collection TMDB compte) : un bouton « Ne pas afficher » sous la case.
   // Sans `rank`, pas de pastille de rang (les films d'une personne ne se suivent pas) ; `note` remplace « Manquant » sous le titre (son rôle : « Acteur »).
-  function missingCard(m, hide) {
+  function missingCard(m, opts) {
+    opts = opts || {};
     var pic = H.picture(m.cover ? m.cover + '?w=300' : '', m.title, '');
     if (m.rank) pic.appendChild(h('span', { class: 'part' }, m.rank));
     var state = m.coming ? H.t('pas encore sorti') : 'manquant';           // un film annoncé est grisé comme les autres, mais il ne manque à personne
-    var card = h('div', { class: 'card wanted', title: m.title + ' (' + state + ')' }, pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, m.note || (m.coming ? H.t('À venir') : H.t('Manquant'))].filter(Boolean).join(' · ')));
-    if (!hide || !m.ignorable) return card;
-    return h('div', { class: 'mcell' }, card, H.button(H.t('Ne pas afficher'), 'close', { class: 'mhide', 'data-key': 'hide-' + m.tmdb, 'aria-label': H.t('Ne pas afficher {title} comme manquant', { title: m.title }), onclick: function () { hide(m); } }));
+    var asked = H.canRequest() && !m.coming && m.tmdb ? askState(m.request) : null, look = asked ? ASK[asked] : null, act = look && look.act, outer;
+    function changed(request) {           // la case se refait sur place avec le nouvel état ; le focus y reste
+      if (request) m.request = request; else delete m.request;
+      if (!outer.parentNode) return;
+      var fresh = missingCard(m, opts);
+      outer.parentNode.replaceChild(fresh, outer);
+      var target = fresh.classList.contains('card') ? fresh : fresh.querySelector('.card');
+      if (target && target.classList.contains('f')) H.focus.set(target, true);
+    }
+    var card = h('div', { class: 'card wanted' + (act ? ' f ask' : ''), title: m.title + ' (' + state + ')', 'data-key': act ? 'req-' + m.tmdb : null, role: act ? 'button' : null, tabindex: act ? '0' : null,
+      'aria-label': act ? askLabel(asked, m.title) : null,
+      onclick: act ? function () {
+        if (act === 'withdraw') withdrawFrom(m, function () { H.toast(H.t('Demande retirée : {title}', { title: m.title })); changed(null); });
+        else askFor(m, function (res) { H.toast(H.t('Demandé : {title}', { title: m.title })); changed({ status: res.status, mine: true, id: res.id }); });
+      } : null },
+      pic, h('div', { class: 't' }, m.title), h('div', { class: 's' }, [m.year, m.note || (m.coming ? H.t('À venir') : H.t('Manquant'))].filter(Boolean).join(' · ')),
+      look ? h('div', { class: 'rq' }, look.line ? h('span', { class: 'rqstate' }, look.line) : null,
+        look.pill ? h('span', { class: 'rqbtn' + (act === 'withdraw' ? ' on' : ''), 'aria-hidden': 'true' }, H.icon(act === 'withdraw' ? 'check' : 'plus'), h('span', null, look.pill)) : null) : null);
+    outer = opts.hide && m.ignorable ? h('div', { class: 'mcell' }, card, H.button(H.t('Ne pas afficher'), 'close', { class: 'mhide', 'data-key': 'hide-' + m.tmdb, 'aria-label': H.t('Ne pas afficher {title} comme manquant', { title: m.title }), onclick: function () { opts.hide(m); } })) : card;
+    return outer;
   }
   // Combien de ces films manquent vraiment : ceux qui ne sont pas encore sortis ne comptent pas.
   function lacking(absent) { return (absent || []).filter(function (m) { return !m.coming; }).length; }
   // Les films qu'on a et ceux qui manquent, rangés ensemble par leur rang dans la saga ; `card(film)` fait la case d'un film qu'on a.
-  function sagaCells(films, absent, card, hide) {
+  function sagaCells(films, absent, card, opts) {
     var cells = films.map(function (f, i) { return { rank: f.part === undefined || f.part === null ? i + 1 : f.part, node: card(f) }; });
-    (absent || []).forEach(function (m) { cells.push({ rank: m.rank, node: missingCard(m, hide) }); });
+    (absent || []).forEach(function (m) { cells.push({ rank: m.rank, node: missingCard(m, opts) }); });
     cells.sort(function (a, b) { return a.rank - b.rank; });
     return cells.map(function (c) { return c.node; });
   }
@@ -326,6 +415,19 @@
     return [h('p', { class: 'libtiles-note muted' }, masked ? H.t('Tu as masqué tous les rayons de l’accueil : Paramètres > Préférences, pour les remettre') : H.t('Rien à reprendre ni à découvrir pour l’instant')),
       h('div', { class: 'libtiles' }, tiles)];
   }
+  // « Tes demandes sont arrivées » : les éléments que le compte avait demandés et qui sont là (`requests_ready`), en cartes comme les autres rayons.
+  // Ouvrir une carte dit au serveur que la demande est vue (`ack`) : elle quitte le rayon, qui disparaît avec la dernière.
+  function readyShelf(list) {
+    return h('section', { class: 'shelf ready' }, h('h2', null, H.t('Tes demandes sont arrivées')), h('div', { class: 'grid' }, list.map(function (r) {
+      var card = H.card(r.card, false);
+      card.setAttribute('data-request', r.id);
+      card.addEventListener('click', function (e) {
+        if (e.target && e.target.closest && e.target.closest('button')) return;          // le menu « … » de la carte n'ouvre pas l'élément
+        H.api('/api/requests/' + r.id + '/ack', {}, { keepalive: true }).catch(function () { /* tant pis : elle reviendra au prochain accueil */ });
+      });
+      return card;
+    })));
+  }
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
     var timer = null;
@@ -348,6 +450,8 @@
         }
         var me = H.session.auth && H.session.user && H.session.user.name;
         el.appendChild(h('h1', { class: 'greeting' }, me ? H.t('Bonjour {name}', { name: me }) : H.t('Bonjour')));
+        var ready = H.setting('home_requests') === 'hide' ? [] : (data.requests_ready || []);          // masquable comme les autres rayons (le serveur rend alors déjà une liste vide)
+        if (ready.length) el.appendChild(readyShelf(ready));
         if (data.continue.length) el.appendChild(row(H.t('Reprendre'), null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
         if (latest.length) el.appendChild(cardsSection('latest', H.t('Nouveautés'), latest));
@@ -355,7 +459,7 @@
         unseen.forEach(function (shelf) {
           el.appendChild(libraryShelf('unseen', H.t('Pas encore vu'), shelf.lib, shelf.items));
         });
-        if (!data.continue.length && !latest.length && !unseen.length) libraryTiles(data.libraries).forEach(function (node) { el.appendChild(node); });       // aucun rayon : les bibliothèques, pour ne pas laisser une page nue
+        if (!data.continue.length && !latest.length && !unseen.length && !ready.length) libraryTiles(data.libraries).forEach(function (node) { el.appendChild(node); });       // aucun rayon : les bibliothèques, pour ne pas laisser une page nue
         if (!document.body.contains(el) || el.style.display === 'none') return;       // une réponse tardive, la page a été quittée : `H.focus.first()` prendrait le focus de la page courante (la barre de la liseuse, dont les flèches ne tournent plus les pages)
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
@@ -889,7 +993,7 @@
       el.appendChild(h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + films[0].id + '?w=300)' }),
         h('div', { class: 'hero-in' }, h('div', { class: 'stack-big' }, H.stack(films.map(function (f) { return itemCover(f.id); }), name, 500)), info)));
       el.appendChild(h('div', { class: 'body' }, h('section', { class: 'sagaall' }, h('h2', null, H.t('Les films de la saga')),
-        h('div', { class: 'grid' }, sagaCells(films, absent, function (f) { return H.card(f, false, true); }, H.isAdmin() ? hide : null)))));
+        h('div', { class: 'grid' }, sagaCells(films, absent, function (f) { return H.card(f, false, true); }, { hide: H.isAdmin() ? hide : null })))));
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
     // Marque tous les films de la saga vus (ou non vus) : un appel par film, comme le menu « … » d'une carte de saga.
@@ -969,9 +1073,9 @@
       out.appendChild(h('p', null, h('a', { class: 'btn f', href: '#/search', 'data-autofocus': '1' }, H.t('Rechercher'))));
       settle();
     }
-    // Les films de la personne qu'on n'a pas (`missing` : voir docs/api.md) : des cases grisées, ni focus ni clic (comme un album manquant) ; son rôle sous le titre, pas de rang.
+    // Les films de la personne qu'on n'a pas (`missing` : voir docs/api.md) : des cases grisées, qui se demandent (sinon ni focus ni clic, comme un album manquant) ; son rôle sous le titre, pas de rang.
     function missingShelf(list) {
-      var cards = list.map(function (m) { return missingCard({ tmdb: m.tmdb, title: m.title, year: m.year, cover: m.cover, note: ROLE_NAMES[m.role] || '' }); });
+      var cards = list.map(function (m) { return missingCard({ tmdb: m.tmdb, title: m.title, year: m.year, cover: m.cover, note: ROLE_NAMES[m.role] || '', request: m.request }); });
       return h('section', { class: 'shelf missing' }, h('h2', null, H.t('Films qui manquent') + ' · ' + list.length), h('div', { class: 'grid' }, cards));
     }
     // Demande à TMDB les films de la personne (une tâche de fond), attend la fin de CETTE tâche (d'autres, un scan par exemple, peuvent passer devant), puis redessine la page. Le bouton ne fait rien tant que la demande court.
@@ -1026,6 +1130,65 @@
     return { el: el, nav: '#/search', refresh: name ? load : null, destroy: function () { gone = true; clearTimeout(timer); } };      // au retour d'une fiche : les pastilles « vu » ont pu changer
   });
 
+  // --- Demandes : « Mes demandes » et l'onglet de l'administrateur ----------------------------------
+  var REQUEST_STATUS = { pending: H.t('En attente'), added: H.t('Ajouté'), declined: H.t('Refusé') };
+  // Le titre d'une demande, avec son année : « Film intermédiaire (2014) ». Le titre vient du serveur (TMDB, ou ce que le compte a envoyé) : toujours en texte.
+  function requestTitle(r) { return (r.title || (r.kind === 'show' ? H.t('Série TMDB {n}', { n: r.tmdb }) : H.t('Film TMDB {n}', { n: r.tmdb }))) + (r.year ? ' (' + r.year + ')' : ''); }
+  // L'état en toutes lettres, avec le motif d'un refus : « Refusé : pas en France ».
+  function requestStatus(r) {
+    var said = REQUEST_STATUS[r.status] || r.status;
+    return r.status === 'declined' && r.reason ? H.t('{status} : {reason}', { status: said, reason: r.reason }) : said;
+  }
+  function requestPicture(r) { return H.picture(r.cover ? r.cover + (r.cover.indexOf('?') < 0 ? '?' : '&') + 'w=160' : '', r.title || '?', 'rqpic'); }
+  function openLink(r) { return h('a', { class: 'btn f', href: '#/i/' + r.item, 'data-key': 'open-' + r.id }, H.icon('play'), h('span', { class: 'lbl' }, H.t('Ouvrir'))); }
+  // La clé de focus du bouton de la ligne qui suit (ou précède) `r` dans `list`, pour que le focus ne retombe pas en haut quand la ligne disparaît.
+  function neighbourKey(list, r, prefix) {
+    var i = list.indexOf(r), next = list[i + 1] || list[i - 1];
+    return next ? prefix + next.id : null;
+  }
+
+  // #/requests : les demandes du compte (GET /api/requests?mine=1), de la plus récente à la plus ancienne. Chacune se retire ; une demande arrivée mène à l'élément quand le compte le voit.
+  // Ce que le compte voit : ses demandes et son message, jamais qui d'autre a demandé le même film.
+  H.route(/^\/requests$/, function () {
+    var out = h('div', { class: 'panel reqlist' });
+    var intro = h('p', { class: 'intro muted' }, H.t('Les films que tu as demandés à l’administrateur. Le hub ne télécharge rien : l’administrateur ajoute le film s’il le peut.'));
+    var el = h('section', { class: 'myrequests' }, h('h1', null, H.t('Mes demandes')), intro, out);
+    var list = [];
+    function row(r) {
+      var what = h('div', { class: 'what' }, h('b', null, requestTitle(r)), h('span', { class: 'rqstatus' }, requestStatus(r)),
+        r.note ? h('span', { class: 'rqnote' }, H.t('Ton message : « {note} »', { note: r.note })) : null,
+        r.asked ? h('span', null, H.t('Demandé le {date}', { date: H.date(r.asked) })) : null);
+      return h('div', { class: 'line reqrow', 'data-request': r.id, 'data-status': r.status }, requestPicture(r), what,
+        r.item ? openLink(r) : null,
+        H.button(H.t('Retirer'), 'trash', { 'data-key': 'rm-' + r.id, 'aria-label': H.t('Retirer ta demande de « {title} »', { title: requestTitle(r) }), onclick: function () { withdraw(r); } }));
+    }
+    function withdraw(r) {
+      H.confirm({ title: H.t('Retirer ta demande ?'), lead: [H.t('« {title} » ne sera plus dans tes demandes.', { title: requestTitle(r) })], ok: H.t('Retirer'), danger: true,
+        submit: function () { return H.api('/api/requests/' + r.id + '/delete', {}).catch(goneAlready); },
+        done: function () { H.toast(H.t('Demande retirée : {title}', { title: requestTitle(r) })); load(neighbourKey(list, r, 'rm-')); } });
+    }
+    function show(focusKey) {
+      var key = focusKey || (document.activeElement && out.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null);
+      H.clear(out);
+      if (!H.canRequest()) out.appendChild(h('p', { class: 'muted' }, H.t('L’administrateur t’a retiré le droit de demander des films ; tes demandes déjà faites restent ici.')));
+      if (!list.length) {
+        out.appendChild(h('div', { class: 'reqempty' }, h('p', null, H.t('Tu n’as aucune demande pour l’instant. Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée : « Demander ».')),
+          h('a', { class: 'btn f', href: '#/search', 'data-autofocus': '1', 'data-key': 'req-search' }, H.icon('search'), h('span', { class: 'lbl' }, H.t('Rechercher')))));
+      }
+      list.forEach(function (r) { out.appendChild(row(r)); });
+      if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;          // une réponse tardive : la page a été quittée
+      if (!(key && H.focus.key(out, key, true))) H.focus.first();
+    }
+    function load(focusKey) {
+      return H.api('/api/requests?mine=1').then(function (res) { list = res.requests || []; show(focusKey); }).catch(function (e) {
+        H.clear(out).appendChild(h('p', { class: 'muted' }, e.message));
+        out.appendChild(h('button', { class: 'btn f', 'data-autofocus': '1', onclick: function () { load(); } }, H.t('Réessayer')));
+      });
+    }
+    load();
+    return { el: el, nav: '#/settings', refresh: function () { load(); } };
+  });
+
   // --- Gestion ---------------------------------------------------------------------
   function ago(ts) {
     if (!ts) return H.t('jamais');
@@ -1051,7 +1214,8 @@
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
     }
-    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'inbox', label: H.t('Boîte de réception'), admin: true }, { id: 'preferences', label: H.t('Préférences') }, { id: 'comptes', label: H.t('Comptes') }];
+    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'inbox', label: H.t('Boîte de réception'), admin: true }, { id: 'preferences', label: H.t('Préférences') }, { id: 'comptes', label: H.t('Comptes') },
+      { id: 'demandes', label: H.t('Demandes'), admin: true }];
     var OLD_TABS = { lecture: 'preferences', interface: 'preferences', taches: 'gestion', serveur: 'gestion' };          // les anciens onglets : les adresses et le choix mémorisé y mènent encore
     function visibleTabs() { return TABS.filter(function (t) { return !t.admin || H.isAdmin(); }); }
     function activeTab() {          // un onglet réservé à l'administrateur ne s'ouvre pas pour un autre compte : on retombe sur le premier
@@ -1059,12 +1223,17 @@
         var wanted = OLD_TABS[tab] || tab;
         return ids.indexOf(wanted) >= 0 ? wanted : ids[0];
     }
-    function choose(id) { tab = id; H.pref('settings.tab', id); render(); H.focus.key(el, 'tab-' + id); }
+    function choose(id) {
+      tab = id; H.pref('settings.tab', id);
+      if (id === 'demandes' && !reqLoading) { reqList = null; reqError = ''; }          // l'onglet se relit à chaque fois qu'on y entre : pas de liste périmée
+      render(); H.focus.key(el, 'tab-' + id);
+    }
     function tabBar() {
       var active = activeTab();
       return h('div', { class: 'tabs', role: 'tablist' }, visibleTabs().map(function (t) {
         return h('button', { class: 'chip tab f' + (t.id === active ? ' on' : '') + (t.id === 'gestion' && busy ? ' busy' : ''), role: 'tab', 'aria-selected': t.id === active ? 'true' : 'false', 'data-key': 'tab-' + t.id,
-          'data-autofocus': t.id === active ? '1' : null, onclick: function () { choose(t.id); } }, t.label);
+          'data-autofocus': t.id === active ? '1' : null, onclick: function () { choose(t.id); } }, t.label,
+          t.id === 'demandes' && H.session.pending > 0 ? h('span', { class: 'pend', 'aria-label': H.t('{n} en attente', { n: H.plural(H.session.pending, 'demande') }) }, String(H.session.pending)) : null);
       }));
     }
     function render() {
@@ -1079,6 +1248,7 @@
       if (active === 'gestion') gestion(body);
       else if (active === 'inbox') body.appendChild(H.upload.adminPanel());
       else if (active === 'preferences') preferences(body);
+      else if (active === 'demandes') requestsTab(body);
       else accounts(body);
       el.appendChild(body);
       if (logPanel) logRestore(logPanel, kept);          // un journal lu à mi-chemin le reste quand la page est refaite (une tâche qui se termine)
@@ -1157,6 +1327,76 @@
       tasks(body);
       serverFacts(body);
     }
+    // Demandes (administrateur) : toutes les demandes, filtrées par état, avec leurs demandeurs et leurs messages. Lues à l'ouverture de l'onglet et après chaque action ;
+    // le compteur de la barre et de l'onglet suit (/api/state relu par poll).
+    var reqList = null, reqError = '', reqFilter = 'all', reqLoading = false, reqToken = 0;
+    var REQ_FILTERS = [['all', H.t('Toutes')], ['pending', H.t('En attente')], ['added', H.t('Ajoutées')], ['declined', H.t('Refusées')]];
+    // Relit la liste, puis met le focus sur `key`, à défaut sur `fallback` (une ligne voisine, quand celle qu'on vient de traiter sort du filtre), à défaut sur le filtre.
+    // Une réponse arrivée après une autre lecture (un filtre changé entre-temps) est ignorée.
+    function loadRequests(key, fallback) {
+      var mine = ++reqToken;
+      reqLoading = true;
+      return H.api('/api/requests' + (reqFilter !== 'all' ? '?status=' + reqFilter : '')).then(function (res) { return { list: res.requests || [], error: '' }; }, function (e) { return { list: null, error: e.message }; }).then(function (got) {
+        if (mine !== reqToken) return;
+        reqLoading = false;
+        reqList = got.list; reqError = got.error;
+        if (closed || activeTab() !== 'demandes') return;
+        render();
+        if (key && !H.focus.key(el, key, true) && !(fallback && H.focus.key(el, fallback, true))) H.focus.key(el, 'rf-' + reqFilter, true);
+      });
+    }
+    function afterRequest(key, fallback) { return loadRequests(key, fallback).then(function () { return poll(); }); }
+    function requestsTab(body) {
+      if (reqList === null && !reqError && !reqLoading) loadRequests();
+      var panel = h('section', { class: 'panel requests' }, h('h2', null, H.t('Demandes')),
+        h('p', { class: 'muted' }, H.t('Ce que les comptes ont demandé. Le hub ne télécharge rien : ajoute le film à la médiathèque, il passe « Ajouté » tout seul s’il porte son identifiant TMDB ; sinon, marque-le à la main.')));
+      panel.appendChild(h('div', { class: 'chips', role: 'group', 'aria-label': H.t('Filtrer les demandes') }, REQ_FILTERS.map(function (f) {
+        var on = reqFilter === f[0];
+        return h('button', { class: 'chip f' + (on ? ' on' : ''), type: 'button', 'data-key': 'rf-' + f[0], 'aria-pressed': on ? 'true' : 'false',
+          onclick: function () { if (reqFilter === f[0]) return; reqFilter = f[0]; reqList = null; reqError = ''; loadRequests('rf-' + f[0]); } }, f[1]);
+      })));
+      if (reqError) panel.appendChild(h('p', { class: 'muted' }, reqError, ' ', h('button', { class: 'btn f', type: 'button', 'data-key': 'rq-retry', onclick: function () { reqList = null; reqError = ''; loadRequests('rf-' + reqFilter); } }, H.t('Réessayer'))));
+      else if (!reqList) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
+      else if (!reqList.length) panel.appendChild(h('p', { class: 'muted reqempty' }, reqFilter === 'all' ? H.t('Aucune demande pour l’instant : un compte demande un film depuis sa case grisée (page d’une saga, d’une personne).') : H.t('Aucune demande dans cet état.')));
+      (reqList || []).forEach(function (r) { panel.appendChild(adminRequestRow(r)); });
+      body.appendChild(panel);
+    }
+    // Une demande : titre, état, demandeurs (nom, date, message), et ce qu'on peut en faire. Noms et messages viennent des comptes : toujours en texte.
+    function adminRequestRow(r) {
+      var users = r.users || [];
+      var who = h('ul', { class: 'rqusers' }, users.map(function (u) {
+        return h('li', null, h('b', null, u.name || H.t('compte supprimé')), ' · ' + H.date(u.created), u.note ? [' · ', h('q', null, u.note)] : null);
+      }));
+      var what = h('div', { class: 'what' }, h('b', null, requestTitle(r)), h('span', { class: 'rqstatus' }, requestStatus(r)),
+        h('span', null, H.plural(users.length, 'demandeur') + ' · ' + H.t('demandée le {date}', { date: H.date(r.created) })), users.length ? who : null);
+      var buttons = [];
+      if (r.item) buttons.push(openLink(r));
+      if (r.status === 'pending') {
+        buttons.push(H.button(H.t('Marquer ajouté'), 'check', { 'data-key': 'rq-added-' + r.id, onclick: function () { setRequest(r, 'added'); } }));
+        buttons.push(H.button(H.t('Refuser'), 'close', { 'data-key': 'rq-declined-' + r.id, onclick: function () { declineRequest(r); } }));
+      } else buttons.push(H.button(H.t('Remettre en attente'), 'refresh', { 'data-key': 'rq-pending-' + r.id, onclick: function () { setRequest(r, 'pending'); } }));
+      buttons.push(H.button(H.t('Supprimer'), 'trash', { 'data-key': 'rq-del-' + r.id, 'aria-label': H.t('Supprimer la demande de « {title} »', { title: requestTitle(r) }), onclick: function () { deleteRequest(r); } }));
+      return h('div', { class: 'line reqrow', 'data-request': r.id, 'data-status': r.status }, requestPicture(r), what, buttons);
+    }
+    // Le bouton qui remplace celui qu'on vient d'utiliser : « Marquer ajouté » et « Refuser » deviennent « Remettre en attente », et l'inverse.
+    function setRequest(r, status) {
+      var next = neighbourKey(reqList || [], r, 'rq-del-');          // la ligne peut sortir du filtre : le focus va alors à sa voisine
+      H.api('/api/requests/' + r.id + '/status', { status: status }).then(function () { return afterRequest(status === 'pending' ? 'rq-added-' + r.id : 'rq-pending-' + r.id, next); })
+        .catch(function (e) { H.toast(e.message, 5000); });
+    }
+    function declineRequest(r) {
+      H.form({ title: H.t('Refuser « {title} »', { title: requestTitle(r) }), ok: H.t('Refuser'),
+        lead: [H.t('Le motif est montré à ceux qui l’ont demandé. Tant que la demande est refusée, personne ne peut la refaire.')],
+        fields: [{ key: 'reason', label: H.t('Motif (facultatif, 200 caractères au plus)'), maxlength: 200 }],
+        submit: function (v) { return H.api('/api/requests/' + r.id + '/status', { status: 'declined', reason: v.reason }); },
+        done: function () { afterRequest('rq-pending-' + r.id, neighbourKey(reqList || [], r, 'rq-del-')); } });
+    }
+    function deleteRequest(r) {
+      H.confirm({ title: H.t('Supprimer la demande « {title} » ?', { title: requestTitle(r) }), ok: H.t('Supprimer'), danger: true,
+        lead: [H.t('Elle disparaît pour tous ceux qui l’ont faite ({n}), avec leurs messages. Cela ne s’annule pas.', { n: H.plural((r.users || []).length, 'demandeur') })],
+        submit: function () { return H.api('/api/requests/' + r.id + '/delete', {}).catch(goneAlready); },
+        done: function () { H.toast(H.t('Demande supprimée : {title}', { title: requestTitle(r) })); afterRequest(neighbourKey(reqList || [], r, 'rq-del-') || 'rf-' + reqFilter); } });
+    }
     // Les réglages qu'on touche une fois : l'apparence de ce navigateur, la lecture, l'affichage du compte.
     function preferences(body) {
       interfaceTab(body);
@@ -1214,7 +1454,8 @@
         choices: [['6', H.t('Peu')], ['12', H.t('Habituel')], ['18', H.t('Beaucoup')], ['24', H.t('Le maximum')]].map(function (c) { return { label: H.t('{n} cartes', { n: c[0] }), detail: c[1], value: c[0] }; }) },
       { key: 'home_unseen_sort', title: H.t('Pas encore vu : trier par'), note: H.t('Sur la page d’accueil'),
         choices: [{ label: H.t('Au hasard'), detail: H.t('Un ordre qui change chaque jour'), value: 'random' }, { label: H.t('Note TMDB'), detail: H.t('Les mieux notés d’abord, ceux sans note à la fin'), value: 'rating' },
-          { label: H.t('Date d’ajout'), detail: H.t('Les plus récemment ajoutés d’abord'), value: 'added' }] }];
+          { label: H.t('Date d’ajout'), detail: H.t('Les plus récemment ajoutés d’abord'), value: 'added' }] },
+      { key: 'home_requests', title: H.t('Tes demandes sont arrivées'), note: H.t('Sur la page d’accueil'), choices: ON_OFF }];
     function displayPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Affichage')));
       DISPLAY.forEach(function (setting) {
@@ -1227,6 +1468,12 @@
           } })));
       });
       return panel;
+    }
+    // « Mes demandes » : la page des demandes du compte, depuis « Mon compte ».
+    function myRequestsLine() {
+      return h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Mes demandes')),
+        h('span', null, H.canRequest() ? H.t('Les films que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film ; tes demandes déjà faites restent visibles'))),
+        h('a', { class: 'btn f', href: '#/requests', 'data-key': 'my-requests' }, H.icon('queue'), h('span', { class: 'lbl' }, H.t('Mes demandes'))));
     }
     function accounts(body) {
       body.appendChild(accountPanel());
@@ -1286,12 +1533,14 @@
       if (!H.session.auth || !me) {
         panel.appendChild(h('p', { class: 'muted' }, H.t('Aucun compte n’existe : le serveur est ouvert, et toute personne qui peut l’atteindre voit et gère tout. Pour le protéger, crée le premier compte (il sera administrateur) sur le serveur avec '),
           h('code', null, H.t('python -m hub user add <nom>')), H.t(', ou définis '), h('code', null, 'HUB_PASSWORD'), H.t(' avant de démarrer le serveur. Les comptes suivants se gèrent ensuite ici.')));
+        panel.appendChild(myRequestsLine());
         return panel;
       }
       panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, me.name), h('span', null, ROLES[me.role] || me.role)),
         H.button(H.t('Changer mon mot de passe'), 'edit', { 'data-key': 'mypw', onclick: changeMine }),
         H.button(H.t('Déconnecter les autres appareils'), null, { 'data-key': 'signout-others', onclick: signOutOthers }),
         h('a', { class: 'btn f', href: '/api/logout', 'data-key': 'logout', onclick: function () { H.forgetAccount(); } }, H.t('Se déconnecter'))));
+      panel.appendChild(myRequestsLine());
       return panel;
     }
     function changeMine() {
@@ -1325,8 +1574,8 @@
       (users || []).forEach(function (u) {
         var mine = H.session.user && u.id === H.session.user.id;
         panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' ' + H.t('(toi)') : '')),
-          h('span', null, (ROLES[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
-          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger, envoyer', { name: u.name }), onclick: function () { rightsOf(u); } }),
+          h('span', null, (ROLES[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours') + ' · ' + H.t('Peut demander : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
+          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger, envoyer, demander', { name: u.name }), onclick: function () { rightsOf(u); } }),
           H.button(H.t('Mot de passe'), 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': H.t('Changer le mot de passe de {name}', { name: u.name }), onclick: function () { passwordOf(u, mine); } }),
           H.button(H.t('Supprimer'), 'trash', { 'data-key': 'del-' + u.id, 'aria-label': H.t('Supprimer le compte de {name}', { name: u.name }), onclick: function () { deleteUser(u, mine); } })));
       });
@@ -1358,17 +1607,18 @@
       }
       if (libs.length) parts.push(H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') }));
       parts.push(H.t('Envoyer des fichiers : {upload}', { upload: u.can_upload ? H.t('oui') : H.t('non') }));
+      parts.push(H.t('Peut demander : {request}', { request: u.can_request ? H.t('oui') : H.t('non') }));
       return parts.join(' · ');
     }
-    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Au-dessous, le droit d'envoyer des fichiers (Oui / Non), qui ne tient pas à une bibliothèque.
+    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Au-dessous, le droit d'envoyer des fichiers et celui de demander des films (Oui / Non), qui ne tiennent pas à une bibliothèque.
     // Les droits valent tout de suite, sans que la personne se reconnecte.
     function rightsOf(u) {
-      var draft = {}, rows = h('div', { class: 'rights' }), upload = !!u.can_upload;
+      var draft = {}, rows = h('div', { class: 'rights' }), upload = !!u.can_upload, ask = u.can_request !== false;
       (state.libraries || []).forEach(function (l) {
         var r = (u.rights || {})[l.id] || { view: true, play: true, download: true };
         draft[l.id] = { view: !!r.view, play: !!(r.view && r.play), download: !!(r.view && r.download) };
       });
-      var saved = { rights: JSON.stringify(draft), upload: upload, touched: false };      // ce que le serveur a déjà : un second essai n'envoie que le reste
+      var saved = { rights: JSON.stringify(draft), upload: upload, request: ask, touched: false };      // ce que le serveur a déjà : un second essai n'envoie que le reste
       function toggle(l, which) {
         var button = h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + l.id, onclick: function () {
           var d = draft[l.id];
@@ -1378,16 +1628,17 @@
         } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }));        // la coche a toujours sa place (visible ou non) : le bouton garde la même largeur
         return button;
       }
-      function choice(value, label) {
-        return h('button', { class: 'chip f', type: 'button', 'data-key': 'r-upload-' + (value ? 'yes' : 'no'), onclick: function () { upload = value; paint(); } },
+      function choice(which, value, label) {         // `which` : « upload » (envoyer des fichiers) ou « request » (demander des films)
+        return h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + (value ? 'yes' : 'no'), onclick: function () { if (which === 'upload') upload = value; else ask = value; paint(); } },
           h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, label));
       }
-      var buttons = {}, yes = choice(true, H.t('Oui')), no = choice(false, H.t('Non'));
+      var buttons = {}, yes = choice('upload', true, H.t('Oui')), no = choice('upload', false, H.t('Non')), askYes = choice('request', true, H.t('Oui')), askNo = choice('request', false, H.t('Non'));
       (state.libraries || []).forEach(function (l) {
         buttons[l.id] = { view: toggle(l, 'view'), play: toggle(l, 'play'), download: toggle(l, 'download') };
         rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, H.libLabel(l)), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
       });
       rows.appendChild(h('div', { class: 'rrow', 'data-upload-right': '1' }, h('b', null, H.t('Envoyer des fichiers')), yes, no));
+      rows.appendChild(h('div', { class: 'rrow', 'data-request-right': '1' }, h('b', null, H.t('Peut demander')), askYes, askNo));
       function paint() {
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
@@ -1402,17 +1653,19 @@
         });
         yes.classList.toggle('on', upload); yes.setAttribute('aria-pressed', upload ? 'true' : 'false');
         no.classList.toggle('on', !upload); no.setAttribute('aria-pressed', upload ? 'false' : 'true');
+        askYes.classList.toggle('on', ask); askYes.setAttribute('aria-pressed', ask ? 'true' : 'false');
+        askNo.classList.toggle('on', !ask); askNo.setAttribute('aria-pressed', ask ? 'false' : 'true');
       }
       paint();
       H.form({ title: H.t('Droits de {name}', { name: u.name }), ok: H.t('Enregistrer'), kind: 'form', cls: 'rightsbox',
         lead: [H.t('Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.')],
         extra: [rows],
-        submit: function () { return saveAccount(u, draft, upload, saved); },
+        submit: function () { return saveAccount(u, draft, upload, ask, saved); },
         done: function () { H.toast(H.t('Droits enregistrés : {name}', { name: u.name })); refreshUsers('rights-' + u.id); },
         cancel: function () { if (saved.touched) refreshUsers('rights-' + u.id); } });       // fermée après un enregistrement à moitié réussi : la liste montre ce qui l'est
     }
-    // Enregistre les droits de bibliothèque et le droit d'envoi, chacun par son appel et seulement s'il a changé. Refuse (avec ce qui a réussi et ce qui a échoué) si l'un des deux échoue.
-    function saveAccount(u, draft, upload, saved) {
+    // Enregistre les droits de bibliothèque, le droit d'envoi et celui de demander, chacun par son appel et seulement s'il a changé. Refuse (avec ce qui a réussi et ce qui a échoué) si l'un échoue.
+    function saveAccount(u, draft, upload, ask, saved) {
       var base = '/api/user/' + encodeURIComponent(u.id), now = JSON.stringify(draft), failed = {}, applied = {};
       function run(part, changed, path, body, keep) {
         if (!changed) return Promise.resolve();
@@ -1420,14 +1673,21 @@
       }
       return Promise.all([
         run('rights', now !== saved.rights, base + '/rights', { rights: draft }, function () { saved.rights = now; }),
-        run('upload', upload !== saved.upload, base + '/upload', { upload: upload }, function () { saved.upload = upload; })
+        run('upload', upload !== saved.upload, base + '/upload', { upload: upload }, function () { saved.upload = upload; }),
+        run('request', ask !== saved.request, base + '/request', { request: ask }, function () { saved.request = ask; })
       ]).then(function () {
         var bad = saveFailure(failed, applied);
         if (bad) throw new Error(bad);
       });
     }
-    // Dit ce qui a échoué, et seulement ce qui est enregistré s'il l'est : l'un n'est jamais présenté comme raté parce que l'autre l'est.
+    // Dit ce qui a échoué, et seulement ce qui est enregistré s'il l'est : l'un n'est jamais présenté comme raté parce qu'un autre l'est. « Peut demander » s'ajoute à la phrase des deux autres.
     function saveFailure(failed, applied) {
+      var said = libraryFailure(failed, applied), more = '';
+      if (failed.request) more = H.t('« Peut demander » n’a pas été enregistré : {error}', { error: failed.request }) + (!said && (applied.rights || applied.upload) ? ' ' + H.t('Le reste est enregistré.') : '');
+      else if (said && applied.request) more = H.t('« Peut demander » est enregistré.');
+      return [said, more].filter(Boolean).join(' ');
+    }
+    function libraryFailure(failed, applied) {
       if (failed.rights && failed.upload) return H.t('Rien n’a été enregistré. Droits de bibliothèque : {rights}. Envoyer des fichiers : {upload}', { rights: failed.rights, upload: failed.upload });
       if (failed.rights) return applied.upload ? H.t('« Envoyer des fichiers » est enregistré, mais pas les droits de bibliothèque : {error}', { error: failed.rights }) : H.t('Les droits de bibliothèque n’ont pas été enregistrés : {error}', { error: failed.rights });
       if (failed.upload) return applied.rights ? H.t('Les droits de bibliothèque sont enregistrés, mais pas « Envoyer des fichiers » : {error}', { error: failed.upload }) : H.t('« Envoyer des fichiers » n’a pas été enregistré : {error}', { error: failed.upload });
@@ -1521,6 +1781,7 @@
       return Promise.all([H.api('/api/state'), jobsCall]).then(function (r) {
         H.setSession(r[0]);
         if (H.canUpload() !== !!document.querySelector('#nav [data-nav="#/upload"]')) { H.nav.build(); H.nav.mark(location.hash || '#/'); }       // un droit « Envoyer » donné ou retiré se voit sans recharger
+        H.nav.pending();                                                   // le nombre de demandes en attente, sur l'entrée des paramètres
         if (!(r[0].auth && H.isAdmin())) { users = null; usersError = ''; return r; }
         return H.api('/api/users').then(function (res) { users = res.users; usersError = ''; return r; }, function (e) { users = null; usersError = e.message; return r; });
       }).then(function (r) {
@@ -1542,6 +1803,6 @@
       }).catch(function (e) { if (!closed) H.toast(e.message, 5000); });
     }
     poll();
-    return { el: el, nav: '#/settings', refresh: poll, destroy: function () { closed = true; clearTimeout(timer); } };
+    return { el: el, nav: '#/settings', refresh: function () { if (activeTab() === 'demandes' && !reqLoading) loadRequests(); return poll(); }, destroy: function () { closed = true; clearTimeout(timer); } };          // au retour (« Mes demandes », une fiche) : la liste des demandes a pu changer
   });
 })();

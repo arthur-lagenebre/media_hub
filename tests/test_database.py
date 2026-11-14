@@ -139,10 +139,10 @@ class TestUploadMigration(TempCase):
                 database._add_column(conn, table, column, "INTEGER")
         self.assertIsNotNone(self.db.one("SELECT name FROM sqlite_master WHERE name='users'"))
 
-    def test_a_new_base_has_the_columns_too_and_the_version_is_7(self):
-        self.assertEqual(database.SCHEMA_VERSION, 7)
+    def test_a_new_base_has_the_columns_too_and_the_version_is_8(self):
+        self.assertEqual(database.SCHEMA_VERSION, 8)
         self.db.execute("INSERT INTO users(id, name, pass_hash, created) VALUES('x', 'x', 'h', 1)")
-        self.assertEqual(tuple(self.db.one("SELECT can_upload, inbox_dir FROM users WHERE id='x'")), (0, None))
+        self.assertEqual(tuple(self.db.one("SELECT can_upload, inbox_dir, can_request FROM users WHERE id='x'")), (0, None, 1))
 
     def test_a_base_in_version_3_reaches_the_last_version_through_the_other_migrations_too(self):
         path = self.old_base()
@@ -183,7 +183,7 @@ class TestRatingsMigration(TempCase):
 
     def test_a_version_6_base_gets_the_ratings_table_and_loses_nothing(self):
         db = Database(self.v6_base())
-        self.assertEqual(db.kv_get("schema"), 7)
+        self.assertEqual(db.kv_get("schema"), database.SCHEMA_VERSION)
         self.assertEqual(db.query("SELECT * FROM ratings"), [])
         self.assertEqual([tuple(r) for r in db.query("SELECT id, name, can_upload, inbox_dir FROM users ORDER BY id")], [("abc", "alice", 1, "alice"), ("default", "boss", 0, None)])
         self.assertEqual([tuple(r) for r in db.query("SELECT profile, entry_id, position FROM progress")], [("abc", "e1", 12.5)])

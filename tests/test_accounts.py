@@ -103,7 +103,7 @@ class TestUploadRight(unittest.TestCase):
 
     def test_it_changes_nothing_else_and_nobody_else(self):
         accounts.set_can_upload(self.db, self.alice["id"], True)
-        self.assertEqual(accounts.public(accounts.by_id(self.db, self.boss["id"])), {"id": "default", "name": "boss", "role": "admin", "can_upload": True})
+        self.assertEqual(accounts.public(accounts.by_id(self.db, self.boss["id"])), {"id": "default", "name": "boss", "role": "admin", "can_upload": True, "can_request": True})
         self.assertEqual(accounts.by_id(self.db, self.alice["id"])["token_version"], 1)                # la session ne tombe pas
 
     def test_an_administrator_a_stranger_and_a_value_that_is_not_a_boolean_are_refused(self):

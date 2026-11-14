@@ -2156,9 +2156,9 @@ class TestAccountSeed(AccountsCase):
     def test_hub_password_creates_the_default_admin(self):
         users = self.admin.json("/api/users")[1]["users"]
         self.assertEqual([(u["id"], u["name"], u["role"]) for u in users], [("default", "admin", "admin")])       # HUB_ADMIN absent : « admin »
-        self.assertEqual(self.admin.session["user"], {"id": "default", "name": "admin", "role": "admin", "can_upload": True})
+        self.assertEqual(self.admin.session["user"], {"id": "default", "name": "admin", "role": "admin", "can_upload": True, "can_request": True})
         state = self.admin.json("/api/state")[1]
-        self.assertEqual((state["auth"], state["user"]), (True, {"id": "default", "name": "admin", "role": "admin", "can_upload": True}))
+        self.assertEqual((state["auth"], state["user"]), (True, {"id": "default", "name": "admin", "role": "admin", "can_upload": True, "can_request": True}))
 
     def test_hub_admin_names_the_account_and_the_password_may_be_short(self):
         other = tempfile.mkdtemp()
@@ -2168,7 +2168,7 @@ class TestAccountSeed(AccountsCase):
         api = Client(run.port)
         status, _, body = api.request("POST", "/api/token", body={"password": "court"})       # un seul compte : le nom est facultatif
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["user"], {"id": "default", "name": "Chef de famille", "role": "admin", "can_upload": True})
+        self.assertEqual(json.loads(body)["user"], {"id": "default", "name": "Chef de famille", "role": "admin", "can_upload": True, "can_request": True})
         for user in ("CHEF DE FAMILLE", " chef de famille "):                                  # la casse et les espaces ne comptent pas
             self.assertEqual(api.request("POST", "/api/token", body={"user": user, "password": "court"})[0], 200, user)
         status, _, body = api.request("POST", "/api/token", body={"user": "admin", "password": "court"})
@@ -2240,7 +2240,7 @@ class TestAccountLogin(AccountsCase):
     def test_token_gives_each_account_its_own_session_token(self):
         for client, name, role in ((self.alice, "alice", "user"), (self.bob, "Bob", "user"), (self.admin, "admin", "admin")):
             uid = client.session["user"]["id"]
-            self.assertEqual(client.session["user"], {"id": uid, "name": name, "role": role, "can_upload": role == "admin"})
+            self.assertEqual(client.session["user"], {"id": uid, "name": name, "role": role, "can_upload": role == "admin", "can_request": True})
             self.assertRegex(client.session["token"], rf"^{uid}\.[0-9a-f]{{64}}$")
             self.assertEqual(client.json("/api/state")[1]["user"]["name"], name)
         self.assertEqual(len({c.session["token"] for c in (self.alice, self.bob, self.admin)}), 3)
@@ -2413,7 +2413,7 @@ class TestAccountPermissions(AccountsCase):
         self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "admin", "password": "secret"})[0], 200)
 
     def test_a_plain_account_keeps_everything_else(self):
-        self.assertEqual(self.bob.json("/api/state")[1]["user"], {"id": self.bob.account["id"], "name": "bob", "role": "user", "can_upload": False})
+        self.assertEqual(self.bob.json("/api/state")[1]["user"], {"id": self.bob.account["id"], "name": "bob", "role": "user", "can_upload": False, "can_request": True})
         for path in ("/api/home", "/api/library/films", "/api/jobs", "/api/playlists", f"/api/artist/musique/{self.artist}", "/api/search?q=dark"):
             self.assertEqual(self.bob.get(path)[0], 200, path)
 
@@ -2475,13 +2475,13 @@ class TestAccountManagement(AccountsCase):
         self.assertEqual((made["name"], made["role"]), ("Barbara Martin", "user"))
         self.assertRegex(made["id"], r"^[0-9a-f]{16}$")
         self.assertIsInstance(made["created"], int)
-        self.assertEqual(set(made), {"id", "name", "role", "can_upload", "created", "rights"})
+        self.assertEqual(set(made), {"id", "name", "role", "can_upload", "can_request", "created", "rights"})
         self.assertTrue(all(r == {"view": True, "play": True, "download": True} for r in made["rights"].values()))       # un compte neuf voit et télécharge tout
         boss = self.admin.json("/api/users", {"name": "Chef", "password": self.PASSWORD, "role": "admin"})[1]
         self.assertEqual(boss["role"], "admin")
         users = self.admin.json("/api/users")[1]["users"]
         self.assertEqual([u["name"] for u in users], ["admin", "Barbara Martin", "Chef"])           # du plus ancien au plus récent
-        self.assertEqual({k for u in users for k in u}, {"id", "name", "role", "can_upload", "created", "rights"})
+        self.assertEqual({k for u in users for k in u}, {"id", "name", "role", "can_upload", "can_request", "created", "rights"})
         self.assertNotIn("scrypt", json.dumps(users))
         self.assertEqual(self.sign_in("barbara martin", self.PASSWORD).session["user"]["id"], made["id"])
 
@@ -2713,7 +2713,7 @@ class TestOpenServer(unittest.TestCase):
 
     def test_state_says_there_is_no_auth_and_who_the_profile_is(self):
         state = self.api.json("/api/state")[1]
-        self.assertEqual((state["auth"], state["user"]), (False, {"id": "default", "name": "Maison", "role": "admin", "can_upload": False}))       # sans compte, personne n'envoie
+        self.assertEqual((state["auth"], state["user"]), (False, {"id": "default", "name": "Maison", "role": "admin", "can_upload": False, "can_request": True}))       # sans compte, personne n'envoie
         self.assertEqual(self.api.json("/api/users"), (200, {"users": []}))
         self.assertEqual(self.api.get("/login")[0], 200)
 
@@ -2755,7 +2755,7 @@ class TestOpenServer(unittest.TestCase):
         self.assertEqual(self.api.get("/media/abc/file")[0], 302)
         status, _, body = self.api.request("POST", "/api/token", body={"password": "motdepasse12"})
         session = json.loads(body)
-        self.assertEqual((status, session["user"]), (200, {"id": "default", "name": "alice", "role": "admin", "can_upload": True}))
+        self.assertEqual((status, session["user"]), (200, {"id": "default", "name": "alice", "role": "admin", "can_upload": True, "can_request": True}))
         alice = BearerClient(self.run_.port, session["token"])
         self.assertEqual([c["item"]["id"] for c in alice.json("/api/home")[1]["continue"]], [dark])      # elle reprend la progression d'avant
         self.cli("passwd", "alice", password="autre-mot-de-passe")                                  # changer le mot de passe en ligne de commande...
@@ -3136,7 +3136,7 @@ class ContractBase(unittest.TestCase):
 class TestApiContract(ContractBase):
     def test_state(self):
         data = self.get("/api/state")
-        self.has(data, {"version": str, "api": int, "libraries": list, "ffmpeg": bool, "ffprobe": bool, "tmdb": bool, "auth": bool, "busy": bool, "streams": int, "max_streams": int}, "state")
+        self.has(data, {"version": str, "api": int, "libraries": list, "ffmpeg": bool, "ffprobe": bool, "tmdb": bool, "auth": bool, "busy": bool, "streams": int, "max_streams": int, "can_request": bool}, "state")
         self.assertEqual(data["api"], 1)
         self.assertTrue(data["auth"])
         self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "musique", "livres"])
@@ -3149,7 +3149,7 @@ class TestApiContract(ContractBase):
         self.assertEqual(self.api.json("/api/progress", {"entry": film, "position": 600, "duration": 8880})[0], 200)
         self.addCleanup(self.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (film,))
         data = self.get("/api/home")
-        self.has(data, {"continue": list, "libraries": list}, "home")
+        self.has(data, {"continue": list, "libraries": list, "requests_ready": list}, "home")
         self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "musique", "livres"])
         for lib in data["libraries"]:
             self.has(lib, {"id": str, "label": str, "kind": str, "count": int, "recent": list}, f"home.libraries[{lib['id']}]")

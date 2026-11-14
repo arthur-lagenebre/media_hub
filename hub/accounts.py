@@ -17,8 +17,10 @@ import re
 import secrets
 import threading
 import time
+from functools import partial
 
 from . import prefs
+from . import requests
 
 FIRST_ID = "default"
 ROLES = ("admin", "user")
@@ -170,9 +172,14 @@ def can_upload(row):
     return row["role"] == "admin" or bool(row["can_upload"])
 
 
+def can_request(row):
+    """Le compte peut-il demander un film ou une série (voir requests.py) ? Un administrateur toujours, un autre compte tant que l'administrateur ne lui a pas retiré ce droit (donné par défaut)."""
+    return row["role"] == "admin" or bool(row["can_request"])
+
+
 def public(row):
     """Ce que l'API dit d'un compte (jamais le haché ni la version du jeton)."""
-    return {"id": row["id"], "name": row["name"], "role": row["role"], "can_upload": can_upload(row)}
+    return {"id": row["id"], "name": row["name"], "role": row["role"], "can_upload": can_upload(row), "can_request": can_request(row)}
 
 
 def listing(row):
@@ -290,17 +297,27 @@ def _store_right(conn, uid, lib, view, play, download):
                      (uid, lib, int(view), int(play), int(download)))
 
 
-def set_can_upload(db, uid, allowed):
-    """Donne ou retire le droit d'envoyer dans la boîte de réception (`allowed` : un booléen, rien d'autre). Refuse 400 un administrateur (il envoie toujours), 404 un compte inconnu. Renvoie le compte à jour ; la session ne change pas."""
+FLAGS = {"can_upload": ("« upload » vaut vrai ou faux", "un administrateur peut toujours envoyer"),     # colonne de `users` -> (refus d'une valeur qui n'est pas un booléen, refus pour un administrateur)
+         "can_request": ("« request » vaut vrai ou faux", "un administrateur peut toujours demander")}   # en toutes lettres : test_i18n cherche chaque message traduit tel quel dans le code
+
+
+def set_flag(db, uid, allowed, column):
+    """Donne ou retire à un compte un droit global de FLAGS : `can_upload` (envoyer dans la boîte de réception) ou `can_request` (demander des films et des séries). `allowed` : un booléen, rien d'autre.
+    Refuse 400 un administrateur (il a toujours ces droits), 404 un compte inconnu. Renvoie le compte à jour ; la session ne change pas, et les envois ou demandes déjà faits restent."""
+    not_bool, refused = FLAGS[column]
     if not isinstance(allowed, bool):
-        raise AccountError(400, "« upload » vaut vrai ou faux")
+        raise AccountError(400, not_bool)
     row = by_id(db, uid)
     if row is None:
         raise AccountError(404, "compte inconnu")
     if row["role"] == "admin":
-        raise AccountError(400, "un administrateur peut toujours envoyer")
-    db.execute("UPDATE users SET can_upload=? WHERE id=?", (int(allowed), uid))
+        raise AccountError(400, refused)
+    db.execute(f"UPDATE users SET {column}=? WHERE id=?", (int(allowed), uid))         # `column` vient de FLAGS, jamais d'une donnée
     return by_id(db, uid)
+
+
+set_can_upload = partial(set_flag, column="can_upload")        # set_can_upload(db, uid, allowed)
+set_can_request = partial(set_flag, column="can_request")      # set_can_request(db, uid, allowed)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +376,7 @@ def revoke_sessions(db, uid):
 
 
 def delete(db, uid):
-    """Supprime le compte, ses droits, sa progression, ses avis, ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction.
+    """Supprime le compte, ses droits, sa progression, ses avis, ses demandes (une demande qui n'a plus de demandeur disparaît), ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction.
     Son dossier de la boîte de réception et les fichiers qu'il contient restent en place (rien n'est perdu) : le lien (`users.inbox_dir`) disparaît avec la ligne, et l'administrateur voit ce dossier sous son nom comme celui d'un compte supprimé."""
     with db.write_lock:
         conn = db.connection()
@@ -372,6 +389,7 @@ def delete(db, uid):
             conn.execute("DELETE FROM progress WHERE profile=?", (uid,))
             conn.execute("DELETE FROM rights WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM ratings WHERE user_id=?", (uid,))
+            requests.forget_user(conn, uid)
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE profile=?)", (uid,))
             conn.execute("DELETE FROM playlists WHERE profile=?", (uid,))
             prefix = f"dismiss:{uid}:"

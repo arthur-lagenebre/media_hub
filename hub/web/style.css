@@ -330,7 +330,7 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .menu.form .formerr:empty { display: block; }
 .menu.prompt .field { width: 100%; margin: 0.2rem 0 0.4rem; }
 .menu.form .rights { padding: 0 0.6rem 0.4rem; }
-.menu.rightsbox .lead { margin: 0; padding-bottom: 0.4rem; }
+.menu.rightsbox .lead { margin: 0; padding-bottom: 0.4rem; font-size: 0.86rem; line-height: 1.35; }
 /* wide : contenu libre */
 .menu.wide { width: min(46rem, 94vw); }
 .menu.picker { overflow-y: auto; }
@@ -486,14 +486,14 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .crop-stage:active { cursor: grabbing; }
 .crop-stage img { position: absolute; max-width: none; pointer-events: none; }
 .crop-frame { position: absolute; box-sizing: border-box; border: 2px solid var(--accent); box-shadow: 0 0 0 999px rgba(5, 7, 9, 0.66); pointer-events: none; }
-.rights .rrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.2rem 0.4rem; padding: 0.3rem 0; border-top: 1px solid var(--line); }       /* le nom de la bibliothèque, puis trois boutons égaux : la mise en page ne dépend pas de la largeur de la police */
+.rights .rrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.15rem 0.4rem; padding: 0.22rem 0; border-top: 1px solid var(--line); }       /* le nom de la bibliothèque, puis trois boutons égaux : la mise en page ne dépend pas de la largeur de la police */
 .rights .rrow b { grid-column: 1 / -1; overflow-wrap: anywhere; }
 .rights .rrow .chip { margin: 0; padding: 0.28rem 0.5rem; text-align: center; }
 .rights .rrow .chip .mark { visibility: hidden; margin-right: 0.35em; }
 .rights .rrow .chip.on .mark { visibility: visible; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
-.rights .rrow[data-upload-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* le droit d'envoi : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas de plus */
-.rights .rrow[data-upload-right] b { grid-column: auto; }
+.rights .rrow[data-upload-right], .rights .rrow[data-request-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* envoyer des fichiers, demander des films : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas */
+.rights .rrow[data-upload-right] b, .rights .rrow[data-request-right] b { grid-column: auto; }
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
 /* Sagas composées à la main */
@@ -506,6 +506,34 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .mcell { display: flex; flex-direction: column; align-items: flex-start; }
 .mcell .card { width: 100%; }
 .btn.mhide { margin-top: 0.35rem; padding: 0.35rem 0.7rem; font-size: 0.8rem; font-weight: 600; }
+/* Demander un film absent : la case grisée qui se demande est un bouton (focus visible de loin), avec son état et ce que fait Entrée sous le titre */
+.card.wanted.ask { cursor: pointer; }
+.card.wanted .rq { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem; margin-top: 0.35rem; }
+.rqstate { color: var(--mute); font-size: 0.8rem; font-weight: 650; }
+.rqbtn { display: inline-flex; align-items: center; gap: 0.3rem; background: var(--s2); color: var(--text); border-radius: 0.6rem; padding: 0.35rem 0.7rem; font-size: 0.8rem; font-weight: 650; }
+.rqbtn .ic svg { width: 1.05em; height: 1.05em; }
+.rqbtn.on, .card.wanted.ask:focus .rqbtn, .card.wanted.ask:hover .rqbtn { background: var(--accent); color: var(--on-accent); }
+body.mouse .card.wanted.ask:focus:not(:hover) .rqbtn:not(.on) { background: var(--s2); color: var(--text); }
+html:not([data-device="pc"]) .card.wanted.ask:hover:not(:focus) .rqbtn:not(.on) { background: var(--s2); color: var(--text); }
+/* Le nombre de demandes en attente : sur l'entrée des paramètres et sur l'onglet « Demandes » */
+.pend { display: inline-block; min-width: 1.35em; margin-left: 0.3rem; padding: 0 0.35em; border-radius: 1em; background: var(--accent); color: var(--on-accent); font-size: 0.72rem; font-weight: 800; line-height: 1.35em; text-align: center; vertical-align: middle; }
+.tab.on .pend { background: var(--on-accent); color: var(--accent); }
+/* Mes demandes (.myrequests), et l'onglet « Demandes » de l'administrateur (.panel.requests) */
+.myrequests { padding-bottom: 3rem; }
+.myrequests h1 { padding: 1.4rem var(--gut) 0.6rem; }
+.myrequests .intro { margin: 0 var(--gut) 1rem; max-width: var(--prose); line-height: 1.5; }
+.reqrow .poster.rqpic { flex: none; width: 3rem; padding-top: 4.5rem; margin-right: 0.9rem; }
+.reqrow .what .rqstatus { color: var(--text); font-weight: 650; overflow-wrap: anywhere; }
+.reqrow[data-status="declined"] .what .rqstatus { color: #ffa595; }
+.reqrow[data-status="added"] .what .rqstatus { color: #9bd16b; }
+.reqrow .what .rqnote { overflow-wrap: anywhere; }
+.rqusers { margin: 0.35rem 0 0; padding: 0; list-style: none; font-size: 0.88rem; color: var(--mute); }
+.rqusers li { overflow-wrap: anywhere; }
+.rqusers b { color: var(--text); font-weight: 650; }
+.reqempty p { line-height: 1.5; max-width: var(--prose); }
+.reqempty .btn { margin-top: 0.4rem; }
+.panel.requests .chips { margin: 0.6rem 0 0.2rem; }
+@media (max-width: 40rem) { .reqrow .poster.rqpic { width: 2.4rem; padding-top: 3.6rem; } }
 .panel code { background: var(--s2); border-radius: 0.3rem; padding: 0.05rem 0.35rem; font-size: 0.92em; color: var(--text); }
 .panel > p.muted { line-height: 1.5; }
 @media (max-width: 40rem) { .line .btn { margin: 0.5rem 0.6rem 0 0; } }
