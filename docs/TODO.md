@@ -1,63 +1,19 @@
 # À faire
 
-Ce qui reste ouvert. Ce qui est fait est dans `git log` et dans les pull requests ; ce qui a été tranché, surtout les « non », est dans [decisions.md](decisions.md) : à lire avant de proposer quelque chose de nouveau. Ce qui reste à essayer sur place : [essais-sur-place.md](essais-sur-place.md). Rien n'est en attente d'être développé.
+La liste des travaux ouverts de **media_hub** est désormais tenue dans
+[Notion](https://app.notion.com/p/418da06137f281b3b954ff3b1e37142e?pvs=204).
 
-## À essayer sur place
+Ce fichier reste volontairement dans le dépôt comme point d'entrée stable pour
+les liens existants. Ne pas y ajouter de tâches : mettre à jour la page Notion
+avec le connecteur MCP du projet.
 
-Les essais que les tests ne peuvent pas faire (NAS, Funnel, téléphone, tablette, télé) sont une séance à dérouler dans [essais-sur-place.md](essais-sur-place.md). Rien de tout cela ne bloque le reste.
+## Connexion MCP
 
-## Limites connues, non traitées
+- **Codex** : la configuration partagée est dans `.codex/config.toml`. À la
+  première utilisation, lancer `codex mcp login notion`, puis terminer
+  l'autorisation OAuth dans le navigateur.
+- **Claude Code** : la configuration partagée est dans `.mcp.json`. À la
+  première utilisation, approuver le serveur dans `/mcp`, puis terminer
+  l'autorisation OAuth.
 
-- [ ] **`test_admin_runs_an_update` échoue parfois** (une fois sur une machine, jamais sur l'autre) : le relancer seul avec `python -W ignore -m unittest tests.test_ui.TestDetailPages.test_admin_runs_an_update` et garder les lignes de l'échec. Ce test attend au plus 30 s qu'un scan se termine.
-- [ ] **Un refus précoce de plus de 64 Mo ou de 5 s d'envoi** : le serveur laisse arriver la réponse en jetant le corps dans ces bornes (`INBOX_DRAIN_BYTES`, `INBOX_DRAIN_SECONDS`) ; un refus qui tombe sur un fichier de plusieurs Go ferme ensuite la connexion avec des octets non lus, et le navigateur peut encore voir une erreur réseau (message neutre de la page « Envoyer »). Un `Content-Length` illisible ou un corps en morceaux (411, 400) n'est pas jeté non plus.
-- [ ] **Pas de reprise d'un envoi interrompu** (`Content-Range`) : un envoi coupé se refait en entier ; la reprise viendra plus tard, si le besoin se confirme.
-- [ ] **Réponses tardives et focus** : l'accueil ne prend plus le focus de la page courante quand sa réponse arrive après qu'on l'a quittée (c'était la cause des tests de la liseuse instables en CI : le focus allait sur la barre de la liseuse, dont les flèches ne tournent plus les pages avant son masquage, 6 s plus tard). Les autres pages qui se redessinent après une réponse du serveur (`render` de la fiche d'un film, `render` de la fiche d'un artiste, les réglages, `refreshUsers`) appellent encore `H.focus.first()` sans vérifier qu'elles sont toujours à l'écran : même défaut possible, non observé. De plus, les tests de la liseuse qui attendent la sauvegarde de la position (`wait_for_timeout(2000)` pour un minuteur de 1,5 s) échouent si le navigateur est ralenti d'un facteur 8 (`Emulation.setCPUThrottlingRate`) : à remplacer par une attente de la requête `/api/progress`.
-- [ ] **Liseuse, double page** : passer de la page seule au double depuis une page paire donne des couples décalés (`[2,3]` au lieu de `[1,2]`) ; « Décaler d’une page » les recale. Une page paysage rompt aussi le couplage local : les couples ne suivent pas une grille fixe du livre.
-- [ ] **Liseuse, images lentes** : les préchargements qui sortent de la fenêtre ne sont pas annulés (bande passante seulement), une image en erreur reste dans le cache et n'est pas retentée tant qu'elle y reste, et une image dont la requête ne répond jamais (ni chargement ni erreur) laisse les touches de la liseuse sans effet, faute de délai de garde (le curseur de progression reste utilisable).
-- [ ] Une saga de `sagas.json` ne garde que la **première version** d'un film listé en double (`by_tmdb`, le premier gagne). Les sagas de l'étiquette, elles, numérotent les deux versions.
-- [ ] Le conteneur `media_hub` **tourne en root** (avec `cap_drop: ALL` et deux capacités gardées, voir `deploy/README.md`).
-- [ ] Le **jeton de session ne se périme pas**, et *Se déconnecter* n'efface que le cookie de l'appareil : seul *Déconnecter les autres appareils* révoque.
-- [ ] Une **fiche TMDB fixée à la main** ne se retire pas, on en fait une autre. Le marqueur `{tmdb-…}` n'est pas écrit dans le nom du dossier : pour que `media_library` voie le même choix, il se tape à la main.
-- [ ] Les sous-titres **VobSub (DVD)** ne sont pas affichés : seuls les PGS (Blu-ray) le sont. ffmpeg ne sait pas les extraire tels quels (pas de muxer `.idx`/`.sub`) : il faudrait lire les paquets du `.mkv` soi-même, avec la palette de leur `CodecPrivate`. Contournement : un fichier `.srt` à côté de la vidéo.
-- [ ] Les PGS ne se **choisissent jamais d'office** à l'ouverture d'un film (l'extraction peut durer) : il faut les choisir une fois dans le menu « Sous-titres » ; la langue choisie est ensuite retenue, et un PGS de cette langue est repris s'il n'y a pas de piste texte.
-- [ ] **Un élément disparu laisse ses références** : le scan efface ses lignes `items` et `entries`, mais ses clés `kv` restent (`enrich:<bibliothèque>:<id>` avec la note TMDB, `tmdb-pin:<id>`, `poster:<id>`, `dismiss:<compte>:<id>`). Elles resservent si le dossier revient au même chemin, mais un élément renommé ou déplacé change d'identifiant et laisse les anciennes clés sans emploi. À faire : les retirer (et leurs fichiers d'affiche) pour les éléments absents depuis un certain temps, avec un délai comme `ORPHAN_PROGRESS_DAYS` pour qu'un volume démonté n'efface rien. À vérifier d'abord : `artist:<mbid>`, `artistlinks:<mbid>`, `wanted:<bibliothèque>` et les listes de lecture.
-- [ ] **L'avis personnel d'un élément disparu reste, et celui d'un dossier renommé est perdu** : la table `ratings` a pour clé l'identifiant de l'élément, qui vient du chemin, comme les clés `dismiss:`. Le scan ne la touche pas : un élément qui revient au même chemin retrouve son avis ; renommé ou déplacé, il change d'identifiant et l'ancienne ligne reste sans emploi (jamais lue, jamais rendue). Un compte supprimé emporte ses avis. Les sagas, les épisodes, la musique et les livres n'ont pas d'avis (une saga se juge film par film).
-- [ ] **Des tris restent sans départage par l'identifiant** : `rating_key` et le tri `added` du rayon « Pas encore vu » finissent par l'identifiant, mais pas `SORTS` (`added`, `title`, `year`, `year-asc`), `release_key`, le `ORDER BY added DESC, sort LIMIT 24` de `api_home`, ni le tri des fichiers et des albums. Deux films de même titre et de même année (ou deux ajouts de même date et de même titre) gardent l'ordre dans lequel la base les rend, qui change après un nouveau scan : leur rang, ou la coupe à 24 de « Nouveautés », peut alors changer d'un chargement à l'autre. Remède : `r["id"]` en dernier critère de ces clés et `, id` dans l'`ORDER BY`.
-- [ ] **Boîte de réception : un dossier repris sans la mention « compte supprimé »** : un compte nommé « default » envoie (il obtient `default/`), puis il est supprimé ; l'administrateur d'identifiant `default`, qui n'avait pas encore de dossier, envoie à son tour. `folder_for` reprend alors `default/` pour lui (plus aucun compte ne le tient) : les fichiers de l'ancien compte apparaissent comme ceux de l'administrateur, sans la mention « (compte supprimé) ». Sans perte et sans effet pour un non-administrateur ; le remède serait de ne reprendre un dossier nommé d'après l'identifiant que lors de la migration, pas dans `folder_for`.
-- [ ] **Envoi d'un dossier : coût quadratique pour un très gros dossier** (`upload.js`, `addFolder` et `paint`) : chaque fichier ajouté repeint la ligne du dossier, qui reparcourt tous ses fichiers. Sans gêne jusqu'à quelques milliers de fichiers ; au-delà, la page se fige à la création. Remède : repeindre le dossier une seule fois à la fin de `addFolder`.
-- [ ] **Envoi d'un dossier : « Mes envois » est relue toutes les 1,5 s pendant un gros dossier** (`upload.js`) : le serveur reparcourt tout l'arbre de la boîte à chaque lecture (deux fois, avec `used`) et la liste est reconstruite, ce qui fait perdre le focus d'un bouton « Supprimer » tenu à ce moment. Remède : ne pas relire tant que le dossier est en cours, ou allonger le délai.
-- [ ] **Envoi d'un dossier : un glisser qui mêle du texte et un dossier décale `dt.items` et `dt.files`** (`upload.js`) : les deux listes sont parcourues par le même indice alors que `items` contient aussi les chaînes ; un dossier peut partir comme un fichier illisible (« connexion coupée »). Très rare. Remède : parcourir `dt.items` en gardant `kind === 'file'` et prendre `getAsFile()`.
-- [ ] **Le bouton « Envoyer un dossier » peut tromper sur un navigateur qui annonce `webkitdirectory` sans le gérer** (téléphones : Android, iOS, à voir sur place) : il ouvre alors un sélecteur de fichiers ordinaire. Cela se dégrade bien (les fichiers choisis partent comme des fichiers), mais le libellé promet un dossier. Un dossier vide choisi par le bouton ne dit rien non plus (le navigateur ne déclenche pas `change`).
-- [ ] **Boîte de réception : `COM¹`, `LPT²`, `CONIN$` et `CONOUT$` ne sont pas traités comme noms réservés** (`hub/inbox.py`, table `RESERVED` l.45 et `_is_reserved` l.88 : `ntpath.isreserved` les donne vrais, `is_folder_name('COM¹')` rend vrai). Windows seulement (ou un client SMB Windows) : le dossier ou le fichier est créé tel quel et devient inutilisable. Sans effet sur le déploiement Linux. Remède : compléter la table `RESERVED`.
-- [ ] **Le décompte des tests du README range des tests de navigateur dans la part « serveur »** : les 293 « interface » sont ceux de `tests/test_ui.py` seul ; les 15 tests de `tests/test_i18n.py` et celui de `tests/test_popups.py` qui pilotent Chromium sont comptés dans les « serveur », alors que la phrase qui suit laisse croire qu'ils sont dans les 293.
-- [ ] **Le bouton « Télécharger » des lignes par bibliothèque de la boîte « Droits de {nom} » déborde de la fenêtre à 390 px** : vérifié sur `main` et sur la branche `interface-droits-films-accueil` (défaut déjà présent, non traité par le lot 4).
-- [ ] **La fiche déborde sur un téléphone étroit** (défaut antérieur aux badges, mesuré le 13 novembre 2026) : à 360 px comme à 390 px, la grille de l'en-tête (`.hero-in`, image `minmax(10rem, 15rem)` + 2rem d'écart + texte) est plus large que son encart (386 px pour 326 à 360 px, 356 à 390 px) ; `.hero` cache ce qui dépasse, si bien que la fin des titres longs, des boutons et des badges peut être coupée au bord droit. Remède probable : une image plus étroite, ou l'image au-dessus du texte, sur `data-device="phone"`.
-- [ ] **Badges : où ils sont.** La fiche porte tous les badges (un film : ceux de son premier fichier sondé ; une série : ceux de la saison affichée). La vignette d'un film ne porte que la qualité (« 4K », « HDR ») ; celle d'une série, d'une saga ou d'un épisode n'en porte aucun, et les langues ne sont jamais sur une vignette (choix du 13 novembre 2026 : l'affiche est déjà occupée aux quatre coins).
-- [ ] **Badges : la langue originale (VO)** n'est pas donnée : prévue plus tard.
-- [ ] **Badges : limites de la sonde.** Un fichier que ffprobe n'a pas su lire n'est réessayé qu'au redémarrage du serveur ou quand il change (la liste des illisibles est en mémoire). La langue d'un fichier de sous-titres voisin n'est reconnue que parmi celles de `LANG_NAMES` (`hub/media/subs.py` : fr, en, es, de, it, ja, pt) ; les autres n'ont pas de badge. Les langues sans code à deux lettres (ISO 639-1) non plus. La première analyse d'une grosse médiathèque reste à chronométrer sur le NAS.
-- [ ] **Recommandations (« Parce que tu as aimé ») : les poids sont à régler d'après l'usage.** Poids, seuils et plafonds (`WEIGHTS`, `MAX_SHARE`, `QUALITY_*`, `DOWN_*`…) sont dans un seul bloc en tête de `hub/recommend.py`, choisis sans avoir vu la vraie médiathèque. **Pas de signal collectif** : seuls les avis et la progression du compte comptent (voir [decisions.md](decisions.md)). **Peu d'avis ou une médiathèque jeune donnent peu de rayons** : il faut deux films ou séries aimés ou terminés, et quatre voisins au moins pour un rayon. **Un film sans réalisateur ni casting** dans ses étiquettes ne se rapproche que par le genre et la saga (la décennie ne suffit jamais seule) ; une série n'a de casting qu'une fois enrichie par TMDB. Deux personnes de même nom n'en font qu'une (comme `GET /api/person`). **Dans l'interface :** les rayons arrivent après le reste de l'accueil (une requête de plus) et ne sont pas gardés d'un retour à l'autre : revenir à l'accueil les redemande ; « Pas intéressé » n'existe que sur les cartes de ces rayons (ailleurs, « Mon avis » > « Je n'aime pas » fait la même chose).
-
-## Routes ajoutées, à relier à l'interface
-
-Une route ajoutée au serveur est reliée à l'interface dans le même lot, ou notée ici tant qu'elle ne l'est pas. Aucune pour l'instant.
-
-## Demandes : limites connues
-
-- [ ] **La demande suit l'identifiant TMDB.** Un film présent sans étiquette TMDB (`movie/<n>`), ou une série que l'enrichissement n'a pas trouvée sur TMDB, n'est pas reconnu : sa demande reste « en attente » jusqu'à ce que l'administrateur la marque « ajoutée » (`POST /api/requests/<id>/status`). Deux fiches TMDB pour le même film (une version longue à part, par exemple) font deux demandes distinctes.
-- [ ] **Arrivée dans une bibliothèque invisible au demandeur** : la demande passe à « ajoutée » pour lui aussi, sans lien vers l'élément ni carte sur l'accueil (voir [decisions.md](decisions.md)). Rien ne lui dit pourquoi il ne peut pas l'ouvrir.
-- [ ] **Remettre « en attente » une demande dont l'élément est là** ne tient pas : la lecture suivante la repasse à « ajoutée ». Pour la garder ouverte, il faut que l'élément ne soit plus dans aucune bibliothèque.
-- [ ] **Titre et année** viennent de ce que l'enrichissement a gardé (sagas, filmographies) ou, à défaut, de ce que le client envoie : une série n'a que ce que le client envoie, et le serveur ne vérifie pas que l'identifiant TMDB existe.
-
-## Idées mises de côté
-
-À reprendre seulement si l'envie vient.
-
-- [ ] **Affiches TMDB** : les récupérer pour les films qui n'en ont pas, ou les proposer dans *Changer l'affiche*.
-- [ ] **Écrire le marqueur `{tmdb-…}`** depuis le hub quand le volume n'est pas en lecture seule.
-- [ ] **Accueil** : « À revoir » (suggestions calculées par compte), un accueil par personne (« depuis ta dernière visite »).
-- [ ] **`ARTISTS` dans `media_library`** : le scan lit les tags lui-même (`hub/scan/music.py`, `read_info`) parce que `track_info` ne rend pas encore `ARTISTS` ; le jour où il le fera, `credits` pourra disparaître du hub.
-- [ ] **Mesurer le JavaScript** de l'interface : aucun outil de couverture ni de complexité n'existe pour `hub/web`. Une mesure grossière (3 novembre 2026) donnait 10 fonctions sur 862 à 15 décisions ou plus, presque toutes du dispatch de touches (`core.js`, lecteurs vidéo et de livres) ; à reprendre avec un vrai outil.
-
-## Pas relu
-
-- `.claude/skills/`, volontairement laissé de côté.
+Aucun jeton Notion n'est stocké dans le dépôt.
