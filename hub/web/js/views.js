@@ -280,6 +280,7 @@
   };
   // Une carte notée « Je n'aime pas » quitte les rayons qui suggèrent (« Pas encore vu », « Parce que tu as aimé ») sans recharger la page ; un rayon vidé disparaît.
   // Si elle avait le focus, il passe à sa voisine (la suivante, sinon la précédente), sinon au rayon d'après (ou d'avant), sinon au premier élément de la page : jamais dans le vide.
+  // Le dernier rayon parti, l'accueil se redessine (`hubRedraw`) : d'autres suggestions, ou les bibliothèques en tuiles, la première avec le focus ; jamais « Bonjour » seul.
   var SUGGESTED_CARDS = '.shelf.unseen .card, .shelf.recommend .card';
   function firstIn(node) { return node.classList && node.classList.contains('f') ? node : node.querySelector && node.querySelector('.f'); }
   function nearShelf(shelf) {
@@ -289,12 +290,13 @@
     return null;
   }
   function dropCard(card) {
-    var shelf = card.closest('.shelf'), had = card.contains(document.activeElement);
+    var shelf = card.closest('.shelf'), page = shelf.parentNode, had = card.contains(document.activeElement);
     var next = card.nextElementSibling || card.previousElementSibling;
     card.parentNode.removeChild(card);
     if (!shelf.querySelector('.card')) {
       next = nearShelf(shelf);
-      if (shelf.parentNode) shelf.parentNode.removeChild(shelf);
+      if (page) page.removeChild(shelf);
+      if (page && page.hubRedraw && !page.querySelector('.shelf, .libtiles')) { page.hubRedraw(); return; }
     }
     if (had && !H.focus.set(next)) H.focus.first();
   }
@@ -509,6 +511,7 @@
         if (!a || a === document.body || (a.closest && a.closest('#nav'))) H.focus.first();
       }).catch(function (e) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Le serveur ne répond pas')), h('p', null, e.message), h('button', { class: 'btn f', onclick: load, 'data-autofocus': '1' }, H.t('Réessayer')))); });
     }
+    el.hubRedraw = function () { load(); };          // plus aucun rayon après « Je n'aime pas » (dropCard)
     load();
     return { el: el, nav: '#/', refresh: load, destroy: function () { clearTimeout(timer); } };
   });

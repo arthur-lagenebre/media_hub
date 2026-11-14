@@ -6653,7 +6653,7 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         db.execute("DELETE FROM ratings")
         db.execute("DELETE FROM progress")
         for who in (self.alice, self.bob):
-            prefs.save(db, who["id"], {"home_recommend": "show"})
+            prefs.save(db, who["id"], {"home_recommend": "show", "home_latest": "show", "home_unseen": "show"})
         self.errors = []
         self.pages = []
 
@@ -6767,6 +6767,40 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         where = self.active(page)
         self.assertIsNotNone(where)
         self.assertNotIn("recommend", where["shelf"] or "")                                             # le focus est resté où l'accueil l'avait mis
+
+    def test_a_focused_card_pushed_down_by_the_arriving_shelves_stays_focused_and_in_view(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        held, flow = [], {"hold": True}
+        page, _ = self.opened("alice")
+        page.set_viewport_size({"width": 1280, "height": 520})
+        page.route("**" + self.ROUTE, lambda r: held.append(r) if flow["hold"] else r.continue_())
+        with page.expect_request(lambda r: r.url.endswith(self.ROUTE)):
+            page.reload()
+        first = self.view(page, ".shelf.latest .card").first
+        first.wait_for()
+        first.focus()
+        key = first.get_attribute("data-key")
+        self.assertEqual(self.shelves(page).count(), 0)
+        flow["hold"] = False
+        held[0].continue_()
+        self.shelves(page).nth(1).wait_for()                                                             # les rayons sont arrivés, au-dessus de la carte
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), key)             # le focus n'a pas bougé
+        self.assertTrue(page.evaluate("(() => { var r = document.activeElement.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })()"))     # et la carte est restée en vue
+
+    def test_shelves_arriving_on_a_home_of_tiles_take_away_the_sentence_and_keep_the_tiles(self):
+        self.call("alice", "/api/me/settings", {"home_latest": "hide", "home_unseen": "hide"})
+        self.like("alice", "ancrepolar", "ancrewestern")
+        held, flow = [], {"hold": True}
+        page, _ = self.opened("alice")
+        page.route("**" + self.ROUTE, lambda r: held.append(r) if flow["hold"] else r.continue_())
+        with page.expect_request(lambda r: r.url.endswith(self.ROUTE)):
+            page.reload()
+        self.view(page, ".libtiles-note").wait_for()                                                       # avant : la phrase et les tuiles
+        flow["hold"] = False
+        held[0].continue_()
+        self.shelves(page).nth(1).wait_for()
+        self.assertEqual(self.view(page, ".libtiles-note").count(), 0)
+        self.assertGreater(self.view(page, ".libtiles a.libtile").count(), 0)
 
     def test_with_a_single_liked_film_there_is_no_shelf(self):
         self.like("alice", "ancrepolar")
@@ -6893,6 +6927,32 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         self.pick(page, "Pas intéressé")
         page.locator("#toast.on", has_text="avis refusé pour le moment").wait_for()
         self.assertEqual(self.shelves(page).first.locator(".card").count(), len(reply.json()["shelves"][0]["items"]))
+
+    def test_when_the_last_shelf_is_emptied_the_home_shows_the_libraries_and_the_focus_goes_to_the_first(self):
+        self.call("alice", "/api/me/settings", {"home_latest": "hide"})                                   # « Pas encore vu » sera le seul rayon
+        kept = {}
+
+        def one_card(route):
+            data = route.fetch().json()
+            for lib in data["libraries"]:
+                if "unseen" in lib:
+                    kept.setdefault("id", next((u["id"] for u in lib["unseen"] if lib["id"] == "films"), None) or kept.get("id"))
+                    lib["unseen"] = [u for u in lib["unseen"] if u["id"] == kept.get("id")]
+            route.fulfill(json=data)
+        page, _ = self.opened("alice", setup=lambda p: p.route("**/api/home", one_card))
+        card = self.view(page, ".shelf.unseen .card")
+        card.wait_for()
+        self.assertEqual(self.view(page, ".shelf").count(), 1)
+        card.focus()
+        page.keyboard.press("ContextMenu")
+        page.locator(".veil .menu.choice").wait_for()
+        self.arrow_to(page, "Mon avis")
+        page.locator(".veil .menu.choice h3", has_text="Mon avis").wait_for()
+        self.arrow_to(page, "Je n’aime pas")
+        tile = self.view(page, ".libtiles a.libtile").first
+        tile.wait_for()                                                                                      # jamais un accueil réduit à « Bonjour »
+        self.assertEqual(self.view(page, ".shelf").count(), 0)
+        page.wait_for_function("document.activeElement === document.querySelector('#views > .view:not([style*=\"none\"]) .libtiles a.libtile')")
 
     def test_a_card_rated_not_liked_leaves_the_unseen_shelf_at_once(self):
         page, _ = self.opened("alice")
