@@ -43,6 +43,7 @@ from .. import missing
 from .. import people
 from .. import playlists
 from .. import prefs
+from .. import recommend
 from .. import requests as hub_requests
 from .. import urls
 from .. import sagas as sagafile
@@ -1091,6 +1092,18 @@ def api_home(h, m, q):
             row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order, quality=quality, ratings=ratings)
         rows.append(row)
     h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play"), ratings), "libraries": rows, "requests_ready": requests_ready(h, seen, quality, ratings) if settings["home_requests"] == "show" else []})        # rayon caché par le compte : rien à calculer, le champ reste
+
+
+@route("GET", r"/api/recommendations")
+def api_recommendations(h, m, q):
+    """Les rayons « Parce que tu as aimé <titre> » du compte de la requête (voir recommend.py) : ses avis et sa progression seulement, dans les bibliothèques vidéo qu'il peut lire. Calculés quel que soit le réglage `home_recommend` : c'est l'interface qui n'appelle pas la route quand il est à `hide`."""
+    hub, uid = h.hub, h.user["id"]
+    readable = {lib.id for lib in hub.cfg.libraries if lib.kind in UNSEEN_KINDS and h.can(lib.id, "play")}
+    opinions, progress = hub.db.dated_ratings_for(uid), recommend.progress_of(hub.db, uid)
+    found = recommend.shelves(recommend.index(hub.db, lambda meta: (shown_rating(meta.get("tmdb_rating")) or {}).get("vote")), opinions, progress, readable, uid, today())
+    seen, quality, ratings = {i: p[:2] for i, p in progress.items()}, card_quality(hub.db), {i: o[0] for i, o in opinions.items()}
+    h.send_json({"shelves": [{"anchor": {k: anchor.row[k] for k in ("id", "title", "year", "type")},
+                              "items": [{**with_seen(cand.row, seen, quality, ratings), "why": why} for cand, why in cards]} for anchor, cards in found]})
 
 
 @route("GET", r"/api/search")

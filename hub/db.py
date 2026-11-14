@@ -342,4 +342,8 @@ class Database:
 
     def ratings_for(self, user_id):
         """{id d'élément: avis} de ce compte, en une lecture : les avis d'un autre compte ne se lisent nulle part."""
-        return {r["item_id"]: r["rating"] for r in self.query("SELECT item_id, rating FROM ratings WHERE user_id=?", (user_id,))}
+        return {item_id: rating for item_id, (rating, _) in self.dated_ratings_for(user_id).items()}
+
+    def dated_ratings_for(self, user_id):
+        """{id d'élément: (avis, date)} de ce compte, en une lecture : ses avis avec le moment de chacun (les recommandations partent des plus récents)."""
+        return {r["item_id"]: (r["rating"], r["updated"]) for r in self.query("SELECT item_id, rating, updated FROM ratings WHERE user_id=?", (user_id,))}
