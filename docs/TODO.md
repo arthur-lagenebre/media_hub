@@ -40,8 +40,6 @@ Les essais que les tests ne peuvent pas faire (NAS, Funnel, téléphone, tablett
 
 Une route ajoutée au serveur est reliée à l'interface dans le même lot, ou notée ici tant qu'elle ne l'est pas.
 
-- [ ] **Demandes** (le lot 8 ne relie que la demande d'un film depuis une case grisée, son retrait et l'accueil) : la liste de l'administrateur (`GET /api/requests`, ses filtres, `POST /api/requests/<id>/status`, `POST /api/requests/<id>/delete`), le droit « Peut demander » dans la gestion des comptes (`POST /api/user/<id>/request`), le compteur `requests_pending` de `/api/state`, « Mes demandes » (`GET /api/requests?mine=1`). La recherche d'un titre sur TMDB pour le demander (films et séries) est le lot 8 bis.
-
 ## Demandes : limites connues
 
 - [ ] **La demande suit l'identifiant TMDB.** Un film présent sans étiquette TMDB (`movie/<n>`), ou une série que l'enrichissement n'a pas trouvée sur TMDB, n'est pas reconnu : sa demande reste « en attente » jusqu'à ce que l'administrateur la marque « ajoutée » (`POST /api/requests/<id>/status`). Deux fiches TMDB pour le même film (une version longue à part, par exemple) font deux demandes distinctes.
