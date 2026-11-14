@@ -111,10 +111,13 @@ class TestControlCharacters(Sent):
                 with self.subTest(text=ascii(text)):
                     self.forget()
                     handler, reply = self.go(self.alice, text)
-                    self.assertIn(reply.status, (200, 400))
-                    for url, *_ in self.sent:
-                        self.assertEqual(self.parsed(url), text)
+                    self.assertEqual((reply.status, reply.json()), (400, {"error": "texte à chercher : de 2 à 100 caractères"}))      # aucun caractère utile
+                    self.assertEqual(self.sent, [])
                     self.assertEqual(handler.stderr, "")
+        with self.answer():
+            self.forget()
+            self.assertEqual(self.go(self.alice, "a\x00\u200bb")[1].status, 200)               # deux caractères utiles suffisent, les autres partent encodés
+            self.assertEqual(self.only_sent(), "a\x00\u200bb")
 
 
 class TestTextLength(Sent):
@@ -387,9 +390,8 @@ class TestTheJournalNeverHasTheKeyNorTheText(Silent):
                 for text in ("secretaire", "secr", "va"):
                     self.assertNotIn(text, handler.stderr)
 
-    @unittest.expectedFailure
     def test_the_text_is_hidden_when_the_path_is_percent_encoded(self):
-        # DÉFAUT : `dispatch` route d'après `unquote(split.path)`, mais `log_failure` compare `split.path` brut à « /api/requests/search » (app.py, log_failure) :
+        # Défaut corrigé : `dispatch` route d'après `unquote(split.path)`, mais `log_failure` compare `split.path` brut à « /api/requests/search » (app.py, log_failure) :
         # `/api/requests/%73earch?q=…` atteint la route et son échec écrit le texte cherché au journal.
         with self.answer(error=self.FAILURES["TmdbError"]):
             handler, reply = self.call(self.alice, "GET", "/api/requests/%73earch?q=secretaire")
@@ -457,17 +459,15 @@ class TestPosterJobIsSilent(Silent):
 class TestUnexpectedFailures(Silent):
     """Ce que TMDB ou le client ne devraient pas faire, mais que le serveur doit tenir : une réponse hostile n'est pas une panne du serveur, et rien ne fuit."""
 
-    @unittest.expectedFailure
     def test_an_answer_nested_too_deep_is_a_502_not_a_500(self):
-        # DÉFAUT : `json.loads` d'une réponse imbriquée sur des dizaines de milliers de niveaux lève RecursionError dans Tmdb.get (media_library) ; `request_search._asked` ne rattrape que
+        # Défaut corrigé : `json.loads` d'une réponse imbriquée sur des dizaines de milliers de niveaux lève RecursionError dans Tmdb.get (media_library) ; `request_search._asked` ne rattrape que
         # TmdbError, TmdbAuthError, OSError et ValueError (request_search.py, _asked) : la recherche rend 500 « erreur interne » et une trace au journal au lieu du 502 du contrat.
         with self.answer(b"[" * 100_000):
             handler, reply = self.call(self.alice, "GET", "/api/requests/search?q=profond&kind=movie")
         self.assertEqual((reply.status, reply.json()), (502, UNREACHABLE))
 
-    @unittest.expectedFailure
     def test_an_answer_nested_too_deep_does_not_stop_the_poster_job(self):
-        # DÉFAUT : même cause dans `fetch_posters` (request_search.py) : la RecursionError n'est pas rattrapée par `except (TmdbError, OSError, ValueError)`, la tâche entière échoue
+        # Défaut corrigé : même cause dans `fetch_posters` (request_search.py) : la RecursionError n'est pas rattrapée par `except (TmdbError, OSError, ValueError)`, la tâche entière échoue
         # au lieu de compter un échec pour cette affiche seulement (« un échec n'arrête que son affiche »).
         self.hub.cfg.tmdb_key = ""
         self.ask(self.alice, 90, "movie", title="Titre")
@@ -477,9 +477,8 @@ class TestUnexpectedFailures(Silent):
             result = request_search.fetch_posters(self.hub.cfg, self.db, log.append)
         self.assertEqual(result, {"saved": 0, "failed": 1, "without": 0})
 
-    @unittest.expectedFailure
     def test_an_unforeseen_exception_carrying_the_address_does_not_leak_the_key(self):
-        # DÉFAUT : `_asked` est une liste blanche d'exceptions (request_search.py) ; toute autre est une erreur 500 dont le message (« erreur interne : … ») part dans la réponse
+        # Défaut corrigé : `_asked` est une liste blanche d'exceptions (request_search.py) ; toute autre est une erreur 500 dont le message (« erreur interne : … ») part dans la réponse
         # et au journal tel quel. Ici le message porte l'adresse demandée, donc `api_key=<clé>` : la clé sort dans la réponse et dans stderr.
         def boom(url, *rest, **more):
             raise RuntimeError(f"incident sur {url}")
@@ -488,9 +487,8 @@ class TestUnexpectedFailures(Silent):
         self.assertNotIn(KEY.encode(), reply.body)
         self.assertNotIn(KEY, handler.stderr)
 
-    @unittest.expectedFailure
     def test_an_unforeseen_exception_carrying_the_address_does_not_leak_the_key_in_the_job_log(self):
-        # DÉFAUT : même cause dans la tâche : `Jobs._run` écrit « ERREUR : {e} » dans le journal que l'administrateur lit (jobs.py, _run) ; une exception hors de la liste de
+        # Défaut corrigé : même cause dans la tâche : `Jobs._run` écrit « ERREUR : {e} » dans le journal que l'administrateur lit (jobs.py, _run) ; une exception hors de la liste de
         # `fetch_posters` y porte l'adresse, donc la clé.
         self.hub.cfg.tmdb_key = ""
         self.ask(self.alice, 90, "movie", title="Titre")

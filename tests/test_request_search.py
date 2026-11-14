@@ -8,6 +8,7 @@ import threading
 import time
 import types
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 from urllib.error import HTTPError
@@ -78,7 +79,11 @@ class SearchCase(RequestCase):
     """Les comptes de RequestCase (l'administrateur, Alice, Bob qui ne voit pas « prive »), une clé TMDB, et un TMDB simulé ; le film 7 est dans « prive », la série 50 dans « series »."""
 
     def setUp(self):
+        # Ces tests lisent stderr (`handler.stderr`) : une base d'un test précédent que le ramasse-miettes détruit pendant la requête y écrirait « unclosed database » (Python 3.14).
+        self.enterContext(warnings.catch_warnings())
+        warnings.simplefilter("ignore", ResourceWarning)
         super().setUp()
+        self.addCleanup(self.db.connection().close)                 # celle de ce fil ; celles des autres fils partent avec eux
         self.hub.cfg.tmdb_key = KEY
         self.hub.finder = request_search.Finder(self.hub.cfg)
         self.tmdb = FakeTmdb(dict(SEARCHES))
@@ -398,6 +403,32 @@ class TestAskingFromAResult(SearchCase):
         self.ask(self.bob, 77, "show")
         self.ask(self.alice, 1)                                          # déjà là : 409
         self.assertEqual(self.hub.jobs.request_posters.call_count, 1)
+
+    def test_creations_asking_tmdb_count_in_the_pace_of_the_account(self):
+        for n in range(30):
+            self.assertEqual(self.ask(self.alice, 1000 + n, "show").status, 404, n)            # inconnus de TMDB : rien n'est créé, mais l'appel a eu lieu
+        reply = self.ask(self.alice, 2000, "show")
+        self.assertEqual(reply.status, 429)
+        self.assertRegex(reply.json()["error"], r"^trop de recherches : réessaie dans [0-9]+ s$")
+        self.assertEqual(len(self.tmdb.calls), 30)
+        self.assertEqual(self.search(self.alice).status, 429)                                 # recherches et créations partagent la cadence
+        self.assertEqual(self.ask(self.alice, 3).status, 201)                                 # un film que le serveur connaît ne demande rien à TMDB
+        self.assertEqual(self.ask(self.bob, 77, "show").status, 201)                          # l'autre compte n'est pas touché
+        self.assertEqual(self.stored(), sorted([("movie", 3, "pending", self.alice["id"]), ("show", 77, "pending", self.bob["id"])]))
+
+    def test_a_full_ceiling_or_a_declined_request_is_a_409_without_asking_tmdb(self):
+        self.hub.cfg.tmdb_key = ""
+        for n in range(20):
+            self.assertEqual(self.ask(self.alice, 3000 + n, "show", title="T").status, 201)
+        rid = self.ask(self.bob, 4000, "show", title="Refusée").json()["id"]
+        self.set_status(rid, "declined")
+        self.hub.cfg.tmdb_key = KEY
+        reply = self.ask(self.alice, 77, "show")
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "trop de demandes en attente (20)"}))
+        self.assertEqual(self.ask(self.bob, 4000, "show").status, 409)
+        self.assertEqual(self.tmdb.calls, [])
+        self.assertEqual(self.ask(self.boss, 77, "show").status, 201)                         # l'administrateur n'a pas de plafond
+        self.assertEqual(self.tmdb.calls, ["tv/77"])
 
     def test_a_failing_poster_job_never_fails_the_request(self):
         self.hub.jobs.request_posters.side_effect = RuntimeError("file des tâches en panne")

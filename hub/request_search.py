@@ -16,6 +16,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from collections import OrderedDict
 from contextlib import contextmanager
 from urllib.parse import quote
@@ -51,10 +52,18 @@ def client(cfg):
     return Tmdb(cfg.tmdb_key, LANGUAGE, user_agent="media_hub/1.0", timeout=TIMEOUT, attempts=ATTEMPTS, cache=None)
 
 
+def without_key(text, key):
+    """`text` sans la clé TMDB `key` (remplacée par « … ») : le message d'une exception du client peut porter l'URL demandée, donc la clé."""
+    text = str(text)
+    return text.replace(key, "…") if key else text
+
+
 def search_text(value):
-    """Le texte cherché, blancs de bord retirés ; 400 s'il n'a pas de 2 à 100 caractères."""
+    """Le texte cherché, blancs de bord retirés ; 400 s'il a moins de 2 caractères utiles (ni contrôle, ni format, ni blanc, ni séparateur : catégories Unicode C* et Z*)
+    ou plus de 100 caractères en tout."""
     text = (value or "").strip()
-    if not MIN_TEXT <= len(text) <= MAX_TEXT:
+    useful = sum(not unicodedata.category(c).startswith(("C", "Z")) for c in text)
+    if useful < MIN_TEXT or len(text) > MAX_TEXT:
         raise RequestError(400, BAD_TEXT)
     return text
 
@@ -114,6 +123,8 @@ def _asked(call):
         failure = "clé refusée"
     except (OSError, ValueError):
         failure = "pas de réponse"
+    except Exception as e:                  # imprévu (RecursionError d'un JSON trop imbriqué, erreur du client) : jamais son message, qui peut porter l'URL
+        failure = f"réponse inattendue ({type(e).__name__})"
     print(f"TMDB (recherche des demandes) : {failure}", file=sys.stderr)
     raise RequestError(502, UNREACHABLE) from None
 
@@ -208,8 +219,11 @@ class Finder:
                     self.memo.put(("search", kind, text.casefold()), found[kind])
         return [dict(result) for kind in kinds for result in found[kind]]
 
-    def details(self, kind, tmdb_id):
-        """(titre, année) du film ou de la série `tmdb_id` selon TMDB ; 404 s'il n'existe pas, 502 si TMDB ne répond pas, 503 si les places sont prises."""
+    def details(self, kind, tmdb_id, who=None):
+        """(titre, année) du film ou de la série `tmdb_id` selon TMDB ; 404 s'il n'existe pas, 502 si TMDB ne répond pas, 503 si les places sont prises.
+        `who` : le compte qui crée la demande ; l'appel compte dans sa cadence (429 au-delà), comme une recherche."""
+        if who is not None:
+            self.pace.take(who)
         key = ("details", kind, tmdb_id)
         hit = self.memo.get(key)
         if hit is None:
@@ -258,8 +272,8 @@ def fetch_posters(cfg, db, log, make=client):
             done = _poster(tmdb, folder, row, log)
         except TmdbAuthError:
             raise RuntimeError("clé TMDB refusée par l'API") from None
-        except (TmdbError, OSError, ValueError):
-            log(f"  échec : {row['title']} (TMDB ne répond pas)")
+        except Exception as e:              # RecursionError d'un JSON trop imbriqué compris : seule cette affiche échoue, et rien du message (il peut porter l'URL, donc la clé)
+            log(f"  échec : {row['title']} ({type(e).__name__})")
             counts["failed"] += 1
             continue
         counts["saved" if done else "without"] += 1

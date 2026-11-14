@@ -292,12 +292,17 @@ def known_film(db, tmdb):
     return next((hit for hit in (_in_filmography(row["value"], tmdb) for row in rows) if hit), None)
 
 
-def _described(db, kind, tmdb, title, year, describe):
+def _described(db, kind, tmdb, title, year, describe, uid, limit):
     """(titre, année) d'une demande : ce que le serveur sait d'un film ; sinon, pour une demande nouvelle, ce que `describe(kind, tmdb)` en dit (TMDB, voir request_search.Finder.details :
-    ses RequestError passent, rien n'est alors écrit) ; sinon (sans `describe`, ou demande qui existe déjà et garde son titre) ce que le corps a dit."""
+    ses RequestError passent, rien n'est alors écrit) ; sinon (sans `describe`, ou demande qui existe déjà et garde son titre) ce que le corps a dit.
+    Avant d'interroger TMDB, les 409 (refusée, plafond atteint) sont vérifiés : une demande perdue d'avance ne coûte pas d'appel. La transaction de `create` les revérifie."""
     known = known_film(db, tmdb) if kind == "movie" else None
-    if not known and describe is not None and db.one("SELECT 1 FROM requests WHERE kind=? AND tmdb=?", (kind, tmdb)) is None:
-        known = describe(kind, tmdb)
+    if not known and describe is not None:
+        conn = db.connection()
+        row, _ = _existing(conn, kind, tmdb, uid)
+        if row is None:
+            _check_room(conn, None, uid, limit)
+            known = describe(kind, tmdb)
     return (known[0][:MAX_TEXT], known[1][:4]) if known else (title, year)
 
 
@@ -339,7 +344,7 @@ def create(db, cfg, uid, body, visible, limit, describe=None):
     item = item_for(found, kind, tmdb, visible)
     if item:
         raise RequestError(409, "déjà dans la médiathèque", {"item": item})
-    title, year = _described(db, kind, tmdb, title, year, describe)
+    title, year = _described(db, kind, tmdb, title, year, describe, uid, limit)
     now = int(time.time())
     with db.write_lock:
         conn = db.connection()

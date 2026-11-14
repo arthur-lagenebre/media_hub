@@ -160,7 +160,7 @@ class Hub:
         forms |= {form.replace("\\", "\\\\") for form in forms if "\\" in form}      # une OSError écrit son chemin entre guillemets, antislashs doublés (Windows)
         for form in sorted(forms, key=len, reverse=True):          # le plus long d'abord : un dossier peut en contenir un autre
             text = text.replace(form, "…")
-        return text
+        return request_search.without_key(text, self.cfg.tmdb_key)          # ceinture : une exception du client TMDB peut porter l'URL, donc la clé
 
     def entry(self, ident):
         return self.known("entries", ident, "fichier inconnu")
@@ -502,10 +502,10 @@ class Handler(BaseHTTPRequestHandler):
     def log_failure(self, status, message):
         """Une erreur du serveur (500, 502 et plus) au journal ; le jeton n'y va pas : masqué d'après les clés décodées (`?%74oken=` aussi)."""
         split = urlsplit(self.path)
-        hidden = {"token", "q"} if split.path == "/api/requests/search" else {"token"}         # le texte d'une recherche dans TMDB ne va pas au journal
+        hidden = {"token", "q"} if unquote(split.path) == "/api/requests/search" else {"token"}         # le texte d'une recherche dans TMDB ne va pas au journal
         pairs = [(k, "***" if k in hidden else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
         shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
-        print(f"{status} {self.command} {shown} : {message}", file=sys.stderr)
+        print(f"{status} {self.command} {shown} : {request_search.without_key(message, self.hub.cfg.tmdb_key)}", file=sys.stderr)
 
     def inbox_unread(self):
         """Pour un envoi (`POST /api/inbox`) : ce que le client peut encore envoyer du corps annoncé par `Content-Length`, moins ce que la route en a lu. 0 pour toute autre requête, et quand la taille n'est pas annoncée proprement (voir announced_length)."""
@@ -3077,7 +3077,7 @@ def api_request_create(h, m, q):
     body = strict_body_dict(h)
     hub = h.hub
     limit = None if h.user["role"] == "admin" else hub.cfg.request_max
-    describe = hub.finder.details if hub.finder.configured() else None           # sans clé TMDB, le titre et l'année du corps, comme avant la recherche
+    describe = partial(hub.finder.details, who=h.user["id"]) if hub.finder.configured() else None           # sans clé TMDB, le titre et l'année du corps, comme avant la recherche
     done = request_failure(h, hub_requests.create, hub.db, hub.cfg, h.user["id"], body, h.visible_ids(), limit, describe)
     if done is None:
         return

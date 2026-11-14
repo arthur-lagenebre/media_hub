@@ -80,7 +80,7 @@ class Jobs:
                 job.result = job.func(job.line)
                 job.status = "done"
             except Exception as e:           # une tâche qui échoue ne doit pas arrêter les suivantes
-                job.line(f"ERREUR : {e}")
+                job.line(f"ERREUR : {request_search.without_key(e, getattr(self.cfg, 'tmdb_key', ''))}")          # la clé TMDB ne va pas au journal, que l'administrateur lit
                 job.status = "failed"
             job.ended = time.time()
 
