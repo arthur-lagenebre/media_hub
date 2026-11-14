@@ -17,6 +17,7 @@ import re
 import secrets
 import threading
 import time
+from functools import partial
 
 from . import prefs
 from . import requests
@@ -296,30 +297,27 @@ def _store_right(conn, uid, lib, view, play, download):
                      (uid, lib, int(view), int(play), int(download)))
 
 
-def set_can_upload(db, uid, allowed):
-    """Donne ou retire le droit d'envoyer dans la boîte de réception (`allowed` : un booléen, rien d'autre). Refuse 400 un administrateur (il envoie toujours), 404 un compte inconnu. Renvoie le compte à jour ; la session ne change pas."""
+FLAGS = {"can_upload": ("upload", "un administrateur peut toujours envoyer"),            # colonne de `users` -> (clé du corps de la route, refus pour un administrateur)
+         "can_request": ("request", "un administrateur peut toujours demander")}
+
+
+def set_flag(db, uid, allowed, column):
+    """Donne ou retire à un compte un droit global de FLAGS : `can_upload` (envoyer dans la boîte de réception) ou `can_request` (demander des films et des séries). `allowed` : un booléen, rien d'autre.
+    Refuse 400 un administrateur (il a toujours ces droits), 404 un compte inconnu. Renvoie le compte à jour ; la session ne change pas, et les envois ou demandes déjà faits restent."""
+    key, refused = FLAGS[column]
     if not isinstance(allowed, bool):
-        raise AccountError(400, "« upload » vaut vrai ou faux")
+        raise AccountError(400, f"« {key} » vaut vrai ou faux")
     row = by_id(db, uid)
     if row is None:
         raise AccountError(404, "compte inconnu")
     if row["role"] == "admin":
-        raise AccountError(400, "un administrateur peut toujours envoyer")
-    db.execute("UPDATE users SET can_upload=? WHERE id=?", (int(allowed), uid))
+        raise AccountError(400, refused)
+    db.execute(f"UPDATE users SET {column}=? WHERE id=?", (int(allowed), uid))         # `column` vient de FLAGS, jamais d'une donnée
     return by_id(db, uid)
 
 
-def set_can_request(db, uid, allowed):
-    """Donne ou retire le droit de demander un film ou une série (`allowed` : un booléen, rien d'autre). Refuse 400 un administrateur (il demande toujours), 404 un compte inconnu. Renvoie le compte à jour ; ses demandes déjà faites restent."""
-    if not isinstance(allowed, bool):
-        raise AccountError(400, "« request » vaut vrai ou faux")
-    row = by_id(db, uid)
-    if row is None:
-        raise AccountError(404, "compte inconnu")
-    if row["role"] == "admin":
-        raise AccountError(400, "un administrateur peut toujours demander")
-    db.execute("UPDATE users SET can_request=? WHERE id=?", (int(allowed), uid))
-    return by_id(db, uid)
+set_can_upload = partial(set_flag, column="can_upload")        # set_can_upload(db, uid, allowed)
+set_can_request = partial(set_flag, column="can_request")      # set_can_request(db, uid, allowed)
 
 
 # ---------------------------------------------------------------------------

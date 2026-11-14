@@ -850,21 +850,16 @@ def api_user_rights(h, m, q):
     h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
 
 
-@route("POST", r"/api/user/(\w+)/upload")
-def api_user_upload(h, m, q):
-    """L'administrateur donne ou retire le droit d'envoyer dans la boîte de réception : `{"upload": bool}`. Pas pour un administrateur (400 : il envoie toujours). Rend le compte. Valable à la requête suivante."""
-    require_admin(h)
-    need_accounts(h)
-    account_call(accounts.set_can_upload, h.hub.db, m.group(1), body_dict(h).get("upload"))
-    h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
+ACCOUNT_FLAGS = {"upload": accounts.set_can_upload, "request": accounts.set_can_request}       # clé de la route et du corps -> ce qui change le droit
 
 
-@route("POST", r"/api/user/(\w+)/request")
-def api_user_request(h, m, q):
-    """L'administrateur donne ou retire le droit de demander des films et des séries : `{"request": bool}`. Pas pour un administrateur (400 : il demande toujours). Rend le compte. Valable à la requête suivante ; les demandes déjà faites restent."""
+@route("POST", r"/api/user/(\w+)/(upload|request)")
+def api_user_flag(h, m, q):
+    """L'administrateur donne ou retire un droit global d'un compte : `/upload` `{"upload": bool}` (envoyer dans la boîte de réception) ou `/request` `{"request": bool}` (demander des films et des séries).
+    Pas pour un administrateur (400 : il a toujours ces droits). Rend le compte. Valable à la requête suivante ; ce qui a déjà été envoyé ou demandé reste."""
     require_admin(h)
     need_accounts(h)
-    account_call(accounts.set_can_request, h.hub.db, m.group(1), body_dict(h).get("request"))
+    account_call(ACCOUNT_FLAGS[m.group(2)], h.hub.db, m.group(1), body_dict(h).get(m.group(2)))
     h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
 
 
