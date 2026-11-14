@@ -20,6 +20,7 @@ from tests.test_requests import PASSWORD
 from tests.test_request_search import KEY, RealClient, SearchCase, UNREACHABLE, movie
 from hub import accounts, request_search
 from hub.server import jobs
+from hub.server.app import HttpError
 from libraries.video import tmdb as tmdb_module
 from libraries.video.tmdb import TmdbAuthError, TmdbError
 
@@ -504,6 +505,50 @@ class TestUnexpectedFailures(Silent):
             while job.status in ("waiting", "running") and time.monotonic() < deadline:
                 threading.Event().wait(0.01)
         self.assertNotIn(KEY, "\n".join(job.log))
+
+
+class TestTheLastResortsHideTheKey(Silent):
+    """Les trois ceintures qui retirent la clé TMDB d'un message qui n'a rien à voir avec la recherche (`Jobs._run`, `Hub.scrub`, `log_failure`) : ni la route de recherche ni la tâche des affiches
+    n'y mènent (elles rattrapent tout avant), donc on y arrive avec une tâche et une route qui échouent à leur façon."""
+
+    def setUp(self):
+        super().setUp()
+        self.hub.cfg.ffprobe = ""
+
+    def lines(self, handler):
+        return handler.stderr.splitlines()
+
+    def test_a_job_that_fails_with_the_address_leaves_the_key_out_of_its_log(self):
+        def boom(log):
+            raise RuntimeError(f"incident sur https://api.themoviedb.org/3/search/movie?api_key={KEY}")
+        self.hub.jobs = queue = jobs.Jobs(self.hub.cfg, self.db)
+        job = queue._submit("Tâche en panne", boom)
+        deadline = time.monotonic() + LAG
+        while job.status in ("waiting", "running") and time.monotonic() < deadline:
+            threading.Event().wait(0.01)
+        self.assertEqual((job.status, list(job.log)[-1].startswith("ERREUR : incident sur https://api.themoviedb.org/")), ("failed", True))
+        reply = self.get(self.boss, "/api/jobs?log=1")
+        for seen in ("\n".join(job.log), reply.body.decode()):
+            self.assertNotIn(KEY, seen)
+
+    def test_a_refusal_with_the_address_hides_the_key_in_the_answer_and_in_the_journal(self):
+        # Une 502 levée par une route : `_fail` passe le message à `Hub.scrub` (la réponse), puis `log_failure` l'écrit sur stderr ; chacune des deux ceintures retire la clé.
+        self.hub.jobs.snapshot.side_effect = HttpError(502, f"TMDB a répondu sur https://api.themoviedb.org/3/movie/1?api_key={KEY}")
+        handler, reply = call(self.hub, "GET", "/api/jobs", headers=self.headers(self.boss))
+        self.assertEqual(reply.status, 502)
+        self.assertIn("https://api.themoviedb.org/3/movie/1?api_key=", reply.json()["error"])
+        self.assertNotIn(KEY.encode(), reply.body)
+        self.assertRegex(self.lines(handler)[-1], r"^502 GET /api/jobs : TMDB a répondu sur ")
+        self.assertNotIn(KEY, handler.stderr)
+
+    def test_an_internal_error_with_the_address_hides_the_key_in_the_answer_and_in_the_log_line(self):
+        self.hub.jobs.snapshot.side_effect = RuntimeError(f"incident sur https://api.themoviedb.org/3/movie/1?api_key={KEY}")
+        handler, reply = call(self.hub, "GET", "/api/jobs", headers=self.headers(self.boss))
+        self.assertEqual(reply.status, 500)
+        self.assertIn("erreur interne : incident sur", reply.json()["error"])
+        self.assertNotIn(KEY.encode(), reply.body)
+        self.assertRegex(self.lines(handler)[-1], r"^500 GET /api/jobs : erreur interne : incident sur ")
+        self.assertNotIn(KEY, self.lines(handler)[-1])
 
 
 if __name__ == "__main__":
