@@ -6444,6 +6444,78 @@ class TestRequestsInTheUi(unittest.TestCase):
         self.count_rows(page, 1)
         self.assertEqual([(r["tmdb"], r["status"]) for r in self.call("admin", "/api/requests")["requests"]], [(9500, "pending")])
 
+    # --- Une demande qui disparaît ailleurs, un filtre, une erreur de chargement --------------
+    def test_a_request_withdrawn_elsewhere_closes_the_window_on_the_card(self):
+        rid = self.ask("alice", 1000)["id"]
+        page = self.session("alice")
+        self.open(page, self.SAGA)
+        card = self.card(page, "Film intermédiaire")
+        card.click()
+        box = self.dialog(page)
+        box.wait_for()
+        self.call("alice", f"/api/requests/{rid}/delete", {})                                               # retirée depuis un autre appareil
+        with page.expect_response(lambda r: r.url.endswith("/delete")) as info:
+            box.locator(".btn.danger").click()
+        self.assertEqual(info.value.status, 404)
+        box.wait_for(state="detached")                                                                       # la fenêtre ne reste pas bloquée
+        card.locator(".rqbtn", has_text="Demander").wait_for()
+
+    def test_a_request_withdrawn_elsewhere_leaves_my_requests(self):
+        rid = self.ask("alice", 1000)["id"]
+        page = self.session("alice")
+        self.open(page, "#/requests")
+        self.rows(page).first.wait_for()
+        self.rows(page).locator("button", has_text="Retirer").click()
+        self.call("alice", f"/api/requests/{rid}/delete", {})
+        self.dialog(page).locator(".btn.danger").click()
+        self.dialog(page).wait_for(state="detached")
+        self.view(page, ".reqempty").wait_for()
+
+    def test_a_request_deleted_elsewhere_leaves_the_administrator_list(self):
+        rid = self.ask("alice", 1000)["id"]
+        page = self.session("admin")
+        self.open(page, "#/settings?tab=demandes")
+        self.rows(page).first.wait_for()
+        self.rows(page).locator("button", has_text="Supprimer").click()
+        self.call("admin", f"/api/requests/{rid}/delete", {})
+        self.dialog(page).locator(".btn.danger").click()
+        self.dialog(page).wait_for(state="detached")
+        self.count_rows(page, 0)
+
+    def test_under_a_filter_the_focus_goes_to_the_next_request_not_to_the_tabs(self):
+        self.ask("alice", 1000)
+        self.ask("alice", 9500)
+        page = self.session("admin")
+        self.open(page, "#/settings?tab=demandes")
+        self.rows(page).first.wait_for()
+        self.view(page, "[data-key=rf-pending]").click()
+        page.wait_for_function("(() => { var b = document.querySelector('#views > .view:not([style*=\"none\"]) [data-key=rf-pending]'); return b && b.classList.contains('on') && document.querySelectorAll('#views > .view:not([style*=\"none\"]) .reqrow').length === 2; })()")
+        first = self.rows(page).first
+        first.locator("button", has_text="Marquer ajouté").click()                                         # la ligne sort du filtre
+        self.count_rows(page, 1)
+        page.wait_for_function("document.activeElement && (document.activeElement.getAttribute('data-key') || '').indexOf('rq-') === 0")
+        self.rows(page).first.locator("button", has_text="Refuser").click()                                 # la dernière : le focus revient au filtre, pas à l'onglet
+        self.dialog(page).locator(".btn.primary").click()
+        self.count_rows(page, 0)
+        page.wait_for_function("document.activeElement && document.activeElement.getAttribute('data-key') === 'rf-pending'")
+
+    def test_a_failed_load_can_be_retried_and_the_tab_is_read_again_when_reopened(self):
+        page = self.session("admin")
+        page.route("**/api/requests", lambda route: route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "base verrouillée"})))
+        self.open(page, "#/settings?tab=demandes")
+        retry = self.view(page, "[data-key=rq-retry]")
+        retry.wait_for()
+        self.assertIn("base verrouillée", self.view(page, ".panel").inner_text())
+        page.unroute("**/api/requests")
+        self.ask("alice", 1000)
+        retry.click()
+        self.rows(page).first.wait_for()
+        self.view(page, "[data-key=tab-comptes]").click()
+        self.view(page, "[data-key=tab-comptes][aria-selected=true]").wait_for()
+        self.ask("bob", 9500)                                                                                # arrivée pendant qu'on regardait ailleurs
+        self.view(page, "[data-key=tab-demandes]").click()
+        self.count_rows(page, 2)                                                                             # relue, pas la liste d'avant
+
     def test_the_administrator_tab_is_reached_with_the_remote(self):
         self.ask("alice", 1000)
         page = self.session("admin", device="tv")
