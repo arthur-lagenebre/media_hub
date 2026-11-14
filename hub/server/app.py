@@ -1083,7 +1083,8 @@ def api_home(h, m, q):
     hub = h.hub
     seen, quality, ratings = seen_counts(hub, h.user["id"]), card_quality(hub.db), hub.db.ratings_for(h.user["id"])
     day, rows = today(), []
-    order = prefs.load(hub.db, h.user["id"])["home_unseen_sort"]
+    settings = prefs.load(hub.db, h.user["id"])
+    order = settings["home_unseen_sort"]
     for lib in h.visible_libs():
         items = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
         if lib.kind == "music":
@@ -1094,7 +1095,7 @@ def api_home(h, m, q):
         if lib.kind in UNSEEN_KINDS:
             row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order, quality=quality, ratings=ratings)
         rows.append(row)
-    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play"), ratings), "libraries": rows, "requests_ready": requests_ready(h, seen, quality, ratings)})
+    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play"), ratings), "libraries": rows, "requests_ready": requests_ready(h, seen, quality, ratings) if settings["home_requests"] == "show" else []})        # rayon caché par le compte : rien à calculer, le champ reste
 
 
 @route("GET", r"/api/search")
