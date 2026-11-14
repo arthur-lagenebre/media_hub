@@ -130,6 +130,7 @@
     'Plus récents': 'Newest',
     'Plus anciens': 'Oldest',
     'Mieux notés': 'Highest rated',
+    'Mon avis': 'My rating',
     'Collection': 'Collection',
     'Filtrer': 'Filter',
     'Filtrer {name}': 'Filter {name}',
@@ -227,6 +228,12 @@
     'Recherche lancée : {name}': 'Search started: {name}',
     'Aucun film ne manque.': 'No movie is missing.',
     'La recherche a échoué : voir les tâches dans Gestion.': 'The search failed: see the tasks in Management.',
+
+    // --- Mon avis (fiche, menu « … ») ---
+    'J’aime': 'I like it',
+    'Bof': 'So-so',
+    'Je n’aime pas': 'I don’t like it',
+    'Effacer': 'Clear',
 
     // --- Menus « … » ---
     'Marquer toutes les saisons non vu': 'Mark all seasons as unwatched',
@@ -831,6 +838,9 @@
     'un administrateur a tous les droits': 'an administrator has every permission',
     'droits attendus : {bibliothèque: {view, play, download}}': 'permissions expected: {bibliothèque: {view, play, download}}',
     'bibliothèque inconnue : {lib}': 'unknown library: {lib}',
+    'avis inconnu : {value}': 'unknown rating: {value}',
+    'cette bibliothèque ne se note pas': 'this library cannot be rated',
+    'une saga ne se note pas': 'a saga cannot be rated',
     // --- Renommer une bibliothèque (hub/labels.py) : le nom cité est traduit s'il est celui d'origine, jamais s'il a été choisi (H.isChosenLabel) ---
     "« {name} » est déjà le nom d'une autre bibliothèque": '“{name}” is already the name of another library',
     'le libellé fait {max} caractères au plus': 'the name can be {max} characters at most',

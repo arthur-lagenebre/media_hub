@@ -50,11 +50,22 @@
     more: 'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
     download: 'M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z', upload: 'M5 20h14v-2H5v2zM9 16h6v-6h4l-7-7-7 7h4v6z', up: 'M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z', down: 'M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z',
     trash: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
-    edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'
+    edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
+    // L'avis personnel : une forme par avis, pour qu'on les distingue sans la couleur (pouce levé, trait, pouce baissé)
+    like: 'M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z',
+    soso: 'M4 10.5h16v3H4z',
+    dislike: 'M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z'
   };
   H.icon = function (name, cls) {
     return h('span', { class: 'ic' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true', html: '<svg viewBox="0 0 24 24"><path d="' + (ICONS[name] || '') + '"/></svg>' });
   };
+  // L'avis personnel d'un film ou d'une série (`rating` de l'API) : sa valeur, son icône et son libellé. L'ordre est celui des boutons de la fiche et du menu.
+  H.ratings = [
+    { value: 'up', icon: 'like', label: H.t('J’aime') },
+    { value: 'mid', icon: 'soso', label: H.t('Bof') },
+    { value: 'down', icon: 'dislike', label: H.t('Je n’aime pas') }
+  ];
+  H.ratingOf = function (value) { return H.ratings.filter(function (r) { return r.value === value; })[0] || null; };
   H.button = function (label, icon, attrs) {
     attrs = attrs || {};
     attrs.class = 'btn f' + (attrs.class ? ' ' + attrs.class : '');

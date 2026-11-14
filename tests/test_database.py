@@ -128,7 +128,7 @@ class TestUploadMigration(TempCase):
         conn.commit()
         conn.close()
         db = Database(path)
-        self.assertEqual(db.kv_get("schema"), 6)
+        self.assertEqual(db.kv_get("schema"), database.SCHEMA_VERSION)
         self.assertEqual([tuple(r) for r in db.query("SELECT id, can_upload, inbox_dir FROM users ORDER BY id")], [("abc", 1, None), ("default", 0, None)])
         self.assertEqual(db.kv_get("secret"), "s")
 
@@ -139,12 +139,12 @@ class TestUploadMigration(TempCase):
                 database._add_column(conn, table, column, "INTEGER")
         self.assertIsNotNone(self.db.one("SELECT name FROM sqlite_master WHERE name='users'"))
 
-    def test_a_new_base_has_the_columns_too_and_the_version_is_6(self):
-        self.assertEqual(database.SCHEMA_VERSION, 6)
+    def test_a_new_base_has_the_columns_too_and_the_version_is_7(self):
+        self.assertEqual(database.SCHEMA_VERSION, 7)
         self.db.execute("INSERT INTO users(id, name, pass_hash, created) VALUES('x', 'x', 'h', 1)")
         self.assertEqual(tuple(self.db.one("SELECT can_upload, inbox_dir FROM users WHERE id='x'")), (0, None))
 
-    def test_a_base_in_version_3_reaches_6_through_the_other_migration_too(self):
+    def test_a_base_in_version_3_reaches_the_last_version_through_the_other_migrations_too(self):
         path = self.old_base()
         conn = sqlite3.connect(path)
         conn.execute("UPDATE kv SET value='3' WHERE key='schema'")
@@ -153,10 +153,82 @@ class TestUploadMigration(TempCase):
         conn.commit()
         conn.close()
         db = Database(path)
-        self.assertEqual(db.kv_get("schema"), 6)
+        self.assertEqual(db.kv_get("schema"), database.SCHEMA_VERSION)
         self.assertIn("inbox_dir", [r["name"] for r in db.query("PRAGMA table_info(users)")])
         self.assertIn("can_upload", [r["name"] for r in db.query("PRAGMA table_info(users)")])
         self.assertIn("play", [r["name"] for r in db.query("PRAGMA table_info(rights)")])
+
+
+class TestRatingsMigration(TempCase):
+    def v6_base(self):
+        """Une base en version 6, d'avant les avis : des comptes, de la progression, une playlist, des droits."""
+        path = self.root / "v6.db"
+        conn = sqlite3.connect(path)
+        conn.executescript("""
+            CREATE TABLE users(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, pass_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', token_version INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL, can_upload INTEGER NOT NULL DEFAULT 0, inbox_dir TEXT);
+            CREATE TABLE rights(user_id TEXT NOT NULL, lib TEXT NOT NULL, view INTEGER NOT NULL DEFAULT 1, play INTEGER NOT NULL DEFAULT 1, download INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(user_id, lib));
+            CREATE TABLE progress(profile TEXT NOT NULL, entry_id TEXT NOT NULL, position REAL NOT NULL DEFAULT 0, duration REAL NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL, PRIMARY KEY(profile, entry_id));
+            CREATE TABLE playlists(id TEXT PRIMARY KEY, profile TEXT NOT NULL, name TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL);
+            CREATE TABLE playlist_tracks(playlist_id TEXT NOT NULL, pos INTEGER NOT NULL, entry_id TEXT NOT NULL, PRIMARY KEY(playlist_id, pos));
+            CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO users VALUES('default', 'boss', 'h1', 'admin', 3, 100, 0, NULL), ('abc', 'alice', 'h2', 'user', 1, 200, 1, 'alice');
+            INSERT INTO rights VALUES('abc', 'films', 1, 0, 0);
+            INSERT INTO progress VALUES('abc', 'e1', 12.5, 100, 0, 300);
+            INSERT INTO playlists VALUES('p1', 'abc', 'Ma liste', 400, 500);
+            INSERT INTO playlist_tracks VALUES('p1', 0, 't1'), ('p1', 1, 't2');
+            INSERT INTO kv VALUES('schema', '6'), ('secret', '"s"'), ('dismiss:abc:m1', '300');""")
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_a_version_6_base_gets_the_ratings_table_and_loses_nothing(self):
+        db = Database(self.v6_base())
+        self.assertEqual(db.kv_get("schema"), 7)
+        self.assertEqual(db.query("SELECT * FROM ratings"), [])
+        self.assertEqual([tuple(r) for r in db.query("SELECT id, name, can_upload, inbox_dir FROM users ORDER BY id")], [("abc", "alice", 1, "alice"), ("default", "boss", 0, None)])
+        self.assertEqual([tuple(r) for r in db.query("SELECT profile, entry_id, position FROM progress")], [("abc", "e1", 12.5)])
+        self.assertEqual([tuple(r) for r in db.query("SELECT id, profile, name FROM playlists")], [("p1", "abc", "Ma liste")])
+        self.assertEqual([tuple(r) for r in db.query("SELECT pos, entry_id FROM playlist_tracks ORDER BY pos")], [(0, "t1"), (1, "t2")])
+        self.assertEqual([tuple(r) for r in db.query("SELECT user_id, lib, play FROM rights")], [("abc", "films", 0)])
+        self.assertEqual((db.kv_get("secret"), db.kv_get("dismiss:abc:m1")), ("s", 300))
+
+    def test_the_migration_alone_creates_the_table_and_a_second_opening_keeps_the_ratings(self):
+        path = self.v6_base()
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        database._create_ratings(conn)
+        database._create_ratings(conn)                  # rien ne casse quand la table est déjà là
+        conn.close()
+        db = Database(path)
+        db.set_rating("abc", "m1", "up")
+        self.assertEqual(Database(path).ratings_for("abc"), {"m1": "up"})
+
+
+class TestRatings(TempCase):
+    def test_a_rating_is_set_replaced_and_cleared_per_account(self):
+        self.db.set_rating("a", "m1", "up")
+        self.db.set_rating("b", "m1", "down")
+        self.db.set_rating("a", "m2", "mid")
+        self.assertEqual((self.db.ratings_for("a"), self.db.ratings_for("b"), self.db.ratings_for("c")), ({"m1": "up", "m2": "mid"}, {"m1": "down"}, {}))
+        self.db.set_rating("a", "m1", "down")
+        self.assertEqual(self.db.ratings_for("a"), {"m1": "down", "m2": "mid"})
+        self.assertEqual(self.db.one("SELECT COUNT(*) AS n FROM ratings WHERE user_id='a' AND item_id='m1'")["n"], 1)
+        self.db.set_rating("a", "m1", None)
+        self.db.set_rating("a", "nope", None)
+        self.assertEqual((self.db.ratings_for("a"), self.db.ratings_for("b")), ({"m2": "mid"}, {"m1": "down"}))
+
+    def test_only_the_three_values_are_kept_by_the_code_and_by_the_base(self):
+        for value in ("excellent", "", "UP", 1):
+            with self.assertRaises(ValueError, msg=value):
+                self.db.set_rating("a", "m1", value)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO ratings(user_id, item_id, rating, updated) VALUES('a', 'm1', 'super', 1)")
+        self.assertEqual(self.db.ratings_for("a"), {})
+
+    def test_a_scan_keeps_the_ratings_even_of_an_item_that_is_gone(self):
+        self.db.set_rating("a", "m1", "up")
+        self.db.replace_library("lib", [], [])
+        self.assertEqual(self.db.ratings_for("a"), {"m1": "up"})
 
 
 class TestKeyValue(TempCase):

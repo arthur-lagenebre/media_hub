@@ -4,7 +4,7 @@ Toute fenêtre qui s'ouvre par-dessus la page est un **pop-up**. Il n'en existe 
 
 | Déclinaison | Pour quoi | Fabrique | Exemples |
 |---|---|---|---|
-| **choice** | Choisir dans une liste ; un clic ferme. | `H.menu(titre, options, courant, onPick)` | Trier par, Genre, Langue, Audio / Sous-titres, menu `…` d'une carte ou d'une piste, Ajouter à une playlist ou à une saga, « Que faire de… » |
+| **choice** | Choisir dans une liste ; un clic ferme. | `H.menu(titre, options, courant, onPick)` | Trier par, Genre, Langue, Audio / Sous-titres, menu `…` d'une carte ou d'une piste, **Mon avis** (J'aime / Bof / Je n'aime pas / Effacer, avec l'avis actuel marqué), Ajouter à une playlist ou à une saga, « Que faire de… » |
 | **confirm** | Une question, une action (rouge si elle détruit ou ne s'annule pas), Annuler. | `H.confirm({title, lead, ok, danger, done, cancel})` | Supprimer une saga, une playlist, un compte, les fichiers parasites ; retirer un lien ; envoyer un dossier (`cls: 'sendfolder'`, avec la liste dépliable des fichiers écartés) |
 | **form** | Un ou plusieurs champs, ou un petit réglage, avec Valider / Annuler. | `H.form({title, lead, fields, extra, ok, submit, done, cancel})` ; `H.prompt(...)` pour un seul champ de texte | Ajouter un compte, mot de passe, droits d'un compte, nom d'une playlist, ajouter un lien, **renommer une bibliothèque** (champ prérempli et sélectionné, action seconde « Rétablir ») |
 | **wide** | Contenu libre qui demande de la place : liste à gérer, recherche, image. Un pied de boutons. | `H.box('wide <nom>', titre, …enfants)` puis `H.overlay.open(box)` | File d'attente (`wide queue`), choix de films d'une saga (`wide picker`), recadrage d'une photo (`wide crop`) |

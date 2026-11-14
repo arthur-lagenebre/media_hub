@@ -170,6 +170,24 @@
     if (b.hdr === true) out.push('HDR');
     return out;
   };
+  // Les pastilles d'une affiche de film, de série ou d'album, en haut à droite : l'avis du compte (une icône, ni bouton ni focus) prend la place de la coche « Vu » ;
+  // l'avancement d'un élément en cours (« En cours », « 10/25 ») reste toujours, sous l'avis quand il y en a un.
+  function cardMarks(pic, it) {
+    var total = it.n || 1, done = it.seen >= total && it.seen > 0, rated = it.type === 'movie' || it.type === 'show' ? H.ratingOf(it.rating) : null;
+    if (rated) pic.appendChild(h('span', { class: 'badge mine', 'data-rating': rated.value, role: 'img', 'aria-label': rated.label, title: rated.label }, H.icon(rated.icon)));
+    if (done) { if (!rated) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check'))); }
+    else if (it.seen || it.started) pic.appendChild(h('span', { class: 'badge' }, it.type === 'movie' ? H.t('En cours') : (it.seen || 0) + '/' + total));
+  }
+  // L'avis d'un élément a changé (`value` : « up », « mid », « down », ou rien) : toutes ses cartes à l'écran, dans toutes les pages gardées, repeignent leurs pastilles sans recharger la liste.
+  H.rated = function (id, value) {
+    Array.prototype.forEach.call(document.querySelectorAll('.card'), function (card) {
+      var it = card.hubItem, pic = it && it.id === id ? card.querySelector('.poster') : null;
+      if (!pic) return;
+      if (value) it.rating = value; else delete it.rating;
+      Array.prototype.forEach.call(pic.querySelectorAll('.badge'), function (b) { pic.removeChild(b); });
+      cardMarks(pic, it);
+    });
+  };
   H.card = function (it, withGroup, withPart) {
     if (it.type === 'saga') return sagaCard(it);
     if (it.type === 'artist') return artistCard(it);
@@ -181,11 +199,9 @@
     var square = it.type === 'album';
     var a = h('a', { class: 'card f' + (square ? ' sq' : ''), href: '#/i/' + it.id, 'data-key': it.id, 'data-type': it.type, title: it.title });
     var pic = H.picture('/img/item/' + it.id + '?w=300', it.title, square ? 'sq' : '');
-    var total = it.n || 1;
-    if (it.seen >= total && it.seen > 0) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
-    else if (it.seen || it.started) pic.appendChild(h('span', { class: 'badge' }, it.type === 'movie' ? H.t('En cours') : (it.seen || 0) + '/' + total));
+    cardMarks(pic, it);
     if (square && H.music) pic.appendChild(H.music.cardTools(it));
-    if (it.type === 'movie' || it.type === 'show') { pic.appendChild(H.actions.tools(it)); H.actions.bind(a, it); }
+    if (it.type === 'movie' || it.type === 'show') { pic.appendChild(H.actions.tools(it)); H.actions.bind(a, it); a.hubItem = it; }      // `hubItem` : de quoi repeindre ses pastilles quand l'avis change (H.rated)
     var numbered = withPart && it.part !== undefined && it.part !== null;
     if (numbered) pic.appendChild(h('span', { class: 'part' }, it.part));
     var picture = it.type === 'movie' ? H.pictureTags(it) : [];                       // la qualité d'un film (voir docs/api.md), sous son numéro dans une saga ; ni langues, ni focus
@@ -352,7 +368,7 @@
 
   // --- Bibliothèque ----------------------------------------------------------------
   var SORTS = {
-    movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')], ['rating', H.t('Mieux notés')]],      // films et séries ; « Mieux notés » : la note TMDB
+    movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')], ['rating', H.t('Mieux notés')], ['my-rating', H.t('Mon avis')]],      // films et séries ; « Mieux notés » : la note TMDB ; « Mon avis » : celui du compte (J'aime, Bof, sans avis, Je n'aime pas)
     books: [['title', H.t('Collection')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')]]
   };
   // Les choix du statut, accordés d'après le GENRE de la bibliothèque (jamais d'après son nom, qu'on peut changer) : les films au masculin, les séries et les livres (comptés en « séries ») au féminin. [valeur de `filter=`, libellé]
@@ -651,6 +667,23 @@
       return actions;
     }
 
+    // « Mon avis » (films et séries entières) : trois boutons à bascule, et « Effacer » quand il y en a un. Un clic sur l'avis déjà choisi l'efface.
+    // L'avis est privé : le serveur ne le donne qu'au compte qui l'a posé. Une fois posé, la fiche est relue (le serveur fait foi) et le focus reste sur le bouton.
+    function ratingRow(d) {
+      if (!H.actions.ratable(d)) return null;
+      function rate(value) {
+        var was = d.rating;
+        H.actions.rate(d, value).then(load).then(function () { H.focus.key(el, 'rate-' + (value || was), true); }).catch(function (e) { H.toast(e && e.message ? e.message : H.t('Impossible pour le moment.'), 5000); });
+      }
+      var row = h('div', { class: 'myrating', role: 'group', 'aria-label': H.t('Mon avis') }, h('span', { class: 'lab', 'aria-hidden': 'true' }, H.t('Mon avis')));
+      H.ratings.forEach(function (r) {
+        var on = d.rating === r.value;
+        row.appendChild(H.button(r.label, r.icon, { 'data-key': 'rate-' + r.value, 'aria-pressed': on ? 'true' : 'false', onclick: function () { rate(on ? null : r.value); } }));
+      });
+      if (d.rating) row.appendChild(H.button(H.t('Effacer'), 'close', { 'data-key': 'rate-clear', onclick: function () { rate(null); } }));
+      return row;
+    }
+
     // Sous la ligne grise, comme sur TMDB : le disque de la note, et à côté ce qu'il mesure et sur combien de votes.
     function scoreRow(d) {
       return h('div', { class: 'rate' }, H.scoreRing(d, true),
@@ -667,6 +700,8 @@
       if (d.summary) info.appendChild(h('p', { class: 'synopsis' }, d.summary));
       if (d.doubts && d.doubts.length && H.isAdmin()) info.appendChild(doubtNote(d));
       info.appendChild(actionsRow(d, view));
+      var mine = ratingRow(d);
+      if (mine) info.appendChild(mine);
       return info;
     }
     function heroBlock(d, info) {

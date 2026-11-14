@@ -17,6 +17,7 @@ from functools import partial
 from pathlib import Path
 
 ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "meta", "added", "count"}      # ce que update_item_meta peut changer
+RATINGS = ("up", "mid", "down")      # l'avis d'un compte sur un film ou une série : J'aime, Bof, Je n'aime pas. Pas de ligne = pas d'avis ; « Bof » n'est donc pas l'absence d'avis
 ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
 
 
@@ -28,13 +29,29 @@ def _add_column(conn, table, column, definition):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def _create_ratings(conn):
+    """7 : la table `ratings`. Déjà là sur une base qui vient d'être créée (SCHEMA), pas sur une base d'avant : CREATE IF NOT EXISTS, rien d'existant n'est touché."""
+    conn.execute(RATINGS_TABLE)
+
+
 # {version: fonction(connexion)} : ce qui fait passer la base à `version` depuis la précédente. CREATE TABLE IF NOT EXISTS (SCHEMA) ajoute des tables, pas une colonne : toute autre évolution s'écrit ici, ex. `3: lambda conn: conn.execute("ALTER TABLE items ADD COLUMN x TEXT")`
 # 4 : « lire » (`rights.play`) vaut 1 pour les lignes d'avant, qui n'avaient pas ce droit à retirer. 5 : le droit « Envoyer » (`users.can_upload`) vaut 0 pour les comptes d'avant ; l'administrateur envoie toujours, quelle que soit la colonne. 6 : `users.inbox_dir` (le dossier du compte dans la boîte de réception) vaut NULL pour les comptes d'avant : `Inbox` le fixe à la première utilisation, ou au démarrage (migration de l'ancien dossier nommé d'après l'identifiant).
+# 7 : la table `ratings` (l'avis personnel d'un compte, voir plus bas), qui ne change aucune table existante.
 # (Une virgule doit précéder chaque numéro : .github/scripts/check_version.py lit ces clés dans le texte.)
 MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition="INTEGER NOT NULL DEFAULT 1"),
               5: partial(_add_column, table="users", column="can_upload", definition="INTEGER NOT NULL DEFAULT 0"),
-              6: partial(_add_column, table="users", column="inbox_dir", definition="TEXT")}
-SCHEMA_VERSION = 6          # 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+              6: partial(_add_column, table="users", column="inbox_dir", definition="TEXT"),
+              7: _create_ratings}
+SCHEMA_VERSION = 7          # 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+
+RATINGS_TABLE = f"""
+CREATE TABLE IF NOT EXISTS ratings(
+    user_id TEXT NOT NULL,                  -- users.id, pas une clé étrangère (comme `rights`) : un compte supprimé est nettoyé par accounts.delete
+    item_id TEXT NOT NULL,                  -- items.id, qui vient du chemin : un dossier renommé perd son avis, un élément disparu laisse sa ligne (qui ne se voit plus) et la retrouve s'il revient
+    rating  TEXT NOT NULL CHECK (rating IN ({", ".join(repr(r) for r in RATINGS)})),
+    updated INTEGER NOT NULL,
+    PRIMARY KEY(user_id, item_id)
+)"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items(
@@ -113,7 +130,7 @@ CREATE TABLE IF NOT EXISTS rights(
     download INTEGER NOT NULL DEFAULT 1,    -- télécharger ses fichiers ; sans effet quand view est à 0
     PRIMARY KEY(user_id, lib)
 );                                          -- pas de ligne = tout autorisé : les comptes d'avant les droits n'ont rien perdu, et une bibliothèque ajoutée s'ouvre à tous
-"""
+""" + RATINGS_TABLE + ";"
 
 
 def make_id(*parts):
@@ -297,3 +314,20 @@ class Database:
             for row in self.query(f"SELECT * FROM progress WHERE profile=? AND entry_id IN ({marks})", (profile, *chunk)):
                 found[row["entry_id"]] = row
         return found
+
+    # --- Avis personnel ------------------------------------------------------
+    def set_rating(self, user_id, item_id, rating):
+        """Pose l'avis (`up`, `mid` ou `down`) d'un compte sur un élément, ou l'efface (`None`). Rien d'autre qu'une de ces trois valeurs : la base la refuse aussi (CHECK)."""
+        if rating is None:
+            self.execute("DELETE FROM ratings WHERE user_id=? AND item_id=?", (user_id, item_id))
+            return
+        if rating not in RATINGS:
+            raise ValueError(f"avis inconnu : {rating!r}")
+        self.execute(
+            "INSERT INTO ratings(user_id, item_id, rating, updated) VALUES(?,?,?,?) "
+            "ON CONFLICT(user_id, item_id) DO UPDATE SET rating=excluded.rating, updated=excluded.updated",
+            (user_id, item_id, rating, int(time.time())))
+
+    def ratings_for(self, user_id):
+        """{id d'élément: avis} de ce compte, en une lecture : les avis d'un autre compte ne se lisent nulle part."""
+        return {r["item_id"]: r["rating"] for r in self.query("SELECT item_id, rating FROM ratings WHERE user_id=?", (user_id,))}

@@ -80,6 +80,10 @@ body.full #nav { display: none; }
 .badge { position: absolute; right: 0.4rem; top: 0.4rem; background: rgba(0, 0, 0, 0.78); padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 700; }
 .badge.done { background: var(--accent); color: var(--on-accent); padding: 0.1rem 0.25rem; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.78), 0 2px 6px rgba(0, 0, 0, 0.5); }
 .badge .ic svg { width: 1em; height: 1em; }
+/* L'avis du compte sur l'affiche (H.card) : une pastille ronde, sombre, à l'icône claire ; la forme (pouce levé, trait, pouce baissé) dit l'avis, pas la couleur. Une marque, pas un bouton : rien ne la désigne au focus ni à la souris. */
+.badge.mine { display: flex; align-items: center; justify-content: center; width: 1.7rem; height: 1.7rem; padding: 0; background: rgba(0, 0, 0, 0.82); color: #fff; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85), 0 2px 6px rgba(0, 0, 0, 0.5); pointer-events: none; }
+.badge.mine .ic svg { width: 1.05rem; height: 1.05rem; }
+.badge.mine + .badge { top: 2.5rem; }          /* l'avancement (« En cours », « 10/25 ») n'est jamais caché : il passe sous l'avis */
 /* La note TMDB, dans le style de son « User Score » (H.scoreRing) : disque sombre, anneau vert, jaune ou rouge sur sa piste plus foncée. */
 .score { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 2.6rem; height: 2.6rem; border-radius: 50%;
   background: #081c22; color: #fff; font-size: 0.85rem; font-weight: 700; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5); }
@@ -166,6 +170,11 @@ body.mouse .people .chip:focus:not(:hover) { background: var(--s2); color: var(-
 .search .field { margin: 0 var(--gut); width: calc(100% - 2 * var(--gut)); max-width: 40rem; min-width: 0; }
 
 /* Fiche */
+.myrating { display: flex; flex-wrap: wrap; align-items: center; margin-top: 0.3rem; }
+.myrating .lab { color: var(--mute); font-weight: 650; margin: 0 0.9rem 0.7rem 0; }
+.myrating .btn { margin: 0 0.7rem 0.7rem 0; }
+@media (max-width: 40rem) { .myrating .lab { flex-basis: 100%; margin-bottom: 0.4rem; } }
+.myrating .btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 .hero { position: relative; overflow: hidden; padding: 2rem var(--gut) 1.6rem; }
 .hero-bg { position: absolute; top: -12%; left: -12%; width: 124%; height: 124%; background-size: cover; background-position: center; filter: blur(34px) saturate(1.3); opacity: 0.38; }
 .hero::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 60%; background: linear-gradient(to bottom, transparent, var(--bg)); }

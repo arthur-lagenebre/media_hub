@@ -11,7 +11,7 @@ import unittest
 import urllib.request
 from pathlib import Path
 
-from tests.test_ui import UiCase
+from tests.test_ui import UiCase, expect
 
 ROOT = Path(__file__).resolve().parent.parent
 JS = ROOT / "hub" / "web" / "js"
@@ -324,6 +324,44 @@ class TestEnglishInTheBrowser(UiCase):
                     self.open("#/i/" + first[0]["id"])
                     self.page.wait_for_timeout(250)
                     self.assertEqual(self.missing(), [])
+
+    def test_my_rating_is_in_english_on_the_page_the_card_menu_the_badge_and_the_sort(self):
+        film = self.api("/api/library/films")["items"]
+        film = next(i for i in film if i["title"] == "Inception")["id"]
+        self.addCleanup(self.api, f"/api/item/{film}/rating", {"rating": None})
+        self.open("#/i/" + film)
+        row = self.view(".myrating")
+        row.wait_for()
+        self.assertEqual(row.get_attribute("aria-label"), "My rating")
+        self.assertEqual(row.locator(".btn").all_inner_texts(), ["I like it", "So-so", "I don’t like it"])
+        with self.page.expect_response(lambda r: r.url.endswith(f"/api/item/{film}/rating") and r.request.method == "POST"):
+            row.locator('[data-key="rate-mid"]').click()
+        expect(row.locator('[data-key="rate-clear"]')).to_have_text("Clear")
+        self.open("#/l/films")
+        card = self.view(f'.card[data-key="{film}"]')
+        expect(card.locator(".badge.mine")).to_have_attribute("aria-label", "So-so")
+        card.locator(".qbtn").click()
+        self.page.locator(".menu .opt", has_text="My rating").locator(".det").wait_for()
+        self.assertEqual(self.page.locator(".menu .opt", has_text="My rating").locator(".det").inner_text(), "So-so")
+        self.page.locator(".menu .opt", has_text="My rating").click()
+        self.page.wait_for_function("() => document.querySelectorAll('.menu').length === 1 && document.querySelector('.menu h3').textContent === 'My rating'")
+        self.assertEqual(self.page.locator(".menu .opt .lbl").all_inner_texts(), ["I like it", "So-so", "I don’t like it", "Clear"])
+        self.page.keyboard.press("Escape")
+        expect(self.page.locator(".menu")).to_have_count(0)
+        self.view(".tools .btn.flt").nth(1).click()
+        expect(self.page.locator(".veil .opt", has_text="My rating")).to_have_count(1)
+        self.assertEqual(self.missing(), [])
+
+    def test_a_refusal_of_the_rating_route_reaches_the_screen_in_english(self):
+        film = next(i for i in self.api("/api/library/films")["items"] if i["title"] == "Inception")["id"]
+        self.open("#/i/" + film)
+        self.page.route("**/api/item/*/rating", lambda route: route.fulfill(status=400, content_type="application/json", body='{"error": "cette bibliothèque ne se note pas"}'))
+        row = self.view(".myrating")
+        row.wait_for()
+        with self.page.expect_response(lambda r: r.url.endswith(f"/api/item/{film}/rating")):
+            row.locator('[data-key="rate-up"]').click()
+        expect(self.page.locator("#toast")).to_have_text("this library cannot be rated")
+        self.errors[:] = [e for e in self.errors if "status of 400" not in e]                     # le navigateur journalise la réponse refusée : c'est voulu ici
 
     def test_the_settings_page_is_in_english(self):
         self.open("#/settings")

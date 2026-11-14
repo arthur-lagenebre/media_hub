@@ -1,4 +1,4 @@
-/* Le bouton « … » : voir / revoir et vu / non vu, sur les cartes des films, des sagas et des séries, et sur chaque épisode.
+/* Le bouton « … » : voir / revoir, vu / non vu et mon avis, sur les cartes des films, des sagas et des séries, et sur chaque épisode.
    Le même menu s'ouvre au clic sur le bouton, au clic droit et à la touche « Menu » de la télécommande. */
 (function () {
   'use strict';
@@ -41,15 +41,34 @@
     });
   }
 
+  // --- Mon avis (films et séries entières seulement : ni saga, ni épisode, ni musique, ni livre) ------------------------
+  A.ratable = function (it) { return it.type === 'movie' || it.type === 'show'; };
+  // Pose l'avis (« up », « mid », « down ») ou l'efface (null) ; les cartes à l'écran repeignent leur pastille une fois le serveur d'accord. Rend une promesse : l'appelant montre l'échec.
+  A.rate = function (it, value) {
+    return H.api('/api/item/' + it.id + '/rating', { rating: value }).then(function (r) {
+      var now = r && r.rating ? r.rating : null;
+      H.rated(it.id, now);
+      return now;
+    });
+  };
+  // Le choix de l'avis (une fenêtre « choice ») : J'aime, Bof, Je n'aime pas, et Effacer quand il y en a un ; `current` est l'avis actuel (null sans avis).
+  A.ratingMenu = function (it, current) {
+    var options = H.ratings.map(function (r) { return { label: r.label, value: r.value }; }).concat([{ label: H.t('Effacer'), value: 'clear', disabled: !current }]);
+    H.menu(H.t('Mon avis'), options, current, function (v) { A.rate(it, v === 'clear' ? null : v).catch(fail); });
+  };
+
   // `d` : la fiche de l'élément (/api/item), qui sait si TMDB le connaît ; null pour une saga, ou quand la fiche ne vient pas.
   function showMenu(it, d) {
     var done = finished(it), tmdb = d && d.links ? d.links.filter(function (l) { return l.label === 'TMDB'; })[0] : null;
     var options = (A.canPlay(d && d.library && d.library.id) ? [{ label: done ? H.t('Revoir') : (it.seen || it.started ? H.t('Reprendre') : H.t('Voir')), value: 'play' }] : []).concat([{ label: A.seenLabel(it.type, done), value: 'seen' }]);
+    var mine = d ? d.rating || null : it.rating || null, rated = H.ratingOf(mine);      // la fiche, quand elle est venue, est plus fraîche que la carte
+    if (A.ratable(it)) options.push({ label: H.t('Mon avis'), detail: rated ? rated.label : '', value: 'rate' });
     if (it.type === 'movie' && d && d.tmdb && H.isAdmin() && H.sagas) options.push({ label: H.t('Ajouter à une saga'), value: 'saga' });      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
     if (tmdb) options.push({ label: 'TMDB', detail: H.t('Ouvre la fiche dans un nouvel onglet'), value: 'tmdb' });
     if (d && d.entries && d.entries.length && A.canDownload(d.library && d.library.id)) options.push({ label: H.t('Télécharger'), detail: d.entries.length > 1 ? H.t('{n} fichiers, l’un après l’autre', { n: d.entries.length }) : '', value: 'download' });
     H.menu(it.title, options, null, function (v) {
       if (v === 'play') (it.type === 'saga' ? playSaga : play)(it, done).catch(fail);
+      else if (v === 'rate') A.ratingMenu(it, mine);
       else if (v === 'saga') H.sagas.addTo(d, refresh);
       else if (v === 'tmdb') window.open(tmdb.url, '_blank', 'noopener');
       else if (v === 'download') A.download(d.entries.map(function (e) { return e.id; }));
