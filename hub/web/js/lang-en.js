@@ -753,6 +753,23 @@
     '« Peut demander » est enregistré.': '“Can request” is saved.',
     'Le reste est enregistré.': 'The rest is saved.',
 
+    // --- Demander un film ou une série cherché dans TMDB (#/request), et ses entrées ---
+    'Demander un film ou une série': 'Request a movie or a series',
+    'Nouvelle demande': 'New request',
+    'Pas trouvé ? Demander « {q} »': 'Not found? Request “{q}”',
+    'Cherche dans TMDB un film ou une série que la médiathèque n’a pas, puis demande-le à l’administrateur. Le hub ne télécharge rien : l’administrateur l’ajoute s’il le peut.': 'Search TMDB for a movie or a series the media library doesn’t have, then request it from the administrator. The hub downloads nothing: the administrator adds it if they can.',
+    'Titre d’un film ou d’une série': 'Title of a movie or a series',
+    'Titre à chercher dans TMDB': 'Title to search for in TMDB',
+    'Type': 'Type',
+    'Les deux': 'Both',
+    'Séries': 'Series',
+    'Recherche…': 'Searching…',
+    'Aucun titre trouvé dans TMDB pour « {q} ».': 'No title found in TMDB for “{q}”.',
+    'Ouvrir « {title} »': 'Open “{title}”',
+    'L’administrateur verra ta demande et ajoutera la série s’il le peut. Rien n’est téléchargé tout seul.': 'The administrator will see your request and add the series if they can. Nothing is downloaded automatically.',
+    'La recherche de titres à demander n’est pas configurée sur ce serveur. Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée.': 'Searching for titles to request isn’t set up on this server. A movie missing from a saga, or from a person’s filmography, is requested from its greyed-out box.',
+    'L’administrateur t’a retiré le droit de demander des films et des séries.': 'The administrator took away your right to request movies and series.',
+
     // --- Parce que tu as aimé (accueil, menu « … ») ---
     'Parce que tu as aimé {title}': 'Because you liked {title}',
     'Parce que tu as aimé…': 'Because you liked…',
@@ -1004,6 +1021,14 @@
     'demande inconnue': 'unknown request',
     'statut inconnu (pending, added ou declined)': 'unknown status (pending, added or declined)',
     'un administrateur peut toujours demander': 'an administrator can always request',
-    '« request » vaut vrai ou faux': '“request” is true or false'
+    '« request » vaut vrai ou faux': '“request” is true or false',
+    // --- La recherche des titres à demander (hub/request_search.py, GET /api/requests/search) ---
+    'texte à chercher : de {min} à {max} caractères': 'text to search for: {min} to {max} characters',
+    "la recherche n'est pas configurée sur ce serveur": 'searching isn’t set up on this server',
+    'trop de recherches : réessaie dans {n} s': 'too many searches: try again in {n} s',
+    'le serveur est occupé, réessaie dans un instant': 'the server is busy, try again in a moment',
+    'TMDB ne répond pas, réessaie plus tard': 'TMDB isn’t responding, try again later',
+    'titre inconnu sur TMDB': 'title unknown on TMDB',
+    'Affiches des demandes': 'Request posters'
   };
 })();
