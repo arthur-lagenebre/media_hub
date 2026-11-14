@@ -152,7 +152,7 @@ Un compte à qui l'administrateur a donné le droit **Envoyer** (`POST /api/user
 
 ## Demandes
 
-Un compte demande un film (ou une série) qui manque : depuis la case grisée d'une saga ou de la fiche d'une personne, ou en le cherchant dans TMDB (le serveur seul parle à TMDB, avec la clé `TMDB_KEY` ; sans elle, pas de recherche). Ce n'est qu'une **liste d'attente que l'administrateur lit** : le hub ne télécharge rien et n'écrit pas dans la médiathèque. L'administrateur ajoute le film lui-même ; la demande passe à « ajoutée » d'elle-même quand le film (reconnu par son étiquette TMDB) arrive dans une bibliothèque, et le demandeur le voit sur son accueil. Il peut aussi la refuser, avec un motif : elle ne peut plus être refaite tant qu'il ne l'a pas remise en attente ou supprimée.
+Un compte demande un film (ou une série) qui manque : depuis la case grisée d'une saga ou de la fiche d'une personne, ou en le cherchant dans TMDB (le serveur seul parle à TMDB, avec la clé `TMDB_KEY` ; sans elle, pas de recherche) : page *Demander un film ou une série*, ouverte par *Nouvelle demande* dans *Mes demandes* ou par « Pas trouvé ? » sous une recherche de la médiathèque restée vide. Ce n'est qu'une **liste d'attente que l'administrateur lit** : le hub ne télécharge rien et n'écrit pas dans la médiathèque. L'administrateur ajoute le film lui-même ; la demande passe à « ajoutée » d'elle-même quand le film (reconnu par son étiquette TMDB) arrive dans une bibliothèque, et le demandeur le voit sur son accueil. Il peut aussi la refuser, avec un motif : elle ne peut plus être refaite tant qu'il ne l'a pas remise en attente ou supprimée.
 
 Chacun voit ses demandes ; d'un film demandé par un autre, il ne sait que « déjà demandé », sans nom ni nombre. Le droit « Peut demander » est donné à tout compte et se retire compte par compte ; `HUB_REQUEST_MAX` borne les demandes en attente de chacun. Pas de notification hors du hub. Détail dans [docs/api.md](docs/api.md#demandes).
 
@@ -212,10 +212,10 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 2686 tests : 2241 serveur + 445 interface
+python -m unittest discover -s tests          # 2699 tests : 2241 serveur + 458 interface
 ```
 
-`tests/test_ui.py` (et `tests/test_labels_ui.py`, et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 445 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et `tests/test_labels_ui.py`, et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 458 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
 
 ### Intégration continue (GitHub Actions)
 
