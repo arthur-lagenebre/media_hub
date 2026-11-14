@@ -341,6 +341,28 @@ class TestDays(RecommendCase):
         self.assertGreater(len(picks), 1)
 
 
+class TestRarityFollowsWhatTheAccountCanPlay(RecommendCase):
+    """La rareté d'une particularité (et le seuil MAX_SHARE) se compte dans les bibliothèques que le compte peut lire : une bibliothèque qu'il ne lit pas ne change rien pour lui."""
+
+    def setUp(self):
+        super().setUp()
+        extra = [film("x1", "Autre 1"), film("x2", "Autre 2")]                                # 51 films sans « Drame »
+        self.drama = [film(f"d{n:02d}", f"Drame {n:02d}", genres=["Drame"]) for n in range(34)]  # 34 sur 85 : 40 % pile, encore compté
+        self.fill("films", FILMS + extra + self.drama)
+        for who in (self.alice, self.bob):
+            self.rate(who, "a2", "d00")
+
+    def test_a_library_the_account_cannot_play_never_moves_its_rarity(self):
+        before = self.shelves(self.bob)
+        self.assertEqual({s["anchor"]["id"] for s in before}, {"a2", "d00"})
+        self.assertIn("d00", self.by_anchor(self.alice))
+        self.fill("prive", SECRET + [film(f"q{n:02d}", f"Drame privé {n:02d}", genres=["Drame"], lib="prive") for n in range(10)])
+        self.assertEqual(self.shelves(self.bob), before)                                  # Bob ne lit pas « prive » : rien ne bouge
+        self.assertNotIn("d00", self.by_anchor(self.alice))                               # Alice la lit : 44 sur 97, « Drame » est ignoré
+        self.fill("prive", SECRET + [film(f"q{n:02d}", f"Privé {n:02d}", lib="prive") for n in range(200)])
+        self.assertEqual(self.shelves(self.bob), before)                                  # ni quand elle grossit sans « Drame »
+
+
 class TestAccountsAreSeparate(RecommendCase):
     def test_another_account_never_changes_the_result(self):
         self.rate(self.alice, "a1", "a2")
@@ -384,6 +406,14 @@ class TestCost(RecommendCase):
         self.fill("films", FILMS + [film("new", "Nouveau Ridley", ["Ridley"], ["Sigourney"])])
         shelf = self.by_anchor(self.alice)["a1"]
         self.assertLess(shelf.index("new"), shelf.index("c_dir"))
+
+    def test_the_index_is_renewed_after_an_enrichment(self):
+        self.rate(self.alice, "a1", "a2")
+        shelf = self.by_anchor(self.alice)["a1"]
+        self.assertLess(shelf.index("c_act"), shelf.index("c_sf1"))
+        self.db.update_item_meta("c_sf1", meta={"directors": ["Ridley"]})          # ce qu'écrit l'enrichissement TMDB
+        shelf = self.by_anchor(self.alice)["a1"]
+        self.assertLess(shelf.index("c_sf1"), shelf.index("c_act"))
 
 
 class TestEmptyAndDegenerate(RecommendCase):
@@ -461,7 +491,7 @@ class TestUnreadableTags(RecommendCase):
                 self.assertEqual([i for i in cards if i.startswith("c_sf")], self.BASELINE)
 
     def test_a_candidate_whose_meta_is_not_an_object_is_still_offered(self):
-        """DÉFAUT CONNU : `summary` (app.py:217) relit `meta` avec `safe_json`, qui rend tout JSON valide tel quel ; `.get` plante sur une liste, une chaîne, un nombre ou `null` (500). Le moteur, lui, passe par `people.meta_of`."""
+        """Un `meta` JSON valide qui n'est pas un objet (`null`, liste, texte, nombre, booléen) se lit comme vide : l'élément reste proposé, sans 500."""
         self.rate(self.alice, "a1", "a2")
         for raw in self.NOT_AN_OBJECT:
             with self.subTest(meta=raw):
@@ -493,13 +523,17 @@ class TestUnreadableTags(RecommendCase):
         self.assertTrue(all("bare" not in shelf for shelf in shelves.values()))
 
     def test_a_tmdb_rating_with_a_text_vote_does_not_break_the_answer(self):
-        """DÉFAUT CONNU : `shown_rating` (app.py:194) compare `votes` à MIN_VOTES et `quality` (recommend.py:144) soustrait `vote` sans vérifier qu'ils sont des nombres (500)."""
+        """Une note TMDB dont `vote` ou `votes` n'est pas un nombre (texte, liste, booléen, NaN, infini) n'est pas montrée et ne casse rien."""
         self.rate(self.alice, "a1", "a2")
-        for raw in ('{"tmdb_rating": {"vote": "9.0", "votes": 1000}}', '{"tmdb_rating": {"vote": "9.0", "votes": "1000"}}', '{"tmdb_rating": {"vote": [9], "votes": 1000}}'):
+        for raw in ('{"tmdb_rating": {"vote": "9.0", "votes": 1000}}', '{"tmdb_rating": {"vote": "9.0", "votes": "1000"}}', '{"tmdb_rating": {"vote": [9], "votes": 1000}}',
+                    '{"tmdb_rating": {"vote": NaN, "votes": 1000}}', '{"tmdb_rating": {"vote": Infinity, "votes": 1000}}', '{"tmdb_rating": {"vote": true, "votes": 1000}}',
+                    '{"tmdb_rating": {"vote": 9.0, "votes": true}}', '{"tmdb_rating": {"vote": 9.0, "votes": 1000.5}}'):
             with self.subTest(meta=raw):
                 self.with_raw_meta("c_sf1", raw)
                 reply = self.reply(self.alice)
                 self.assertEqual(reply.status, 200, reply.body)
+                cards = {c["id"]: c for s in reply.json()["shelves"] for c in s["items"]}          # NaN refusé : la réponse reste du JSON strict
+                self.assertNotIn("tmdb_rating", cards["c_sf1"])                                  # une note illisible n'est pas montrée
 
 
 class TestSameTitles(RecommendCase):
