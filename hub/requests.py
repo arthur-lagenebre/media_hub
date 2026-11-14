@@ -109,12 +109,12 @@ def item_for(found, kind, tmdb, visible):
 
 def promote(db, rows, found):
     """Les demandes en attente de `rows` (dictionnaires, modifiés sur place) dont l'élément est dans `found` (voir `owned`) passent à « added », en une écriture pour toutes."""
-    ids = [r["id"] for r in rows if r["status"] == "pending" and (r["kind"], r["tmdb"]) in found]
+    ids = {r["id"] for r in rows if r["status"] == "pending" and (r["kind"], r["tmdb"]) in found}
     if not ids:
         return rows
-    now = int(time.time())
-    for start in range(0, len(ids), 500):
-        chunk = ids[start:start + 500]
+    now, listed = int(time.time()), sorted(ids)
+    for start in range(0, len(listed), 500):
+        chunk = listed[start:start + 500]
         db.execute(f"UPDATE requests SET status='added', updated=? WHERE status='pending' AND id IN ({','.join('?' * len(chunk))})", (now, *chunk))
     for r in rows:
         if r["id"] in ids:

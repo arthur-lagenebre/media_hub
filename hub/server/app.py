@@ -85,9 +85,10 @@ def require_admin(h):
 
 
 def safe_json(text, default):
+    """`text` lu en JSON, ou `default` : texte vide, illisible, ou imbriqué au point de dépasser la pile (`[[[[…` lève RecursionError, pas ValueError)."""
     try:
         return json.loads(text) if text else default
-    except ValueError:
+    except (ValueError, RecursionError):
         return default
 
 
@@ -3074,7 +3075,10 @@ def api_request_status(h, m, q):
     body = strict_body_dict(h)
     rid = int(m.group(1))
     request_call(hub_requests.set_status, h.hub.db, rid, body.get("status"), body.get("reason"))
-    h.send_json(next(r for r in hub_requests.everything(h.hub.db, h.hub.cfg, h.user["id"]) if r["id"] == rid))
+    changed = next((r for r in hub_requests.everything(h.hub.db, h.hub.cfg, h.user["id"]) if r["id"] == rid), None)
+    if changed is None:                     # supprimée entre le changement et la relecture (une autre requête)
+        raise HttpError(404, "demande inconnue")
+    h.send_json(changed)
 
 
 @route("POST", r"/api/requests/([0-9]{1,15})/ack")

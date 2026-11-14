@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 from urllib.parse import quote
 
@@ -18,6 +19,7 @@ from tests.rig import MiniHub, call
 from tests.test_server_views import entry, item
 from hub import accounts, config, missing
 from hub import db as database
+from hub import requests as hub_requests
 from hub import scan as scanning
 from hub.db import Database
 
@@ -279,6 +281,14 @@ class TestLimits(RequestCase):
         self.assertEqual(self.set_status(rid, "declined", "x" * 201).json(), {"error": "motif trop long (200 caractères au plus)"})
         self.assertEqual(self.set_status(999, "added").status, 404)
         self.assertEqual(self.mine(self.alice)[0]["status"], "pending")
+
+
+class TestStatusRace(RequestCase):
+    def test_a_request_deleted_between_the_change_and_the_reply_is_a_404_not_a_500(self):
+        rid = self.ask(self.alice, 2).json()["id"]
+        with mock.patch.object(hub_requests, "everything", return_value=[]):          # une autre requête l'a supprimée entre-temps
+            reply = self.set_status(rid, "added")
+        self.assertEqual((reply.status, reply.json()), (404, UNKNOWN))
 
 
 class TestWithdrawing(RequestCase):
@@ -566,9 +576,8 @@ class TestDamagedBodies(RequestCase):
                     self.assertEqual((reply.status, reply.json()), (400, expected[target]))
                     self.assertEqual(self.snapshot(), self.before)
 
-    @unittest.expectedFailure
     def test_a_body_nested_without_end_is_never_a_500(self):
-        """DÉFAUT CONNU (hub/server/app.py, `safe_json` ligne 87, utilisé par `body_json`) : `safe_json` n'attrape que ValueError, or `json.loads` d'un corps `[[[[…` lève RecursionError : 500 « erreur interne : Stack overflow » au lieu d'un corps ignoré ou d'un 400. Les routes `strict_body_dict` (création, statut) attrapent déjà RecursionError ; celles qui passent par `body_json` (droit « Peut demander », retrait, acquittement, et toutes les autres routes POST) non. Rien n'est modifié en base, mais c'est une 500 sur une entrée d'un client."""
+        """Un corps `[[[[…` fait lever RecursionError à `json.loads` : `safe_json` (donc `body_json` : droit « Peut demander », retrait, acquittement) l'ignore comme un corps illisible, `strict_body_dict` (création, statut) le refuse en 400 ; jamais une 500."""
         failed = []
         for who, target in self.writes():
             _, reply = call(self.hub, "POST", target, self.DEEP, self.headers(who))
