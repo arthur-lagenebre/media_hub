@@ -297,16 +297,16 @@ def _store_right(conn, uid, lib, view, play, download):
                      (uid, lib, int(view), int(play), int(download)))
 
 
-FLAGS = {"can_upload": ("upload", "un administrateur peut toujours envoyer"),            # colonne de `users` -> (clé du corps de la route, refus pour un administrateur)
-         "can_request": ("request", "un administrateur peut toujours demander")}
+FLAGS = {"can_upload": ("« upload » vaut vrai ou faux", "un administrateur peut toujours envoyer"),     # colonne de `users` -> (refus d'une valeur qui n'est pas un booléen, refus pour un administrateur)
+         "can_request": ("« request » vaut vrai ou faux", "un administrateur peut toujours demander")}   # en toutes lettres : test_i18n cherche chaque message traduit tel quel dans le code
 
 
 def set_flag(db, uid, allowed, column):
     """Donne ou retire à un compte un droit global de FLAGS : `can_upload` (envoyer dans la boîte de réception) ou `can_request` (demander des films et des séries). `allowed` : un booléen, rien d'autre.
     Refuse 400 un administrateur (il a toujours ces droits), 404 un compte inconnu. Renvoie le compte à jour ; la session ne change pas, et les envois ou demandes déjà faits restent."""
-    key, refused = FLAGS[column]
+    not_bool, refused = FLAGS[column]
     if not isinstance(allowed, bool):
-        raise AccountError(400, f"« {key} » vaut vrai ou faux")
+        raise AccountError(400, not_bool)
     row = by_id(db, uid)
     if row is None:
         raise AccountError(404, "compte inconnu")
