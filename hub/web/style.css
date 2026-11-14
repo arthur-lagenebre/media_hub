@@ -518,10 +518,10 @@ html:not([data-device="pc"]) .card.wanted.ask:hover:not(:focus) .rqbtn:not(.on) 
 /* Le nombre de demandes en attente : sur l'entrée des paramètres et sur l'onglet « Demandes » */
 .pend { display: inline-block; min-width: 1.35em; margin-left: 0.3rem; padding: 0 0.35em; border-radius: 1em; background: var(--accent); color: var(--on-accent); font-size: 0.72rem; font-weight: 800; line-height: 1.35em; text-align: center; vertical-align: middle; }
 .tab.on .pend { background: var(--on-accent); color: var(--accent); }
-/* Mes demandes, et l'onglet « Demandes » de l'administrateur */
-.requests { padding-bottom: 3rem; }
-.requests h1 { padding: 1.4rem var(--gut) 0.6rem; }
-.requests .intro { margin: 0 var(--gut) 1rem; max-width: var(--prose); line-height: 1.5; }
+/* Mes demandes (.myrequests), et l'onglet « Demandes » de l'administrateur (.panel.requests) */
+.myrequests { padding-bottom: 3rem; }
+.myrequests h1 { padding: 1.4rem var(--gut) 0.6rem; }
+.myrequests .intro { margin: 0 var(--gut) 1rem; max-width: var(--prose); line-height: 1.5; }
 .reqrow .poster.rqpic { flex: none; width: 3rem; padding-top: 4.5rem; margin-right: 0.9rem; }
 .reqrow .what .rqstatus { color: var(--text); font-weight: 650; overflow-wrap: anywhere; }
 .reqrow[data-status="declined"] .what .rqstatus { color: #ffa595; }

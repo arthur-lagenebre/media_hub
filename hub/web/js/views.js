@@ -167,20 +167,23 @@
         return H.api('/api/requests', body).catch(function (e) {
           found = e.data && typeof e.data.item === 'string' ? e.data.item : null;
           open.hidden = !found;
+          if (found) H.focus.set(open, true);          // à la télécommande : Entrée ouvre la fiche
           throw e;
         });
       },
       done: done });
   }
+  // Une demande déjà retirée ou supprimée ailleurs (404 « demande inconnue ») : le but est atteint, la fenêtre se ferme et la case ou la liste se refait.
+  function goneAlready(e) { if (e && e.status === 404) return null; throw e; }
   // Retirer sa demande (un confirm, Annuler par défaut). La case porte l'identifiant de sa propre demande (`request.id`) ; s'il manque (un serveur plus ancien), on le retrouve dans « Mes demandes ».
   function withdrawFrom(m, done) {
     H.confirm({ title: H.t('Retirer ta demande ?'), lead: [H.t('« {title} » ne sera plus dans tes demandes.', { title: m.title })], ok: H.t('Retirer'), danger: true,
       submit: function () {
         var id = m.request && m.request.id;
-        if (typeof id === 'number') return H.api('/api/requests/' + id + '/delete', {});
+        if (typeof id === 'number') return H.api('/api/requests/' + id + '/delete', {}).catch(goneAlready);
         return H.api('/api/requests?mine=1').then(function (res) {
           var mine = (res.requests || []).filter(function (r) { return r.kind === 'movie' && r.tmdb === m.tmdb; })[0];
-          return mine ? H.api('/api/requests/' + mine.id + '/delete', {}) : null;            // déjà retirée (un autre appareil) : rien à faire
+          return mine ? H.api('/api/requests/' + mine.id + '/delete', {}).catch(goneAlready) : null;            // déjà retirée (un autre appareil) : rien à faire
         });
       },
       done: done });
@@ -1130,7 +1133,7 @@
   // --- Demandes : « Mes demandes » et l'onglet de l'administrateur ----------------------------------
   var REQUEST_STATUS = { pending: H.t('En attente'), added: H.t('Ajouté'), declined: H.t('Refusé') };
   // Le titre d'une demande, avec son année : « Film intermédiaire (2014) ». Le titre vient du serveur (TMDB, ou ce que le compte a envoyé) : toujours en texte.
-  function requestTitle(r) { return (r.title || H.t('Film TMDB {n}', { n: r.tmdb })) + (r.year ? ' (' + r.year + ')' : ''); }
+  function requestTitle(r) { return (r.title || (r.kind === 'show' ? H.t('Série TMDB {n}', { n: r.tmdb }) : H.t('Film TMDB {n}', { n: r.tmdb }))) + (r.year ? ' (' + r.year + ')' : ''); }
   // L'état en toutes lettres, avec le motif d'un refus : « Refusé : pas en France ».
   function requestStatus(r) {
     var said = REQUEST_STATUS[r.status] || r.status;
@@ -1149,7 +1152,7 @@
   H.route(/^\/requests$/, function () {
     var out = h('div', { class: 'panel reqlist' });
     var intro = h('p', { class: 'intro muted' }, H.t('Les films que tu as demandés à l’administrateur. Le hub ne télécharge rien : l’administrateur ajoute le film s’il le peut.'));
-    var el = h('section', { class: 'requests' }, h('h1', null, H.t('Mes demandes')), intro, out);
+    var el = h('section', { class: 'myrequests' }, h('h1', null, H.t('Mes demandes')), intro, out);
     var list = [];
     function row(r) {
       var what = h('div', { class: 'what' }, h('b', null, requestTitle(r)), h('span', { class: 'rqstatus' }, requestStatus(r)),
@@ -1161,7 +1164,7 @@
     }
     function withdraw(r) {
       H.confirm({ title: H.t('Retirer ta demande ?'), lead: [H.t('« {title} » ne sera plus dans tes demandes.', { title: requestTitle(r) })], ok: H.t('Retirer'), danger: true,
-        submit: function () { return H.api('/api/requests/' + r.id + '/delete', {}); },
+        submit: function () { return H.api('/api/requests/' + r.id + '/delete', {}).catch(goneAlready); },
         done: function () { H.toast(H.t('Demande retirée : {title}', { title: requestTitle(r) })); load(neighbourKey(list, r, 'rm-')); } });
     }
     function show(focusKey) {
@@ -1220,7 +1223,11 @@
         var wanted = OLD_TABS[tab] || tab;
         return ids.indexOf(wanted) >= 0 ? wanted : ids[0];
     }
-    function choose(id) { tab = id; H.pref('settings.tab', id); render(); H.focus.key(el, 'tab-' + id); }
+    function choose(id) {
+      tab = id; H.pref('settings.tab', id);
+      if (id === 'demandes' && !reqLoading) { reqList = null; reqError = ''; }          // l'onglet se relit à chaque fois qu'on y entre : pas de liste périmée
+      render(); H.focus.key(el, 'tab-' + id);
+    }
     function tabBar() {
       var active = activeTab();
       return h('div', { class: 'tabs', role: 'tablist' }, visibleTabs().map(function (t) {
@@ -1322,18 +1329,23 @@
     }
     // Demandes (administrateur) : toutes les demandes, filtrées par état, avec leurs demandeurs et leurs messages. Lues à l'ouverture de l'onglet et après chaque action ;
     // le compteur de la barre et de l'onglet suit (/api/state relu par poll).
-    var reqList = null, reqError = '', reqFilter = 'all', reqLoading = false;
+    var reqList = null, reqError = '', reqFilter = 'all', reqLoading = false, reqToken = 0;
     var REQ_FILTERS = [['all', H.t('Toutes')], ['pending', H.t('En attente')], ['added', H.t('Ajoutées')], ['declined', H.t('Refusées')]];
-    function loadRequests(key) {
+    // Relit la liste, puis met le focus sur `key`, à défaut sur `fallback` (une ligne voisine, quand celle qu'on vient de traiter sort du filtre), à défaut sur le filtre.
+    // Une réponse arrivée après une autre lecture (un filtre changé entre-temps) est ignorée.
+    function loadRequests(key, fallback) {
+      var mine = ++reqToken;
       reqLoading = true;
-      return H.api('/api/requests' + (reqFilter !== 'all' ? '?status=' + reqFilter : '')).then(function (res) { reqList = res.requests || []; reqError = ''; }, function (e) { reqList = null; reqError = e.message; }).then(function () {
+      return H.api('/api/requests' + (reqFilter !== 'all' ? '?status=' + reqFilter : '')).then(function (res) { return { list: res.requests || [], error: '' }; }, function (e) { return { list: null, error: e.message }; }).then(function (got) {
+        if (mine !== reqToken) return;
         reqLoading = false;
+        reqList = got.list; reqError = got.error;
         if (closed || activeTab() !== 'demandes') return;
         render();
-        if (key) H.focus.key(el, key, true);
+        if (key && !H.focus.key(el, key, true) && !(fallback && H.focus.key(el, fallback, true))) H.focus.key(el, 'rf-' + reqFilter, true);
       });
     }
-    function afterRequest(key) { return loadRequests(key).then(function () { return poll(); }); }
+    function afterRequest(key, fallback) { return loadRequests(key, fallback).then(function () { return poll(); }); }
     function requestsTab(body) {
       if (reqList === null && !reqError && !reqLoading) loadRequests();
       var panel = h('section', { class: 'panel requests' }, h('h2', null, H.t('Demandes')),
@@ -1343,7 +1355,7 @@
         return h('button', { class: 'chip f' + (on ? ' on' : ''), type: 'button', 'data-key': 'rf-' + f[0], 'aria-pressed': on ? 'true' : 'false',
           onclick: function () { if (reqFilter === f[0]) return; reqFilter = f[0]; reqList = null; reqError = ''; loadRequests('rf-' + f[0]); } }, f[1]);
       })));
-      if (reqError) panel.appendChild(h('p', { class: 'muted' }, reqError));
+      if (reqError) panel.appendChild(h('p', { class: 'muted' }, reqError, ' ', h('button', { class: 'btn f', type: 'button', 'data-key': 'rq-retry', onclick: function () { reqList = null; reqError = ''; loadRequests('rf-' + reqFilter); } }, H.t('Réessayer'))));
       else if (!reqList) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
       else if (!reqList.length) panel.appendChild(h('p', { class: 'muted reqempty' }, reqFilter === 'all' ? H.t('Aucune demande pour l’instant : un compte demande un film depuis sa case grisée (page d’une saga, d’une personne).') : H.t('Aucune demande dans cet état.')));
       (reqList || []).forEach(function (r) { panel.appendChild(adminRequestRow(r)); });
@@ -1368,7 +1380,8 @@
     }
     // Le bouton qui remplace celui qu'on vient d'utiliser : « Marquer ajouté » et « Refuser » deviennent « Remettre en attente », et l'inverse.
     function setRequest(r, status) {
-      H.api('/api/requests/' + r.id + '/status', { status: status }).then(function () { return afterRequest(status === 'pending' ? 'rq-added-' + r.id : 'rq-pending-' + r.id); })
+      var next = neighbourKey(reqList || [], r, 'rq-del-');          // la ligne peut sortir du filtre : le focus va alors à sa voisine
+      H.api('/api/requests/' + r.id + '/status', { status: status }).then(function () { return afterRequest(status === 'pending' ? 'rq-added-' + r.id : 'rq-pending-' + r.id, next); })
         .catch(function (e) { H.toast(e.message, 5000); });
     }
     function declineRequest(r) {
@@ -1376,12 +1389,12 @@
         lead: [H.t('Le motif est montré à ceux qui l’ont demandé. Tant que la demande est refusée, personne ne peut la refaire.')],
         fields: [{ key: 'reason', label: H.t('Motif (facultatif, 200 caractères au plus)'), maxlength: 200 }],
         submit: function (v) { return H.api('/api/requests/' + r.id + '/status', { status: 'declined', reason: v.reason }); },
-        done: function () { afterRequest('rq-pending-' + r.id); } });
+        done: function () { afterRequest('rq-pending-' + r.id, neighbourKey(reqList || [], r, 'rq-del-')); } });
     }
     function deleteRequest(r) {
       H.confirm({ title: H.t('Supprimer la demande « {title} » ?', { title: requestTitle(r) }), ok: H.t('Supprimer'), danger: true,
         lead: [H.t('Elle disparaît pour tous ceux qui l’ont faite ({n}), avec leurs messages. Cela ne s’annule pas.', { n: H.plural((r.users || []).length, 'demandeur') })],
-        submit: function () { return H.api('/api/requests/' + r.id + '/delete', {}); },
+        submit: function () { return H.api('/api/requests/' + r.id + '/delete', {}).catch(goneAlready); },
         done: function () { H.toast(H.t('Demande supprimée : {title}', { title: requestTitle(r) })); afterRequest(neighbourKey(reqList || [], r, 'rq-del-') || 'rf-' + reqFilter); } });
     }
     // Les réglages qu'on touche une fois : l'apparence de ce navigateur, la lecture, l'affichage du compte.

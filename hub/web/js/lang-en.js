@@ -723,6 +723,7 @@
     'Demandé le {date}': 'Requested on {date}',
     'demandée le {date}': 'requested on {date}',
     'Film TMDB {n}': 'TMDB movie {n}',
+    'Série TMDB {n}': 'TMDB series {n}',
     '{status} : {reason}': '{status}: {reason}',
     'Ouvrir': 'Open',
     'Retirer ta demande de « {title} »': 'Withdraw your request for “{title}”',
