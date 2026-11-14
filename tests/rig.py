@@ -42,7 +42,7 @@ class MiniHub(app.Hub):
         self.db = Database(root / "hub.db")
         data = root / "data"
         data.mkdir(exist_ok=True)
-        limits = {"inbox": data / "inbox", "inbox_keep_free": 0, "inbox_max_uploads": 2}
+        limits = {"inbox": data / "inbox", "inbox_keep_free": 0, "inbox_max_uploads": 2, "request_max": 20}
         self.cfg = types.SimpleNamespace(data=data, libraries=list(libraries), web=root / "web", max_streams=2, ffmpeg="", ffprobe="", tmdb_key="", repo=None, admin="", **{**limits, **cfg})
         self.cfg.library = lambda ident: next((lib for lib in self.cfg.libraries if lib.id == ident), None)
         self.images, self.jobs = mock.MagicMock(), mock.MagicMock()

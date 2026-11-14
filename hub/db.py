@@ -16,6 +16,8 @@ import time
 from functools import partial
 from pathlib import Path
 
+from .requests import TABLES as REQUEST_TABLES
+
 ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "meta", "added", "count"}      # ce que update_item_meta peut changer
 RATINGS = ("up", "mid", "down")      # l'avis d'un compte sur un film ou une série : J'aime, Bof, Je n'aime pas. Pas de ligne = pas d'avis ; « Bof » n'est donc pas l'absence d'avis
 ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
@@ -34,15 +36,24 @@ def _create_ratings(conn):
     conn.execute(RATINGS_TABLE)
 
 
+def _create_requests(conn):
+    """8 : les demandes (tables `requests` et `request_users`, voir requests.py) et le droit « Peut demander » (`users.can_request`, actif pour les comptes d'avant comme pour les nouveaux). Rien d'existant n'est touché."""
+    for table in REQUEST_TABLES:
+        conn.execute(table)
+    _add_column(conn, "users", "can_request", "INTEGER NOT NULL DEFAULT 1")
+
+
 # {version: fonction(connexion)} : ce qui fait passer la base à `version` depuis la précédente. CREATE TABLE IF NOT EXISTS (SCHEMA) ajoute des tables, pas une colonne : toute autre évolution s'écrit ici, ex. `3: lambda conn: conn.execute("ALTER TABLE items ADD COLUMN x TEXT")`
 # 4 : « lire » (`rights.play`) vaut 1 pour les lignes d'avant, qui n'avaient pas ce droit à retirer. 5 : le droit « Envoyer » (`users.can_upload`) vaut 0 pour les comptes d'avant ; l'administrateur envoie toujours, quelle que soit la colonne. 6 : `users.inbox_dir` (le dossier du compte dans la boîte de réception) vaut NULL pour les comptes d'avant : `Inbox` le fixe à la première utilisation, ou au démarrage (migration de l'ancien dossier nommé d'après l'identifiant).
 # 7 : la table `ratings` (l'avis personnel d'un compte, voir plus bas), qui ne change aucune table existante.
+# 8 : les demandes (tables `requests` et `request_users`, voir requests.py) et la colonne `users.can_request` (« Peut demander »), qui vaut 1 pour les comptes d'avant : le droit est donné par défaut, l'administrateur le retire.
 # (Une virgule doit précéder chaque numéro : .github/scripts/check_version.py lit ces clés dans le texte.)
 MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition="INTEGER NOT NULL DEFAULT 1"),
               5: partial(_add_column, table="users", column="can_upload", definition="INTEGER NOT NULL DEFAULT 0"),
               6: partial(_add_column, table="users", column="inbox_dir", definition="TEXT"),
-              7: _create_ratings}
-SCHEMA_VERSION = 7          # 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+              7: _create_ratings,
+              8: _create_requests}
+SCHEMA_VERSION = 8          # 8 : tables `requests` et `request_users` (les demandes), colonne `users.can_request` ; 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 RATINGS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS ratings(
@@ -120,6 +131,7 @@ CREATE TABLE IF NOT EXISTS users(
     token_version INTEGER NOT NULL DEFAULT 1,     -- change à chaque nouveau mot de passe : les jetons de session de ce compte cessent de valoir
     created       INTEGER NOT NULL,
     can_upload    INTEGER NOT NULL DEFAULT 0,     -- le droit « Envoyer » (boîte de réception) ; l'administrateur envoie toujours, sans tenir compte de cette colonne
+    can_request   INTEGER NOT NULL DEFAULT 1,     -- le droit « Peut demander » (voir requests.py), donné par défaut ; l'administrateur demande toujours, sans tenir compte de cette colonne
     inbox_dir     TEXT                            -- le nom du dossier du compte sous la boîte de réception, fixé à la première utilisation (voir inbox.py) ; NULL tant que le compte n'a rien envoyé. Un renommage ou une suppression de compte ne le change pas
 );
 CREATE TABLE IF NOT EXISTS rights(
@@ -130,7 +142,7 @@ CREATE TABLE IF NOT EXISTS rights(
     download INTEGER NOT NULL DEFAULT 1,    -- télécharger ses fichiers ; sans effet quand view est à 0
     PRIMARY KEY(user_id, lib)
 );                                          -- pas de ligne = tout autorisé : les comptes d'avant les droits n'ont rien perdu, et une bibliothèque ajoutée s'ouvre à tous
-""" + RATINGS_TABLE + ";"
+""" + RATINGS_TABLE + ";" + "".join(table + ";" for table in REQUEST_TABLES)
 
 
 def make_id(*parts):

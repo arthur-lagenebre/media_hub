@@ -43,6 +43,7 @@ from .. import missing
 from .. import people
 from .. import playlists
 from .. import prefs
+from .. import requests as hub_requests
 from .. import urls
 from .. import sagas as sagafile
 from ..sagas import Sagas
@@ -124,7 +125,7 @@ class Hub:
 
     def open_user(self):
         """Qui est « connecté » quand le serveur est ouvert : le profil `default`, administrateur (c'est lui que le premier compte reprendra)."""
-        return {"id": accounts.FIRST_ID, "name": self.cfg.admin, "role": "admin", "can_upload": False}        # sans compte, personne n'envoie : un envoi anonyme serait une porte ouverte sur le disque
+        return {"id": accounts.FIRST_ID, "name": self.cfg.admin, "role": "admin", "can_upload": False, "can_request": True}        # sans compte, personne n'envoie : un envoi anonyme serait une porte ouverte sur le disque
 
     def media_token(self, row):
         """Le jeton de média du compte `row`, celui qui voyage dans les URLs (`?token=`) : il ne vaut que sur /media, /img, /book et /api/subs (sous-titres, lecture seule), nulle part ailleurs sur /api/ ;
@@ -857,6 +858,15 @@ def api_user_upload(h, m, q):
     h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
 
 
+@route("POST", r"/api/user/(\w+)/request")
+def api_user_request(h, m, q):
+    """L'administrateur donne ou retire le droit de demander des films et des séries : `{"request": bool}`. Pas pour un administrateur (400 : il demande toujours). Rend le compte. Valable à la requête suivante ; les demandes déjà faites restent."""
+    require_admin(h)
+    need_accounts(h)
+    account_call(accounts.set_can_request, h.hub.db, m.group(1), body_dict(h).get("request"))
+    h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
+
+
 @route("POST", r"/api/user/(\w+)/password")
 def api_user_password(h, m, q):
     """L'administrateur donne un nouveau mot de passe à un autre compte sans connaître l'ancien. Pour le sien, il doit redonner l'actuel (`current`, comme `/api/me/password`) :
@@ -975,7 +985,8 @@ def api_state(h, m, q):
         count = hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]
         libs.append({**labels.describe(hub.db, lib), "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir(), "play": h.can(lib.id, "play"), "download": h.can(lib.id, "download")})
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
-                 "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams})
+                 "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams,
+                 "can_request": h.user["can_request"], **requests_state(h)})
 
 
 def next_entry(hub, entry):
@@ -1082,7 +1093,7 @@ def api_home(h, m, q):
         if lib.kind in UNSEEN_KINDS:
             row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order, quality=quality, ratings=ratings)
         rows.append(row)
-    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play"), ratings), "libraries": rows})
+    h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play"), ratings), "libraries": rows, "requests_ready": requests_ready(h, seen, quality, ratings)})
 
 
 @route("GET", r"/api/search")
@@ -1131,7 +1142,9 @@ def api_person(h, m, q):
     person = person if shown else None              # ce que le compte ne voit pas n'existe pas pour lui
     roles, rows = person_rows(hub.db, person, {lib.id for lib in libs})
     seen, ratings = (seen_counts(hub, h.user["id"]), hub.db.ratings_for(h.user["id"])) if rows else ({}, {})
-    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": person_results(hub.db, libs, rows, seen, ratings), **person_extras(hub, person, libs)})
+    extras = person_extras(hub, person, libs)
+    mark_requests(h, extras.get("missing"))
+    h.send_json({"name": shown or " ".join(name.split()), "roles": roles, "results": person_results(hub.db, libs, rows, seen, ratings), **extras})
 
 
 def person_rows(db, person, visible):
@@ -1579,6 +1592,7 @@ def api_library(h, m, q):
            "genres": genre_menu(genres)}
     if group and sort == "part":
         number_films(out["items"], ranks, offset + 1)
+    mark_requests(h, absent)
     library_extras(out, lib.kind, sections, absent, sagas, chosen, artists)
     h.send_json(out)
 
@@ -1715,6 +1729,7 @@ def api_item(h, m, q):
             out["season_badges"] = by_season
     if item["type"] == "movie":
         out.update(movie_sagas(hub, item, lib, h.user["id"], ratings))
+        mark_requests(h, *[saga.get("missing") for saga in out.get("sagas", [])])
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
     h.send_json(out)
@@ -2973,6 +2988,101 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     request_queue_size = 64
+
+
+# ---------------------------------------------------------------------------
+# Demandes (voir requests.py) : une liste d'attente que l'administrateur lit ; le hub ne télécharge rien
+# ---------------------------------------------------------------------------
+request_call = partial(module_call, hub_requests.RequestError)
+
+
+def requests_state(h):
+    """Ce que `/api/state` dit des demandes : leur nombre en attente, pour l'administrateur seulement."""
+    return {"requests_pending": hub_requests.pending_count(h.hub.db, h.hub.cfg)} if h.user["role"] == "admin" else {}
+
+
+def requests_ready(h, seen, quality, ratings):
+    """Pour l'accueil : les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack`), chacune avec la vignette de l'élément (`card`, comme celles des rayons). Vide quand il n'en a pas."""
+    found = hub_requests.ready(h.hub.db, h.hub.cfg, h.user["id"], h.visible_ids())
+    rows = {row["id"]: row for row in items_by_id(h.hub.db, {item for _, item in found})} if found else {}
+    return [{"id": request["id"], "kind": request["kind"], "tmdb": request["tmdb"], "title": request["title"], "year": request["year"], "item": item, "card": with_seen(rows[item], seen, quality, ratings)}
+            for request, item in found if item in rows]
+
+
+def mark_requests(h, *lists):
+    """Les films absents de ces listes (`missing` d'une saga ou d'une personne) reçoivent `request` ({"status", "mine"}) quand quelqu'un les a demandés ; `mine` dit seulement si c'est ce compte. Une lecture des demandes pour toutes les listes, aucune quand elles sont vides."""
+    films = [film for films in lists for film in films or ()]
+    if not films:
+        return
+    found = hub_requests.marks(h.hub.db, h.hub.cfg, h.user["id"])
+    for film in films:
+        if film.get("tmdb") in found:
+            film["request"] = dict(found[film["tmdb"]])
+
+
+def request_failure(h, call, *args):
+    """`call(*args)` ; une RequestError devient la réponse, avec ses champs en plus (`item` d'un élément déjà là) : None est alors rendu, la réponse est partie."""
+    try:
+        return call(*args)
+    except hub_requests.RequestError as e:
+        if not e.extra:
+            raise HttpError(e.status, e.message)
+        h.send_json({"error": e.message, **e.extra}, e.status)
+        return None
+
+
+@route("GET", r"/api/requests")
+def api_requests(h, m, q):
+    """`?mine=1` : les demandes du compte ; sans, toutes les demandes avec leurs demandeurs, pour l'administrateur seulement (403 sinon), `?status=` en garde une sorte."""
+    hub = h.hub
+    if q.get("mine") == "1":
+        h.send_json({"requests": hub_requests.mine(hub.db, hub.cfg, h.user["id"], h.visible_ids())})
+        return
+    require_admin(h)
+    h.send_json({"requests": request_call(hub_requests.everything, hub.db, hub.cfg, h.user["id"], q.get("status"))})
+
+
+@route("POST", r"/api/requests")
+def api_request_create(h, m, q):
+    """Le compte demande un film ou une série : `{"kind": "movie" | "show", "tmdb": <entier>, "note": "…", "title": "…", "year": "AAAA"}` (titre et année ne servent que si le serveur ne connaît pas le film).
+    201 : nouvelle demande ; 200 : le compte rejoint une demande existante, ou l'avait déjà faite. L'administrateur n'a pas de plafond."""
+    if not h.user["can_request"]:
+        h.discard_body()
+        raise HttpError(403, "tu n'as pas le droit de demander des films ni des séries")
+    body = strict_body_dict(h)
+    hub = h.hub
+    limit = None if h.user["role"] == "admin" else hub.cfg.request_max
+    done = request_failure(h, hub_requests.create, hub.db, hub.cfg, h.user["id"], body, h.visible_ids(), limit)
+    if done is None:
+        return
+    row, new = done
+    h.send_json({"id": row["id"], "kind": row["kind"], "tmdb": row["tmdb"], "status": row["status"], "mine": True}, 201 if new else 200)
+
+
+@route("POST", r"/api/requests/([0-9]{1,15})/delete")
+def api_request_delete(h, m, q):
+    """Un compte retire sa demande ; l'administrateur supprime la demande entière. 404 pour une demande inconnue ou qui n'est pas celle du compte."""
+    h.body_json()
+    request_call(hub_requests.withdraw, h.hub.db, h.user["id"], int(m.group(1)), h.user["role"] == "admin")
+    h.send_json({"ok": True})
+
+
+@route("POST", r"/api/requests/([0-9]{1,15})/status")
+def api_request_status(h, m, q):
+    """L'administrateur passe une demande à `added`, `declined` (`reason` : un motif facultatif, 200 caractères au plus) ou la remet en `pending` ; rend la demande comme `GET /api/requests`."""
+    require_admin(h)
+    body = strict_body_dict(h)
+    rid = int(m.group(1))
+    request_call(hub_requests.set_status, h.hub.db, rid, body.get("status"), body.get("reason"))
+    h.send_json(next(r for r in hub_requests.everything(h.hub.db, h.hub.cfg, h.user["id"]) if r["id"] == rid))
+
+
+@route("POST", r"/api/requests/([0-9]{1,15})/ack")
+def api_request_ack(h, m, q):
+    """Le compte a vu que sa demande est arrivée : elle quitte `requests_ready` de son accueil. 404 pour une demande inconnue ou qui n'est pas la sienne."""
+    h.body_json()
+    request_call(hub_requests.acknowledge, h.hub.db, h.user["id"], int(m.group(1)))
+    h.send_json({"ok": True})
 
 
 def make_server(cfg):

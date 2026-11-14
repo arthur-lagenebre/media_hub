@@ -18,6 +18,7 @@ HUB_INBOX ne se règle que dans l'environnement (le yaml qui monte le volume), j
     HUB_INBOX      dossier de la boîte de réception (envois)      HUB_DATA/inbox
     HUB_INBOX_KEEP_FREE  espace libre à garder sur le volume de la boîte, en Mo   10240
     HUB_INBOX_MAX_UPLOADS  envois simultanés (429 au-delà)              2
+    HUB_REQUEST_MAX  demandes en attente par compte (409 au-delà)   20
     TMDB_KEY       clé TMDB, pour enrichir les séries             (aussi lue dans le .env de HUB_REPO)
 """
 
@@ -66,6 +67,7 @@ class Config:
     inbox: Path | None = None            # la boîte de réception ; sans valeur, HUB_DATA/inbox (voir __post_init__)
     inbox_keep_free: int = 10240 << 20    # octets, à garder libres sur le volume de la boîte (les variables HUB_INBOX_* se donnent en Mo)
     inbox_max_uploads: int = 2
+    request_max: int = 20                 # demandes en attente par compte (voir requests.py) ; l'administrateur n'a pas de plafond
     web: Path = Path(__file__).resolve().parent / "web"
 
     def __post_init__(self):
@@ -169,6 +171,7 @@ def load(env=None):
         inbox=Path(env.get("HUB_INBOX", "").strip() or data / "inbox").resolve(),
         inbox_keep_free=_megabytes(env, "HUB_INBOX_KEEP_FREE", 10240, 0),
         inbox_max_uploads=max(1, int(env.get("HUB_INBOX_MAX_UPLOADS", "2"))),
+        request_max=max(1, int(env.get("HUB_REQUEST_MAX", "20"))),
     )
 
 

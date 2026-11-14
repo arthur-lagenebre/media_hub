@@ -19,6 +19,7 @@ import threading
 import time
 
 from . import prefs
+from . import requests
 
 FIRST_ID = "default"
 ROLES = ("admin", "user")
@@ -170,9 +171,14 @@ def can_upload(row):
     return row["role"] == "admin" or bool(row["can_upload"])
 
 
+def can_request(row):
+    """Le compte peut-il demander un film ou une série (voir requests.py) ? Un administrateur toujours, un autre compte tant que l'administrateur ne lui a pas retiré ce droit (donné par défaut)."""
+    return row["role"] == "admin" or bool(row["can_request"])
+
+
 def public(row):
     """Ce que l'API dit d'un compte (jamais le haché ni la version du jeton)."""
-    return {"id": row["id"], "name": row["name"], "role": row["role"], "can_upload": can_upload(row)}
+    return {"id": row["id"], "name": row["name"], "role": row["role"], "can_upload": can_upload(row), "can_request": can_request(row)}
 
 
 def listing(row):
@@ -303,6 +309,19 @@ def set_can_upload(db, uid, allowed):
     return by_id(db, uid)
 
 
+def set_can_request(db, uid, allowed):
+    """Donne ou retire le droit de demander un film ou une série (`allowed` : un booléen, rien d'autre). Refuse 400 un administrateur (il demande toujours), 404 un compte inconnu. Renvoie le compte à jour ; ses demandes déjà faites restent."""
+    if not isinstance(allowed, bool):
+        raise AccountError(400, "« request » vaut vrai ou faux")
+    row = by_id(db, uid)
+    if row is None:
+        raise AccountError(404, "compte inconnu")
+    if row["role"] == "admin":
+        raise AccountError(400, "un administrateur peut toujours demander")
+    db.execute("UPDATE users SET can_request=? WHERE id=?", (int(allowed), uid))
+    return by_id(db, uid)
+
+
 # ---------------------------------------------------------------------------
 # Écriture
 # ---------------------------------------------------------------------------
@@ -359,7 +378,7 @@ def revoke_sessions(db, uid):
 
 
 def delete(db, uid):
-    """Supprime le compte, ses droits, sa progression, ses avis, ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction.
+    """Supprime le compte, ses droits, sa progression, ses avis, ses demandes (une demande qui n'a plus de demandeur disparaît), ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction.
     Son dossier de la boîte de réception et les fichiers qu'il contient restent en place (rien n'est perdu) : le lien (`users.inbox_dir`) disparaît avec la ligne, et l'administrateur voit ce dossier sous son nom comme celui d'un compte supprimé."""
     with db.write_lock:
         conn = db.connection()
@@ -372,6 +391,7 @@ def delete(db, uid):
             conn.execute("DELETE FROM progress WHERE profile=?", (uid,))
             conn.execute("DELETE FROM rights WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM ratings WHERE user_id=?", (uid,))
+            requests.forget_user(conn, uid)
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE profile=?)", (uid,))
             conn.execute("DELETE FROM playlists WHERE profile=?", (uid,))
             prefix = f"dismiss:{uid}:"
