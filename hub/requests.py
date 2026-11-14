@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from functools import partial
 
 from . import missing
 from . import sagas as sagafile
@@ -84,22 +85,29 @@ def _owned_key(row):
     return ("show", ident) if ident is not None else None
 
 
+def _gathered(rows):
+    """{(kind, identifiant TMDB): [(id de l'élément, bibliothèque), …]} des lignes de OWNED_SQL ; une ligne sans identifiant lisible est écartée, un élément n'y est qu'une fois."""
+    found = {}
+    for row in rows:
+        key = _owned_key(row)
+        if key is not None and (row["item"], row["lib"]) not in found.get(key, []):
+            found.setdefault(key, []).append((row["item"], row["lib"]))
+    return found
+
+
+def _owned_now(db, movies, shows):
+    """Ce que `owned` rend, lu dans la base pour ces bibliothèques de films et de séries (identifiants), en une requête ; rien sans bibliothèque vidéo."""
+    if not movies and not shows:
+        return {}
+    sql = OWNED_SQL.format(movies=",".join("?" * len(movies)) or "NULL", shows=",".join("?" * len(shows)) or "NULL")
+    return _gathered(db.query(sql, [*movies, *shows, *shows, '%"movie/%']))
+
+
 def owned(db, libs):
     """{(kind, identifiant TMDB): [(id de l'élément, bibliothèque), …]} de ce que ces bibliothèques `libs` (objets Library) ont : les films comme `missing.owned_films` (y compris un film rangé dans une bibliothèque de séries, par l'étiquette de son fichier), les séries par leur fiche TMDB.
     Une requête, gardée en mémoire jusqu'au prochain scan ou enrichissement (Database.derived)."""
     movies, shows = [lib.id for lib in libs if lib.kind == "movies"], [lib.id for lib in libs if lib.kind == "shows"]
-
-    def build():
-        found = {}
-        if not movies and not shows:
-            return found
-        sql = OWNED_SQL.format(movies=",".join("?" * len(movies)) or "NULL", shows=",".join("?" * len(shows)) or "NULL")
-        for row in db.query(sql, [*movies, *shows, *shows, '%"movie/%']):
-            key = _owned_key(row)
-            if key is not None and (row["item"], row["lib"]) not in found.get(key, []):
-                found.setdefault(key, []).append((row["item"], row["lib"]))
-        return found
-    return db.derived("requests-owned:" + ",".join(movies) + "|" + ",".join(shows), build)
+    return db.derived("requests-owned:" + ",".join(movies) + "|" + ",".join(shows), partial(_owned_now, db, movies, shows))
 
 
 def item_for(found, kind, tmdb, visible):
@@ -210,33 +218,87 @@ def _text(value, what, limit=MAX_TEXT):
     return value
 
 
-def checked(body):
-    """(kind, tmdb, message, titre, année) d'un corps de demande ; 400 en français pour ce qui ne va pas."""
-    kind, tmdb = body.get("kind"), body.get("tmdb")
-    if kind not in KINDS:
+def _kind(value):
+    if value not in KINDS:
         raise RequestError(400, "sorte de demande inconnue (movie ou show)")
-    if isinstance(tmdb, bool) or not isinstance(tmdb, int) or not 0 < tmdb < 1 << 53:
+    return value
+
+
+def _tmdb_id(value):
+    """Un identifiant TMDB : un entier (pas un booléen) de 1 à 2⁵³ exclu ; 400 sinon."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value < 1 << 53:
         raise RequestError(400, "identifiant TMDB attendu : un entier positif")
-    note = _text(body.get("note"), "message")
-    title = _text(body.get("title"), "titre")
-    year = body.get("year")
-    year = "" if year in (None, "") else str(year) if isinstance(year, (str, int)) and not isinstance(year, bool) else None
-    if year is None or (year and not YEAR_RE.fullmatch(year)):
+    return value
+
+
+def _year(value):
+    """Une année facultative : absente ou vide, sinon 4 chiffres (texte ou nombre, pas un booléen) ; 400 sinon."""
+    if value in (None, ""):
+        return ""
+    text = str(value) if isinstance(value, (str, int)) and not isinstance(value, bool) else ""
+    if not YEAR_RE.fullmatch(text):
         raise RequestError(400, "année attendue : 4 chiffres")
-    return kind, tmdb, note, title, year
+    return text
+
+
+def checked(body):
+    """(kind, tmdb, message, titre, année) d'un corps de demande ; 400 en français pour ce qui ne va pas, dans cet ordre."""
+    return _kind(body.get("kind")), _tmdb_id(body.get("tmdb")), _text(body.get("note"), "message"), _text(body.get("title"), "titre"), _year(body.get("year"))
+
+
+def _named(film):
+    """(titre, année) d'une fiche de film gardée par l'enrichissement, ou None quand elle n'a pas de titre."""
+    return (film["title"], film.get("year") or "") if isinstance(film, dict) and film.get("title") else None
+
+
+def _in_filmography(text, tmdb):
+    """(titre, année) du film `tmdb` dans une filmographie gardée (`personinfo:<id>`, voir enrich.enrich_person), ou None."""
+    known = json.loads(text)
+    films = (known.get("films") or []) if isinstance(known, dict) else []
+    return next((_named(f) for f in films if isinstance(f, dict) and f.get("tmdb") == tmdb and _named(f)), None)
 
 
 def known_film(db, tmdb):
     """(titre, année) d'un film que l'enrichissement a décrit (absent d'une saga, ou de la filmographie d'une personne), ou None."""
-    film = missing.load(db)["films"].get(str(tmdb))
-    if isinstance(film, dict) and film.get("title"):
-        return film["title"], film.get("year") or ""
-    for row in db.query("SELECT value FROM kv WHERE key LIKE 'personinfo:%' AND value LIKE ?", (f'%"tmdb": {tmdb},%',)):
-        known = json.loads(row["value"])
-        film = next((f for f in (known.get("films") or []) if isinstance(f, dict) and f.get("tmdb") == tmdb and f.get("title")), None) if isinstance(known, dict) else None
-        if film:
-            return film["title"], film.get("year") or ""
-    return None
+    found = _named(missing.load(db)["films"].get(str(tmdb)))
+    if found:
+        return found
+    rows = db.query("SELECT value FROM kv WHERE key LIKE 'personinfo:%' AND value LIKE ?", (f'%"tmdb": {tmdb},%',))
+    return next((hit for hit in (_in_filmography(row["value"], tmdb) for row in rows) if hit), None)
+
+
+def _described(db, kind, tmdb, title, year):
+    """(titre, année) d'une demande : ce que le serveur sait d'un film, sinon ce que le corps a dit."""
+    known = known_film(db, tmdb) if kind == "movie" else None
+    return (known[0][:MAX_TEXT], known[1][:4]) if known else (title, year)
+
+
+def _existing(conn, kind, tmdb, uid):
+    """(la demande de cet élément ou None, ce compte en est-il) ; 409 quand elle a été refusée."""
+    row = conn.execute("SELECT * FROM requests WHERE kind=? AND tmdb=?", (kind, tmdb)).fetchone()
+    if row is not None and row["status"] == "declined":
+        raise RequestError(409, f"cette demande a été refusée : {row['reason']}" if row["reason"] else "cette demande a été refusée")
+    mine = row is not None and conn.execute("SELECT 1 FROM request_users WHERE request_id=? AND user_id=?", (row["id"], uid)).fetchone() is not None
+    return row, mine
+
+
+def _check_room(conn, row, uid, limit):
+    """409 quand le compte a déjà `limit` demandes en attente (None : sans plafond) et que celle-ci en serait une de plus (nouvelle, ou en attente)."""
+    waiting = conn.execute("SELECT COUNT(*) FROM request_users u JOIN requests r ON r.id = u.request_id WHERE u.user_id=? AND r.status='pending'", (uid,)).fetchone()[0]
+    if limit is not None and (row is None or row["status"] == "pending") and waiting >= limit:
+        raise RequestError(409, f"trop de demandes en attente ({limit})")
+
+
+def _store(conn, row, uid, fields, found, now):
+    """Écrit la demande (si `row` est None : nouvelle, déjà « added » si l'élément est là) et le compte parmi ses demandeurs ; rend l'identifiant de la demande. `fields` : (kind, tmdb, message, titre, année)."""
+    kind, tmdb, note, title, year = fields
+    if row is None:
+        status = "added" if (kind, tmdb) in found else "pending"
+        rid = conn.execute("INSERT INTO requests(kind, tmdb, title, year, status, reason, created, updated) VALUES(?,?,?,?,?,'',?,?)", (kind, tmdb, title, year, status, now, now)).lastrowid
+    else:
+        rid = row["id"]
+    conn.execute("INSERT INTO request_users(request_id, user_id, note, created, ack) VALUES(?,?,?,?,0)", (rid, uid, note, now))
+    return rid
 
 
 def create(db, cfg, uid, body, visible, limit):
@@ -248,34 +310,23 @@ def create(db, cfg, uid, body, visible, limit):
     item = item_for(found, kind, tmdb, visible)
     if item:
         raise RequestError(409, "déjà dans la médiathèque", {"item": item})
-    known = known_film(db, tmdb) if kind == "movie" else None
-    title, year = (known[0][:MAX_TEXT], known[1][:4]) if known else (title, year)
+    title, year = _described(db, kind, tmdb, title, year)
     now = int(time.time())
     with db.write_lock:
         conn = db.connection()
         try:
-            row = conn.execute("SELECT * FROM requests WHERE kind=? AND tmdb=?", (kind, tmdb)).fetchone()
-            if row is not None and row["status"] == "declined":
-                raise RequestError(409, f"cette demande a été refusée : {row['reason']}" if row["reason"] else "cette demande a été refusée")
-            if row is not None and conn.execute("SELECT 1 FROM request_users WHERE request_id=? AND user_id=?", (row["id"], uid)).fetchone():
+            row, mine = _existing(conn, kind, tmdb, uid)
+            if mine:
                 conn.rollback()
                 return dict(row), False
-            waiting = conn.execute("SELECT COUNT(*) FROM request_users u JOIN requests r ON r.id = u.request_id WHERE u.user_id=? AND r.status='pending'", (uid,)).fetchone()[0]
-            if limit is not None and (row is None or row["status"] == "pending") and waiting >= limit:
-                raise RequestError(409, f"trop de demandes en attente ({limit})")
-            if row is None:
-                status = "added" if (kind, tmdb) in found else "pending"
-                rid = conn.execute("INSERT INTO requests(kind, tmdb, title, year, status, reason, created, updated) VALUES(?,?,?,?,?,'',?,?)", (kind, tmdb, title, year, status, now, now)).lastrowid
-            else:
-                rid = row["id"]
-            conn.execute("INSERT INTO request_users(request_id, user_id, note, created, ack) VALUES(?,?,?,?,0)", (rid, uid, note, now))
+            _check_room(conn, row, uid, limit)
+            rid = _store(conn, row, uid, (kind, tmdb, note, title, year), found, now)
             conn.commit()
         except Exception:
             conn.rollback()
             raise
-    joined = row is not None
-    row = dict(db.one("SELECT * FROM requests WHERE id=?", (rid,)))
-    return promote(db, [row], found)[0], not joined
+    stored = dict(db.one("SELECT * FROM requests WHERE id=?", (rid,)))
+    return promote(db, [stored], found)[0], row is None
 
 
 def withdraw(db, uid, rid, admin):
