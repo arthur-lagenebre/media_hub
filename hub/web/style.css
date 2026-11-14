@@ -330,7 +330,7 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .menu.form .formerr:empty { display: block; }
 .menu.prompt .field { width: 100%; margin: 0.2rem 0 0.4rem; }
 .menu.form .rights { padding: 0 0.6rem 0.4rem; }
-.menu.rightsbox .lead { margin: 0; padding-bottom: 0.4rem; }
+.menu.rightsbox .lead { margin: 0; padding-bottom: 0.4rem; font-size: 0.86rem; line-height: 1.35; }
 /* wide : contenu libre */
 .menu.wide { width: min(46rem, 94vw); }
 .menu.picker { overflow-y: auto; }
@@ -486,14 +486,14 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .crop-stage:active { cursor: grabbing; }
 .crop-stage img { position: absolute; max-width: none; pointer-events: none; }
 .crop-frame { position: absolute; box-sizing: border-box; border: 2px solid var(--accent); box-shadow: 0 0 0 999px rgba(5, 7, 9, 0.66); pointer-events: none; }
-.rights .rrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.2rem 0.4rem; padding: 0.3rem 0; border-top: 1px solid var(--line); }       /* le nom de la bibliothèque, puis trois boutons égaux : la mise en page ne dépend pas de la largeur de la police */
+.rights .rrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.15rem 0.4rem; padding: 0.22rem 0; border-top: 1px solid var(--line); }       /* le nom de la bibliothèque, puis trois boutons égaux : la mise en page ne dépend pas de la largeur de la police */
 .rights .rrow b { grid-column: 1 / -1; overflow-wrap: anywhere; }
 .rights .rrow .chip { margin: 0; padding: 0.28rem 0.5rem; text-align: center; }
 .rights .rrow .chip .mark { visibility: hidden; margin-right: 0.35em; }
 .rights .rrow .chip.on .mark { visibility: visible; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
-.rights .rrow[data-upload-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* le droit d'envoi : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas de plus */
-.rights .rrow[data-upload-right] b { grid-column: auto; }
+.rights .rrow[data-upload-right], .rights .rrow[data-request-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* envoyer des fichiers, demander des films : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas */
+.rights .rrow[data-upload-right] b, .rights .rrow[data-request-right] b { grid-column: auto; }
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
 /* Sagas composées à la main */
