@@ -108,6 +108,7 @@ Idéalement un téléphone étroit, une fois en français et une fois en anglais
 - [ ] **Fiche d'un artiste :** la croix de retrait à côté de chaque lien se touche sans viser à côté ; « Ajouter un lien » ne se laisse pas cacher par le clavier.
 - [ ] **Interface en anglais :** les boutons des Paramètres, la barre du lecteur et les fenêtres de droits ne débordent pas (les tests ne vérifient que l'absence de texte manquant).
 - [ ] **Disque de la note TMDB** sur une vignette : il ne gêne ni le bouton « … » ni la barre de progression, et reste lisible.
+- [ ] **« Parce que tu as aimé » :** après avoir noté deux films « J'aime », les rayons arrivent sur l'accueil sans faire sauter la page sous le doigt ; « … » > « Pourquoi cette suggestion ? » se lit sans défiler ; « Pas intéressé » retire la carte.
 
 ---
 
@@ -132,4 +133,5 @@ Android TV, Fire TV, webOS. La télé n'est pas prioritaire : cette séance peut
 - [ ] **Liseuse en double page :** le focus des boutons « Double page » et « Décaler d'une page ».
 - [ ] **Interface en anglais :** rien ne déborde (barre du lecteur, Paramètres).
 - [ ] **Disque de la note TMDB :** lisible de loin.
+- [ ] **« Parce que tu as aimé » :** les rayons arrivent sans voler le focus ; la touche « Menu » sur une de leurs cartes ouvre « … », « Pourquoi cette suggestion ? » se ferme par Retour, et après « Pas intéressé » le focus passe à la carte voisine.
 - [ ] **Sous-titres PGS :** la fluidité du décodage dans le navigateur de la télé.
