@@ -104,7 +104,7 @@ PROGRESS_SQL = ("SELECT e.item_id AS item, SUM(p.done) AS seen, COUNT(*) AS touc
 
 def progress_of(db, profile):
     """{id d'élément: (fichiers vus, fichiers entamés, dernière mise à jour)} de ce compte, en une lecture (les deux premiers comme `seen_counts`)."""
-    return {r["item"]: (r["seen"] or 0, r["touched"], r["last"]) for r in db.query(PROGRESS_SQL, (profile,))}
+    return {r["item"]: (r["seen"], r["touched"], r["last"]) for r in db.query(PROGRESS_SQL, (profile,))}
 
 
 class Scope:

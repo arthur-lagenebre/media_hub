@@ -87,8 +87,10 @@ class RecommendCase(unittest.TestCase):
             self.db.set_rating(who["id"], ident, value)
             self.db.execute("UPDATE ratings SET updated=? WHERE user_id=? AND item_id=?", (1000 + n, who["id"], ident))         # l'ordre des avis : le dernier cité est le plus récent
 
-    def watch(self, who, ident, done=True):
+    def watch(self, who, ident, done=True, when=None):
         self.db.save_progress(who["id"], "v_" + ident, 99 if done else 10, 100, done)
+        if when is not None:
+            self.db.execute("UPDATE progress SET updated=? WHERE profile=? AND entry_id=?", (when, who["id"], "v_" + ident))
 
     def reply(self, who, day=DAY):
         headers = self.hub.cookie(accounts.by_id(self.db, who["id"])) if who else {}
@@ -129,8 +131,33 @@ class TestOrder(RecommendCase):
         self.fill("films", FILMS + common)                       # « Drame » sur 30 films sur 81 : sous le seuil
         self.rate(self.alice, "a2", "d00")
         self.assertIn("d00", self.by_anchor(self.alice))
-        self.fill("films", FILMS + common + [film(f"e{n:02d}", f"Encore {n:02d}", genres=["Drame"]) for n in range(30)])       # 60 sur 111 : au-dessus de 40 %
-        self.assertNotIn("d00", self.by_anchor(self.alice))
+        drama = [film("a2", "Inception", ["Nolan"], ["Leo"], ["Thriller", "Drame"], "2010"), film("dn", "Drame Nolan", ["Nolan"], [], ["Drame"], ""),
+                 film("d01", "Drame 01", genres=["Drame"], vote=9.0)]
+        rows = {r["id"]: r for r in FILMS + common + [film(f"e{n:02d}", f"Encore {n:02d}", genres=["Drame"]) for n in range(30)] + drama}
+        self.fill("films", list(rows.values()))                  # 61 sur 112 : au-dessus de 40 %
+        shelves = self.shelves(self.alice)
+        self.assertEqual([s["anchor"]["id"] for s in shelves], ["a2"])
+        cards = {c["id"]: c for c in shelves[0]["items"]}
+        self.assertEqual(cards["dn"]["why"], [{"kind": "director", "value": "Nolan"}])         # « Drame » n'explique rien
+        self.assertNotIn("d01", cards)                                                         # ni ne rapproche, même un film bien noté
+
+    def test_a_feature_on_exactly_forty_percent_still_counts(self):
+        group = ("films", "movie")
+        idx = {"items": {}, "counts": {group: {("genre", "x"): 4, ("genre", "y"): 5}}, "sizes": {group: 10}}
+        scope = recommend.Scope(idx, "movie", {}, {"films"})
+        self.assertGreater(scope.weight(("genre", "x")), 0)
+        self.assertEqual(scope.weight(("genre", "y")), 0)
+
+    def test_the_rating_bonus_follows_the_slope_up_to_its_cap(self):
+        self.assertEqual(recommend.quality(None), 0)
+        self.assertEqual(recommend.quality(recommend.QUALITY_PIVOT), 0)
+        self.assertAlmostEqual(recommend.quality(recommend.QUALITY_PIVOT + 0.5), 0.5 * recommend.QUALITY_SLOPE)
+        self.assertEqual(recommend.quality(10), recommend.QUALITY_CAP)
+        self.assertEqual(recommend.quality(0), -recommend.QUALITY_CAP)
+
+    def test_between_equals_the_better_rated_comes_first(self):
+        self.assertEqual(self.sf_order([film("c_sf2", "Contact", genres=["SF"], year="1997", vote=9.0), film("c_sf4", "Tenet", genres=["SF"], year="2020", vote=9.5)]),
+                         ["c_sf4", "c_sf2", "c_sf1", "c_sf3"])                          # bonus plafonné des deux côtés : la note départage avant le titre
 
     def test_a_decade_alone_is_not_enough(self):
         self.rate(self.alice, "a1", "a2")
@@ -156,6 +183,16 @@ class TestOrder(RecommendCase):
         self.assertEqual(order, ["c_sf2", "c_sf1", "c_sf3", "c_sf4"])
         self.rate(self.alice, "z", value="down")
         self.assertEqual([i for i in self.by_anchor(self.alice)["a1"] if i.startswith("c_sf")], ["c_sf2", "c_sf3", "c_sf4", "c_sf1"])
+
+    def test_only_what_is_not_liked_and_of_the_same_kind_weighs_down_not_its_decade(self):
+        expected = ["c_sf2", "c_sf1", "c_sf3", "c_sf4"]
+        self.sf_order([film("c_sf1", "Dune", ["Denis"], [], ["SF"], "2021"), film("z", "Raté", ["Denis"], [], ["Western"], "1950"),
+                       film("y", "Même décennie", [], [], ["Western"], "2020")])
+        self.fill("series", SHOWS + [film("zs", "Série de Denis", ["Denis"], [], [], "", lib="series", kind="show")])
+        self.rate(self.alice, "z", value="mid")                    # « Bof » n'est pas « Je n'aime pas »
+        self.rate(self.alice, "zs", "y", value="down")            # une série, et un film qui ne partage que la décennie de Dune
+        self.db.set_rating(self.alice["id"], "disparu", "down")    # un élément disparu : son avis reste, sans effet
+        self.assertEqual([i for i in self.by_anchor(self.alice)["a1"] if i.startswith("c_sf")], expected)
 
     def test_only_the_first_five_actors_count(self):
         cast = ["Un", "Deux", "Trois", "Quatre", "Cinq", "Six"]
@@ -256,6 +293,26 @@ class TestEnoughSignal(RecommendCase):
         self.rate(self.alice, "a1")
         self.watch(self.alice, "a2")
         self.assertEqual(set(self.by_anchor(self.alice)), {"a1", "a2"})
+
+    def test_a_shelf_of_exactly_four_items_is_kept(self):
+        self.fill("films", FILMS + [film(f"s_solo{n}", f"Avec Solo {n}", ["Solo"]) for n in range(2, 5)])
+        self.rate(self.alice, "a1", "a3")
+        self.assertEqual(len(self.by_anchor(self.alice)["a3"]), 4)
+
+    def test_only_the_ten_most_recent_liked_are_anchors(self):
+        self.rate(self.alice, "a1", "a2", *[f"f{n:02d}" for n in range(9)])     # a1 est le plus ancien des 11 avis ; les remplissages n'ont aucun voisin
+        self.assertEqual(set(self.by_anchor(self.alice)), {"a2"})
+
+    def test_only_the_ten_most_recently_finished_are_anchors(self):
+        for when, ident in enumerate(["a1", "a2"] + [f"f{n:02d}" for n in range(9)]):
+            self.watch(self.alice, ident, when=1000 + when)
+        self.assertEqual(set(self.by_anchor(self.alice)), {"a2"})
+
+    def test_a_film_without_files_is_never_finished(self):
+        self.fill("films", [r for r in FILMS if r["id"] != "a2"] + [film("a2", "Inception", ["Nolan"], ["Leo"], ["Thriller"], "2010", count=0)])
+        self.rate(self.alice, "a1")
+        self.watch(self.alice, "a2", done=False)
+        self.assertEqual(self.shelves(self.alice), [])
 
     def test_a_shelf_under_four_items_is_dropped_and_the_next_anchor_tried(self):
         self.rate(self.alice, "a1", "a3")
