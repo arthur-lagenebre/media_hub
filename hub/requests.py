@@ -140,13 +140,19 @@ def refreshed(db, libs, rows):
 # ---------------------------------------------------------------------------
 # Lire
 # ---------------------------------------------------------------------------
+def poster_file(kind, tmdb):
+    """Le nom de l'affiche TMDB d'un film ou d'une série dans HUB_DATA/tmdb : celui que l'enrichissement lui donne (`film-<id>.jpg`, voir missing.poster_name ; `<id>.jpg` pour une série, voir enrich.enrich_show)."""
+    return missing.poster_name(tmdb) if kind == "movie" else f"{tmdb}.jpg"
+
+
 def cover(cfg, row, item):
-    """L'image d'une demande : celle de l'élément quand le compte le voit, sinon l'affiche que l'enrichissement a gardée d'un film absent (saga, personne), sinon rien."""
+    """L'image d'une demande : celle de l'élément quand le compte le voit, sinon l'affiche gardée dans HUB_DATA/tmdb (par l'enrichissement, ou par la tâche « Affiches des demandes ») :
+    `/img/film/<tmdb>` pour un film (comme les films absents des sagas), `/img/request/<id>` pour une série ; sinon rien."""
     if item:
         return urls.item_cover(item)
-    if row["kind"] == "movie" and (cfg.data / "tmdb" / missing.poster_name(row["tmdb"])).is_file():
-        return urls.missing_film(row["tmdb"])
-    return ""
+    if not (cfg.data / "tmdb" / poster_file(row["kind"], row["tmdb"])).is_file():
+        return ""
+    return urls.missing_film(row["tmdb"]) if row["kind"] == "movie" else urls.request_poster(row["id"])
 
 
 def shown(cfg, row, found, visible):
@@ -200,7 +206,26 @@ def marks(db, cfg, uid, kind="movie"):
     """{identifiant TMDB: {"status", "mine", "id"?}} des demandes de cette sorte : `mine` dit si ce compte en est, rien d'autre (ni qui, ni combien) ; `id` (de quoi la retirer) seulement quand c'est la sienne, jamais pour celle d'un autre. Une lecture des demandes."""
     rows = db.query("SELECT r.id, r.kind, r.tmdb, r.status, r.updated, MAX(u.user_id = ?) AS mine FROM requests r JOIN request_users u ON u.request_id = r.id WHERE r.kind=? GROUP BY r.id", (uid, kind))
     rows, _ = refreshed(db, cfg.libraries, rows)
-    return {r["tmdb"]: {"status": r["status"], "mine": True, "id": r["id"]} if r["mine"] else {"status": r["status"], "mine": False} for r in rows}
+    return {r["tmdb"]: _mark(r) for r in rows}
+
+
+def _mark(row):
+    """Ce qu'un compte sait d'une demande (`row` porte `mine`) : son état, si c'est la sienne, et alors seulement son identifiant."""
+    return {"status": row["status"], "mine": True, "id": row["id"]} if row["mine"] else {"status": row["status"], "mine": False}
+
+
+def search_marks(db, cfg, uid, keys):
+    """Pour la recherche dans TMDB : ({(kind, tmdb): marque (voir `_mark`)} des demandes de ces éléments `keys`, ce que la médiathèque a (voir `owned`)).
+    Une lecture des demandes et un regard sur la médiathèque pour tous les résultats ; rien du tout sans résultat."""
+    if not keys:
+        return {}, {}
+    found = owned(db, cfg.libraries)
+    ids = sorted({tmdb for _, tmdb in keys})
+    rows = db.query(f"SELECT r.id, r.kind, r.tmdb, r.status, r.updated, MAX(u.user_id = ?) AS mine FROM requests r JOIN request_users u ON u.request_id = r.id "
+                    f"WHERE r.tmdb IN ({','.join('?' * len(ids))}) GROUP BY r.id", (uid, *ids))
+    rows = promote(db, [dict(r) for r in rows], found)
+    wanted = set(keys)
+    return {(r["kind"], r["tmdb"]): _mark(r) for r in rows if (r["kind"], r["tmdb"]) in wanted}, found
 
 
 # ---------------------------------------------------------------------------
@@ -267,9 +292,12 @@ def known_film(db, tmdb):
     return next((hit for hit in (_in_filmography(row["value"], tmdb) for row in rows) if hit), None)
 
 
-def _described(db, kind, tmdb, title, year):
-    """(titre, année) d'une demande : ce que le serveur sait d'un film, sinon ce que le corps a dit."""
+def _described(db, kind, tmdb, title, year, describe):
+    """(titre, année) d'une demande : ce que le serveur sait d'un film ; sinon, pour une demande nouvelle, ce que `describe(kind, tmdb)` en dit (TMDB, voir request_search.Finder.details :
+    ses RequestError passent, rien n'est alors écrit) ; sinon (sans `describe`, ou demande qui existe déjà et garde son titre) ce que le corps a dit."""
     known = known_film(db, tmdb) if kind == "movie" else None
+    if not known and describe is not None and db.one("SELECT 1 FROM requests WHERE kind=? AND tmdb=?", (kind, tmdb)) is None:
+        known = describe(kind, tmdb)
     return (known[0][:MAX_TEXT], known[1][:4]) if known else (title, year)
 
 
@@ -301,8 +329,9 @@ def _store(conn, row, uid, fields, found, now):
     return rid
 
 
-def create(db, cfg, uid, body, visible, limit):
+def create(db, cfg, uid, body, visible, limit, describe=None):
     """Le compte `uid` demande un film ou une série (`body` : {kind, tmdb, note, title, year}) ; rend (demande, nouvelle ?). `visible` : les bibliothèques qu'il voit (None : toutes) ; `limit` : ses demandes en attente au plus (None : sans plafond).
+    `describe(kind, tmdb)` : (titre, année) d'un élément que le serveur ne connaît pas (voir `_described`), None pour s'en tenir au corps.
 
     409 quand l'élément est déjà dans une bibliothèque qu'il voit (avec son identifiant, `item`), quand la demande a été refusée, ou au-delà de `limit`. Une demande qu'il a déjà faite rend la même, sans doublon."""
     kind, tmdb, note, title, year = checked(body)
@@ -310,7 +339,7 @@ def create(db, cfg, uid, body, visible, limit):
     item = item_for(found, kind, tmdb, visible)
     if item:
         raise RequestError(409, "déjà dans la médiathèque", {"item": item})
-    title, year = _described(db, kind, tmdb, title, year)
+    title, year = _described(db, kind, tmdb, title, year, describe)
     now = int(time.time())
     with db.write_lock:
         conn = db.connection()

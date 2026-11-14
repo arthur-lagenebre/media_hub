@@ -19,6 +19,7 @@ config.use_media_library(fixtures.REPO)
 from hub.db import Database  # noqa: E402
 from hub.sagas import Sagas  # noqa: E402
 from hub.server import app  # noqa: E402
+from hub import request_search  # noqa: E402
 
 
 class Reply:
@@ -50,6 +51,7 @@ class MiniHub(app.Hub):
         self.sagas = Sagas(data / "sagas.json")
         self.throttle = accounts.Throttle()
         self.inbox = inbox.Inbox(self.cfg, self.db)
+        self.finder = request_search.Finder(self.cfg)
         self.streams = threading.BoundedSemaphore(2)
         self.active = 0
         self.secret = "ab" * 32

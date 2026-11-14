@@ -26,6 +26,11 @@ def missing_film(tmdb_id):
     return f"/img/film/{tmdb_id}"
 
 
+def request_poster(request_id):
+    """L'affiche d'une demande (voir request_search.fetch_posters), pour ses demandeurs et l'administrateur ; 404 sans affiche."""
+    return f"/img/request/{request_id}"
+
+
 def artist_image(lib_id, artist_id):
     """La photo d'un artiste ; 404 s'il n'en a pas."""
     return f"/img/artist/{lib_id}/{artist_id}"

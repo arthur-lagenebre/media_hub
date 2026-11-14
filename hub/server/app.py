@@ -45,6 +45,7 @@ from .. import playlists
 from .. import prefs
 from .. import recommend
 from .. import requests as hub_requests
+from .. import request_search
 from .. import urls
 from .. import sagas as sagafile
 from ..sagas import Sagas
@@ -110,6 +111,7 @@ class Hub:
         self.sagas = Sagas(cfg.data / "sagas.json")
         self.throttle = accounts.Throttle()                    # les essais de connexion ratés, par adresse
         self.inbox = Inbox(cfg, self.db)                       # les envois des comptes (voir inbox.py)
+        self.finder = request_search.Finder(cfg)                # la recherche dans TMDB des titres à demander (voir request_search.py)
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
         self.active = 0
         self.secret = self._secret()
@@ -500,7 +502,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_failure(self, status, message):
         """Une erreur du serveur (500, 502 et plus) au journal ; le jeton n'y va pas : masqué d'après les clés décodées (`?%74oken=` aussi)."""
         split = urlsplit(self.path)
-        pairs = [(k, "***" if k == "token" else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
+        hidden = {"token", "q"} if split.path == "/api/requests/search" else {"token"}         # le texte d'une recherche dans TMDB ne va pas au journal
+        pairs = [(k, "***" if k in hidden else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
         shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
         print(f"{status} {self.command} {shown} : {message}", file=sys.stderr)
 
@@ -992,7 +995,7 @@ def api_state(h, m, q):
         libs.append({**labels.describe(hub.db, lib), "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir(), "play": h.can(lib.id, "play"), "download": h.can(lib.id, "download")})
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
                  "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams,
-                 "can_request": h.user["can_request"], **requests_state(h)})
+                 "can_request": h.user["can_request"], "request_search": bool(h.user["can_request"] and hub.finder.configured()), **requests_state(h)})
 
 
 def next_entry(hub, entry):
@@ -2805,14 +2808,17 @@ def api_sagas_ignore(h, m, q):
 @route("GET", r"/img/film/(\d+)")
 def film_image(h, m, q):
     """L'affiche d'un film qui manque à une saga ou à une personne (HUB_DATA/tmdb, voir missing.py) ; 404 s'il n'en a pas (la page montre alors une case grisée). Le fichier fait foi : l'enrichissement des sagas et celui des personnes le posent chacun, sans rien se dire."""
-    hub = h.hub
-    path = hub.cfg.data / "tmdb" / missing.poster_name(m.group(1))
+    send_poster(h, q, f"film:{m.group(1)}", h.hub.cfg.data / "tmdb" / missing.poster_name(m.group(1)))
+
+
+def send_poster(h, q, ref, path):
+    """Envoie l'affiche `path` (HUB_DATA/tmdb), réduite à `?w=` et gardée sous `ref` ; 404 quand le fichier n'y est pas."""
     path = path if path.is_file() else None
     try:
         width = int(q.get("w", 0))
     except ValueError:
         width = 0
-    served = hub.images.file(f"film:{m.group(1)}", path, width) if path else None
+    served = h.hub.images.file(ref, path, width) if path else None
     if served is None:
         raise HttpError(404, "pas d'affiche")
     data, mime, key = served
@@ -3067,15 +3073,67 @@ def api_request_create(h, m, q):
     201 : nouvelle demande ; 200 : le compte rejoint une demande existante, ou l'avait déjà faite. L'administrateur n'a pas de plafond."""
     if not h.user["can_request"]:
         h.discard_body()
-        raise HttpError(403, "tu n'as pas le droit de demander des films ni des séries")
+    require_requester(h)
     body = strict_body_dict(h)
     hub = h.hub
     limit = None if h.user["role"] == "admin" else hub.cfg.request_max
-    done = request_failure(h, hub_requests.create, hub.db, hub.cfg, h.user["id"], body, h.visible_ids(), limit)
+    describe = hub.finder.details if hub.finder.configured() else None           # sans clé TMDB, le titre et l'année du corps, comme avant la recherche
+    done = request_failure(h, hub_requests.create, hub.db, hub.cfg, h.user["id"], body, h.visible_ids(), limit, describe)
     if done is None:
         return
     row, new = done
     h.send_json({"id": row["id"], "kind": row["kind"], "tmdb": row["tmdb"], "status": row["status"], "mine": True}, 201 if new else 200)
+    if new and row["status"] == "pending" and describe is not None:
+        fetch_request_posters(hub)
+
+
+def fetch_request_posters(hub):
+    """Met en file la tâche « Affiches des demandes », la réponse déjà partie : un échec ici ne touche pas la demande, il est seulement dit au journal."""
+    try:
+        hub.jobs.request_posters()
+    except Exception as e:                  # la demande est faite : rien ne doit la défaire
+        print(f"Affiches des demandes : la tâche n'a pas pu être lancée ({e})", file=sys.stderr)
+
+
+def require_requester(h):
+    """403 quand le compte n'a pas le droit « Peut demander »."""
+    if not h.user["can_request"]:
+        raise HttpError(403, "tu n'as pas le droit de demander des films ni des séries")
+
+
+@route("GET", r"/api/requests/search")
+def api_request_search(h, m, q):
+    """Cherche dans TMDB un film (`kind=movie`), une série (`kind=show`) ou les deux (sans `kind`) à demander : `q`, 2 à 100 caractères. Au plus 10 résultats par sorte, de la première page de TMDB ;
+    chacun dit s'il est déjà demandé (`request`, comme les cases grisées) et, quand il est dans une bibliothèque que le compte voit, son élément (`item`). Garde-fous : voir request_search.py."""
+    require_requester(h)
+    text = request_call(request_search.search_text, q.get("q"))
+    kinds = request_call(request_search.search_kinds, q.get("kind"))
+    hub = h.hub
+    if not hub.finder.configured():
+        raise HttpError(503, request_search.UNCONFIGURED)
+    request_call(hub.finder.pace.take, h.user["id"])
+    results = request_call(hub.finder.search, text, kinds)
+    marks, found = hub_requests.search_marks(hub.db, hub.cfg, h.user["id"], [(r["kind"], r["tmdb"]) for r in results])
+    visible = h.visible_ids()
+    for result in results:
+        key = (result["kind"], result["tmdb"])
+        if key in marks:
+            result["request"] = marks[key]
+        item = hub_requests.item_for(found, *key, visible)
+        if item:
+            result["item"] = item
+    h.send_json({"results": results})
+
+
+@route("GET", r"/img/request/([0-9]{1,15})")
+def request_image(h, m, q):
+    """L'affiche d'une demande (HUB_DATA/tmdb, voir request_search.fetch_posters), pour ses demandeurs et l'administrateur ; 404 sans affiche, et pour la demande d'un autre (comme une inconnue)."""
+    hub = h.hub
+    row = hub.db.one("SELECT r.kind, r.tmdb FROM requests r WHERE r.id=? AND (? OR EXISTS (SELECT 1 FROM request_users u WHERE u.request_id = r.id AND u.user_id=?))",
+                     (int(m.group(1)), h.user["role"] == "admin", h.user["id"]))
+    if row is None:
+        raise HttpError(404, "pas d'affiche")
+    send_poster(h, q, f"request:{row['kind']}:{row['tmdb']}", hub.cfg.data / "tmdb" / hub_requests.poster_file(row["kind"], row["tmdb"]))
 
 
 @route("POST", r"/api/requests/([0-9]{1,15})/delete")

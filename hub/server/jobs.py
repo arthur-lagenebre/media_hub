@@ -17,7 +17,7 @@ from pathlib import Path
 
 from libraries.music import coverfile, wanted
 
-from .. import enrich, labels, scan
+from .. import enrich, labels, request_search, scan
 from ..media import probe as prober
 from ..scan.common import is_album_cover
 
@@ -57,13 +57,13 @@ class Jobs:
         self.worker = threading.Thread(target=self._run, name="jobs", daemon=True)
         self.worker.start()
 
-    def _submit(self, label, func, key=None, again=False):
+    def _submit(self, label, func, key=None, again=False, joined=("waiting", "running")):
         """Met la tâche en file, ou rend celle qui attend ou tourne déjà pour la même demande. La demande est reconnue à `key` (sans lui, à l'intitulé) : l'intitulé porte le libellé affiché
         d'une bibliothèque, que l'administrateur peut changer ou fixer à « tout » ; il ne doit jamais décider si deux demandes sont la même.
-        `again` : la tâche en cours se remet elle-même en file, derrière celles qui attendent (voir probe) ; elle ne doit pas se reconnaître."""
+        `again` : la tâche en cours se remet elle-même en file, derrière celles qui attendent (voir probe) ; elle ne doit pas se reconnaître. `joined` : les états d'une tâche qu'on rejoint au lieu d'en mettre une autre en file."""
         key = label if key is None else key
         with self.lock:
-            same = None if again else next((j for j in self.history if j.key == key and j.status in ("waiting", "running")), None)
+            same = None if again else next((j for j in self.history if j.key == key and j.status in joined), None)
             if same:
                 return same
             self.counter += 1
@@ -137,6 +137,11 @@ class Jobs:
     def enrich_people(self, libs, label="bibliothèques de films", force=False):
         """Les films des réalisateurs et des acteurs de premier plan de ces bibliothèques `libs` : voir enrich.enrich_people. `label` : « bibliothèques de films » ou le nom de la catégorie (« Séries »), pour l'intitulé de la tâche : une tâche par catégorie."""
         return self._submit(f"Films manquants · {label}", lambda log: enrich.enrich_people(self.cfg, self.db, libs, log, force), ("people", tuple(lib.id for lib in libs)))
+
+    def request_posters(self):
+        """Les affiches des demandes qui n'en ont pas (voir request_search.fetch_posters), lancée après chaque nouvelle demande. Seule une tâche **en attente** est rejointe :
+        celle qui tourne a peut-être déjà lu les demandes, la nouvelle attendrait la suivante."""
+        return self._submit(request_search.POSTERS_LABEL, lambda log: request_search.fetch_posters(self.cfg, self.db, log), ("request-posters",), joined=("waiting",))
 
     def cleanup(self, apply):
         def run(log):
