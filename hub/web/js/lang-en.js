@@ -751,7 +751,19 @@
     'Droits de {name} : consulter, lecture, télécharger, envoyer, demander': 'Permissions of {name}: browse, play, download, upload, request',
     '« Peut demander » n’a pas été enregistré : {error}': '“Can request” was not saved: {error}',
     '« Peut demander » est enregistré.': '“Can request” is saved.',
-    'Le reste est enregistré.': 'The rest is saved.'
+    'Le reste est enregistré.': 'The rest is saved.',
+
+    // --- Parce que tu as aimé (accueil, menu « … ») ---
+    'Parce que tu as aimé {title}': 'Because you liked {title}',
+    'Parce que tu as aimé…': 'Because you liked…',
+    'Pourquoi cette suggestion ?': 'Why this suggestion?',
+    'Pas intéressé': 'Not interested',
+    'Noté « Je n’aime pas » : il n’est plus proposé': 'Rated “I don’t like it”: no longer suggested',
+    'Même réalisateur : {value}': 'Same director: {value}',
+    'Même acteur : {value}': 'Same actor: {value}',
+    'Même genre : {value}': 'Same genre: {value}',
+    'Même saga : {value}': 'Same saga: {value}',
+    'Même époque : années {value}': 'Same era: the {value}s'
   };
 
   // Ce que le serveur écrit. Les libellés de bibliothèque viennent de la configuration (« Films », « Séries »…) : un nom que l'on a choisi soi-même reste tel quel.

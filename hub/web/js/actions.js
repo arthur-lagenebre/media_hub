@@ -57,18 +57,38 @@
     H.menu(H.t('Mon avis'), options, current, function (v) { A.rate(it, v === 'clear' ? null : v).catch(fail); });
   };
 
+  // --- Suggestions (« Parce que tu as aimé ») : une carte qui porte `why` (GET /api/recommendations) --------------------
+  // Une particularité partagée avec l'ancre, en toutes lettres ; null pour une sorte inconnue. La saga se traduit comme sur la carte (H.tr).
+  function reason(w) {
+    if (!w || typeof w.value !== 'string') return null;
+    if (w.kind === 'director') return H.t('Même réalisateur : {value}', { value: w.value });
+    if (w.kind === 'actor') return H.t('Même acteur : {value}', { value: w.value });
+    if (w.kind === 'genre') return H.t('Même genre : {value}', { value: w.value });
+    if (w.kind === 'saga') return H.t('Même saga : {value}', { value: H.tr(w.value) });
+    if (w.kind === 'decade') return H.t('Même époque : années {value}', { value: w.value });
+    return null;
+  }
+  // « Pourquoi cette suggestion ? » : une fenêtre d'information (déclinaison confirm, comme « Rien à envoyer »), l'ancre puis ce que l'élément partage avec elle.
+  A.why = function (it) {
+    var lead = (it.because ? [H.t('Parce que tu as aimé {title}', { title: it.because.title })] : []).concat((it.why || []).map(reason).filter(Boolean));
+    H.confirm({ title: H.t('Pourquoi cette suggestion ?'), lead: lead, ok: H.t('Compris') });
+  };
+
   // `d` : la fiche de l'élément (/api/item), qui sait si TMDB le connaît ; null pour une saga, ou quand la fiche ne vient pas.
   function showMenu(it, d) {
     var done = finished(it), tmdb = d && d.links ? d.links.filter(function (l) { return l.label === 'TMDB'; })[0] : null;
     var options = (A.canPlay(d && d.library && d.library.id) ? [{ label: done ? H.t('Revoir') : (it.seen || it.started ? H.t('Reprendre') : H.t('Voir')), value: 'play' }] : []).concat([{ label: A.seenLabel(it.type, done), value: 'seen' }]);
     var mine = d ? d.rating || null : it.rating || null, rated = H.ratingOf(mine);      // la fiche, quand elle est venue, est plus fraîche que la carte
     if (A.ratable(it)) options.push({ label: H.t('Mon avis'), detail: rated ? rated.label : '', value: 'rate' });
+    if (it.why && A.ratable(it)) options.push({ label: H.t('Pourquoi cette suggestion ?'), value: 'why' }, { label: H.t('Pas intéressé'), detail: H.t('Noté « Je n’aime pas » : il n’est plus proposé'), value: 'down' });      // une carte de « Parce que tu as aimé » ; « Pas intéressé » la retire du rayon (H.rated)
     if (it.type === 'movie' && d && d.tmdb && H.isAdmin() && H.sagas) options.push({ label: H.t('Ajouter à une saga'), value: 'saga' });      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
     if (tmdb) options.push({ label: 'TMDB', detail: H.t('Ouvre la fiche dans un nouvel onglet'), value: 'tmdb' });
     if (d && d.entries && d.entries.length && A.canDownload(d.library && d.library.id)) options.push({ label: H.t('Télécharger'), detail: d.entries.length > 1 ? H.t('{n} fichiers, l’un après l’autre', { n: d.entries.length }) : '', value: 'download' });
     H.menu(it.title, options, null, function (v) {
       if (v === 'play') (it.type === 'saga' ? playSaga : play)(it, done).catch(fail);
       else if (v === 'rate') A.ratingMenu(it, mine);
+      else if (v === 'why') A.why(it);
+      else if (v === 'down') A.rate(it, 'down').catch(fail);
       else if (v === 'saga') H.sagas.addTo(d, refresh);
       else if (v === 'tmdb') window.open(tmdb.url, '_blank', 'noopener');
       else if (v === 'download') A.download(d.entries.map(function (e) { return e.id; }));

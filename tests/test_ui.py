@@ -4216,7 +4216,7 @@ class TestSettings(UiCase):
         self.assertEqual(panels.count(), 3)
         self.assertEqual(panels.nth(0).locator(".line .what b").all_inner_texts(), ["Appareil", "Taille du texte", "Langue"])
         self.assertEqual(panels.nth(1).locator(".line .what b").all_inner_texts(), ["Qualité", "Son surround 5.1"])
-        self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Nouveautés", "Pas encore vu", "Pas encore vu : cartes par rayon", "Pas encore vu : trier par", "Tes demandes sont arrivées"])
+        self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Nouveautés", "Pas encore vu", "Pas encore vu : cartes par rayon", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…"])
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
@@ -6590,6 +6590,474 @@ class TestRequestsInTheUi(unittest.TestCase):
         self.rows(admin).first.wait_for()
         self.assertIn("1 requester", self.rows(admin).inner_text())
         self.assertEqual(admin.evaluate("Hub.missing"), [])
+
+
+class TestRecommendationsInTheUi(unittest.TestCase):
+    """« Parce que tu as aimé <titre> » à l'accueil : un rayon par ancre, juste après « Reprendre », arrivé sans déplacer le focus ; « Pourquoi cette suggestion ? » et « Pas intéressé » dans le menu « … » ;
+    une carte notée « Je n'aime pas » quitte aussi « Pas encore vu » ; le réglage `home_recommend` masque le rayon sans appeler la route.
+
+    Un serveur avec comptes (`alice` et `bob`) ; deux ancres possibles, « Ancre Polar » (réalisée par « Réal Polar », 1974) et « Ancre Western » (« Réal Western »), cinq voisins chacune,
+    et des films sans rien en commun (aucune particularité ne doit être portée par trop de films). Avis, progression et réglages sont remis à zéro entre deux tests.
+    """
+    PASSWORD = "motdepasse12"
+    ROUTE = "/api/recommendations"
+    EVERY_REASON = [{"kind": "director", "value": "Réal Polar"}, {"kind": "actor", "value": "Acteur Polar"}, {"kind": "genre", "value": "Polar"},
+                    {"kind": "saga", "value": "Saga Polar"}, {"kind": "decade", "value": "1970"}]
+
+    @classmethod
+    def setUpClass(cls):
+        if not (sync_playwright and fixtures.FFMPEG):
+            raise unittest.SkipTest("Playwright ou ffmpeg absent")
+        from hub import accounts
+        cls.tmp = tempfile.mkdtemp()
+        cls.run_ = Running(cls.tmp, password="secret")
+        cls.hub = cls.run_.hub
+        cls.base = f"http://127.0.0.1:{cls.run_.port}"
+        db = cls.hub.db
+        items = [dict(r) for r in db.query("SELECT * FROM items WHERE lib='films'")]
+        entries = [dict(r) for r in db.query("SELECT * FROM entries WHERE lib='films'")]
+        model = next(i for i in items if i["type"] == "movie" and any(e["item_id"] == i["id"] for e in entries))
+        file = next(e for e in entries if e["item_id"] == model["id"])
+
+        def film(ident, title, directors=(), actors=(), genres=(), year=""):
+            meta = {"directors": list(directors), "actors": [{"name": a, "role": ""} for a in actors]}
+            return {**model, "id": ident, "title": title, "sort": title.casefold(), "letter": title[:1].upper(), "grp": "", "year": year, "added": 100,
+                    "genres": json.dumps(list(genres)), "meta": json.dumps(meta), "summary": ""}
+        made = [film("ancrepolar", "Ancre Polar", ["Réal Polar"], ["Acteur Polar"], ["Polar"], "1974"),
+                film("polar1", "Polar Un", ["Réal Polar"], ["Acteur Polar"], [], "2001"),
+                film("polar2", "Polar Deux", ["Réal Polar"], [], [], "1976"),
+                film("polar3", "Polar Trois", ["Réal Polar"], [], ["Polar"], "2005"),
+                film("polar4", "Polar Quatre", ["Réal Polar"], [], [], "2010"),
+                film("polar5", "Polar Cinq", ["Réal Polar"], [], [], "2012"),
+                film("ancrewestern", "Ancre Western", ["Réal Western"], [], [], "1990")] \
+            + [film(f"western{n}", f"Western {n}", ["Réal Western"], [], [], "1950") for n in range(1, 6)] \
+            + [film(f"autre{n:02d}", f"Autre {n:02d}", [], [], [f"Genre {n}"]) for n in range(24)]
+        files = [{**file, "id": "v" + it["id"], "item_id": it["id"], "rel": it["id"] + "/film.mkv"} for it in made]
+        db.replace_library("films", items + made, entries + files)
+        cls.resume = (file["id"], file["duration"] or 100)                                    # un film à entamer : le rayon « Reprendre »
+        cls.alice = accounts.create(db, "alice", cls.PASSWORD)
+        cls.bob = accounts.create(db, "bob", cls.PASSWORD)
+        cls.pw = sync_playwright().start()
+        cls.browser = cls.pw.chromium.launch()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        cls.pw.stop()
+        cls.run_.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        from hub import prefs
+        db = self.hub.db
+        db.execute("DELETE FROM ratings")
+        db.execute("DELETE FROM progress")
+        for who in (self.alice, self.bob):
+            prefs.save(db, who["id"], {"home_recommend": "show", "home_latest": "show", "home_unseen": "show"})
+        self.errors = []
+        self.pages = []
+
+    def tearDown(self):
+        for context in self.pages:
+            context.close()
+        self.assertEqual(self.errors, [], "erreurs JavaScript")
+
+    # --- Aides ---------------------------------------------------------------
+    def opened(self, name, lang=None, setup=None):
+        """Une page connectée en tant que `name`, arrivée sur l'accueil, et la réponse de `GET /api/recommendations` que l'accueil a demandée.
+        `setup(page)` est appelé avant la connexion (une route interceptée)."""
+        context = self.browser.new_context(viewport={"width": 1280, "height": 900})
+        self.pages.append(context)
+        if lang:
+            context.add_cookies([{"name": "hub_lang", "value": lang, "url": self.base}])
+            context.add_init_script(f"localStorage.setItem('hub.lang', JSON.stringify('{lang}'))")
+        page = context.new_page()
+        page.on("pageerror", lambda e: self.errors.append(str(e)))
+        page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text else None)
+        if setup:
+            setup(page)
+        page.goto(self.base + "/login")
+        page.fill("input[name=user]", name)
+        page.fill("input[type=password]", self.PASSWORD)
+        with page.expect_response(lambda r: r.url.endswith(self.ROUTE)) as info:
+            page.keyboard.press("Enter")
+        page.wait_for_selector("#nav .link", state="attached")
+        return page, info.value
+
+    def token(self, name):
+        req = urllib.request.Request(self.base + "/api/token", data=json.dumps({"user": name, "password": self.PASSWORD}).encode(), headers={"Content-Type": "application/json"})
+        return json.load(urllib.request.urlopen(req))["token"]
+
+    def call(self, name, path, body=None):
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None, headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.token(name)})
+        return json.load(urllib.request.urlopen(req))
+
+    def like(self, name, *idents, value="up"):
+        for ident in idents:
+            self.call(name, f"/api/item/{ident}/rating", {"rating": value})
+
+    def view(self, page, selector=""):
+        return page.locator(f"#views > .view:visible {selector}".strip())
+
+    def shelves(self, page):
+        return self.view(page, ".shelf.recommend")
+
+    def titles(self, page):
+        return self.view(page, ".shelf h2").all_inner_texts()
+
+    def every_reason(self, route):
+        """La réponse du serveur, la première carte expliquée par les cinq sortes de particularités."""
+        data = route.fetch().json()
+        data["shelves"][0]["items"][0]["why"] = self.EVERY_REASON
+        route.fulfill(json=data)
+
+    def menu(self, page, card):
+        """Ouvre le menu « … » de la carte à la souris et rend les libellés de ses entrées."""
+        card.hover()
+        card.locator(".qbtn").click()
+        page.locator(".veil .menu.choice").wait_for()
+        return page.locator(".veil .opt .lbl").all_inner_texts()
+
+    def pick(self, page, label):
+        page.locator(".veil .opt", has=page.locator(".lbl", has_text=re.compile("^" + re.escape(label) + "$"))).click()
+
+    def arrow_to(self, page, text):
+        """Descend aux flèches dans le menu ouvert jusqu'à l'entrée `text`, puis Entrée."""
+        for _ in range(12):
+            if text in page.evaluate("document.activeElement.textContent"):
+                break
+            page.keyboard.press("ArrowDown")
+        self.assertIn(text, page.evaluate("document.activeElement.textContent"))
+        page.keyboard.press("Enter")
+
+    def active(self, page):
+        return page.evaluate("(() => { var e = document.activeElement; if (!e || e === document.body) return null; var s = e.closest('.shelf');"
+                             " return {key: e.getAttribute('data-key'), cls: e.className, shelf: s ? s.className : null, inView: !!e.closest('#views > .view:not([style*=\"none\"])')}; })()")
+
+    def shown(self, page, hash):
+        page.wait_for_function("h => { var c = window.Hub.current(); return !!c && c.hash === h && c.el.style.display !== 'none'; }", arg=hash)
+
+    # --- Le rayon ---------------------------------------------------------------
+    def test_two_liked_films_bring_their_shelves_right_after_resume_with_the_usual_cards(self):
+        entry, total = self.resume
+        self.hub.db.save_progress(self.alice["id"], entry, total / 3, total, False)
+        self.like("alice", "ancrepolar", "ancrewestern")
+        self.like("alice", "polar1", value="mid")
+        page, reply = self.opened("alice")
+        data = reply.json()
+        self.assertEqual(len(data["shelves"]), 2)
+        self.shelves(page).nth(1).wait_for()
+        titles = self.titles(page)
+        self.assertEqual(titles[0], "Reprendre")
+        self.assertEqual(titles[1:3], ["Parce que tu as aimé " + s["anchor"]["title"] for s in data["shelves"]])      # juste après « Reprendre », dans l'ordre du serveur
+        self.assertEqual(titles[3], "Nouveautés")
+        for shelf, given in zip(self.shelves(page).all(), data["shelves"]):
+            cards = shelf.locator(".card")
+            self.assertEqual(cards.evaluate_all("els => els.map(e => e.getAttribute('data-key'))"), [i["id"] for i in given["items"]])
+            self.assertTrue(cards.evaluate_all("els => els.every(e => e.tagName === 'A' && e.classList.contains('f') && e.querySelector('.poster') && e.querySelector('.qbtn'))"))
+            self.assertEqual(shelf.locator(".qual").count(), sum(1 for i in given["items"] if i.get("quality")))          # la qualité, comme sur les autres cartes
+        polar = self.shelves(page).filter(has_text="Ancre Polar")
+        self.assertEqual(polar.locator(".card[data-key=polar1] .badge.mine").get_attribute("data-rating"), "mid")       # la pastille d'avis aussi
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    def test_the_shelf_arrives_without_moving_the_focus(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, _ = self.opened("alice")
+        self.shelves(page).first.wait_for()
+        where = self.active(page)
+        self.assertIsNotNone(where)
+        self.assertNotIn("recommend", where["shelf"] or "")                                             # le focus est resté où l'accueil l'avait mis
+
+    def test_a_focused_card_pushed_down_by_the_arriving_shelves_stays_focused_and_in_view(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        held, flow = [], {"hold": True}
+        page, _ = self.opened("alice")
+        page.set_viewport_size({"width": 1280, "height": 520})
+        page.route("**" + self.ROUTE, lambda r: held.append(r) if flow["hold"] else r.continue_())
+        with page.expect_request(lambda r: r.url.endswith(self.ROUTE)):
+            page.reload()
+        first = self.view(page, ".shelf.latest .card").first
+        first.wait_for()
+        first.focus()
+        key = first.get_attribute("data-key")
+        self.assertEqual(self.shelves(page).count(), 0)
+        flow["hold"] = False
+        held[0].continue_()
+        self.shelves(page).nth(1).wait_for()                                                             # les rayons sont arrivés, au-dessus de la carte
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), key)             # le focus n'a pas bougé
+        self.assertTrue(page.evaluate("(() => { var r = document.activeElement.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })()"))     # et la carte est restée en vue
+
+    def test_shelves_arriving_on_a_home_of_tiles_take_away_the_sentence_and_keep_the_tiles(self):
+        self.call("alice", "/api/me/settings", {"home_latest": "hide", "home_unseen": "hide"})
+        self.like("alice", "ancrepolar", "ancrewestern")
+        held, flow = [], {"hold": True}
+        page, _ = self.opened("alice")
+        page.route("**" + self.ROUTE, lambda r: held.append(r) if flow["hold"] else r.continue_())
+        with page.expect_request(lambda r: r.url.endswith(self.ROUTE)):
+            page.reload()
+        self.view(page, ".libtiles-note").wait_for()                                                       # avant : la phrase et les tuiles
+        flow["hold"] = False
+        held[0].continue_()
+        self.shelves(page).nth(1).wait_for()
+        self.assertEqual(self.view(page, ".libtiles-note").count(), 0)
+        self.assertGreater(self.view(page, ".libtiles a.libtile").count(), 0)
+
+    def test_with_a_single_liked_film_there_is_no_shelf(self):
+        self.like("alice", "ancrepolar")
+        page, reply = self.opened("alice")
+        self.assertEqual(reply.json(), {"shelves": []})
+        self.view(page, ".shelf.latest .card").first.wait_for()
+        self.assertEqual(self.shelves(page).count(), 0)
+
+    def test_the_shelf_is_hidden_in_the_settings_and_the_route_is_then_never_called(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, _ = self.opened("alice")
+        self.shelves(page).first.wait_for()
+        page.goto(self.base + "/#/settings?tab=preferences")
+        line = self.view(page, ".panel .line").filter(has=page.locator("b", has_text=re.compile("^Parce que tu as aimé…$")))
+        self.assertIn("Sur la page d’accueil : Affiché", line.inner_text())
+        line.locator("button", has_text="Changer").click()
+        page.locator(".menu .opt .lbl", has_text="Masqué").click()
+        line.filter(has_text="Masqué").wait_for()
+        self.assertEqual(self.call("alice", "/api/me/settings")["settings"]["home_recommend"], "hide")
+        page.add_init_script("window.__calls = []; (function () { var f = window.fetch; window.fetch = function (u) { window.__calls.push(String(u)); return f.apply(this, arguments); }; })();")
+        page.goto(self.base + "/#/")
+        page.reload()                                                                               # l'espion n'est posé qu'au chargement d'une page
+        self.view(page, ".shelf.latest .card").first.wait_for()                                     # l'accueil est dessiné : la route serait déjà partie
+        calls = page.evaluate("window.__calls")
+        self.assertIn("/api/home", calls)
+        self.assertEqual([c for c in calls if self.ROUTE in c], [])
+        self.assertEqual(self.shelves(page).count(), 0)
+        self.call("alice", "/api/me/settings", {"home_recommend": "show"})                          # remontré : il revient
+        page.reload()
+        self.shelves(page).first.wait_for()
+
+    def test_a_failing_route_leaves_the_home_as_it_is(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, reply = self.opened("alice", setup=lambda p: p.route("**" + self.ROUTE, lambda r: r.fulfill(status=500, json={"error": "panne des suggestions"})))
+        self.assertEqual(reply.status, 500)
+        self.view(page, ".shelf.latest .card").first.wait_for()
+        self.assertEqual(self.shelves(page).count(), 0)
+        self.assertNotIn("panne", page.locator("body").inner_text())                                   # ni rayon vide, ni message
+        self.assertEqual(self.view(page, ".blank").count(), 0)
+        self.assertEqual(self.view(page, ".libtiles").count(), 0)
+
+    def test_a_late_answer_never_lands_on_the_page_now_shown(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        held, flow = [], {"hold": True}
+        page, _ = self.opened("alice")
+        page.route("**" + self.ROUTE, lambda r: held.append(r) if flow["hold"] else r.continue_())
+        with page.expect_request(lambda r: r.url.endswith(self.ROUTE)):
+            page.reload()
+        self.view(page, ".shelf.latest .card").first.wait_for()
+        page.evaluate("location.hash = '#/l/films'")
+        self.shown(page, "#/l/films")
+        self.view(page, ".card").first.wait_for()
+        self.view(page, ".card").first.focus()
+        before = self.active(page)
+        self.assertEqual(len(held), 1)
+        flow["hold"] = False
+        with page.expect_event("requestfinished", predicate=lambda r: r.url.endswith(self.ROUTE)):
+            held[0].continue_()
+        page.evaluate("new Promise(r => setTimeout(r))")                                                  # la réponse est traitée par la page
+        self.assertEqual(self.shelves(page).count(), 0)                                                   # rien sur la bibliothèque
+        self.assertEqual(self.active(page), before)                                                      # et le focus n'a pas bougé
+        page.go_back()
+        self.shown(page, "#/")
+        self.shelves(page).nth(1).wait_for()                                                             # de retour à l'accueil : les rayons, une seule fois
+        self.assertEqual(self.shelves(page).count(), 2)
+
+    # --- Le menu « … » -------------------------------------------------------------
+    def test_why_this_suggestion_lists_what_the_film_shares_in_full_words(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, reply = self.opened("alice", setup=lambda p: p.route("**" + self.ROUTE, self.every_reason))
+        first = reply.json()["shelves"][0]
+        card = self.shelves(page).first.locator(".card").first
+        card.wait_for()
+        options = self.menu(page, card)
+        self.assertIn("Pourquoi cette suggestion ?", options)
+        self.assertIn("Pas intéressé", options)
+        self.assertEqual(options.count("Mon avis"), 1)                                                   # l'avis du lot 7 reste, une seule fois
+        self.pick(page, "Pourquoi cette suggestion ?")
+        box = page.locator(".veil .menu")
+        box.locator("h3", has_text="Pourquoi cette suggestion ?").wait_for()
+        self.assertTrue(box.evaluate("e => e.classList.contains('confirm')"))                             # la famille « confirm » de docs/popups.md
+        self.assertEqual(box.locator("p.lead").all_inner_texts(), ["Parce que tu as aimé " + first["anchor"]["title"], "Même réalisateur : Réal Polar", "Même acteur : Acteur Polar",
+                                                                   "Même genre : Polar", "Même saga : Saga Polar", "Même époque : années 1970"])
+        page.keyboard.press("Escape")
+        box.wait_for(state="detached")
+        self.assertEqual(self.shelves(page).first.locator(".card").count(), len(first["items"]))       # rien n'est retiré, rien n'est noté
+        self.assertIsNone(self.call("alice", "/api/item/" + first["items"][0]["id"]).get("rating"))
+
+    def test_the_reasons_the_server_gives_are_written_out(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, reply = self.opened("alice")
+        shelf = reply.json()["shelves"][0]
+        given = shelf["items"][0]
+        self.menu(page, self.shelves(page).first.locator(".card").first)
+        self.pick(page, "Pourquoi cette suggestion ?")
+        names = {"director": "Même réalisateur : ", "actor": "Même acteur : ", "genre": "Même genre : ", "saga": "Même saga : "}
+        wanted = [names[w["kind"]] + w["value"] if w["kind"] in names else "Même époque : années " + w["value"] for w in given["why"]]
+        self.assertTrue(wanted)
+        self.assertEqual(page.locator(".veil .menu.confirm p.lead").all_inner_texts()[1:], wanted)
+
+    def test_not_interested_rates_the_film_down_and_takes_its_card_away_at_once(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, reply = self.opened("alice")
+        shelf = self.shelves(page).first
+        shelf.locator(".card").first.wait_for()
+        first = reply.json()["shelves"][0]
+        gone = first["items"][1]["id"]
+        page.evaluate("window.__same = 1")                                                               # pas de rechargement
+        self.menu(page, shelf.locator(f".card[data-key={gone}]"))
+        with page.expect_response(lambda r: r.url.endswith(f"/api/item/{gone}/rating")):
+            self.pick(page, "Pas intéressé")
+        shelf.locator(f".card[data-key={gone}]").wait_for(state="detached")
+        self.assertEqual(shelf.locator(".card").count(), len(first["items"]) - 1)
+        self.assertEqual(self.view(page, f".card[data-key={gone}]").count(), 0)                           # ni ici, ni dans « Pas encore vu »
+        self.assertEqual(self.call("alice", "/api/item/" + gone)["rating"], "down")
+        self.assertEqual(page.evaluate("window.__same"), 1)
+
+    def test_a_refused_rating_is_shown_in_french_and_the_card_stays(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, reply = self.opened("alice", setup=lambda p: p.route("**/rating", lambda r: r.fulfill(status=500, json={"error": "avis refusé pour le moment"})))
+        card = self.shelves(page).first.locator(".card").first
+        card.wait_for()
+        self.menu(page, card)
+        self.pick(page, "Pas intéressé")
+        page.locator("#toast.on", has_text="avis refusé pour le moment").wait_for()
+        self.assertEqual(self.shelves(page).first.locator(".card").count(), len(reply.json()["shelves"][0]["items"]))
+
+    def test_when_the_last_shelf_is_emptied_the_home_shows_the_libraries_and_the_focus_goes_to_the_first(self):
+        self.call("alice", "/api/me/settings", {"home_latest": "hide"})                                   # « Pas encore vu » sera le seul rayon
+        kept = {}
+
+        def one_card(route):
+            data = route.fetch().json()
+            for lib in data["libraries"]:
+                if "unseen" in lib:
+                    kept.setdefault("id", next((u["id"] for u in lib["unseen"] if lib["id"] == "films"), None) or kept.get("id"))
+                    lib["unseen"] = [u for u in lib["unseen"] if u["id"] == kept.get("id")]
+            route.fulfill(json=data)
+        page, _ = self.opened("alice", setup=lambda p: p.route("**/api/home", one_card))
+        card = self.view(page, ".shelf.unseen .card")
+        card.wait_for()
+        self.assertEqual(self.view(page, ".shelf").count(), 1)
+        card.focus()
+        page.keyboard.press("ContextMenu")
+        page.locator(".veil .menu.choice").wait_for()
+        self.arrow_to(page, "Mon avis")
+        page.locator(".veil .menu.choice h3", has_text="Mon avis").wait_for()
+        self.arrow_to(page, "Je n’aime pas")
+        tile = self.view(page, ".libtiles a.libtile").first
+        tile.wait_for()                                                                                      # jamais un accueil réduit à « Bonjour »
+        self.assertEqual(self.view(page, ".shelf").count(), 0)
+        page.wait_for_function("document.activeElement === document.querySelector('#views > .view:not([style*=\"none\"]) .libtiles a.libtile')")
+
+    def test_a_card_rated_not_liked_leaves_the_unseen_shelf_at_once(self):
+        page, _ = self.opened("alice")
+        shelf = self.view(page, ".shelf.unseen[data-lib=films]")
+        card = shelf.locator(".card").first
+        card.wait_for()
+        key, count = card.get_attribute("data-key"), shelf.locator(".card").count()
+        page.evaluate("window.__same = 1")
+        self.menu(page, card)
+        self.pick(page, "Mon avis")
+        page.locator(".veil .menu.choice h3", has_text="Mon avis").wait_for()
+        self.pick(page, "Je n’aime pas")
+        shelf.locator(f".card[data-key='{key}']").wait_for(state="detached")
+        self.assertEqual(shelf.locator(".card").count(), count - 1)
+        self.assertEqual(self.call("alice", "/api/item/" + key)["rating"], "down")
+        self.assertEqual(page.evaluate("window.__same"), 1)
+
+    def test_an_emptied_shelf_disappears_and_the_focus_goes_to_a_neighbour(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+
+        def one_each(route):
+            data = route.fetch().json()
+            for shelf in data["shelves"]:
+                shelf["items"] = shelf["items"][:1]
+            route.fulfill(json=data)
+        page, reply = self.opened("alice", setup=lambda p: p.route("**" + self.ROUTE, one_each))
+        self.shelves(page).nth(1).wait_for()
+        lone = reply.json()["shelves"][0]["items"][0]["id"]
+        self.shelves(page).first.locator(".card").focus()
+        page.keyboard.press("ContextMenu")                                                                  # la touche « Menu » de la télécommande
+        page.locator(".veil .menu.choice").wait_for()
+        self.arrow_to(page, "Pas intéressé")
+        self.view(page, f".shelf.recommend .card[data-key={lone}]").wait_for(state="detached")
+        self.assertEqual(self.shelves(page).count(), 1)                                                   # le rayon vidé a disparu
+        where = self.active(page)
+        self.assertIsNotNone(where)                                                                          # jamais dans le vide
+        self.assertTrue(where["inView"])
+        self.assertIn("f", where["cls"].split())
+
+    def test_the_remote_reaches_the_cards_and_the_menu_and_back_closes_the_window(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, _ = self.opened("alice")
+        self.shelves(page).nth(1).wait_for()
+        for _ in range(12):                                                                                  # des flèches seulement, jusqu'à une carte du rayon
+            where = self.active(page)
+            if where and "recommend" in (where["shelf"] or ""):
+                break
+            page.keyboard.press("ArrowUp")
+        where = self.active(page)
+        self.assertIn("recommend", where["shelf"])
+        look = page.evaluate("(() => { var s = getComputedStyle(document.activeElement); return s.outlineStyle + '|' + s.boxShadow; })()")
+        self.assertNotEqual(look, "none|none")                                                              # le focus se voit
+        start = where["key"]
+        page.keyboard.press("ArrowRight")
+        self.assertNotEqual(self.active(page)["key"], start)                                               # les flèches parcourent le rayon
+        page.keyboard.press("ArrowLeft")
+        self.assertEqual(self.active(page)["key"], start)
+        page.keyboard.press("ContextMenu")
+        page.locator(".veil .menu.choice").wait_for()
+        self.arrow_to(page, "Pourquoi cette suggestion ?")
+        box = page.locator(".veil .menu.confirm")
+        box.wait_for()
+        page.keyboard.press("Escape")                                                                       # Retour ferme la fenêtre
+        box.wait_for(state="detached")
+        page.wait_for_function("k => document.activeElement && document.activeElement.getAttribute('data-key') === k", arg=start)     # le focus revient sur la carte
+        page.keyboard.press("ContextMenu")
+        page.locator(".veil .menu.choice").wait_for()
+        self.arrow_to(page, "Pas intéressé")
+        self.view(page, f".shelf.recommend .card[data-key={start}]").wait_for(state="detached")
+        where = self.active(page)
+        self.assertIsNotNone(where)
+        self.assertIn("recommend", where["shelf"])                                                        # une voisine du même rayon
+        self.assertNotEqual(where["key"], start)
+
+    # --- Les comptes, la langue -------------------------------------------------------
+    def test_another_account_sees_nothing_of_the_first(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, reply = self.opened("bob")
+        self.assertEqual(reply.json(), {"shelves": []})
+        self.view(page, ".shelf.latest .card").first.wait_for()
+        self.assertEqual(self.shelves(page).count(), 0)
+        self.assertNotIn("Ancre", " ".join(self.titles(page)))
+        mine, _ = self.opened("alice")
+        self.shelves(mine).nth(1).wait_for()
+
+    def test_the_shelf_its_menu_and_its_window_are_in_english(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, reply = self.opened("alice", lang="en", setup=lambda p: p.route("**" + self.ROUTE, self.every_reason))
+        first = reply.json()["shelves"][0]
+        self.shelves(page).nth(1).wait_for()
+        self.assertEqual(self.shelves(page).first.locator("h2").inner_text(), "Because you liked " + first["anchor"]["title"])
+        options = self.menu(page, self.shelves(page).first.locator(".card").first)
+        self.assertIn("Why this suggestion?", options)
+        self.assertIn("Not interested", options)
+        self.pick(page, "Why this suggestion?")
+        box = page.locator(".veil .menu.confirm")
+        box.wait_for()
+        self.assertEqual(box.locator("h3").inner_text(), "Why this suggestion?")
+        self.assertEqual(box.locator("p.lead").all_inner_texts(), ["Because you liked " + first["anchor"]["title"], "Same director: Réal Polar", "Same actor: Acteur Polar",
+                                                                   "Same genre: Polar", "Same saga: Saga Polar", "Same era: the 1970s"])
+        page.keyboard.press("Escape")
+        box.wait_for(state="detached")
+        page.goto(self.base + "/#/settings?tab=preferences")
+        self.view(page, ".panel .line b").filter(has_text=re.compile("^Because you liked…$")).wait_for()
+        self.assertEqual(page.evaluate("Hub.missing"), [])
 
 
 if __name__ == "__main__":

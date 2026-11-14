@@ -43,6 +43,7 @@ from .. import missing
 from .. import people
 from .. import playlists
 from .. import prefs
+from .. import recommend
 from .. import requests as hub_requests
 from .. import urls
 from .. import sagas as sagafile
@@ -90,6 +91,12 @@ def safe_json(text, default):
         return json.loads(text) if text else default
     except (ValueError, RecursionError):
         return default
+
+
+def meta_json(text):
+    """Le `meta` d'un élément ou d'un fichier lu en objet : {} quand il est vide, illisible, ou un JSON valide qui n'est pas un objet (`null`, liste, texte, nombre)."""
+    meta = safe_json(text, {})
+    return meta if isinstance(meta, dict) else {}
 
 
 class Hub:
@@ -191,10 +198,13 @@ MIN_VOTES = 25          # en dessous, une moyenne TMDB tient à quelques avis : 
 
 
 def shown_rating(rating):
-    """La note TMDB gardée (voir enrich.rating_of) si elle mérite d'être montrée : une moyenne, sur au moins MIN_VOTES votes ; None sinon."""
-    if isinstance(rating, dict) and rating.get("vote") and (rating.get("votes") or 0) >= MIN_VOTES:
-        return rating
-    return None
+    """La note TMDB gardée (voir enrich.rating_of) si elle mérite d'être montrée : une moyenne (un nombre fini, non nul), sur au moins MIN_VOTES votes (un entier) ; None sinon."""
+    if not isinstance(rating, dict):
+        return None
+    vote, votes = rating.get("vote"), rating.get("votes")
+    if isinstance(vote, bool) or not isinstance(vote, (int, float)) or not math.isfinite(vote) or not vote:
+        return None                     # une note qui n'est pas un nombre fini (texte, liste, booléen, NaN) n'est pas montrée : elle ne se trie ni ne s'écrit en JSON strict
+    return rating if isinstance(votes, int) and not isinstance(votes, bool) and votes >= MIN_VOTES else None
 
 
 def typed_summary(row, meta):
@@ -215,7 +225,7 @@ def typed_summary(row, meta):
 
 def summary(row, seen=None, quality=None, opinion=None):
     """La vignette d'un élément. `quality` : ce que rend card_quality ; un film qui y est porte `quality` et `hdr`. `opinion` : l'avis du compte sur cet élément (`up`, `mid` ou `down`, le champ `rating` de la vignette), absent de la vignette quand il n'a pas d'avis."""
-    meta = safe_json(row["meta"], {})
+    meta = meta_json(row["meta"])
     out = {"id": row["id"], "type": row["type"], "title": row["title"], "year": row["year"], "grp": row["grp"], "n": row["count"], "letter": row["letter"],
            "added": row["added"], "genres": safe_json(row["genres"], []), "cover": urls.item_cover(row["id"]), **typed_summary(row, meta)}
     rating = shown_rating(meta.get("tmdb_rating"))
@@ -247,7 +257,7 @@ def card_quality(db):
 
 
 def entry_json(row, progress=None):
-    meta = safe_json(row["meta"], {})
+    meta = meta_json(row["meta"])
     out = {"id": row["id"], "kind": row["kind"], "title": row["title"], "summary": row["summary"], "season": row["season"], "disc": row["disc"],
            "number": row["number"], "duration": row["duration"], "format": meta.get("format", ""), "label": meta.get("label", ""), "sub": meta.get("sub", ""),
            "file": urls.entry_file(row["id"])}
@@ -1093,6 +1103,18 @@ def api_home(h, m, q):
     h.send_json({"continue": continue_row(hub, h.user["id"], h.visible_ids("play"), ratings), "libraries": rows, "requests_ready": requests_ready(h, seen, quality, ratings) if settings["home_requests"] == "show" else []})        # rayon caché par le compte : rien à calculer, le champ reste
 
 
+@route("GET", r"/api/recommendations")
+def api_recommendations(h, m, q):
+    """Les rayons « Parce que tu as aimé <titre> » du compte de la requête (voir recommend.py) : ses avis et sa progression seulement, dans les bibliothèques vidéo qu'il peut lire. Calculés quel que soit le réglage `home_recommend` : c'est l'interface qui n'appelle pas la route quand il est à `hide`."""
+    hub, uid = h.hub, h.user["id"]
+    readable = {lib.id for lib in hub.cfg.libraries if lib.kind in UNSEEN_KINDS and h.can(lib.id, "play")}
+    opinions, progress = hub.db.dated_ratings_for(uid), recommend.progress_of(hub.db, uid)
+    found = recommend.shelves(recommend.index(hub.db, lambda meta: (shown_rating(meta.get("tmdb_rating")) or {}).get("vote")), opinions, progress, readable, uid, today())
+    seen, quality, ratings = {i: p[:2] for i, p in progress.items()}, card_quality(hub.db), {i: o[0] for i, o in opinions.items()}
+    h.send_json({"shelves": [{"anchor": {k: anchor.row[k] for k in ("id", "title", "year", "type")},
+                              "items": [{**with_seen(cand.row, seen, quality, ratings), "why": why} for cand, why in cards]} for anchor, cards in found]})
+
+
 @route("GET", r"/api/search")
 def api_search(h, m, q):
     needle = fold(q.get("q", "")).strip()
@@ -1245,7 +1267,7 @@ def row_rating(row):
     """(note, votes) d'une ligne : sa note TMDB montrée (voir shown_rating), ou pour une vignette de saga celle de son meilleur film (à égalité, le plus voté) : une saga vaut ce qu'elle a de mieux, Terminator vaut Terminator 2 ; (None, 0) sans note montrée."""
     if isinstance(row, dict) and "members" in row:
         return max(map(row_rating, row["members"]), key=lambda found: (found[0] is not None, found[0] or 0, found[1]), default=(None, 0))
-    rating = shown_rating(safe_json(row["meta"], {}).get("tmdb_rating"))
+    rating = shown_rating(meta_json(row["meta"]).get("tmdb_rating"))
     return (rating["vote"], rating["votes"]) if rating else (None, 0)
 
 
@@ -1262,7 +1284,7 @@ def my_rating_key(ratings):
 
 def release_key(row):
     """L'ordre d'une saga : par date de sortie. Le numéro posé sur le disque peut être celui d'un dossier de rangement (le MCU : Ant-Man 12, 20, 31), il ne départage que deux films sortis le même jour."""
-    meta = safe_json(row["meta"], {})
+    meta = meta_json(row["meta"])
     part = meta.get("part")
     return (meta.get("date") or row["year"] or "9999", part is None, part or 0, row["sort"])
 
@@ -1276,7 +1298,7 @@ def number_films(films, ranks=None, start=1):
 
 def section_of(row):
     """La section d'une série de livres (le dossier de premier niveau : Manga, Comics, Artbook…) ; « Autres » quand rien n'est indiqué."""
-    return safe_json(row["meta"], {}).get("section") or "Autres"
+    return meta_json(row["meta"]).get("section") or "Autres"
 
 
 def sections_json(counts):
@@ -1374,7 +1396,7 @@ def artist_rows(rows):
     album trouve son artiste. Les artistes sans nom connu viennent en dernier."""
     groups = {}
     for row in rows:
-        groups.setdefault(safe_json(row["meta"], {}).get("artist_id") or fold(row["grp"]), []).append(row)
+        groups.setdefault(meta_json(row["meta"]).get("artist_id") or fold(row["grp"]), []).append(row)
     out = []
     for key, albums in groups.items():
         albums.sort(key=lambda r: (r["year"] or "9999", r["sort"]))
@@ -1388,7 +1410,7 @@ def artist_rows(rows):
 def artist_card(row):
     """La carte d'un artiste dans la liste : son identifiant (celui de sa fiche, `/api/artist/<lib>/<id>`), son nom, son nombre d'albums et l'album dont on prendra la pochette faute de photo."""
     return {"id": row["id"], "lib": row["lib"], "type": "artist", "title": row["title"], "n": row["count"], "letter": row["letter"], "added": row["added"],
-            "album": safe_json(row["meta"], {}).get("album", "")}
+            "album": meta_json(row["meta"]).get("album", "")}
 
 
 ARTIST_ARRIVAL = 7 * 24 * 3600       # les albums d'un artiste arrivés à moins d'une semaine les uns des autres sont l'arrivée de l'artiste
@@ -1399,7 +1421,7 @@ def recent_music(rows, seen, limit):
     tous arrivés à une semaine d'écart au plus) n'est qu'une carte, la sienne. Les compilations et les artistes inconnus restent des albums : les regrouper cacherait ce qui est arrivé."""
     groups = {}
     for row in rows:
-        groups.setdefault(safe_json(row["meta"], {}).get("artist_id") or fold(row["grp"]), []).append(row)
+        groups.setdefault(meta_json(row["meta"]).get("artist_id") or fold(row["grp"]), []).append(row)
     entries = []
     for albums in groups.values():
         added = [a["added"] for a in albums]
@@ -1528,7 +1550,7 @@ def library_item(row, seen, quality=None, ratings=None):
 
 def artist_key(row):
     """Ce qui regroupe les albums d'un même artiste (voir artist_rows)."""
-    return safe_json(row["meta"], {}).get("artist_id") or fold(row["grp"])
+    return meta_json(row["meta"]).get("artist_id") or fold(row["grp"])
 
 
 def music_counts(chosen, artists):
@@ -1708,7 +1730,7 @@ def api_item(h, m, q):
     lib = library_or_404(hub, item["lib"])
     rows = sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (item["id"],)), key=order_key)
     progress = hub.db.progress_for(h.user["id"], [r["id"] for r in rows])
-    meta = safe_json(item["meta"], {})
+    meta = meta_json(item["meta"])
     ratings = hub.db.ratings_for(h.user["id"])
     out = summary(item, opinion=ratings.get(item["id"]))
     out.update({"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "summary": item["summary"], "tagged": bool(meta.get("tagged"))})
@@ -1754,7 +1776,7 @@ def artist_albums(hub, lib_id, artist_id):
     lib = library_or_404(hub, lib_id)
     if lib.kind != "music":
         raise HttpError(404, "pas une bibliothèque de musique")
-    rows = [r for r in hub.db.query("SELECT * FROM items WHERE lib=? AND type='album'", (lib.id,)) if safe_json(r["meta"], {}).get("artist_id") == artist_id]
+    rows = [r for r in hub.db.query("SELECT * FROM items WHERE lib=? AND type='album'", (lib.id,)) if meta_json(r["meta"]).get("artist_id") == artist_id]
     if not rows:
         raise HttpError(404, "artiste inconnu")
     return lib, sorted(rows, key=TITLE_SORTS["music"])
@@ -1763,7 +1785,7 @@ def artist_albums(hub, lib_id, artist_id):
 def artist_kept(hub, rows):
     """La fiche gardée par « Fiches artistes » (voir enrich.enrich_artists), ou None : celle du premier album qui porte un identifiant MusicBrainz et qui en a une."""
     for row in rows:
-        mbid = safe_json(row["meta"], {}).get("artist_mbid")
+        mbid = meta_json(row["meta"]).get("artist_mbid")
         kept = hub.db.kv_get(enrich.artist_key(mbid)) if mbid else None
         if kept:
             return {**kept, "mbid": mbid}
@@ -1826,7 +1848,7 @@ PHOTO_UPLOAD_MAX = 10 << 20
 def artist_home(lib, rows):
     """Le dossier de l'artiste à la racine de la médiathèque (voir scan.music.artist_dirs), où va sa photo ; None si le dernier scan ne lui en a pas trouvé ou s'il n'est plus là."""
     for row in rows:
-        name = safe_json(row["meta"], {}).get("artist_dir")
+        name = meta_json(row["meta"]).get("artist_dir")
         if name and (lib.path / name).is_dir():
             return lib.path / name
     return None
@@ -2610,7 +2632,7 @@ def api_book(h, m, q):
     if entry["kind"] != "book":
         raise HttpError(400, "ce fichier n'est pas un livre")
     lib, path = hub.path_of(entry)
-    meta = safe_json(entry["meta"], {})
+    meta = meta_json(entry["meta"])
     kind = meta.get("format", "")
     progress = hub.db.progress_for(h.user["id"], [entry["id"]]).get(entry["id"])
     out = {"id": entry["id"], "item": entry["item_id"], "title": entry["title"], "format": kind, "position": progress["position"] if progress and not progress["done"] else 0,
@@ -2619,7 +2641,7 @@ def api_book(h, m, q):
         if kind == "cbz":
             out["pages"] = len(bookmedia.cbz_pages(path))
             out["page_url"] = f"/book/{entry['id']}/page/{{n}}"          # `{n}` : le numéro de page, à partir de 0
-            out["rtl"] = bookmedia.reads_right_to_left(meta.get("info"), safe_json(hub.item(entry["item_id"])["meta"], {}).get("section"))
+            out["rtl"] = bookmedia.reads_right_to_left(meta.get("info"), meta_json(hub.item(entry["item_id"])["meta"]).get("section"))
         elif kind == "epub":
             spine = bookmedia.epub_spine(path)
             out["chapters"] = [f"/book/{entry['id']}/epub/{c}" for c in spine["spine"]]
@@ -2692,7 +2714,7 @@ def saga_film(ident, row, info=None):
         if film:
             out.update({k: v for k, v in missing.entry(ident, 0, info).items() if k in ("title", "year", "cover")})
         return out
-    return {"tmdb": ident, "date": safe_json(row["meta"], {}).get("date") or row["year"], "item": summary(row)}
+    return {"tmdb": ident, "date": meta_json(row["meta"]).get("date") or row["year"], "item": summary(row)}
 
 
 def sagas_json(hub):

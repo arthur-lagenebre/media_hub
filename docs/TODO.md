@@ -35,10 +35,11 @@ Les essais que les tests ne peuvent pas faire (NAS, Funnel, téléphone, tablett
 - [ ] **Badges : où ils sont.** La fiche porte tous les badges (un film : ceux de son premier fichier sondé ; une série : ceux de la saison affichée). La vignette d'un film ne porte que la qualité (« 4K », « HDR ») ; celle d'une série, d'une saga ou d'un épisode n'en porte aucun, et les langues ne sont jamais sur une vignette (choix du 13 novembre 2026 : l'affiche est déjà occupée aux quatre coins).
 - [ ] **Badges : la langue originale (VO)** n'est pas donnée : prévue plus tard.
 - [ ] **Badges : limites de la sonde.** Un fichier que ffprobe n'a pas su lire n'est réessayé qu'au redémarrage du serveur ou quand il change (la liste des illisibles est en mémoire). La langue d'un fichier de sous-titres voisin n'est reconnue que parmi celles de `LANG_NAMES` (`hub/media/subs.py` : fr, en, es, de, it, ja, pt) ; les autres n'ont pas de badge. Les langues sans code à deux lettres (ISO 639-1) non plus. La première analyse d'une grosse médiathèque reste à chronométrer sur le NAS.
+- [ ] **Recommandations (« Parce que tu as aimé ») : les poids sont à régler d'après l'usage.** Poids, seuils et plafonds (`WEIGHTS`, `MAX_SHARE`, `QUALITY_*`, `DOWN_*`…) sont dans un seul bloc en tête de `hub/recommend.py`, choisis sans avoir vu la vraie médiathèque. **Pas de signal collectif** : seuls les avis et la progression du compte comptent (voir [decisions.md](decisions.md)). **Peu d'avis ou une médiathèque jeune donnent peu de rayons** : il faut deux films ou séries aimés ou terminés, et quatre voisins au moins pour un rayon. **Un film sans réalisateur ni casting** dans ses étiquettes ne se rapproche que par le genre et la saga (la décennie ne suffit jamais seule) ; une série n'a de casting qu'une fois enrichie par TMDB. Deux personnes de même nom n'en font qu'une (comme `GET /api/person`). **Dans l'interface :** les rayons arrivent après le reste de l'accueil (une requête de plus) et ne sont pas gardés d'un retour à l'autre : revenir à l'accueil les redemande ; « Pas intéressé » n'existe que sur les cartes de ces rayons (ailleurs, « Mon avis » > « Je n'aime pas » fait la même chose).
 
 ## Routes ajoutées, à relier à l'interface
 
-Une route ajoutée au serveur est reliée à l'interface dans le même lot, ou notée ici tant qu'elle ne l'est pas.
+Une route ajoutée au serveur est reliée à l'interface dans le même lot, ou notée ici tant qu'elle ne l'est pas. Aucune pour l'instant.
 
 ## Demandes : limites connues
 

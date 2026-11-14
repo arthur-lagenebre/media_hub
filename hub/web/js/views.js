@@ -276,7 +276,30 @@
       Array.prototype.forEach.call(pic.querySelectorAll('.badge'), function (b) { pic.removeChild(b); });
       cardMarks(pic, it);
     });
+    if (value === 'down') Array.prototype.forEach.call(document.querySelectorAll(SUGGESTED_CARDS), function (card) { if (card.hubItem && card.hubItem.id === id) dropCard(card); });
   };
+  // Une carte notée « Je n'aime pas » quitte les rayons qui suggèrent (« Pas encore vu », « Parce que tu as aimé ») sans recharger la page ; un rayon vidé disparaît.
+  // Si elle avait le focus, il passe à sa voisine (la suivante, sinon la précédente), sinon au rayon d'après (ou d'avant), sinon au premier élément de la page : jamais dans le vide.
+  // Le dernier rayon parti, l'accueil se redessine (`hubRedraw`) : d'autres suggestions, ou les bibliothèques en tuiles, la première avec le focus ; jamais « Bonjour » seul.
+  var SUGGESTED_CARDS = '.shelf.unseen .card, .shelf.recommend .card';
+  function firstIn(node) { return node.classList && node.classList.contains('f') ? node : node.querySelector && node.querySelector('.f'); }
+  function nearShelf(shelf) {
+    var x;
+    for (x = shelf.nextElementSibling; x; x = x.nextElementSibling) if (firstIn(x)) return firstIn(x);
+    for (x = shelf.previousElementSibling; x; x = x.previousElementSibling) if (firstIn(x)) return firstIn(x);
+    return null;
+  }
+  function dropCard(card) {
+    var shelf = card.closest('.shelf'), page = shelf.parentNode, had = card.contains(document.activeElement);
+    var next = card.nextElementSibling || card.previousElementSibling;
+    card.parentNode.removeChild(card);
+    if (!shelf.querySelector('.card')) {
+      next = nearShelf(shelf);
+      if (page) page.removeChild(shelf);
+      if (page && page.hubRedraw && !page.querySelector('.shelf, .libtiles')) { page.hubRedraw(); return; }
+    }
+    if (had && !H.focus.set(next)) H.focus.first();
+  }
   H.card = function (it, withGroup, withPart) {
     if (it.type === 'saga') return sagaCard(it);
     if (it.type === 'artist') return artistCard(it);
@@ -393,6 +416,26 @@
       h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + H.libLabel(lib))),
       h('div', { class: 'grid' }, items.map(function (it) { return H.card(it, false); })));
   }
+  // « Parce que tu as aimé <titre> » : un rayon par ancre que le serveur propose, en cartes comme les autres ; chaque carte garde son ancre (`because`) pour « Pourquoi cette suggestion ? ».
+  function recommendShelf(s) {
+    return h('section', { class: 'shelf recommend', 'data-anchor': s.anchor.id },
+      h('h2', null, H.t('Parce que tu as aimé {title}', { title: s.anchor.title })),
+      h('div', { class: 'grid' }, s.items.map(function (it) { it.because = s.anchor; return H.card(it, false); })));
+  }
+  // Les rayons de suggestions arrivent après l'accueil, sans le retenir : ils se posent devant `spot` (juste après « Reprendre »), seulement si l'accueil qui les a demandés est toujours celui-là (`still()`).
+  // Un échec ou une réponse vide ne montre rien. Le focus ne bouge pas : la carte qui l'a reste en vue si les rayons l'ont poussée vers le bas.
+  function recommendations(spot, still) {
+    H.api('/api/recommendations').then(function (data) {
+      var shelves = (data && data.shelves || []).filter(function (s) { return s.anchor && s.items && s.items.length; });
+      var home = spot.parentNode;
+      if (!shelves.length || !still() || !home) return;
+      shelves.forEach(function (s) { home.insertBefore(recommendShelf(s), spot); });
+      var note = home.querySelector('.libtiles-note');          // « Rien à reprendre ni à découvrir » ne dit plus vrai
+      if (note) note.parentNode.removeChild(note);
+      var a = document.activeElement;
+      if (a && home.style.display !== 'none' && home.contains(a) && (spot.compareDocumentPosition(a) & 4) && !H.overlay.isOpen()) H.focus.set(a);
+    }).catch(function () { /* rien : l'accueil reste tel qu'il est */ });
+  }
   // La pochette d'une tuile de bibliothèque : celle de son dernier ajout (pour un artiste, celle de son album), ou rien.
   function tileCover(lib) {
     var last = lib.recent && lib.recent[0];
@@ -430,7 +473,7 @@
   }
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
-    var timer = null;
+    var timer = null, drawn = 0;          // `drawn` : le numéro du dernier dessin de l'accueil (une réponse tardive des suggestions ne se pose que sur celui qui l'a demandée)
     function dismissed(card) {
       var next = card.nextElementSibling && card.nextElementSibling.classList.contains('card') ? card.nextElementSibling : card.previousElementSibling;
       load(next && next.getAttribute('data-key'));
@@ -453,6 +496,7 @@
         var ready = H.setting('home_requests') === 'hide' ? [] : (data.requests_ready || []);          // masquable comme les autres rayons (le serveur rend alors déjà une liste vide)
         if (ready.length) el.appendChild(readyShelf(ready));
         if (data.continue.length) el.appendChild(row(H.t('Reprendre'), null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
+        var spot = el.appendChild(document.createComment('recommend')), mine = ++drawn;          // la place des rayons « Parce que tu as aimé », qui arrivent plus tard
         var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
         if (latest.length) el.appendChild(cardsSection('latest', H.t('Nouveautés'), latest));
         var unseen = H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10));
@@ -460,12 +504,14 @@
           el.appendChild(libraryShelf('unseen', H.t('Pas encore vu'), shelf.lib, shelf.items));
         });
         if (!data.continue.length && !latest.length && !unseen.length && !ready.length) libraryTiles(data.libraries).forEach(function (node) { el.appendChild(node); });       // aucun rayon : les bibliothèques, pour ne pas laisser une page nue
+        if (H.setting('home_recommend') !== 'hide') recommendations(spot, function () { return mine === drawn && spot.parentNode === el; });       // masqué : la route n'est pas appelée
         if (!document.body.contains(el) || el.style.display === 'none') return;       // une réponse tardive, la page a été quittée : `H.focus.first()` prendrait le focus de la page courante (la barre de la liseuse, dont les flèches ne tournent plus les pages)
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
         if (!a || a === document.body || (a.closest && a.closest('#nav'))) H.focus.first();
       }).catch(function (e) { H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Le serveur ne répond pas')), h('p', null, e.message), h('button', { class: 'btn f', onclick: load, 'data-autofocus': '1' }, H.t('Réessayer')))); });
     }
+    el.hubRedraw = function () { load(); };          // plus aucun rayon après « Je n'aime pas » (dropCard)
     load();
     return { el: el, nav: '#/', refresh: load, destroy: function () { clearTimeout(timer); } };
   });
@@ -1455,7 +1501,8 @@
       { key: 'home_unseen_sort', title: H.t('Pas encore vu : trier par'), note: H.t('Sur la page d’accueil'),
         choices: [{ label: H.t('Au hasard'), detail: H.t('Un ordre qui change chaque jour'), value: 'random' }, { label: H.t('Note TMDB'), detail: H.t('Les mieux notés d’abord, ceux sans note à la fin'), value: 'rating' },
           { label: H.t('Date d’ajout'), detail: H.t('Les plus récemment ajoutés d’abord'), value: 'added' }] },
-      { key: 'home_requests', title: H.t('Tes demandes sont arrivées'), note: H.t('Sur la page d’accueil'), choices: ON_OFF }];
+      { key: 'home_requests', title: H.t('Tes demandes sont arrivées'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
+      { key: 'home_recommend', title: H.t('Parce que tu as aimé…'), note: H.t('Sur la page d’accueil'), choices: ON_OFF }];
     function displayPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Affichage')));
       DISPLAY.forEach(function (setting) {
