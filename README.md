@@ -212,7 +212,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 2612 tests : 2167 serveur + 445 interface
+python -m unittest discover -s tests          # 2686 tests : 2241 serveur + 445 interface
 ```
 
 `tests/test_ui.py` (et `tests/test_labels_ui.py`, et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 445 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
