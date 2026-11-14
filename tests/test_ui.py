@@ -3775,7 +3775,7 @@ class TestHomeUnseen(UiCase):
         day = mock.patch("hub.server.app.today", return_value="2026-11-04")          # le serveur tourne dans ce processus : l'ordre du jour ne change pas pendant le test
         day.start()
         self.addCleanup(day.stop)
-        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random"}))
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show"}))
 
     def libraries(self):
         return self.api("/api/home")["libraries"]
@@ -3936,7 +3936,7 @@ class TestHomeWithNoShelf(UiCase):
 
     def setUp(self):
         super().setUp()
-        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show"}))
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_requests": "show"}))
 
     def hide(self, *names):
         self.api("/api/me/settings", {name: "hide" for name in names})
@@ -4216,7 +4216,7 @@ class TestSettings(UiCase):
         self.assertEqual(panels.count(), 3)
         self.assertEqual(panels.nth(0).locator(".line .what b").all_inner_texts(), ["Appareil", "Taille du texte", "Langue"])
         self.assertEqual(panels.nth(1).locator(".line .what b").all_inner_texts(), ["Qualité", "Son surround 5.1"])
-        self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Nouveautés", "Pas encore vu", "Pas encore vu : cartes par rayon", "Pas encore vu : trier par"])
+        self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Nouveautés", "Pas encore vu", "Pas encore vu : cartes par rayon", "Pas encore vu : trier par", "Tes demandes sont arrivées"])
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
@@ -6228,7 +6228,7 @@ class TestRequestsInTheUi(unittest.TestCase):
         self.assertNotIn("Le message de Bob", page.content())
 
     def test_withdrawing_from_the_card_asks_first_and_cancel_keeps_the_request(self):
-        self.ask("alice", 1000)
+        rid = self.ask("alice", 1000)["id"]
         page = self.session("alice")
         self.open(page, self.SAGA)
         card = self.card(page, "Film intermédiaire")
@@ -6243,11 +6243,14 @@ class TestRequestsInTheUi(unittest.TestCase):
         page.keyboard.press("Enter")
         box.wait_for(state="detached")
         self.assertEqual(len(self.mine("alice")), 1)
+        listed = []
+        page.on("request", lambda r: listed.append(r.url) if "mine=1" in r.url else None)
         card.click()
-        with page.expect_response(lambda r: r.url.endswith("/delete")):
+        with page.expect_response(lambda r: r.url.endswith(f"/api/requests/{rid}/delete")):
             self.dialog(page).locator(".btn.danger").click()
         card.locator(".rqbtn", has_text="Demander").wait_for()
         self.assertEqual(self.mine("alice"), [])
+        self.assertEqual(listed, [])                                                                        # l'`id` de la case suffit : « Mes demandes » n'est pas relue
 
     def test_the_ceiling_is_said_in_the_window_and_the_card_does_not_change(self):
         self.hub.cfg.request_max = 1
@@ -6363,6 +6366,36 @@ class TestRequestsInTheUi(unittest.TestCase):
         self.open(page, "#/requests")
         self.rows(page).locator("a", has_text="Ouvrir").wait_for()                                          # « Mes demandes » mène à l'élément arrivé
 
+    def test_the_arrived_shelf_is_hidden_in_the_settings_and_the_home_is_never_bare(self):
+        self.ask("alice", 1000)
+        arrived = self.films / "Film intermédiaire (2014)" / "Film intermédiaire (2014).mkv"
+        fixtures.write_mkv(arrived, fixtures.movie_blocks("Film intermédiaire", "Arrivé.", "2014-01-01", "movie/1000", "Drame"))
+        self.addCleanup(self.rescan)
+        self.addCleanup(shutil.rmtree, arrived.parent, True)
+        self.addCleanup(lambda: self.call("alice", "/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_requests": "show"}))
+        self.rescan()
+        page = self.session("alice")
+        self.view(page, ".shelf.ready").wait_for()
+        self.open(page, "#/settings?tab=preferences")
+        line = self.view(page, ".panel .line").filter(has=page.locator("b", has_text=re.compile("^Tes demandes sont arrivées$")))
+        self.assertIn("Sur la page d’accueil : Affiché", line.inner_text())
+        line.locator("button", has_text="Changer").click()
+        page.locator(".menu .opt .lbl", has_text="Masqué").click()
+        line.filter(has_text="Masqué").wait_for()
+        self.assertEqual(self.call("alice", "/api/me/settings")["settings"]["home_requests"], "hide")
+        self.open(page, "#/")
+        self.view(page, ".shelf").first.wait_for()                                                         # les autres rayons restent
+        self.assertEqual(self.view(page, ".shelf.ready").count(), 0)
+        self.assertFalse(self.mine("alice")[0]["ack"])                                                      # caché n'est pas vu : il reviendra
+        self.call("alice", "/api/me/settings", {"home_latest": "hide", "home_unseen": "hide"})            # plus aucun rayon : les bibliothèques, pas une page nue
+        page.reload()
+        self.view(page, ".libtiles .libtile").first.wait_for()
+        self.assertEqual(self.view(page, ".shelf.ready").count(), 0)
+        self.call("alice", "/api/me/settings", {"home_requests": "show"})                                  # remontré : seul ce rayon, sans les tuiles
+        page.reload()
+        self.view(page, ".shelf.ready .card").wait_for()
+        self.assertEqual(self.view(page, ".libtiles").count(), 0)
+
     def test_without_an_arrival_the_home_keeps_its_own_shelves(self):
         page = self.session("bob")
         self.view(page, ".shelf").first.wait_for()
@@ -6477,6 +6510,8 @@ class TestRequestsInTheUi(unittest.TestCase):
         self.rows(page).first.wait_for()
         self.assertEqual(self.view(page, "h1").inner_text(), "My requests")
         self.assertIn("Waiting", self.rows(page).inner_text())                                         # « En attente », comme ailleurs dans l’interface
+        self.open(page, "#/settings?tab=preferences")
+        self.view(page, ".panel .line b", ).filter(has_text="Your requests have arrived").wait_for()          # le réglage du rayon de l'accueil
         self.assertEqual(page.evaluate("Hub.missing"), [])
         admin = self.session("admin", lang="en")
         self.open(admin, "#/settings?tab=demandes")
