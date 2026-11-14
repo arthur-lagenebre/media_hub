@@ -38,15 +38,16 @@ Les essais que les tests ne peuvent pas faire (NAS, Funnel, téléphone, tablett
 
 ## Routes ajoutées, à relier à l'interface
 
-Rien pour l'instant : une route ajoutée au serveur est reliée à l'interface dans le même lot, ou notée ici tant qu'elle ne l'est pas.
+Une route ajoutée au serveur est reliée à l'interface dans le même lot, ou notée ici tant qu'elle ne l'est pas.
 
-## Demandes : limites connues et routes à relier
+- [ ] **Demandes** (le lot 8 ne relie que la demande d'un film depuis une case grisée, son retrait et l'accueil) : la liste de l'administrateur (`GET /api/requests`, ses filtres, `POST /api/requests/<id>/status`, `POST /api/requests/<id>/delete`), le droit « Peut demander » dans la gestion des comptes (`POST /api/user/<id>/request`), le compteur `requests_pending` de `/api/state`, « Mes demandes » (`GET /api/requests?mine=1`). La recherche d'un titre sur TMDB pour le demander (films et séries) est le lot 8 bis.
+
+## Demandes : limites connues
 
 - [ ] **La demande suit l'identifiant TMDB.** Un film présent sans étiquette TMDB (`movie/<n>`), ou une série que l'enrichissement n'a pas trouvée sur TMDB, n'est pas reconnu : sa demande reste « en attente » jusqu'à ce que l'administrateur la marque « ajoutée » (`POST /api/requests/<id>/status`). Deux fiches TMDB pour le même film (une version longue à part, par exemple) font deux demandes distinctes.
 - [ ] **Arrivée dans une bibliothèque invisible au demandeur** : la demande passe à « ajoutée » pour lui aussi, sans lien vers l'élément ni carte sur l'accueil (voir [decisions.md](decisions.md)). Rien ne lui dit pourquoi il ne peut pas l'ouvrir.
 - [ ] **Remettre « en attente » une demande dont l'élément est là** ne tient pas : la lecture suivante la repasse à « ajoutée ». Pour la garder ouverte, il faut que l'élément ne soit plus dans aucune bibliothèque.
 - [ ] **Titre et année** viennent de ce que l'enrichissement a gardé (sagas, filmographies) ou, à défaut, de ce que le client envoie : une série n'a que ce que le client envoie, et le serveur ne vérifie pas que l'identifiant TMDB existe.
-- [ ] **Routes à relier à l'interface** (le lot 8 ne relie que la demande d'un film depuis une case grisée, son retrait et l'accueil) : la liste de l'administrateur (`GET /api/requests`, ses filtres, `POST /api/requests/<id>/status`, `POST /api/requests/<id>/delete`), le droit « Peut demander » dans la gestion des comptes (`POST /api/user/<id>/request`), le compteur `requests_pending` de `/api/state`, « Mes demandes » (`GET /api/requests?mine=1`). La recherche d'un titre sur TMDB pour le demander (films et séries) est le lot 8 bis.
 
 ## Idées mises de côté
 
