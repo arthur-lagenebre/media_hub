@@ -401,7 +401,7 @@
     }
     function noSheetNote(info) {
       if (info) return null;
-      return h('p', { class: 'muted' }, H.isAdmin() ? H.t('Pas encore de fiche : lance « Fiches artistes » dans Paramètres > Gestion pour récupérer le résumé, les membres et les liens.') : H.t('Pas encore de fiche pour cet artiste.'));
+      return h('p', { class: 'muted' }, H.isAdmin() ? H.t('Pas encore de fiche : lance « Fiches artistes » dans Administration > Médiathèque pour récupérer le résumé, les membres et les liens.') : H.t('Pas encore de fiche pour cet artiste.'));
     }
     function artistBody(d, info) {
       var body = h('div', { class: 'body' });

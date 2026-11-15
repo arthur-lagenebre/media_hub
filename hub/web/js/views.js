@@ -1,4 +1,4 @@
-/* Les pages : accueil, bibliothèque, fiche, recherche, gestion. */
+/* Les pages : accueil, bibliothèque, fiche, recherche, paramètres (l'administration est dans admin.js). */
 (function () {
   'use strict';
   var H = window.Hub, h = H.h;
@@ -53,17 +53,27 @@
       nav.appendChild(links);
       nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': H.t('Recherche') }, H.icon('search')));
       if (H.canUpload()) nav.appendChild(h('a', { class: 'tool f', href: '#/upload', 'data-nav': '#/upload', 'aria-label': H.t('Envoyer'), title: H.t('Envoyer') }, H.icon('upload')));
-      nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': H.t('Paramètres') }, H.icon('gear')));
+      if (H.isAdmin()) nav.appendChild(h('a', { class: 'tool f', href: '#/admin', 'data-nav': '#/admin', 'aria-label': H.t('Administration'), title: H.t('Administration') }, H.icon('admin')));
+      nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': H.t('Paramètres'), title: H.t('Paramètres') }, H.icon('gear')));
       H.nav.pending();
     },
-    // Les demandes en attente, en pastille sur l'entrée des paramètres : /api/state n'en donne le nombre qu'à l'administrateur (0 pour les autres : pas de pastille).
+    // Les demandes en attente, en pastille sur l'entrée Administration : /api/state n'en donne le nombre qu'à l'administrateur (0 pour les autres, qui n'ont pas cette entrée).
     pending: function () {
-      var gear = document.querySelector('#nav [data-nav="#/settings"]');
-      if (!gear) return;
-      var n = H.session.pending || 0, old = gear.querySelector('.pend');
-      if (old) gear.removeChild(old);
-      if (n > 0) gear.appendChild(h('span', { class: 'pend', 'aria-hidden': 'true' }, String(n)));
-      gear.setAttribute('aria-label', n > 0 ? H.t('Paramètres · {n} en attente', { n: H.plural(n, 'demande') }) : H.t('Paramètres'));
+      var admin = document.querySelector('#nav [data-nav="#/admin"]');
+      if (!admin) return;
+      var n = H.session.pending || 0, old = admin.querySelector('.pend');
+      if (old) admin.removeChild(old);
+      if (n > 0) admin.appendChild(h('span', { class: 'pend', 'aria-hidden': 'true' }, String(n)));
+      admin.setAttribute('aria-label', n > 0 ? H.t('Administration · {n} en attente', { n: H.plural(n, 'demande') }) : H.t('Administration'));
+    },
+    // Après une relecture de /api/state : la barre suit un droit « Envoyer » ou un rôle d'administrateur donné ou retiré ailleurs, sans recharger, et la pastille le nombre de demandes.
+    sync: function () {
+      var upload = !!document.querySelector('#nav [data-nav="#/upload"]'), admin = !!document.querySelector('#nav [data-nav="#/admin"]');
+      if (H.canUpload() !== upload || H.isAdmin() !== admin) {
+        H.nav.build();
+        var top = H.current();
+        H.nav.mark(top ? (top.view.nav || top.hash) : (location.hash || '#/'));
+      } else H.nav.pending();
     },
     mark: function (hash) {
       var back = document.querySelector('#nav .back');
@@ -495,7 +505,7 @@
           el.appendChild(h('div', { class: 'blank' },
             h('h1', null, H.t('Ta médiathèque est vide pour l’instant')),
             h('p', null, !H.isAdmin() ? H.t('Rien n’est encore indexé : l’administrateur doit lancer une mise à jour de la médiathèque.') : H.libs.length ? H.t('Les dossiers sont lus au premier démarrage. Si tu viens d’y ajouter des fichiers, lance une mise à jour.') : H.t('Aucun dossier de bibliothèque trouvé : monte tes dossiers sous /srv (Films, Series, Musique, Livres), ou décris-les avec HUB_LIBRARIES.')),
-            H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/settings?tab=gestion', 'data-autofocus': '1' }, H.t('Ouvrir les paramètres')) : null));
+            H.isAdmin() ? h('a', { class: 'btn f primary', href: '#/admin', 'data-autofocus': '1' }, H.t('Ouvrir l’administration')) : null));
           clearTimeout(timer);
           timer = setTimeout(function () { if (document.body.contains(el) && !document.hidden) load(); }, 4000);
           return;
@@ -1058,10 +1068,10 @@
         .then(function () { H.toast(done ? H.t('Saga marquée comme vue') : H.t('Saga marquée comme non vue')); return load(); })
         .catch(function (e) { H.toast(e && e.message ? e.message : H.t('Impossible pour le moment.'), 5000); return load(); });
     }
-    // Cache un film que la collection TMDB compte et pas nous : il ne sera plus montré comme manquant (Paramètres > Gestion > Sagas le rétablit).
+    // Cache un film que la collection TMDB compte et pas nous : il ne sera plus montré comme manquant (Administration > Médiathèque > Sagas le rétablit).
     function hide(m) {
       H.api('/api/sagas/ignore', { tmdb: m.tmdb }).then(function () {
-        H.toast(H.t('« {title} » ne sera plus montré comme manquant (Paramètres > Gestion > Sagas pour le rétablir)', { title: m.title }), 5000);
+        H.toast(H.t('« {title} » ne sera plus montré comme manquant (Administration > Médiathèque > Sagas pour le rétablir)', { title: m.title }), 5000);
         return load();
       }).catch(function (e) { H.toast(e.message, 5000); });
     }
@@ -1151,7 +1161,7 @@
     function failed(job) { return !!job && (job.status === 'failed' || !!(job.result && job.result.failed)); }
     function finish(job) {
       if (gone) return null;
-      if (failed(job)) { H.toast(H.t('La recherche a échoué : voir les tâches dans Gestion.'), 5000); return null; }
+      if (failed(job)) { H.toast(H.t('La recherche a échoué : voir les tâches dans Administration.'), 5000); return null; }
       return load().then(function (res) { if (res && !gone) H.toast(res.missing ? H.t('Terminé') : H.t('Aucun film ne manque.')); });
     }
     function ask() {
@@ -1206,6 +1216,8 @@
     var i = list.indexOf(r), next = list[i + 1] || list[i - 1];
     return next ? prefix + next.id : null;
   }
+  // Ce que l'onglet Demandes de la page Administration (admin.js) reprend d'ici.
+  H.requests = { title: requestTitle, status: requestStatus, picture: requestPicture, open: openLink, neighbour: neighbourKey, gone: goneAlready };
 
   // #/requests : les demandes du compte (GET /api/requests?mine=1), de la plus récente à la plus ancienne. Chacune se retire ; une demande arrivée mène à l'élément quand le compte le voit.
   // Ce que le compte voit : ses demandes et son message, jamais qui d'autre a demandé le même film.
@@ -1342,213 +1354,81 @@
       destroy: function () { clearTimeout(timer); seq++; } };
   });
 
-  // --- Gestion ---------------------------------------------------------------------
-  function ago(ts) {
+  // --- Paramètres, et ce que la page Administration (admin.js) leur emprunte ---------------------------
+  H.ago = function (ts) {
     if (!ts) return H.t('jamais');
     var s = Math.max(0, Date.now() / 1000 - ts);
     if (s < 90) return H.t('à l’instant');
     if (s < 5400) return H.t('il y a {n} min', { n: Math.round(s / 60) });
     if (s < 129600) return H.t('il y a {n} h', { n: Math.round(s / 3600) });
     return H.t('il y a {n} j', { n: Math.round(s / 86400) });
-  }
-  var ROLES = { admin: H.t('Administrateur'), user: H.t('Utilisateur') };
-  function checkPassword(pw, again) {
+  };
+  H.roles = { admin: H.t('Administrateur'), user: H.t('Utilisateur') };
+  // Les règles du mot de passe, vérifiées avant d'appeler le serveur (qui les vérifie aussi) : un message, ou rien.
+  H.checkPassword = function (pw, again) {
     if (pw.length < 12) return H.t('Le mot de passe doit faire au moins 12 caractères.');
     if (pw.length > 200) return H.t('Le mot de passe est trop long (200 caractères au plus).');
     if (pw !== again) return H.t('Les deux mots de passe ne sont pas identiques.');
     return '';
-  }
+  };
+  // Changer son propre mot de passe (le serveur exige l'actuel) ; `done` rend le focus à ce qui a ouvert la fenêtre.
+  H.changeMyPassword = function (done) {
+    H.form({ title: H.t('Changer mon mot de passe'), ok: H.t('Changer'),
+      fields: [{ key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }, { key: 'next', label: H.t('Nouveau mot de passe (12 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Nouveau mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
+      submit: function (v) {
+        if (!v.current) return H.t('Saisis ton mot de passe actuel.');
+        var bad = H.checkPassword(v.next, v.again);
+        if (bad) return bad;
+        return H.api('/api/me/password', { current: v.current, 'new': v.next });   // le serveur renouvelle le cookie : rien à garder ici
+      },
+      done: function () { H.toast(H.t('Mot de passe changé. Les autres appareils devront se reconnecter.'), 5000); if (done) done(); } });
+  };
+  // Serveur ouvert (aucun compte) : comment créer le premier compte. Dans « Mon compte » et dans Administration > Comptes.
+  H.openServerNote = function () {
+    return h('p', { class: 'muted' }, H.t('Aucun compte n’existe : le serveur est ouvert, et toute personne qui peut l’atteindre voit et gère tout. Pour le protéger, crée le premier compte (il sera administrateur) sur le serveur avec '),
+      h('code', null, H.t('python -m hub user add <nom>')), H.t(', ou définis '), h('code', null, 'HUB_PASSWORD'), H.t(' avant de démarrer le serveur. Les comptes suivants se gèrent ensuite ici.'));
+  };
 
-  // `#/admin` est l'ancienne adresse de la page : les signets et les liens déjà donnés continuent d'y mener.
-  H.route(/^\/(?:admin|settings)$/, function (m, query) {
-    var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, wasAdmin = null, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '', libsOpen = false, libsPanelNode = null, closed = false;
-    var tab = query.tab || H.pref('settings.tab') || '', openJobs = {};
+  // #/settings : ce qui concerne le compte connecté (ses préférences, son compte) et « À propos ». L'administration est sur #/admin.
+  var SETTINGS_TABS = [{ id: 'preferences', label: H.t('Préférences') }, { id: 'compte', label: H.t('Mon compte') }, { id: 'apropos', label: H.t('À propos') }];
+  var OLD_SETTINGS_TABS = { lecture: 'preferences', interface: 'preferences' };          // les anciens onglets : les adresses et le choix mémorisé y mènent encore
+  // Les onglets partis dans Administration : leur ancienne adresse y mène l'administrateur (« comptes » était aussi « Mon compte » : un autre compte y retrouve le sien).
+  var MOVED_TABS = { gestion: 'mediatheque', taches: 'mediatheque', serveur: 'serveur', inbox: 'inbox', demandes: 'demandes', comptes: 'comptes' };
+  H.route(/^\/settings$/, function (m, query) {
+    if (query.tab && MOVED_TABS[query.tab] && H.isAdmin()) {
+      var to = '#/admin?tab=' + MOVED_TABS[query.tab];
+      return { el: h('section', { class: 'blank' }, h('h1', null, H.t('Administration'))), nav: '#/admin', shown: function () { H.go(to, true); } };
+    }
+    var el = h('section', { class: 'admin settings' }), state = null, lastPage = '', closed = false;
+    var tab = query.tab === 'comptes' ? 'compte' : (query.tab || H.pref('settings.tab') || '');
     function qualityLabel(v) { return { auto: H.t('Qualité d’origine quand c’est possible'), '1080': '1080p · 8 Mb/s', '720': '720p · 4 Mb/s', '480': H.t('480p · 1,5 Mb/s') }[v] || v; }
-    function start(path, body, text) {
-      return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
+    function activeTab() {          // un onglet inconnu (ou parti dans Administration) retombe sur le premier
+      var wanted = OLD_SETTINGS_TABS[tab] || tab;
+      return SETTINGS_TABS.some(function (t) { return t.id === wanted; }) ? wanted : SETTINGS_TABS[0].id;
     }
-    var TABS = [{ id: 'gestion', label: H.t('Gestion'), admin: true }, { id: 'inbox', label: H.t('Boîte de réception'), admin: true }, { id: 'preferences', label: H.t('Préférences') }, { id: 'comptes', label: H.t('Comptes') },
-      { id: 'demandes', label: H.t('Demandes'), admin: true }];
-    var OLD_TABS = { lecture: 'preferences', interface: 'preferences', taches: 'gestion', serveur: 'gestion' };          // les anciens onglets : les adresses et le choix mémorisé y mènent encore
-    function visibleTabs() { return TABS.filter(function (t) { return !t.admin || H.isAdmin(); }); }
-    function activeTab() {          // un onglet réservé à l'administrateur ne s'ouvre pas pour un autre compte : on retombe sur le premier
-        var ids = visibleTabs().map(function (t) { return t.id; });
-        var wanted = OLD_TABS[tab] || tab;
-        return ids.indexOf(wanted) >= 0 ? wanted : ids[0];
-    }
-    function choose(id) {
-      tab = id; H.pref('settings.tab', id);
-      if (id === 'demandes' && !reqLoading) { reqList = null; reqError = ''; }          // l'onglet se relit à chaque fois qu'on y entre : pas de liste périmée
-      render(); H.focus.key(el, 'tab-' + id);
-    }
+    function choose(id) { tab = id; H.pref('settings.tab', id); render(); H.focus.key(el, 'tab-' + id); }
     function tabBar() {
       var active = activeTab();
-      return h('div', { class: 'tabs', role: 'tablist' }, visibleTabs().map(function (t) {
-        return h('button', { class: 'chip tab f' + (t.id === active ? ' on' : '') + (t.id === 'gestion' && busy ? ' busy' : ''), role: 'tab', 'aria-selected': t.id === active ? 'true' : 'false', 'data-key': 'tab-' + t.id,
-          'data-autofocus': t.id === active ? '1' : null, onclick: function () { choose(t.id); } }, t.label,
-          t.id === 'demandes' && H.session.pending > 0 ? h('span', { class: 'pend', 'aria-label': H.t('{n} en attente', { n: H.plural(H.session.pending, 'demande') }) }, String(H.session.pending)) : null);
+      return h('div', { class: 'tabs', role: 'tablist' }, SETTINGS_TABS.map(function (t) {
+        return h('button', { class: 'chip tab f' + (t.id === active ? ' on' : ''), role: 'tab', 'aria-selected': t.id === active ? 'true' : 'false', 'data-key': 'tab-' + t.id,
+          'data-autofocus': t.id === active ? '1' : null, onclick: function () { choose(t.id); } }, t.label);
       }));
     }
     function render() {
       var focus = document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
-      var kept = logStates(logPanel);
       H.clear(el);
-      logPanel = null; libsPanelNode = null;
       el.appendChild(h('h1', null, H.t('Paramètres')));
       var bar = tabBar();
       el.appendChild(bar);
       var body = h('div', { class: 'tabbody' }), active = activeTab();
-      if (active === 'gestion') gestion(body);
-      else if (active === 'inbox') body.appendChild(H.upload.adminPanel());
-      else if (active === 'preferences') preferences(body);
-      else if (active === 'demandes') requestsTab(body);
-      else accounts(body);
+      if (active === 'preferences') preferences(body);
+      else if (active === 'compte') body.appendChild(accountPanel());
+      else body.appendChild(aboutPanel());
       el.appendChild(body);
-      if (logPanel) logRestore(logPanel, kept);          // un journal lu à mi-chemin le reste quand la page est refaite (une tâche qui se termine)
       var on = bar.querySelector('.on');
-      if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir (après le contenu : lire offsetLeft sur une page à moitié reconstruite la ramenait en haut)
-      wasAdmin = H.isAdmin();
+      if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir
       if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
       if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
-    }
-    function refreshCovers(l) {
-      H.api('/api/images/refresh', { lib: l.id }).then(function (r) { H.toast(r.removed > 1 ? H.t('Covers à relire : {name} ({n} vignettes oubliées)', { name: H.libLabel(l), n: r.removed }) : H.t('Covers à relire : {name} ({n} vignette oubliée)', { name: H.libLabel(l), n: r.removed })); })
-        .catch(function (e) { H.toast(e.message, 5000); });
-    }
-    // Les films des personnes d'une bibliothèque de films ou de séries : une tâche de fond par bibliothèque, qui n'a de sens qu'avec une clé TMDB.
-    // Pour des films, c'est « Films manquants » ; pour des séries, les identifiants des acteurs viennent de « Enrichir (TMDB) ».
-    function categoryButton(l) {
-      if (!state.tmdb || (l.kind !== 'movies' && l.kind !== 'shows')) return null;
-      var shows = l.kind === 'shows';
-      return H.button(shows ? H.t('Films des personnes (TMDB)') : H.t('Films manquants'), null, { 'data-key': 'people-' + l.id, title: shows ? H.t('Demande à TMDB les films des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Les identifiants viennent de « Enrichir (TMDB) » : lance-le d’abord une fois.') : H.t('Demande à TMDB les films des réalisateurs et des acteurs de cette bibliothèque, pour voir sur la page de chacun ceux qui ne sont pas dans ta médiathèque. Compte une heure ou plus la première fois (un appel par personne, puis les affiches) ; une personne déjà connue depuis moins d’un mois n’est pas redemandée.'),
-        onclick: function () { start('/api/enrich/people', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.libLabel(l) })); } });
-    }
-    // Les cinq bibliothèques tiennent sur une ligne tant qu'on ne les déplie pas : « Tout mettre à jour » suffit presque toujours.
-    function libsPanel() {
-      var libs = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Bibliothèques')),
-        H.button(H.t('Tout mettre à jour'), 'refresh', { class: 'primary', 'data-key': 'scan-all', title: H.t('Relit les cinq bibliothèques ; seuls les fichiers modifiés sont relus.'), onclick: function () { start('/api/scan', {}, H.t('Mise à jour lancée')); } })));
-      libs.appendChild(h('button', { class: 'jhead f', 'aria-expanded': libsOpen ? 'true' : 'false', 'data-key': 'libs-toggle',
-        onclick: function () { libsOpen = !libsOpen; showLibs('libs-toggle'); } }, h('span', { class: 'jt' }, h('b', null, H.t('Détail par bibliothèque')), h('span', null, H.plural(state.libraries.length, 'bibliothèque')))));
-      if (!libsOpen) return libs;
-      state.libraries.forEach(function (l) {
-        libs.appendChild(h('div', { class: 'line', 'data-lib': l.id },
-          h('div', { class: 'what' }, h('b', null, H.libLabel(l)), h('span', null, l.exists ? H.plural(l.count, 'élément') + ' · ' + H.t('mis à jour {when}', { when: ago(l.scanned) }) : H.t('dossier introuvable'))),
-          l.kind === 'shows' ? H.button(H.t('Enrichir (TMDB)'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Enrichissement lancé : {name}', { name: H.libLabel(l) })); } }) : null,
-          l.kind === 'movies' ? H.button(H.t('Sagas (TMDB)'), null, { 'data-key': 'enrich-' + l.id, title: H.t('Cherche chez TMDB les films qui manquent à tes sagas, et la note de chaque film.'), onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Recherche des films manquants lancée : {name}', { name: H.libLabel(l) })); } }) : null,
-          categoryButton(l),
-          l.kind === 'music' ? H.button(H.t('Fiches artistes'), null, { 'data-key': 'enrich-' + l.id, onclick: function () { start('/api/enrich', { lib: l.id }, H.t('Fiches artistes demandées : {name}', { name: H.libLabel(l) })); } }) : null,
-          l.kind === 'movies' ? H.button(H.t('Relire les covers'), null, { 'data-key': 'covers-' + l.id, title: H.t('Vide les vignettes gardées : chacune se refait depuis folder.jpg ou la jaquette du .mkv. Les affiches choisies à la main restent.'), onclick: function () { refreshCovers(l); } }) : null,
-          H.button(H.t('Mettre à jour'), 'refresh', { 'data-key': 'scan-' + l.id, disabled: false, onclick: function () { start('/api/scan', { lib: l.id }, H.t('Mise à jour lancée : {name}', { name: H.libLabel(l) })); } }),
-          H.isAdmin() ? H.button(H.t('Renommer'), 'edit', { 'data-key': 'rename-' + l.id, 'aria-label': H.t('Renommer la bibliothèque {name}', { name: H.libLabel(l) }), onclick: function () { renameLibrary(l); } }) : null));
-      });
-      return libs;
-    }
-    // Change le nom AFFICHÉ d'une bibliothèque (jamais son identifiant) ; un champ vide, ou « Rétablir », rend le nom d'origine. Le serveur nettoie le nom et refuse un doublon : son message s'affiche dans la fenêtre, qui reste ouverte.
-    function renameLibrary(l) {
-      var current = l.label, renamed = H.libRenamed(l);
-      function save(text) { return H.api('/api/library/' + encodeURIComponent(l.id) + '/label', { label: text }); }
-      H.form({ title: H.t('Renommer la bibliothèque « {name} »', { name: H.libLabel(l) }), ok: H.t('Enregistrer'),
-        lead: [H.t('Seul le nom affiché change : les droits, la progression et les fichiers restent attachés à la bibliothèque.')],
-        fields: [{ key: 'label', label: H.t('Nom affiché (40 caractères au plus)'), type: 'text', maxlength: 40, value: current }],
-        alt: renamed ? { label: H.t('Rétablir « {name} »', { name: H.tr(l.default_label) }), submit: function () { return save(''); } } : null,
-        submit: function (v) { return v.label === current || (!v.label && !renamed) ? Promise.resolve(null) : save(v.label); },          // rien à changer : on ferme sans rien demander au serveur
-        done: function (res) {
-          if (!res) return;
-          H.toast(H.libRenamed(res) ? H.t('Bibliothèque renommée : {name}', { name: res.label }) : H.t('Nom d’origine rétabli : {name}', { name: H.libLabel(res) }));
-          poll().then(function () { H.focus.key(el, 'rename-' + l.id); });          // relit /api/state : la barre, les pages et la grille des droits prennent le nouveau nom (H.setLibs)
-        } });
-    }
-    // Remplace le panneau des bibliothèques sur place (la page garde son défilement), en rendant le focus à ce qui l'avait.
-    function showLibs(key) {
-      var fresh = libsPanel();
-      libsPanelNode.parentNode.replaceChild(fresh, libsPanelNode);
-      libsPanelNode = fresh;
-      H.focus.key(fresh, key, true);
-    }
-    // Gestion : les bibliothèques, les sagas, l'entretien, puis ce qui se lit plus qu'il ne se règle : les tâches que les boutons ci-dessus lancent, et le serveur.
-    function gestion(body) {
-      libsPanelNode = libsPanel();
-      body.appendChild(libsPanelNode);
-      body.appendChild(h('section', { class: 'panel' }, h('h2', null, H.t('Sagas')), h('div', { class: 'line' },
-        h('div', { class: 'what' }, h('b', null, H.t('Sagas composées à la main')), h('span', null, H.t('Une trilogie que TMDB ne réunit pas, l’ordre du MCU… : des listes de films dans l’ordre de ton choix, en plus de la saga de l’étiquette.'))),
-        h('a', { class: 'btn f', href: '#/sagas', 'data-key': 'sagas' }, H.icon('edit'), h('span', { class: 'lbl' }, H.t('Composer'))))));
-
-      var tools = h('section', { class: 'panel' }, h('h2', null, H.t('Entretien')));
-      tools.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Fichiers parasites')), h('span', null, H.t('Thumbs.db, desktop.ini, .DS_Store et les AlbumArt_{…}_Large / _Small.jpg semés par Windows et macOS ; en musique, toute image autre que cover.jpg (ou .png…), la seule pochette d’un album, y compris folder.jpg.'))),
-        H.button(H.t('Supprimer'), null, { 'data-key': 'junk-del', onclick: confirmCleanup })));
-      body.appendChild(tools);
-      tasks(body);
-      serverFacts(body);
-    }
-    // Demandes (administrateur) : toutes les demandes, filtrées par état, avec leurs demandeurs et leurs messages. Lues à l'ouverture de l'onglet et après chaque action ;
-    // le compteur de la barre et de l'onglet suit (/api/state relu par poll).
-    var reqList = null, reqError = '', reqFilter = 'all', reqLoading = false, reqToken = 0;
-    var REQ_FILTERS = [['all', H.t('Toutes')], ['pending', H.t('En attente')], ['added', H.t('Ajoutées')], ['declined', H.t('Refusées')]];
-    // Relit la liste, puis met le focus sur `key`, à défaut sur `fallback` (une ligne voisine, quand celle qu'on vient de traiter sort du filtre), à défaut sur le filtre.
-    // Une réponse arrivée après une autre lecture (un filtre changé entre-temps) est ignorée.
-    function loadRequests(key, fallback) {
-      var mine = ++reqToken;
-      reqLoading = true;
-      return H.api('/api/requests' + (reqFilter !== 'all' ? '?status=' + reqFilter : '')).then(function (res) { return { list: res.requests || [], error: '' }; }, function (e) { return { list: null, error: e.message }; }).then(function (got) {
-        if (mine !== reqToken) return;
-        reqLoading = false;
-        reqList = got.list; reqError = got.error;
-        if (closed || activeTab() !== 'demandes') return;
-        render();
-        if (key && !H.focus.key(el, key, true) && !(fallback && H.focus.key(el, fallback, true))) H.focus.key(el, 'rf-' + reqFilter, true);
-      });
-    }
-    function afterRequest(key, fallback) { return loadRequests(key, fallback).then(function () { return poll(); }); }
-    function requestsTab(body) {
-      if (reqList === null && !reqError && !reqLoading) loadRequests();
-      var panel = h('section', { class: 'panel requests' }, h('h2', null, H.t('Demandes')),
-        h('p', { class: 'muted' }, H.t('Ce que les comptes ont demandé. Le hub ne télécharge rien : ajoute le film à la médiathèque, il passe « Ajouté » tout seul s’il porte son identifiant TMDB ; sinon, marque-le à la main.')));
-      panel.appendChild(h('div', { class: 'chips', role: 'group', 'aria-label': H.t('Filtrer les demandes') }, REQ_FILTERS.map(function (f) {
-        var on = reqFilter === f[0];
-        return h('button', { class: 'chip f' + (on ? ' on' : ''), type: 'button', 'data-key': 'rf-' + f[0], 'aria-pressed': on ? 'true' : 'false',
-          onclick: function () { if (reqFilter === f[0]) return; reqFilter = f[0]; reqList = null; reqError = ''; loadRequests('rf-' + f[0]); } }, f[1]);
-      })));
-      if (reqError) panel.appendChild(h('p', { class: 'muted' }, reqError, ' ', h('button', { class: 'btn f', type: 'button', 'data-key': 'rq-retry', onclick: function () { reqList = null; reqError = ''; loadRequests('rf-' + reqFilter); } }, H.t('Réessayer'))));
-      else if (!reqList) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
-      else if (!reqList.length) panel.appendChild(h('p', { class: 'muted reqempty' }, reqFilter === 'all' ? H.t('Aucune demande pour l’instant : un compte demande un film depuis sa case grisée (page d’une saga, d’une personne).') : H.t('Aucune demande dans cet état.')));
-      (reqList || []).forEach(function (r) { panel.appendChild(adminRequestRow(r)); });
-      body.appendChild(panel);
-    }
-    // Une demande : titre, état, demandeurs (nom, date, message), et ce qu'on peut en faire. Noms et messages viennent des comptes : toujours en texte.
-    function adminRequestRow(r) {
-      var users = r.users || [];
-      var who = h('ul', { class: 'rqusers' }, users.map(function (u) {
-        return h('li', null, h('b', null, u.name || H.t('compte supprimé')), ' · ' + H.date(u.created), u.note ? [' · ', h('q', null, u.note)] : null);
-      }));
-      var what = h('div', { class: 'what' }, h('b', null, requestTitle(r)), h('span', { class: 'rqstatus' }, requestStatus(r)),
-        h('span', null, H.plural(users.length, 'demandeur') + ' · ' + H.t('demandée le {date}', { date: H.date(r.created) })), users.length ? who : null);
-      var buttons = [];
-      if (r.item) buttons.push(openLink(r));
-      if (r.status === 'pending') {
-        buttons.push(H.button(H.t('Marquer ajouté'), 'check', { 'data-key': 'rq-added-' + r.id, onclick: function () { setRequest(r, 'added'); } }));
-        buttons.push(H.button(H.t('Refuser'), 'close', { 'data-key': 'rq-declined-' + r.id, onclick: function () { declineRequest(r); } }));
-      } else buttons.push(H.button(H.t('Remettre en attente'), 'refresh', { 'data-key': 'rq-pending-' + r.id, onclick: function () { setRequest(r, 'pending'); } }));
-      buttons.push(H.button(H.t('Supprimer'), 'trash', { 'data-key': 'rq-del-' + r.id, 'aria-label': H.t('Supprimer la demande de « {title} »', { title: requestTitle(r) }), onclick: function () { deleteRequest(r); } }));
-      return h('div', { class: 'line reqrow', 'data-request': r.id, 'data-status': r.status }, requestPicture(r), what, buttons);
-    }
-    // Le bouton qui remplace celui qu'on vient d'utiliser : « Marquer ajouté » et « Refuser » deviennent « Remettre en attente », et l'inverse.
-    function setRequest(r, status) {
-      var next = neighbourKey(reqList || [], r, 'rq-del-');          // la ligne peut sortir du filtre : le focus va alors à sa voisine
-      H.api('/api/requests/' + r.id + '/status', { status: status }).then(function () { return afterRequest(status === 'pending' ? 'rq-added-' + r.id : 'rq-pending-' + r.id, next); })
-        .catch(function (e) { H.toast(e.message, 5000); });
-    }
-    function declineRequest(r) {
-      H.form({ title: H.t('Refuser « {title} »', { title: requestTitle(r) }), ok: H.t('Refuser'),
-        lead: [H.t('Le motif est montré à ceux qui l’ont demandé. Tant que la demande est refusée, personne ne peut la refaire.')],
-        fields: [{ key: 'reason', label: H.t('Motif (facultatif, 200 caractères au plus)'), maxlength: 200 }],
-        submit: function (v) { return H.api('/api/requests/' + r.id + '/status', { status: 'declined', reason: v.reason }); },
-        done: function () { afterRequest('rq-pending-' + r.id, neighbourKey(reqList || [], r, 'rq-del-')); } });
-    }
-    function deleteRequest(r) {
-      H.confirm({ title: H.t('Supprimer la demande « {title} » ?', { title: requestTitle(r) }), ok: H.t('Supprimer'), danger: true,
-        lead: [H.t('Elle disparaît pour tous ceux qui l’ont faite ({n}), avec leurs messages. Cela ne s’annule pas.', { n: H.plural((r.users || []).length, 'demandeur') })],
-        submit: function () { return H.api('/api/requests/' + r.id + '/delete', {}).catch(goneAlready); },
-        done: function () { H.toast(H.t('Demande supprimée : {title}', { title: requestTitle(r) })); afterRequest(neighbourKey(reqList || [], r, 'rq-del-') || 'rf-' + reqFilter); } });
     }
     // Les réglages qu'on touche une fois : l'apparence de ce navigateur, la lecture, l'affichage du compte.
     function preferences(body) {
@@ -1629,84 +1509,21 @@
         h('span', null, H.canRequest() ? H.t('Les films et les séries que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film ni de série ; tes demandes déjà faites restent visibles'))),
         h('a', { class: 'btn f', href: '#/requests', 'data-key': 'my-requests' }, H.icon('queue'), h('span', { class: 'lbl' }, H.t('Mes demandes'))));
     }
-    function accounts(body) {
-      body.appendChild(accountPanel());
-      if (H.session.auth && H.isAdmin()) body.appendChild(usersPanel());
-    }
-    function tasks(body) {
-      logPanel = jobsPanel();
-      body.appendChild(logPanel);
-    }
-    function serverFacts(body) {
-      var server = h('section', { class: 'panel' }, h('h2', null, H.t('Serveur')));
-      var facts = [['Version', state.version], ['ffmpeg', state.ffmpeg ? H.t('présent') : H.t('absent : lecture directe uniquement')], ['TMDB', state.tmdb ? H.t('clé configurée') : H.t('pas de clé (TMDB_KEY)')],
-        [H.t('Conversions'), H.t('{n} en cours sur {max}', { n: state.streams, max: state.max_streams })], [H.t('Accès'), state.auth ? H.t('protégé par mot de passe') : H.t('sans mot de passe')]];
-      server.appendChild(h('dl', null, facts.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })));
-      // La mention et le logo de TMDB (tmdb.svg, le logo court officiel), que demandent les conditions de son API.
-      server.appendChild(h('p', { class: 'credit-tmdb' }, h('img', { src: '/tmdb.svg', alt: 'TMDB', width: '92', height: '12' }),
-        h('span', null, H.t('Ce produit utilise l’API TMDB mais n’est ni approuvé ni certifié par TMDB.'))));
-      body.appendChild(server);
-    }
-    // Supprimer les fichiers parasites ne s'annule pas : on demande d'abord.
-    // « Compter » lance un comptage depuis la fenêtre et en affiche le nombre sans la fermer ; rien n'est affiché avant.
-    function confirmCleanup() {
-      var counting = false;
-      function said(found) { return H.t('Fichiers trouvés : {n}.', { n: found }); }
-      var count = h('p', { class: 'lead', role: 'status', hidden: true });
-      var sample = h('ul', { class: 'sample', 'aria-label': H.t('Les premiers fichiers qui seraient supprimés') });
-      function listed(result) {          // les premiers fichiers que la simulation a nommés, et combien d'autres
-        H.clear(sample);
-        var names = (result && result.sample) || [];
-        names.forEach(function (name) { sample.appendChild(h('li', null, name)); });
-        if (result && result.found > names.length) sample.appendChild(h('li', { class: 'more' }, H.t('… et {n} autre(s)', { n: result.found - names.length })));
-      }
-      var recount = H.button(H.t('Compter'), null, { 'data-key': 'junk-recount', 'aria-label': H.t('Compter de nouveau les fichiers parasites'), onclick: function () {
-        if (counting) return;
-        counting = true; count.hidden = false; count.textContent = H.t('Comptage en cours…'); listed(null);
-        function wait(id) {
-          return H.api('/api/jobs').then(function (r) {
-            var job = r.jobs.filter(function (j) { return j.id === id; })[0];
-            if (job && (job.status === 'waiting' || job.status === 'running')) return new Promise(function (go) { setTimeout(function () { go(wait(id)); }, 700); });
-            return job;
-          });
-        }
-        H.api('/api/cleanup', {}).then(function (r) { return wait(r.job.id); }).then(function (job) {
-          count.textContent = job && job.status === 'done' && job.result ? said(job.result.found) : H.t('Le comptage a échoué : voir les Tâches, en bas de Gestion.');
-          if (job && job.status === 'done') listed(job.result);
-        }, function (e) { count.textContent = e.message; }).then(function () { counting = false; poll(); });
-      } });
-      H.confirm({ title: H.t('Supprimer les fichiers parasites ?'), ok: H.t('Supprimer définitivement'), danger: true,
-        lead: [H.t('Les fichiers parasites seront supprimés de la médiathèque, et cela ne s’annule pas.')], extra: [count, sample, recount],
-        submit: function () { return H.api('/api/cleanup', { apply: true }); },
-        done: function () { H.toast(H.t('Nettoyage lancé')); poll(); } });
-    }
     // Le compte connecté : nom, rôle, changement de mot de passe, déconnexion. Serveur ouvert : comment créer le premier compte.
     function accountPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Mon compte')));
       var me = H.session.user;
       if (!H.session.auth || !me) {
-        panel.appendChild(h('p', { class: 'muted' }, H.t('Aucun compte n’existe : le serveur est ouvert, et toute personne qui peut l’atteindre voit et gère tout. Pour le protéger, crée le premier compte (il sera administrateur) sur le serveur avec '),
-          h('code', null, H.t('python -m hub user add <nom>')), H.t(', ou définis '), h('code', null, 'HUB_PASSWORD'), H.t(' avant de démarrer le serveur. Les comptes suivants se gèrent ensuite ici.')));
+        panel.appendChild(H.openServerNote());
         panel.appendChild(myRequestsLine());
         return panel;
       }
-      panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, me.name), h('span', null, ROLES[me.role] || me.role)),
-        H.button(H.t('Changer mon mot de passe'), 'edit', { 'data-key': 'mypw', onclick: changeMine }),
+      panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, me.name), h('span', null, H.roles[me.role] || me.role)),
+        H.button(H.t('Changer mon mot de passe'), 'edit', { 'data-key': 'mypw', onclick: function () { H.changeMyPassword(function () { H.focus.key(el, 'mypw'); }); } }),
         H.button(H.t('Déconnecter les autres appareils'), null, { 'data-key': 'signout-others', onclick: signOutOthers }),
         h('a', { class: 'btn f', href: '/api/logout', 'data-key': 'logout', onclick: function () { H.forgetAccount(); } }, H.t('Se déconnecter'))));
       panel.appendChild(myRequestsLine());
       return panel;
-    }
-    function changeMine() {
-      H.form({ title: H.t('Changer mon mot de passe'), ok: H.t('Changer'),
-        fields: [{ key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }, { key: 'next', label: H.t('Nouveau mot de passe (12 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Nouveau mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
-        submit: function (v) {
-          if (!v.current) return H.t('Saisis ton mot de passe actuel.');
-          var bad = checkPassword(v.next, v.again);
-          if (bad) return bad;
-          return H.api('/api/me/password', { current: v.current, 'new': v.next });   // le serveur renouvelle le cookie : rien à garder ici
-        },
-        done: function () { H.toast(H.t('Mot de passe changé. Les autres appareils devront se reconnecter.'), 5000); H.focus.key(el, 'mypw'); } });
     }
     // Les autres appareils du compte (téléphone, télé, navigateur oublié) sont déconnectés ; celui-ci reste connecté : le serveur renouvelle son cookie.
     function signOutOthers() {
@@ -1719,244 +1536,27 @@
         },
         done: function () { H.toast(H.t('Les autres appareils sont déconnectés.'), 5000); H.focus.key(el, 'signout-others'); } });
     }
-    // Gestion des comptes (administrateur, serveur avec comptes).
-    function usersPanel() {
-      var panel = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Comptes')),
-        H.button(H.t('Ajouter un compte'), 'plus', { 'data-key': 'user-add', onclick: addUser })));
-      if (usersError) panel.appendChild(h('p', { class: 'muted' }, usersError));
-      else if (!users) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
-      (users || []).forEach(function (u) {
-        var mine = H.session.user && u.id === H.session.user.id;
-        panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' ' + H.t('(toi)') : '')),
-          h('span', null, (ROLES[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours') + ' · ' + H.t('Peut demander : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
-          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger, envoyer, demander', { name: u.name }), onclick: function () { rightsOf(u); } }),
-          H.button(H.t('Mot de passe'), 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': H.t('Changer le mot de passe de {name}', { name: u.name }), onclick: function () { passwordOf(u, mine); } }),
-          H.button(H.t('Supprimer'), 'trash', { 'data-key': 'del-' + u.id, 'aria-label': H.t('Supprimer le compte de {name}', { name: u.name }), onclick: function () { deleteUser(u, mine); } })));
-      });
+    // À propos : la version, et la mention et le logo de TMDB (tmdb.svg, le logo court officiel) que demandent les conditions de son API, pour tous les comptes.
+    function aboutPanel() {
+      var panel = h('section', { class: 'panel about' }, h('h2', null, H.t('À propos')));
+      panel.appendChild(h('dl', null, h('dt', null, 'Version'), h('dd', null, state.version)));
+      panel.appendChild(h('p', { class: 'credit-tmdb' }, h('img', { src: '/tmdb.svg', alt: 'TMDB', width: '92', height: '12' }),
+        h('span', null, H.t('Ce produit utilise l’API TMDB mais n’est ni approuvé ni certifié par TMDB.'))));
       return panel;
     }
-    function addUser() {
-      var role = 'user', toggle = H.button(H.t('Rôle : {role}', { role: ROLES.user }), null, { 'data-key': 'new-role', 'aria-label': H.t('Rôle du nouveau compte, à changer'), onclick: function () {
-        role = role === 'user' ? 'admin' : 'user';
-        toggle.querySelector('.lbl').textContent = H.t('Rôle : {role}', { role: ROLES[role] });
-      } });
-      H.form({ title: H.t('Ajouter un compte'), ok: H.t('Créer le compte'),
-        lead: [H.t('Un administrateur gère la médiathèque et les comptes ; un utilisateur lit, avec sa propre progression et ses propres playlists.')],
-        fields: [{ key: 'name', label: H.t('Nom (40 caractères au plus)'), type: 'text' }, { key: 'pw', label: H.t('Mot de passe (12 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Mot de passe, encore une fois'), type: 'password', auto: 'new-password' }],
-        extra: [toggle],
-        submit: function (v) {
-          if (!v.name) return H.t('Donne un nom au compte.');
-          var bad = checkPassword(v.pw, v.again);
-          if (bad) return bad;
-          return H.api('/api/users', { name: v.name, password: v.pw, role: role });
-        },
-        done: function (u) { H.toast(H.t('Compte créé : {name}', { name: u.name })); refreshUsers('user-add'); } });
-    }
-    // Ce qu'un compte peut consulter, lire et télécharger, puis s'il peut envoyer des fichiers, en une phrase pour la liste des comptes.
-    function rightsSummary(u) {
-      var libs = (state && state.libraries) || [], rights = u.rights || {}, parts = [];
-      function who(perm) {
-        var list = libs.filter(function (l) { return !rights[l.id] || rights[l.id][perm]; });
-        return list.length === libs.length ? H.t('tout') : list.length ? list.map(function (l) { return H.libLabel(l); }).join(', ') : H.t('rien');
-      }
-      if (libs.length) parts.push(H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') }));
-      parts.push(H.t('Envoyer des fichiers : {upload}', { upload: u.can_upload ? H.t('oui') : H.t('non') }));
-      parts.push(H.t('Peut demander : {request}', { request: u.can_request ? H.t('oui') : H.t('non') }));
-      return parts.join(' · ');
-    }
-    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Au-dessous, le droit d'envoyer des fichiers et celui de demander des films (Oui / Non), qui ne tiennent pas à une bibliothèque.
-    // Les droits valent tout de suite, sans que la personne se reconnecte.
-    function rightsOf(u) {
-      var draft = {}, rows = h('div', { class: 'rights' }), upload = !!u.can_upload, ask = u.can_request !== false;
-      (state.libraries || []).forEach(function (l) {
-        var r = (u.rights || {})[l.id] || { view: true, play: true, download: true };
-        draft[l.id] = { view: !!r.view, play: !!(r.view && r.play), download: !!(r.view && r.download) };
-      });
-      var saved = { rights: JSON.stringify(draft), upload: upload, request: ask, touched: false };      // ce que le serveur a déjà : un second essai n'envoie que le reste
-      function toggle(l, which) {
-        var button = h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + l.id, onclick: function () {
-          var d = draft[l.id];
-          if (which === 'view') { d.view = !d.view; if (!d.view) { d.play = false; d.download = false; } }
-          else if (d.view) d[which] = !d[which];
-          paint();
-        } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }));        // la coche a toujours sa place (visible ou non) : le bouton garde la même largeur
-        return button;
-      }
-      function choice(which, value, label) {         // `which` : « upload » (envoyer des fichiers) ou « request » (demander des films)
-        return h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + (value ? 'yes' : 'no'), onclick: function () { if (which === 'upload') upload = value; else ask = value; paint(); } },
-          h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, label));
-      }
-      var buttons = {}, yes = choice('upload', true, H.t('Oui')), no = choice('upload', false, H.t('Non')), askYes = choice('request', true, H.t('Oui')), askNo = choice('request', false, H.t('Non'));
-      (state.libraries || []).forEach(function (l) {
-        buttons[l.id] = { view: toggle(l, 'view'), play: toggle(l, 'play'), download: toggle(l, 'download') };
-        rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, H.libLabel(l)), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
-      });
-      rows.appendChild(h('div', { class: 'rrow', 'data-upload-right': '1' }, h('b', null, H.t('Envoyer des fichiers')), yes, no));
-      rows.appendChild(h('div', { class: 'rrow', 'data-request-right': '1' }, h('b', null, H.t('Peut demander')), askYes, askNo));
-      function paint() {
-        (state.libraries || []).forEach(function (l) {
-          var d = draft[l.id], b = buttons[l.id];
-          b.view.classList.toggle('on', d.view); b.view.setAttribute('aria-pressed', d.view ? 'true' : 'false');
-          b.view.querySelector('.lbl').textContent = H.t('Consulter');
-          b.play.classList.toggle('on', d.play); b.play.setAttribute('aria-pressed', d.play ? 'true' : 'false');
-          b.play.querySelector('.lbl').textContent = H.t('Lecture');
-          b.play.disabled = !d.view;
-          b.download.classList.toggle('on', d.download); b.download.setAttribute('aria-pressed', d.download ? 'true' : 'false');
-          b.download.querySelector('.lbl').textContent = H.t('Télécharger');
-          b.download.disabled = !d.view;
-        });
-        yes.classList.toggle('on', upload); yes.setAttribute('aria-pressed', upload ? 'true' : 'false');
-        no.classList.toggle('on', !upload); no.setAttribute('aria-pressed', upload ? 'false' : 'true');
-        askYes.classList.toggle('on', ask); askYes.setAttribute('aria-pressed', ask ? 'true' : 'false');
-        askNo.classList.toggle('on', !ask); askNo.setAttribute('aria-pressed', ask ? 'false' : 'true');
-      }
-      paint();
-      H.form({ title: H.t('Droits de {name}', { name: u.name }), ok: H.t('Enregistrer'), kind: 'form', cls: 'rightsbox',
-        lead: [H.t('Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.')],
-        extra: [rows],
-        submit: function () { return saveAccount(u, draft, upload, ask, saved); },
-        done: function () { H.toast(H.t('Droits enregistrés : {name}', { name: u.name })); refreshUsers('rights-' + u.id); },
-        cancel: function () { if (saved.touched) refreshUsers('rights-' + u.id); } });       // fermée après un enregistrement à moitié réussi : la liste montre ce qui l'est
-    }
-    // Enregistre les droits de bibliothèque, le droit d'envoi et celui de demander, chacun par son appel et seulement s'il a changé. Refuse (avec ce qui a réussi et ce qui a échoué) si l'un échoue.
-    function saveAccount(u, draft, upload, ask, saved) {
-      var base = '/api/user/' + encodeURIComponent(u.id), now = JSON.stringify(draft), failed = {}, applied = {};
-      function run(part, changed, path, body, keep) {
-        if (!changed) return Promise.resolve();
-        return H.api(path, body).then(function () { keep(); applied[part] = true; saved.touched = true; }, function (e) { failed[part] = e.message; });
-      }
-      return Promise.all([
-        run('rights', now !== saved.rights, base + '/rights', { rights: draft }, function () { saved.rights = now; }),
-        run('upload', upload !== saved.upload, base + '/upload', { upload: upload }, function () { saved.upload = upload; }),
-        run('request', ask !== saved.request, base + '/request', { request: ask }, function () { saved.request = ask; })
-      ]).then(function () {
-        var bad = saveFailure(failed, applied);
-        if (bad) throw new Error(bad);
-      });
-    }
-    // Dit ce qui a échoué, et seulement ce qui est enregistré s'il l'est : l'un n'est jamais présenté comme raté parce qu'un autre l'est. « Peut demander » s'ajoute à la phrase des deux autres.
-    function saveFailure(failed, applied) {
-      var said = libraryFailure(failed, applied), more = '';
-      if (failed.request) more = H.t('« Peut demander » n’a pas été enregistré : {error}', { error: failed.request }) + (!said && (applied.rights || applied.upload) ? ' ' + H.t('Le reste est enregistré.') : '');
-      else if (said && applied.request) more = H.t('« Peut demander » est enregistré.');
-      return [said, more].filter(Boolean).join(' ');
-    }
-    function libraryFailure(failed, applied) {
-      if (failed.rights && failed.upload) return H.t('Rien n’a été enregistré. Droits de bibliothèque : {rights}. Envoyer des fichiers : {upload}', { rights: failed.rights, upload: failed.upload });
-      if (failed.rights) return applied.upload ? H.t('« Envoyer des fichiers » est enregistré, mais pas les droits de bibliothèque : {error}', { error: failed.rights }) : H.t('Les droits de bibliothèque n’ont pas été enregistrés : {error}', { error: failed.rights });
-      if (failed.upload) return applied.rights ? H.t('Les droits de bibliothèque sont enregistrés, mais pas « Envoyer des fichiers » : {error}', { error: failed.upload }) : H.t('« Envoyer des fichiers » n’a pas été enregistré : {error}', { error: failed.upload });
-      return '';
-    }
-    function passwordOf(u, mine) {
-      if (mine) { changeMine(); return; }                              // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)
-      H.form({ title: H.t('Mot de passe de {name}', { name: u.name }), ok: H.t('Changer'),
-        lead: [H.t('Les sessions ouvertes de ce compte seront fermées ; la personne se reconnectera avec le nouveau mot de passe.')],
-        fields: [{ key: 'pw', label: H.t('Nouveau mot de passe (12 caractères au moins)'), type: 'password', auto: 'new-password' }, { key: 'again', label: H.t('Encore une fois'), type: 'password', auto: 'new-password' }],
-        submit: function (v) {
-          var bad = checkPassword(v.pw, v.again);
-          if (bad) return bad;
-          return H.api('/api/user/' + encodeURIComponent(u.id) + '/password', { password: v.pw });
-        },
-        done: function () { H.toast(H.t('Mot de passe changé : {name}', { name: u.name })); H.focus.key(el, 'pw-' + u.id); } });
-    }
-    function deleteUser(u, mine) {
-      var lead = [H.t('Supprimer le compte « {name} » ? Sa progression de lecture, ses playlists et ses éléments retirés de « Reprendre » seront perdus, et cela ne s’annule pas. Les fichiers de la médiathèque ne sont pas touchés.', { name: u.name })];
-      if (mine) lead.push(H.t('C’est le compte avec lequel tu es connecté : tu seras déconnecté. Il doit rester au moins un autre administrateur.'));
-      H.confirm({ title: H.t('Supprimer le compte de {name}', { name: u.name }), ok: H.t('Supprimer définitivement'), danger: true, lead: lead,
-        submit: function () { return H.api('/api/user/' + encodeURIComponent(u.id) + '/delete', {}); },
-        done: function () {
-          if (mine) { H.forgetAccount(); location.href = '/login'; return; }
-          H.toast(H.t('Compte supprimé : {name}', { name: u.name }));
-          refreshUsers('user-add');
-        } });
-    }
-    function refreshUsers(key) {
-      poll().then(function () { if (!(key && H.focus.key(el, key))) H.focus.first(); });
-    }
-    function jobsPanel() {
-      var all = jobs.length > 0 && jobs.every(function (j) { return openJobs[j.id]; });
-      var log = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Tâches'), busy ? h('span', { class: 'busy' }, '…') : null),
-        jobs.length ? H.button(all ? H.t('Tout replier') : H.t('Tout déplier'), null, { 'data-key': 'jobs-all', onclick: function () { jobs.forEach(function (j) { openJobs[j.id] = !all; }); showJobs('jobs-all'); } }) : null));
-      if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, H.t('Aucune tâche pour l’instant.')));
-      jobs.forEach(function (j) {
-        var status = { waiting: H.t('en attente'), running: H.t('en cours'), done: H.t('terminée'), failed: H.t('échec') }[j.status], open = !!openJobs[j.id];
-        var node = h('div', { class: 'job ' + j.status, 'data-job': j.id }, h('button', { class: 'jhead f', 'aria-expanded': open ? 'true' : 'false', 'data-key': 'job-' + j.id,
-          onclick: function () { openJobs[j.id] = !open; showJobs('job-' + j.id); } }, h('span', { class: 'jt' }, h('b', null, H.tr(j.label)), h('span', null, status))));
-        if (open) node.appendChild(logText(j) ? h('pre', null, logText(j)) : h('p', { class: 'muted' }, H.t('Rien n’a été noté.')));
-        log.appendChild(node);
-      });
-      return log;
-    }
-    function logText(j) { return (j.log || []).map(function (line) { return H.tr(line); }).join('\n'); }
-    // Le défilement d'un journal : où il en est, et s'il était lu jusqu'en bas (alors il suit la fin).
-    function logState(pre) { return { top: pre.scrollTop, end: pre.scrollHeight - pre.scrollTop - pre.clientHeight < 4 }; }
-    function logKeep(pre, was) { pre.scrollTop = was.end ? pre.scrollHeight : was.top; }
-    function logStates(panel) {          // le défilement de chaque journal ouvert du panneau, par tâche : à rendre au panneau qui le remplace
-      var kept = {};
-      if (panel) Array.prototype.forEach.call(panel.querySelectorAll('.job pre'), function (pre) { kept[pre.parentNode.getAttribute('data-job')] = logState(pre); });
-      return kept;
-    }
-    function logRestore(panel, kept) {
-      Array.prototype.forEach.call(panel.querySelectorAll('.job pre'), function (pre) { var was = kept[pre.parentNode.getAttribute('data-job')]; if (was) logKeep(pre, was); });
-    }
-    // Les journaux grossissent toutes les 1,5 s : on ne change que le texte de ceux qui ont changé, sans toucher au reste (focus, défilement, sélection).
-    // Faux (rien n'a été modifié) si autre chose que des journaux a changé : une tâche ajoutée ou finie, un journal qui apparaît.
-    function patchLogs() {
-      var nodes = logPanel.querySelectorAll('.job'), todo = [];
-      if (nodes.length !== jobs.length) return false;
-      for (var i = 0; i < jobs.length; i++) {
-        var j = jobs[i], node = nodes[i], pre = node.querySelector('pre'), text = logText(j);
-        if (node.getAttribute('data-job') !== String(j.id) || node.className !== 'job ' + j.status) return false;
-        if (openJobs[j.id] && !!pre !== !!text) return false;
-        if (pre && pre.textContent !== text) todo.push([pre, text]);
-      }
-      todo.forEach(function (t) { var was = logState(t[0]); grow(t[0], t[1]); logKeep(t[0], was); });
-      return true;
-    }
-    function grow(pre, text) {          // un journal ne fait que s'allonger : on ajoute la fin, et ce qu'on y a sélectionné reste sélectionné (sinon le texte est remplacé)
-      var old = pre.textContent;
-      if (pre.childNodes.length === 1 && pre.firstChild.nodeType === 3 && text.slice(0, old.length) === old) pre.firstChild.appendData(text.slice(old.length));
-      else pre.textContent = text;
-    }
-    // Remplace le panneau des tâches sur place (la page garde son défilement), en rendant le focus à ce qui l'avait.
-    function showJobs(key) {
-      var focus = key || (document.activeElement && logPanel && logPanel.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null);
-      var kept = logStates(logPanel), fresh = jobsPanel();
-      logPanel.parentNode.replaceChild(fresh, logPanel);
-      logPanel = fresh;
-      logRestore(fresh, kept);
-      if (focus) H.focus.key(fresh, focus, true);
-    }
-    function poll() {
-      if (closed) return Promise.resolve();          // la vue est détruite : une réponse tardive ne réarme pas le sondage
-      clearTimeout(timer);
-      // Un non-administrateur n'interroge que l'état « occupé » (sans journal). Si son rôle a changé depuis le démarrage, le 403 se rattrape par un appel sans journal.
-      var jobsCall = H.isAdmin() ? H.api('/api/jobs?log=1').catch(function (e) { if (e.status === 403) return H.api('/api/jobs'); throw e; }) : H.api('/api/jobs');
-      return Promise.all([H.api('/api/state'), jobsCall]).then(function (r) {
-        H.setSession(r[0]);
-        if (H.canUpload() !== !!document.querySelector('#nav [data-nav="#/upload"]')) { H.nav.build(); H.nav.mark(location.hash || '#/'); }       // un droit « Envoyer » donné ou retiré se voit sans recharger
-        H.nav.pending();                                                   // le nombre de demandes en attente, sur l'entrée des paramètres
-        if (!(r[0].auth && H.isAdmin())) { users = null; usersError = ''; return r; }
-        return H.api('/api/users').then(function (res) { users = res.users; usersError = ''; return r; }, function (e) { users = null; usersError = e.message; return r; });
-      }).then(function (r) {
+    // L'état du serveur : la version, la session (un droit ou un rôle changé ailleurs se voit dans la barre), les noms des bibliothèques.
+    function load() {
+      return H.api('/api/state').then(function (s) {
         if (closed) return;
-        var page = JSON.stringify([r[0], users, usersError]), tasks = JSON.stringify(r[1].jobs);
-        state = r[0]; jobs = r[1].jobs; H.setLibs(state.libraries);
-        busy = r[1].busy;
-        if (wasBusy && !busy) H.toast(H.t('Terminé'));
-        wasBusy = busy;
-        // Pendant une tâche on revient ici toutes les 1,5 s : reconstruire la page entière coupait le défilement (molette, tactile). On ne refait que ce qui a changé.
-        if (page !== lastPage || H.isAdmin() !== wasAdmin) render();
-        else {
-          var mark = el.querySelector('[data-key="tab-gestion"]');          // un point sur l'onglet de gestion tant qu'il y en a une en cours
-          if (mark) mark.classList.toggle('busy', !!busy);
-          if (logPanel && tasks !== lastTasks && !patchLogs()) showJobs();
-        }
-        lastPage = page; lastTasks = tasks;
-        if (busy) timer = setTimeout(poll, 1500);
+        H.setSession(s);
+        H.nav.sync();
+        state = s; H.setLibs(s.libraries);
+        var page = JSON.stringify(s);
+        if (page !== lastPage) render();
+        lastPage = page;
       }).catch(function (e) { if (!closed) H.toast(e.message, 5000); });
     }
-    poll();
-    return { el: el, nav: '#/settings', refresh: function () { if (activeTab() === 'demandes' && !reqLoading) loadRequests(); return poll(); }, destroy: function () { closed = true; clearTimeout(timer); } };          // au retour (« Mes demandes », une fiche) : la liste des demandes a pu changer
+    load();
+    return { el: el, nav: '#/settings', refresh: load, destroy: function () { closed = true; } };          // au retour (« Mes demandes ») : la session a pu changer
   });
 })();
