@@ -57,14 +57,15 @@
       nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': H.t('Paramètres'), title: H.t('Paramètres') }, H.icon('gear')));
       H.nav.pending();
     },
-    // Les demandes en attente, en pastille sur l'entrée Administration : /api/state n'en donne le nombre qu'à l'administrateur (0 pour les autres, qui n'ont pas cette entrée).
+    // Les demandes en attente et les suggestions pas encore traitées, additionnées en pastille sur l'entrée Administration : /api/state n'en donne le nombre qu'à l'administrateur (0 pour les autres, qui n'ont pas cette entrée).
     pending: function () {
       var admin = document.querySelector('#nav [data-nav="#/admin"]');
       if (!admin) return;
-      var n = H.session.pending || 0, old = admin.querySelector('.pend');
+      var asked = H.session.pending || 0, told = H.session.suggestions || 0, n = asked + told, old = admin.querySelector('.pend');
       if (old) admin.removeChild(old);
       if (n > 0) admin.appendChild(h('span', { class: 'pend', 'aria-hidden': 'true' }, String(n)));
-      admin.setAttribute('aria-label', n > 0 ? H.t('Administration · {n} en attente', { n: H.plural(n, 'demande') }) : H.t('Administration'));
+      var parts = [asked ? H.plural(asked, 'demande') : '', told ? H.plural(told, 'suggestion') : ''].filter(Boolean);
+      admin.setAttribute('aria-label', n > 0 ? H.t('Administration · {n} en attente', { n: parts.join(', ') }) : H.t('Administration'));
     },
     // Après une relecture de /api/state : la barre suit un droit « Envoyer » ou un rôle d'administrateur donné ou retiré ailleurs, sans recharger, et la pastille le nombre de demandes.
     sync: function () {
@@ -1263,6 +1264,84 @@
     return { el: el, nav: '#/settings', refresh: function () { load(null, true); } };
   });
 
+  // --- Suggestions : « Mes suggestions » et l'onglet de l'administrateur ----------------------------------
+  // Une idée ou une remarque sur le hub lui-même (pas un film : ce sont les demandes), entre son auteur et l'administrateur. Textes et réponses viennent des comptes : toujours en texte.
+  var SUGGESTION_CATEGORIES = [['evolution', H.t('Évolution')], ['improvement', H.t('Amélioration')], ['bug', H.t('Bug')], ['other', H.t('Autre')]];
+  var SUGGESTION_STATUSES = [['new', H.t('Nouvelle')], ['planned', H.t('Prévue')], ['done', H.t('Faite')], ['declined', H.t('Écartée')]];
+  function named(pairs, value) { var hit = pairs.filter(function (p) { return p[0] === value; })[0]; return hit ? hit[1] : value; }
+  function suggestionCategory(s) { return named(SUGGESTION_CATEGORIES, s.category); }
+  function suggestionStatus(s) { return named(SUGGESTION_STATUSES, s.status); }
+  // Une rangée de puces dont une seule est choisie (catégorie, état) : `current()` rend la valeur choisie. Atteignable aux flèches, chaque puce s'active par Entrée.
+  function suggestionChoice(pairs, value, label, prefix) {
+    var chosen = value, buttons = [];
+    var row = h('div', { class: 'chips sgchoice', role: 'group', 'aria-label': label });
+    function paint() { buttons.forEach(function (b) { var on = b.getAttribute('data-value') === chosen; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }); }
+    pairs.forEach(function (p) {
+      var b = h('button', { class: 'chip f', type: 'button', 'data-key': prefix + p[0], 'data-value': p[0], onclick: function () { chosen = p[0]; paint(); } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, p[1]));
+      buttons.push(b); row.appendChild(b);
+    });
+    paint();
+    return { el: h('div', { class: 'flab' }, label, row), current: function () { return chosen; } };
+  }
+  // Ce qu'une ligne de suggestion montre, pour son auteur comme pour l'administrateur : la catégorie, l'état, le texte, la réponse, puis `more` (date, auteur).
+  function suggestionWhat(s, more) {
+    return h('div', { class: 'what' }, h('b', null, suggestionCategory(s)), h('span', { class: 'sgstatus' }, suggestionStatus(s)),
+      h('p', { class: 'sgtext' }, s.text),
+      s.reply ? h('p', { class: 'sgreply' }, H.t('Réponse de l’administrateur : « {reply} »', { reply: s.reply })) : null,
+      more);
+  }
+  // Ce que l'onglet Suggestions de la page Administration (admin.js) reprend d'ici.
+  H.suggestions = { categories: SUGGESTION_CATEGORIES, statuses: SUGGESTION_STATUSES, category: suggestionCategory, status: suggestionStatus, choice: suggestionChoice, what: suggestionWhat };
+
+  // #/suggestions : les suggestions du compte (GET /api/suggestions?mine=1), de la plus récente à la plus ancienne, avec l'état et la réponse de l'administrateur. Chacune se retire.
+  H.route(/^\/suggestions$/, function () {
+    var out = h('div', { class: 'panel sglist' });
+    var intro = h('p', { class: 'intro muted' }, H.t('Une idée pour le hub, quelque chose à améliorer, un bug : l’administrateur lit tes suggestions et te répond ici. Personne d’autre ne les voit.'));
+    var add = h('div', { class: 'tools' }, H.button(H.t('Proposer une amélioration'), 'plus', { 'data-key': 'sg-new', onclick: function () { propose(); } }));
+    var el = h('section', { class: 'mysuggestions' }, h('h1', null, H.t('Mes suggestions')), intro, add, out);
+    var list = [];
+    function row(s) {
+      return h('div', { class: 'line sgrow', 'data-suggestion': s.id, 'data-status': s.status }, suggestionWhat(s, h('span', null, H.t('Proposée le {date}', { date: H.date(s.created) }))),
+        H.button(H.t('Retirer'), 'trash', { 'data-key': 'sg-rm-' + s.id, 'aria-label': H.t('Retirer ta suggestion du {date}', { date: H.date(s.created) }), onclick: function () { withdraw(s); } }));
+    }
+    function propose() {
+      var category = suggestionChoice(SUGGESTION_CATEGORIES, 'improvement', H.t('Catégorie'), 'sg-cat-');
+      H.form({ title: H.t('Proposer une amélioration'), ok: H.t('Envoyer'),
+        lead: [H.t('Ce qui manque au hub, ce qui pourrait marcher mieux, ce qui ne marche pas. Pour un film ou une série, c’est « Mes demandes ».')],
+        fields: [{ key: 'text', label: H.t('Ta suggestion (1000 caractères au plus)'), type: 'textarea', maxlength: 1000 }],
+        extra: [category.el],
+        submit: function (v) {
+          if (!v.text) return H.t('Écris ta suggestion.');
+          return H.api('/api/suggestions', { category: category.current(), text: v.text });
+        },
+        done: function (s) { H.toast(H.t('Suggestion envoyée')); load('sg-rm-' + s.id); } });
+    }
+    function withdraw(s) {
+      H.confirm({ title: H.t('Retirer ta suggestion ?'), lead: [H.t('Elle disparaît pour toi et pour l’administrateur, avec sa réponse. Cela ne s’annule pas.')], ok: H.t('Retirer'), danger: true,
+        submit: function () { return H.api('/api/suggestions/' + s.id + '/delete', {}).catch(goneAlready); },
+        done: function () {
+          var i = list.indexOf(s), next = list[i + 1] || list[i - 1];
+          H.toast(H.t('Suggestion retirée')); load(next ? 'sg-rm-' + next.id : 'sg-new');
+        } });
+    }
+    function show(focusKey, keep) {
+      var key = focusKey || (document.activeElement && el.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null);
+      H.clear(out);
+      if (!list.length) out.appendChild(h('p', { class: 'muted sgempty' }, H.t('Tu n’as envoyé aucune suggestion pour l’instant.')));
+      list.forEach(function (s) { out.appendChild(row(s)); });
+      if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;          // une réponse tardive : la page a été quittée
+      if (!(key && H.focus.key(el, key, true)) && !keep) H.focus.first();
+    }
+    function load(focusKey, keep) {
+      return H.api('/api/suggestions?mine=1').then(function (res) { list = res.suggestions || []; show(focusKey, keep); }).catch(function (e) {
+        H.clear(out).appendChild(h('p', { class: 'muted' }, e.message));
+        out.appendChild(h('button', { class: 'btn f', 'data-autofocus': '1', onclick: function () { load(); } }, H.t('Réessayer')));
+      });
+    }
+    load();
+    return { el: el, nav: '#/settings', refresh: function () { load(null, true); } };          // au retour : l'administrateur a pu répondre
+  });
+
   // #/request?q=<texte>&kind=movie|show : chercher dans TMDB (par le serveur : GET /api/requests/search) un film ou une série que la médiathèque n'a pas, pour le demander.
   // Chaque résultat dit ce qu'on peut en faire, comme une case grisée (ASK) : « Demander » (la même fenêtre), « Demandé » (retirer la sienne), « Demander aussi », « Refusé » ; « Ouvrir » quand il est déjà là.
   // La recherche part 400 ms après la dernière frappe, ou sur Entrée (qui mène alors au premier résultat) ; une réponse périmée (une recherche est partie depuis) est ignorée.
@@ -1509,6 +1588,12 @@
         h('span', null, H.canRequest() ? H.t('Les films et les séries que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film ni de série ; tes demandes déjà faites restent visibles'))),
         h('a', { class: 'btn f', href: '#/requests', 'data-key': 'my-requests' }, H.icon('queue'), h('span', { class: 'lbl' }, H.t('Mes demandes'))));
     }
+    // « Mes suggestions » : les idées et les remarques sur le hub que le compte a envoyées à l'administrateur, depuis « Mon compte ».
+    function mySuggestionsLine() {
+      return h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Mes suggestions')),
+        h('span', null, H.t('Une idée, une amélioration ou un bug du hub, à proposer à l’administrateur, et ce qu’il en a fait'))),
+        h('a', { class: 'btn f', href: '#/suggestions', 'data-key': 'my-suggestions' }, H.icon('edit'), h('span', { class: 'lbl' }, H.t('Mes suggestions'))));
+    }
     // Le compte connecté : nom, rôle, changement de mot de passe, déconnexion. Serveur ouvert : comment créer le premier compte.
     function accountPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Mon compte')));
@@ -1516,6 +1601,7 @@
       if (!H.session.auth || !me) {
         panel.appendChild(H.openServerNote());
         panel.appendChild(myRequestsLine());
+        panel.appendChild(mySuggestionsLine());
         return panel;
       }
       panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, me.name), h('span', null, H.roles[me.role] || me.role)),
@@ -1523,6 +1609,7 @@
         H.button(H.t('Déconnecter les autres appareils'), null, { 'data-key': 'signout-others', onclick: signOutOthers }),
         h('a', { class: 'btn f', href: '/api/logout', 'data-key': 'logout', onclick: function () { H.forgetAccount(); } }, H.t('Se déconnecter'))));
       panel.appendChild(myRequestsLine());
+      panel.appendChild(mySuggestionsLine());
       return panel;
     }
     // Les autres appareils du compte (téléphone, télé, navigateur oublié) sont déconnectés ; celui-ci reste connecté : le serveur renouvelle son cookie.

@@ -156,6 +156,10 @@ Un compte demande un film (ou une série) qui manque : depuis la case grisée d'
 
 Chacun voit ses demandes ; d'un film demandé par un autre, il ne sait que « déjà demandé », sans nom ni nombre. Le droit « Peut demander » est donné à tout compte et se retire compte par compte ; `HUB_REQUEST_MAX` borne les demandes en attente de chacun. Pas de notification hors du hub. Détail dans [docs/api.md](docs/api.md#demandes).
 
+## Suggestions
+
+Un compte propose une amélioration du hub lui-même (une évolution, une amélioration, un bug, autre chose) depuis *Paramètres > Mon compte > Mes suggestions* : un texte de 1000 caractères au plus, rangé dans une catégorie. L'administrateur les lit dans *Administration > Suggestions* (filtres par état et par catégorie), leur donne un état (nouvelle, prévue, faite, écartée) et, s'il veut, une réponse que l'auteur lit dans *Mes suggestions*. Chaque suggestion reste entre son auteur et l'administrateur ; tout compte peut suggérer, sans plafond. La pastille de l'entrée Administration additionne les demandes en attente et les suggestions nouvelles. Pour un film ou une série, ce sont les [demandes](#demandes). Détail dans [docs/api.md](docs/api.md#suggestions).
+
 ## Interface HTTP
 
 Le contrat complet pour un client tiers (champs, codes d'erreur, authentification, plan de lecture) est dans [docs/api.md](docs/api.md). Résumé :

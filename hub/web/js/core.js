@@ -107,11 +107,12 @@
   // Qui est connecté : rempli à partir de /api/state (démarrage, Paramètres, Administration). Serveur ouvert (`auth` faux) : un seul profil, administrateur.
   // Masquer une action n'est qu'un confort : le serveur refuse (403) ce que le rôle ne permet pas.
   // `canRequest` : le compte peut demander un film (`can_request`) ; `requestSearch` : il peut aussi chercher dans TMDB un titre à demander (`request_search` : le droit, et une clé TMDB sur le serveur) ;
-  // `pending` : les demandes en attente, que /api/state ne donne qu'à l'administrateur (0 sinon).
-  H.session = { auth: false, user: null, settings: {}, canRequest: false, requestSearch: false, pending: 0 };
+  // `pending` : les demandes en attente, `suggestions` : les suggestions pas encore traitées ; /api/state ne les donne qu'à l'administrateur (0 sinon).
+  H.session = { auth: false, user: null, settings: {}, canRequest: false, requestSearch: false, pending: 0, suggestions: 0 };
   H.setSession = function (state) {
     H.session = { auth: !!(state && state.auth), user: (state && state.user) || null, settings: (state && state.settings) || {},
-      canRequest: !!(state && state.can_request), requestSearch: !!(state && state.request_search), pending: state && typeof state.requests_pending === 'number' ? state.requests_pending : 0 };
+      canRequest: !!(state && state.can_request), requestSearch: !!(state && state.request_search), pending: state && typeof state.requests_pending === 'number' ? state.requests_pending : 0,
+      suggestions: state && typeof state.suggestions_new === 'number' ? state.suggestions_new : 0 };
   };
   // Les réglages du compte (gardés sur le serveur : ils le suivent d'un appareil à l'autre) ; `name` : « music_view »...
   H.setting = function (name) { return (H.session.settings || {})[name]; };
@@ -282,11 +283,11 @@
     H.overlay.open(box);
   };
 
-  // form : une fenêtre à champs, ou à contenu propre : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password', auto, maxlength, value}], extra: [éléments sous les champs],
+  // form : une fenêtre à champs, ou à contenu propre : o = {title, lead: [phrases], fields: [{key, label, type: 'text' | 'password' | 'textarea', auto, maxlength, value}], extra: [éléments sous les champs],
   // ok: libellé du bouton, danger, kind (« form » par défaut s'il y a des champs), cls (modificateur), submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse,
   // alt: {label, submit(valeurs)} (facultatif) : une seconde action, entre la première et Annuler (« Rétablir »), qui passe par le même chemin que `submit` (un seul envoi à la fois, erreur dans la fenêtre),
   // done(résultat) une fois la fenêtre fermée, cancel() une fois fermée sans avoir agi}. Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
-  // `value` préremplit le premier champ, qui s'ouvre alors sélectionné (comme H.prompt).
+  // `value` préremplit le premier champ, qui s'ouvre alors sélectionné (comme H.prompt). Un `textarea` (un texte long) garde ses retours à la ligne, qui s'écrivent avec Maj+Entrée : Entrée seule passe au champ suivant ou valide, comme ailleurs.
   H.form = function (o) {
     var fields = o.fields || [], inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
     var box = H.box((o.kind || (fields.length ? 'form' : 'confirm')) + (fields.length > 1 || o.alt ? ' stacked' : '') + (o.cls ? ' ' + o.cls : ''), o.title);
@@ -295,7 +296,7 @@
     function send(act) {
       if (busy) return;
       var values = {};
-      fields.forEach(function (f) { var v = inputs[f.key].value; values[f.key] = f.type === 'password' ? v : v.replace(/\s+/g, ' ').trim(); });
+      fields.forEach(function (f) { var v = inputs[f.key].value; values[f.key] = f.type === 'password' ? v : f.type === 'textarea' ? v.trim() : v.replace(/\s+/g, ' ').trim(); });
       act = act || o.submit;
       var r = act ? act(values) : Promise.resolve();
       if (typeof r === 'string') { show(r); return; }
@@ -304,13 +305,15 @@
         function (e) { busy = false; show(e.message); });
     }
     fields.forEach(function (f, i) {
-      var input = h('input', { class: 'f field big', type: f.type === 'password' ? 'password' : 'text', maxlength: String(f.maxlength || (f.type === 'password' ? 200 : 40)), autocomplete: f.auto || 'off', value: f.value || '',
+      var long = f.type === 'textarea';
+      var input = h(long ? 'textarea' : 'input', { class: 'f field big', type: long ? null : f.type === 'password' ? 'password' : 'text', rows: long ? '5' : null, maxlength: String(f.maxlength || (f.type === 'password' ? 200 : 40)), autocomplete: f.auto || 'off',
         'data-autofocus': i === 0 ? '1' : null,
         onkeydown: function (e) {
-          if (e.key !== 'Enter') return;
+          if (e.key !== 'Enter' || (long && e.shiftKey)) return;
           e.preventDefault();
           if (list[i + 1]) list[i + 1].focus(); else send();
         } });
+      input.value = f.value || '';
       inputs[f.key] = input; list.push(input);
       box.appendChild(h('label', { class: 'flab' }, f.label, input));
     });

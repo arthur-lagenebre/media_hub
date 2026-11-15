@@ -4194,7 +4194,7 @@ class TestSettings(UiCase):
         self.shown("#/admin")
         self.view(".panel").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Administration")
-        self.assertEqual(self.tabs(), ["Médiathèque", "Demandes", "Boîte de réception", "Comptes", "Serveur"])
+        self.assertEqual(self.tabs(), ["Médiathèque", "Demandes", "Suggestions", "Boîte de réception", "Comptes", "Serveur"])
         self.assertEqual(self.selected(), "Médiathèque")
         self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Tâches"])
         self.assertEqual(self.page.locator("#nav .tool[data-nav='#/admin']").get_attribute("aria-current"), "page")
@@ -4327,7 +4327,7 @@ class TestSettings(UiCase):
         self.open("#/admin?tab=mediatheque")
         self.view(".tabs .tab").first.wait_for()
         self.view(".tabs .tab", has_text="Médiathèque").focus()
-        self.press("ArrowRight", "ArrowRight", "Enter", wait=300)          # Médiathèque, Demandes, Boîte de réception
+        self.press("ArrowRight", "ArrowRight", "ArrowRight", "Enter", wait=300)          # Médiathèque, Demandes, Suggestions, Boîte de réception
         self.assertEqual(self.selected(), "Boîte de réception")
 
     def test_the_tasks_unfold_one_by_one_or_all_at_once(self):
@@ -5227,7 +5227,7 @@ class InboxUiCase(unittest.TestCase):
         page = self.session("admin", lang="en")
         page.goto(self.base + "/#/admin?tab=inbox")
         page.locator("#views > .view:visible .inbox-file").wait_for()
-        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Media library", "Requests", "Inbox", "Accounts", "Server"])
+        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Media library", "Requests", "Suggestions", "Inbox", "Accounts", "Server"])
         self.assertEqual(page.locator("#views > .view:visible .inbox-file .btn").all_inner_texts(), ["Download", "Delete"])
         self.assertEqual(page.locator("#views > .view:visible .inbox .total").inner_text(), "1 file · 2 KB")
         page.goto(self.base + "/#/admin?tab=comptes")
@@ -6700,6 +6700,148 @@ class FakeRequestTmdb:
 
     def save_image(self, image_path, size, dest):
         Path(dest).write_bytes(fixtures.PNG)
+
+
+class TestSuggestionsInTheUi(RequestsUiCase):
+    """Les suggestions dans l'interface : « Mes suggestions » (proposer, lire la réponse, retirer), l'onglet de l'administrateur (répondre, filtrer, supprimer) et la pastille qui additionne demandes et suggestions."""
+
+    def setUp(self):
+        super().setUp()
+        self.hub.db.execute("DELETE FROM suggestions")
+
+    def suggest(self, name, text, category="improvement"):
+        return self.call(name, "/api/suggestions", {"category": category, "text": text})
+
+    def sg_rows(self, page):
+        return self.view(page, ".sgrow")
+
+    def count_sg_rows(self, page, n):
+        page.wait_for_function("n => document.querySelectorAll('#views > .view:not([style*=\"none\"]) .sgrow').length === n", arg=n)
+
+    def test_an_account_proposes_a_suggestion_reads_it_as_text_and_withdraws_it(self):
+        page = self.session("alice")
+        self.open(page, "#/settings?tab=compte")
+        link = self.view(page, "[data-key=my-suggestions]")
+        self.assertTrue(link.evaluate("e => e.classList.contains('f')"))
+        link.click()
+        self.shown(page, "#/suggestions")
+        self.assertEqual(self.view(page, "h1").inner_text(), "Mes suggestions")
+        self.view(page, ".sgempty").wait_for()                                                              # l'état vide est expliqué
+        self.view(page, "[data-key=sg-new]").click()
+        box = self.dialog(page)
+        self.assertTrue(box.evaluate("e => e.classList.contains('form')"))
+        self.assertEqual(box.locator("textarea").get_attribute("maxlength"), "1000")
+        self.assertEqual(box.locator("[data-key=sg-cat-improvement]").get_attribute("aria-pressed"), "true")   # « Amélioration » par défaut
+        box.locator(".btn.primary").click()
+        box.locator(".formerr", has_text="Écris ta suggestion.").wait_for()                                 # un texte vide ne part pas
+        box.locator("[data-key=sg-cat-bug]").click()
+        self.assertEqual(box.locator("[data-key=sg-cat-bug]").get_attribute("aria-pressed"), "true")
+        self.assertEqual(box.locator("[data-key=sg-cat-improvement]").get_attribute("aria-pressed"), "false")
+        box.locator("textarea").fill("Le lecteur <b>saute</b>")
+        box.locator("textarea").press("Shift+Enter")                                                       # Maj+Entrée : un retour à la ligne, la fenêtre reste ouverte
+        box.locator("textarea").type("au chapitre 2")
+        self.assertTrue(box.is_visible())
+        with page.expect_response(lambda r: r.url.endswith("/api/suggestions") and r.request.method == "POST"):
+            box.locator(".btn.primary").click()
+        self.count_sg_rows(page, 1)
+        row = self.sg_rows(page).first
+        self.assertIn("Bug", row.inner_text())
+        self.assertIn("Nouvelle", row.inner_text())
+        self.assertEqual(row.locator(".sgtext").inner_text(), "Le lecteur <b>saute</b>\nau chapitre 2")    # du texte, pas du HTML, retour à la ligne gardé
+        self.assertEqual(row.locator("b", has_text="saute").count(), 0)
+        self.assertEqual([(s["category"], s["text"]) for s in self.call("alice", "/api/suggestions?mine=1")["suggestions"]], [("bug", "Le lecteur <b>saute</b>\nau chapitre 2")])
+        self.assertEqual(self.key(page), "sg-rm-" + str(self.call("alice", "/api/suggestions?mine=1")["suggestions"][0]["id"]))   # le focus va à la suggestion envoyée
+        row.locator("button", has_text="Retirer").click()
+        box = self.dialog(page)
+        self.assertTrue(box.evaluate("e => e.classList.contains('confirm')"))
+        box.locator(".btn.danger").click()
+        self.view(page, ".sgempty").wait_for()
+        self.assertEqual(self.call("alice", "/api/suggestions?mine=1")["suggestions"], [])
+        page.keyboard.press("Escape")                                                                       # Retour remonte aux paramètres
+        self.shown(page, "#/settings?tab=compte")
+
+    def test_the_administrator_answers_filters_and_deletes_and_the_badge_follows(self):
+        self.suggest("alice", "Un mode sombre plus sombre", "evolution")
+        self.suggest("bob", "La recherche oublie les accents", "bug")
+        page = self.session("admin")
+        badge = page.locator("#nav [data-nav='#/admin'] .pend")
+        badge.wait_for()
+        self.assertEqual(badge.inner_text(), "2")
+        self.assertIn("2 suggestions", page.locator("#nav [data-nav='#/admin']").get_attribute("aria-label"))
+        self.open(page, "#/admin?tab=suggestions")
+        rows = self.sg_rows(page)
+        rows.first.wait_for()
+        tab = self.view(page, ".tabs .tab[aria-selected=true]")
+        self.assertTrue(tab.inner_text().startswith("Suggestions"))
+        self.assertEqual(tab.locator(".pend").inner_text(), "2")
+        self.count_sg_rows(page, 2)
+        bug = rows.filter(has_text="La recherche oublie les accents")
+        self.assertIn("bob", bug.inner_text())
+        self.assertIn("Bug", bug.inner_text())
+        self.assertIn("Nouvelle", bug.inner_text())
+        bug.locator("button", has_text="Répondre").click()
+        box = self.dialog(page)
+        self.assertTrue(box.evaluate("e => e.classList.contains('form')"))
+        self.assertIn("La recherche oublie les accents", box.inner_text())                                  # le texte est rappelé dans la fenêtre
+        self.assertEqual(box.locator("[data-key=sg-st-new]").get_attribute("aria-pressed"), "true")
+        box.locator("[data-key=sg-st-planned]").click()
+        box.locator("textarea").fill("Pour la prochaine version")
+        box.locator(".btn.primary").click()
+        bug.locator(".sgstatus", has_text="Prévue").wait_for()
+        self.assertIn("Pour la prochaine version", bug.inner_text())
+        page.wait_for_function("(() => { var c = document.querySelector(\"#nav [data-nav='#/admin'] .pend\"); return !!c && c.textContent === '1'; })()")
+        self.view(page, "[data-key=sc-bug]").click()                                                        # le filtre « Bug »
+        self.count_sg_rows(page, 1)
+        self.view(page, "[data-key=sf-new]").click()                                                        # « Nouvelles » et « Bug » : plus rien
+        self.view(page, ".sgempty").wait_for()
+        self.view(page, "[data-key=sc-all]").click()
+        self.count_sg_rows(page, 1)
+        self.view(page, "[data-key=sf-all]").click()
+        self.count_sg_rows(page, 2)
+        rows.filter(has_text="Un mode sombre").locator("button", has_text="Supprimer").click()
+        box = self.dialog(page)
+        self.assertTrue(box.evaluate("e => e.classList.contains('confirm')"))
+        box.locator(".btn.danger").click()
+        self.count_sg_rows(page, 1)
+        page.locator("#nav [data-nav='#/admin'] .pend").wait_for(state="detached")
+        self.assertEqual(self.call("alice", "/api/suggestions?mine=1")["suggestions"], [])
+
+        bob = self.session("bob")                                                                           # l'auteur lit l'état et la réponse
+        self.open(bob, "#/suggestions")
+        self.count_sg_rows(bob, 1)
+        mine = self.sg_rows(bob).first
+        self.assertIn("Prévue", mine.inner_text())
+        self.assertIn("Réponse de l’administrateur : « Pour la prochaine version »", mine.inner_text())
+
+    def test_the_badge_adds_pending_requests_and_new_suggestions(self):
+        self.ask("alice", 1000)
+        self.suggest("bob", "Une idée")
+        page = self.session("admin")
+        badge = page.locator("#nav [data-nav='#/admin'] .pend")
+        badge.wait_for()
+        self.assertEqual(badge.inner_text(), "2")
+        self.assertEqual(page.locator("#nav [data-nav='#/admin']").get_attribute("aria-label"), "Administration · 1 demande, 1 suggestion en attente")
+        self.open(page, "#/admin?tab=demandes")
+        self.assertEqual(self.view(page, "[data-key=tab-demandes] .pend").inner_text(), "1")
+        self.assertEqual(self.view(page, "[data-key=tab-suggestions] .pend").inner_text(), "1")
+
+    def test_an_account_that_is_not_administrator_has_no_badge_and_no_tab(self):
+        self.suggest("alice", "Une idée")
+        page = self.session("alice")
+        self.assertEqual(page.locator("#nav [data-nav='#/admin']").count(), 0)
+        self.open(page, "#/suggestions")
+        self.count_sg_rows(page, 1)
+        self.assertNotIn("alice", self.sg_rows(page).first.inner_text())                                    # l'auteur ne se voit pas nommé : c'est sa page
+
+    def test_my_suggestions_is_in_english(self):
+        self.suggest("alice", "An idea", "bug")
+        page = self.session("alice", lang="en")
+        self.open(page, "#/suggestions")
+        self.count_sg_rows(page, 1)
+        self.assertEqual(self.view(page, "h1").inner_text(), "My suggestions")
+        self.assertIn("Bug", self.sg_rows(page).first.inner_text())
+        self.assertIn("New", self.sg_rows(page).first.inner_text())
+        self.assertIn("Suggest an improvement", self.view(page, "[data-key=sg-new]").inner_text())
 
 
 class TestRequestSearchInTheUi(RequestsUiCase):
