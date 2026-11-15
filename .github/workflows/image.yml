@@ -48,7 +48,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Construire
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: media_hub
           file: media_hub/deploy/Dockerfile
@@ -96,7 +96,7 @@ jobs:
 
       - name: Publier
         if: github.ref_type == 'tag'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: media_hub
           file: media_hub/deploy/Dockerfile
