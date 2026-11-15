@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hub import accounts, prefs
 from hub.accounts import AccountError
@@ -75,6 +76,63 @@ class TestCreate(unittest.TestCase):
         for password in ("", None, 1234, b"octets"):
             self.assertIn("mot de passe vide", self.refused(lambda: accounts.create(self.db, "alice", password, check=False)), repr(password))
         self.assertEqual(accounts.rows(self.db), [])
+
+
+class TestSessionTokens(unittest.TestCase):
+    """Le jeton de session porte sa date d'émission : il se périme après `SESSION_DAYS` jours et se renouvelle passé la moitié."""
+    DAY = 86400
+
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        self.db = Database(root / "hub.db")
+        self.alice = accounts.create(self.db, "alice", "un-mot-de-passe")
+        self.issued = 1_800_000_000
+        self.token = accounts.session_token("s", self.alice, self.issued)
+
+    def at(self, days, token=None):
+        return accounts.user_for_token(self.db, "s", token or self.token, now=self.issued + days * self.DAY)
+
+    def test_the_token_names_its_account_and_its_date(self):
+        uid, issued, mac = self.token.split(".")
+        self.assertEqual((uid, issued), (self.alice["id"], str(self.issued)))
+        self.assertRegex(mac, r"^[0-9a-f]{64}$")
+        self.assertRegex(accounts.session_token("s", self.alice), rf"^{self.alice['id']}\.[0-9]{{10}}\.[0-9a-f]{{64}}$")       # sans date donnée : maintenant
+
+    def test_the_token_is_valid_until_it_is_session_days_old(self):
+        self.assertEqual(self.at(0)["id"], self.alice["id"])
+        self.assertEqual(accounts.user_for_token(self.db, "s", self.token, now=self.issued + accounts.SESSION_DAYS * self.DAY - 1)["id"], self.alice["id"])
+        self.assertIsNone(self.at(accounts.SESSION_DAYS))
+        self.assertIsNone(self.at(accounts.SESSION_DAYS + 400))
+
+    def test_the_date_is_signed(self):
+        uid, issued, mac = self.token.split(".")
+        later = f"{uid}.{int(issued) + 100 * self.DAY}.{mac}"                    # repousser la date pour faire durer le jeton
+        self.assertIsNone(self.at(1, later))
+        self.assertIsNone(self.at(1, f"{uid}.{mac}"))                          # ni enlever la date
+        self.assertIsNone(self.at(1, f"{uid}.{issued}.{issued}.{mac}"))
+
+    def test_the_token_is_due_for_renewal_after_half_of_its_life(self):
+        half = accounts.SESSION_DAYS * self.DAY / 2
+        self.assertFalse(accounts.session_due(self.token, now=self.issued))
+        self.assertFalse(accounts.session_due(self.token, now=self.issued + half - 1))
+        self.assertTrue(accounts.session_due(self.token, now=self.issued + half))
+
+    def test_the_old_form_without_a_date_is_still_accepted_and_due(self):
+        legacy = f"{self.alice['id']}.{accounts._mac('s', self.alice['id'], self.alice['token_version'])}"
+        self.assertEqual(self.at(0, legacy)["id"], self.alice["id"])
+        self.assertTrue(accounts.session_due(legacy))
+        self.assertIsNone(self.at(0, legacy.replace(legacy[-1], "0" if legacy[-1] != "0" else "1")))
+        with mock.patch.object(accounts, "LEGACY_SESSIONS", False):
+            self.assertIsNone(self.at(0, legacy))
+        accounts.revoke_sessions(self.db, self.alice["id"])
+        self.assertIsNone(self.at(0, legacy))                                   # révoquée comme l'autre
+
+    def test_the_media_token_has_no_date_and_does_not_expire(self):
+        media = accounts.media_token("s", self.alice)
+        self.assertRegex(media, rf"^{self.alice['id']}\.[0-9a-f]{{64}}$")
+        self.assertEqual(accounts.user_for_token(self.db, "s", media, "media", now=self.issued + 1000 * self.DAY)["id"], self.alice["id"])
+        self.assertIsNone(accounts.user_for_token(self.db, "s", self.token, "media"))          # un jeton de session n'y vaut rien, daté ou non
 
 
 class TestUploadRight(unittest.TestCase):

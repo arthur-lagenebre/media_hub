@@ -63,7 +63,6 @@ API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente q
 CHUNK = 256 * 1024
 INBOX_DRAIN_SECONDS = 5    # un envoi refusé (POST /api/inbox) laisse au client ce temps, au plus, pour finir d'envoyer son corps avant que la connexion soit coupée
 INBOX_DRAIN_BYTES = 64 << 20    # ... et ce nombre d'octets, au plus : un client qui n'arrête jamais d'envoyer est coupé à la première borne atteinte
-SESSION_DAYS = 90
 WATCHED_AT = 0.92          # au-delà de cette part, le film est vu
 RESUME_MIN = 20            # en deçà (secondes), on ne reprend pas : on recommence
 
@@ -126,7 +125,7 @@ class Hub:
         return value
 
     def session_token(self, row):
-        """Le jeton de session d'un compte (cookie `hub=` ou `Authorization: Bearer`) : `<identifiant>.<mac>`, voir accounts.py."""
+        """Le jeton de session d'un compte (cookie `hub=` ou `Authorization: Bearer`), émis maintenant : `<identifiant>.<émis>.<mac>`, voir accounts.py."""
         return accounts.session_token(self.secret, row)
 
     def auth(self):
@@ -312,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
     hub: Hub = None
     user: dict = None                          # le compte de la requête en cours (voir authorized)
     granted: dict = None                       # ses droits par bibliothèque, lus à la première question (voir can)
+    session: tuple = None                      # ("cookie" | "bearer", jeton de session) quand c'est lui qui a reconnu le compte (voir session_user)
     body_consumed = 0                          # les octets du corps que la route a déjà lus (voir api_inbox_send)
     routes: list = []
 
@@ -389,13 +389,15 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- Aiguillage -------------------------------------------------------
     def session_user(self):
-        """Le compte du jeton de session, en cookie puis en `Authorization: Bearer` ; None s'il n'y en a pas ou s'il ne vaut rien."""
+        """Le compte du jeton de session, en cookie puis en `Authorization: Bearer` ; None s'il n'y en a pas ou s'il ne vaut rien.
+        D'où vient le jeton reconnu, et lequel, est gardé dans `self.session` (`("cookie" | "bearer", jeton)`) : `/api/state` s'en sert pour le renouveler."""
         cookie = self.headers.get("Cookie", "")
-        found = re.search(r"(?:^|;\s*)hub=(\w{1,64}\.[0-9a-f]{64})\s*(?:;|$)", cookie, re.ASCII)       # valeur entière, sans rien derrière : `hub=<id>.<mac>.junk` ne passe pas
+        found = re.search(r"(?:^|;\s*)hub=(\w{1,64}(?:\.[0-9]{1,12})?\.[0-9a-f]{64})\s*(?:;|$)", cookie, re.ASCII)       # valeur entière, sans rien derrière : `hub=<id>.<émis>.<mac>.junk` ne passe pas
         bearer = re.fullmatch(r"Bearer\s+(\S+)", self.headers.get("Authorization", "").strip(), re.IGNORECASE)
-        for token in (found.group(1) if found else None, bearer.group(1) if bearer else None):
+        for source, token in (("cookie", found.group(1) if found else None), ("bearer", bearer.group(1) if bearer else None)):
             row = accounts.user_for_token(self.hub.db, self.hub.secret, token) if token else None
             if row is not None:
+                self.session = (source, token)
                 return accounts.public(row)
         return None
 
@@ -405,7 +407,7 @@ class Handler(BaseHTTPRequestHandler):
 
         Le compte reconnu est posé sur `self.user` (`{"id", "name", "role"}`) : c'est lui, et lui seul, qui désigne le profil de la progression et des playlists, et dont les droits s'appliquent.
         Le jeton de média est celui d'un compte : il le désigne aussi, mais ne sert que sur les routes de fichiers."""
-        self.user = self.granted = None
+        self.user = self.granted = self.session = None
         if not self.hub.auth():
             self.user = self.hub.open_user()
             return True
@@ -699,8 +701,22 @@ def cookie_flags(secure):
     return "; HttpOnly; SameSite=Lax" + ("; Secure" if secure else "")
 
 
-def session_cookie(hub, row, secure=False):
-    return f"hub={hub.session_token(row)}; Path=/; Max-Age={SESSION_DAYS * 86400}{cookie_flags(secure)}"
+def session_cookie(hub, row, secure=False, token=None):
+    """Le cookie de session du compte `row` : `token` s'il est donné (le même que celui que la réponse rend), sinon un jeton émis maintenant."""
+    return f"hub={token or hub.session_token(row)}; Path=/; Max-Age={accounts.SESSION_DAYS * 86400}{cookie_flags(secure)}"
+
+
+def refreshed_session(h):
+    """Le jeton de session de la requête a passé la moitié de sa vie, ou a l'ancienne forme sans date : (en-têtes, champs) qui en donnent un neuf, sinon (None, {}).
+    Le navigateur le reçoit en cookie, un client natif (`Authorization: Bearer`) dans le champ `token` ; jamais un cookie `HttpOnly` dans une réponse que le JavaScript lit."""
+    if h.session is None or not accounts.session_due(h.session[1]):
+        return None, {}
+    row = accounts.by_id(h.hub.db, h.user["id"])
+    if row is None:                                   # compte supprimé entre-temps : rien à renouveler
+        return None, {}
+    if h.session[0] == "cookie":
+        return {"Set-Cookie": session_cookie(h.hub, row, secure_request(h))}, {}
+    return None, {"token": h.hub.session_token(row)}
 
 
 def ended_session_cookie(secure=False):
@@ -829,7 +845,7 @@ def check_current(h, current):
 def renewed_session(h, row):
     """Après un changement de son propre mot de passe, l'ancien jeton ne vaut plus : le nouveau, dans la réponse et en cookie (le navigateur reste connecté)."""
     token = h.hub.session_token(row)
-    return {"ok": True, "token": token}, {"Set-Cookie": session_cookie(h.hub, row, secure_request(h))}
+    return {"ok": True, "token": token}, {"Set-Cookie": session_cookie(h.hub, row, secure_request(h), token)}
 
 
 @route("GET", r"/api/users")
@@ -993,9 +1009,10 @@ def api_state(h, m, q):
     for lib in h.visible_libs():                  # une bibliothèque qu'on ne voit pas n'existe pas pour ce compte
         count = hub.db.one("SELECT COUNT(*) AS n FROM items WHERE lib=?", (lib.id,))["n"]
         libs.append({**labels.describe(hub.db, lib), "count": count, "scanned": hub.db.kv_get(f"scanned:{lib.id}"), "exists": lib.path.is_dir(), "play": h.can(lib.id, "play"), "download": h.can(lib.id, "download")})
+    headers, renewed = refreshed_session(h)
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
                  "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams,
-                 "can_request": h.user["can_request"], "request_search": bool(h.user["can_request"] and hub.finder.configured()), **requests_state(h)})
+                 "can_request": h.user["can_request"], "request_search": bool(h.user["can_request"] and hub.finder.configured()), **requests_state(h), **renewed}, 200, headers)
 
 
 def next_entry(hub, entry):

@@ -1029,7 +1029,7 @@ class TestNativeToken(unittest.TestCase):
         status, _, body = api.request("POST", "/api/token", body={"password": "secret"})
         self.assertEqual(status, 200)
         token, media = json.loads(body)["token"], json.loads(body)["media_token"]
-        self.assertRegex(token, r"^default\.[0-9a-f]{64}$")        # <identifiant du compte>.<mac> ; le premier compte s'appelle « default »
+        self.assertRegex(token, r"^default\.[0-9]{10}\.[0-9a-f]{64}$")        # <identifiant du compte>.<émis>.<mac> ; le premier compte s'appelle « default »
         self.assertRegex(media, r"^default\.[0-9a-f]{64}$")           # celui du compte aussi, sous une autre signature
         self.assertNotEqual(token, media)
         status, _, body = api.request("POST", "/api/token", body={"password": "wrong"})
@@ -2241,7 +2241,7 @@ class TestAccountLogin(AccountsCase):
         for client, name, role in ((self.alice, "alice", "user"), (self.bob, "Bob", "user"), (self.admin, "admin", "admin")):
             uid = client.session["user"]["id"]
             self.assertEqual(client.session["user"], {"id": uid, "name": name, "role": role, "can_upload": role == "admin", "can_request": True})
-            self.assertRegex(client.session["token"], rf"^{uid}\.[0-9a-f]{{64}}$")
+            self.assertRegex(client.session["token"], rf"^{uid}\.[0-9]{{10}}\.[0-9a-f]{{64}}$")
             self.assertEqual(client.json("/api/state")[1]["user"]["name"], name)
         self.assertEqual(len({c.session["token"] for c in (self.alice, self.bob, self.admin)}), 3)
         self.assertEqual(len({c.session["media_token"] for c in (self.alice, self.bob, self.admin)}), 3)          # le jeton de média est celui du compte
@@ -2249,16 +2249,17 @@ class TestAccountLogin(AccountsCase):
             self.assertRegex(client.session["media_token"], rf"^{client.session['user']['id']}\.[0-9a-f]{{64}}$")
             self.assertNotEqual(client.session["media_token"], client.session["token"])
         again = json.loads(self.anon.request("POST", "/api/token", body={"user": "ALICE", "password": self.PASSWORD})[2])
-        self.assertEqual(again["token"], self.alice.session["token"])                                                # la casse du nom ne compte pas, le jeton est stable
+        self.assertEqual(BearerClient(self.run_.port, again["token"]).json("/api/state")[1]["user"]["name"], "alice")          # la casse du nom ne compte pas
         self.assertEqual((again["user"], again["media_token"]), (self.alice.session["user"], self.alice.session["media_token"]))
 
     def test_forged_tokens_are_refused(self):
-        uid, mac = self.alice.session["token"].split(".")
+        uid, issued, mac = self.alice.session["token"].split(".")
         tampered = mac[:-1] + ("1" if mac[-1] == "0" else "0")
-        for token in (f"{self.bob.account['id']}.{mac}", f"{uid}.{'0' * 64}", f"{uid}.{tampered}", f"{uid}.", f".{mac}", uid, mac, f"inconnu.{mac}", f"{uid}.{mac[:-2]}"):
+        for token in (f"{self.bob.account['id']}.{issued}.{mac}", f"{uid}.{issued}.{'0' * 64}", f"{uid}.{issued}.{tampered}", f"{uid}.{int(issued) + 1}.{mac}", f"{uid}.{mac}",
+                      f"{uid}.{issued}.", f".{issued}.{mac}", uid, mac, f"inconnu.{issued}.{mac}", f"{uid}.{issued}.{mac[:-2]}", f"{uid}..{mac}", f"{uid}.-{issued}.{mac}"):
             self.assertEqual(BearerClient(self.run_.port, token).get("/api/state")[0], 401, token)
             self.assertEqual(Client(self.run_.port, f"hub={token}").get("/api/state")[0], 401, token)
-        self.assertEqual(BearerClient(self.run_.port, f"{uid}.{mac}.x").get("/api/state")[0], 401)
+        self.assertEqual(BearerClient(self.run_.port, f"{uid}.{issued}.{mac}.x").get("/api/state")[0], 401)
         self.assertEqual(BearerClient(self.run_.port, self.alice.session["token"]).get("/api/state")[0], 200)
 
     def test_the_session_cookie_must_be_exactly_the_token(self):
@@ -2280,8 +2281,8 @@ class TestAccountLogin(AccountsCase):
         self.assertEqual(self.anon.get("/api/state", headers={"Authorization": f"Basic {token}"})[0], 401)
         self.assertEqual(self.anon.get("/api/state", headers={"Authorization": token})[0], 401)
         for text, ok in ((token, True), (token + ".junk", False), (token + "zz", False), (token + "\n", False), (token.upper(), False), ("é" + token[token.index("."):], False),
-                         (f"{'a' * 64}.{'0' * 64}", True), (f"{'a' * 65}.{'0' * 64}", False), (f".{'0' * 64}", False)):
-            self.assertEqual(accounts.TOKEN_FORM.fullmatch(text) is not None, ok, text)
+                         (f"{'a' * 64}.1.{'0' * 64}", True), (f"{'a' * 65}.1.{'0' * 64}", False), (f".1.{'0' * 64}", False), (f"a.{'1' * 13}.{'0' * 64}", False), (f"a.{'0' * 64}", False)):
+            self.assertEqual(accounts.SESSION_FORM.fullmatch(text) is not None, ok, text)
 
     def test_login_form_sets_a_cookie_for_the_named_account(self):
         form = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -2561,7 +2562,7 @@ class TestAccountManagement(AccountsCase):
         self.assertTrue(cookie.startswith(f"hub={answer['token']};") and "HttpOnly" in cookie, cookie)
         self.assertEqual(Client(self.run_.port, cookie.split(";")[0]).get("/api/state")[0], 200)
         self.assertEqual(lea.get("/api/state")[0], 200)                                           # les autres comptes ne sont pas touchés
-        self.assertEqual(self.sign_in("bob", self.PASSWORD).session["token"], answer["token"])    # le mot de passe est resté le même
+        self.assertEqual(self.sign_in("bob", self.PASSWORD).get("/api/state")[0], 200)           # le mot de passe est resté le même
         self.assertEqual(self.anon.request("POST", "/api/me/signout-others", body={"current": self.PASSWORD})[0], 401)
 
     def test_a_user_changes_its_own_password(self):
@@ -2576,7 +2577,7 @@ class TestAccountManagement(AccountsCase):
         status, headers, data = bob.request("POST", "/api/me/password", body={"current": self.PASSWORD, "new": "nouveau-mdp-1"})
         answer = json.loads(data)
         self.assertEqual((status, answer["ok"]), (200, True))
-        self.assertRegex(answer["token"], rf"^{bob.account['id']}\.[0-9a-f]{{64}}$")
+        self.assertRegex(answer["token"], rf"^{bob.account['id']}\.[0-9]{{10}}\.[0-9a-f]{{64}}$")
         self.assertNotEqual(answer["token"], bob.session["token"])
         self.assertEqual(bob.get("/api/state")[0], 401)                                           # l'ancien jeton est refusé...
         self.assertEqual(Client(self.run_.port, f"hub={bob.session['token']}").get("/api/state")[0], 401)       # ...en cookie aussi
@@ -2585,7 +2586,7 @@ class TestAccountManagement(AccountsCase):
         self.assertTrue(cookie.startswith(f"hub={answer['token']};") and "HttpOnly" in cookie, cookie)
         self.assertEqual(Client(self.run_.port, cookie.split(";")[0]).get("/api/state")[0], 200)
         renewed = self.sign_in("bob", "nouveau-mdp-1")
-        self.assertEqual(renewed.session["token"], answer["token"])
+        self.assertEqual(renewed.json("/api/state")[1]["user"]["id"], bob.account["id"])
         self.assertNotEqual(renewed.session["media_token"], bob.session["media_token"])           # le jeton de média suit la version du compte, comme celui de session
         self.assertEqual(self.anon.get(f"/img/item/x?token={bob.session['media_token']}")[0], 302)          # l'ancien ne vaut plus
         self.assertEqual(self.anon.request("POST", "/api/token", body={"user": "bob", "password": self.PASSWORD})[0], 401)
