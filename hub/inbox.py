@@ -44,7 +44,10 @@ EXTENSIONS = frozenset({
     ".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup",
     ".zip",
 })
-RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{n}" for n in range(1, 10)), *(f"LPT{n}" for n in range(1, 10))})      # noms que Windows n'ouvre pas comme des fichiers
+# Noms que Windows n'ouvre pas comme des fichiers : ceux de toujours, les ports à chiffre en exposant (¹ ² ³) et la console (CONIN$, CONOUT$), réservés selon la version de Windows.
+# Une table plutôt que `ntpath.isreserved`, qui n'existe qu'à partir de Python 3.13.
+RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                      *(f"{port}{n}" for port in ("COM", "LPT") for n in (*"123456789", "¹", "²", "³"))})
 
 
 class InboxError(Exception):
