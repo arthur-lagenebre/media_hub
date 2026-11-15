@@ -431,6 +431,8 @@ class TestListing(TempCase):
     def test_a_file_deleted_while_the_list_is_read_is_skipped(self):
         self.put("a.mkv")
         self.put("b.mkv")
+        for name in ("a.mkv", "b.mkv"):
+            os.utime(self.tmp / "inbox" / "alice" / name, (1000, 1000))                 # même date : l'ordre est celui des noms, même si les écritures tombent de part et d'autre d'une seconde
 
         class Gone:
             name = path = "gone.mkv"

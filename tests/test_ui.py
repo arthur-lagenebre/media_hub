@@ -475,14 +475,11 @@ class TestDetailPages(UiCase):
     def test_admin_runs_an_update(self):
         self.open("#/admin")
         self.view(".panel").first.wait_for()
-        self.view("button", has_text="Tout mettre à jour").click()
-        status = self.view(".job", has_text="Mise à jour · tout").locator(".jt span")       # la liste montre d'abord les mises à jour du démarrage, terminées : c'est la nouvelle qu'on attend
-        status.wait_for()
-        for _ in range(60):
-            if status.inner_text() == "terminée":
-                break
-            self.page.wait_for_timeout(500)
-        self.assertEqual(status.inner_text(), "terminée")
+        with self.page.expect_response(lambda r: r.url.endswith("/api/scan") and r.request.method == "POST") as started:
+            self.view("button", has_text="Tout mettre à jour").click()
+        job = started.value.json()["job"]                                                    # la tâche qu'on vient de lancer, pas une ligne du démarrage ni une autre qui porterait le même titre
+        self.assertEqual(job["label"], "Mise à jour · tout")
+        expect(self.view(f'.job[data-job="{job["id"]}"] .jt span')).to_have_text("terminée", timeout=60_000)
 
 
 def probe_summary(width, height, hdr=False, audio=(), subs=()):
