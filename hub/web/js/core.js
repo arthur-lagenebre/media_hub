@@ -54,6 +54,7 @@
     // L'avis personnel : une forme par avis, pour qu'on les distingue sans la couleur (pouce levé, trait, pouce baissé)
     like: 'M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z',
     soso: 'M4 10.5h16v3H4z',
+    speed: 'M20.38 8.57l-1.23 1.85a8 8 0 0 1-.22 7.58H5.07A8 8 0 0 1 15.58 6.85l1.85-1.23A10 10 0 0 0 3.35 19a2 2 0 0 0 1.72 1h13.85a2 2 0 0 0 1.74-1 10 10 0 0 0-.27-10.44zm-9.79 6.84a2 2 0 0 0 2.83 0l5.66-8.49-8.49 5.66a2 2 0 0 0 0 2.83z',
     // L'entrée Administration de la barre du haut : une clé à molette, distincte de l'engrenage des paramètres.
     admin: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z',
     dislike: 'M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z'
@@ -72,6 +73,41 @@
     attrs = attrs || {};
     attrs.class = 'btn f' + (attrs.class ? ' ' + attrs.class : '');
     return h('button', attrs, icon ? H.icon(icon) : null, label ? h('span', { class: 'lbl' }, label) : null);
+  };
+
+  // --- Vitesse de lecture (lecteur vidéo, barre de musique) ------------------------------------
+  // Le temps d'une lecture seulement : rien n'est retenu, chaque ouverture repart à 1×. `playbackRate` ne recharge pas le média ; `defaultPlaybackRate` la garde quand la source change (piste suivante, flux relancé après un saut).
+  // La hauteur du son est gardée (`preservesPitch`, vrai par défaut : on n'y touche pas).
+  var SPEEDS = [0.75, 1, 1.25, 1.5, 2], speedsOk = null;
+  H.speedLabel = function (rate) { return String(rate).replace('.', H.lang === 'fr' ? ',' : '.') + '×'; };
+  // Les vitesses que ce navigateur accepte : une affectation qui lève une exception, ou qui ne prend pas, l'écarte du menu.
+  H.speeds = function () {
+    if (speedsOk) return speedsOk;
+    var probe = document.createElement('audio');
+    speedsOk = SPEEDS.filter(function (r) {
+      try { probe.playbackRate = r; return probe.playbackRate === r; } catch (e) { return r === 1; }
+    });
+    return speedsOk;
+  };
+  // Applique `rate` à l'élément ; refusée, la vitesse précédente reste. Rend la vitesse en vigueur, et la montre sur le bouton `btn` :
+  // cerné (.on) hors 1×, libellé `idle` à 1× s'il est donné (« Vitesse » dans le lecteur), sinon la vitesse elle-même.
+  H.setSpeed = function (media, rate, btn, idle) {
+    var before = media.playbackRate || 1, speed = before;
+    try { media.defaultPlaybackRate = rate; media.playbackRate = rate; speed = media.playbackRate; } catch (e) {
+      try { media.defaultPlaybackRate = before; media.playbackRate = before; } catch (x) { /* tant pis */ }
+      H.toast(H.t('Vitesse non prise en charge par ce navigateur.'));
+    }
+    if (btn) {
+      btn.querySelector('.lbl').textContent = speed === 1 && idle ? idle : H.speedLabel(speed);
+      btn.classList.toggle('on', speed !== 1);
+      btn.setAttribute('aria-label', H.t('Vitesse de lecture : {rate}', { rate: H.speedLabel(speed) }));
+    }
+    return speed;
+  };
+  // Le menu « Vitesse » (un choice) : la vitesse en cours cochée et focalisée, 1× marquée « normale ». `open` remplace H.menu (le lecteur vidéo n'empile pas ses menus).
+  H.speedMenu = function (current, onPick, open) {
+    var options = H.speeds().map(function (r) { return { label: H.speedLabel(r), detail: r === 1 ? H.t('normale') : '', value: r }; });
+    (open || H.menu)(H.t('Vitesse'), options, current, onPick);
   };
 
   // --- Serveur ----------------------------------------------------------------

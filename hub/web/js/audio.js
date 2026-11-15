@@ -17,6 +17,9 @@
     ui.queue = H.button('', 'queue', { 'aria-label': H.t('File d’attente'), onclick: function () { if (H.music) H.music.openQueue(); } });
     ui.count = h('span', { class: 'qn' });
     ui.queue.appendChild(ui.count);
+    ui.speed = H.button(H.speedLabel(1), '', { class: 'spd', 'aria-label': H.t('Vitesse de lecture : {rate}', { rate: H.speedLabel(1) }), onclick: function () {
+      H.speedMenu(el.playbackRate, setSpeed);
+    } });
     ui.stop = H.button('', 'close', { 'aria-label': H.t('Fermer le lecteur'), onclick: stop });
     ui.fill = h('i');
     ui.seek = h('div', { class: 'seek f', role: 'slider', tabindex: '0', 'aria-label': H.t('Position'), onclick: function (e) {
@@ -39,6 +42,7 @@
     bar.appendChild(h('div', { class: 'ctl' }, ui.prev, ui.play, ui.next));
     bar.appendChild(h('div', { class: 'pos' }, ui.seek, ui.time));
     bar.appendChild(h('div', { class: 'vl' }, ui.mute, ui.vol));
+    bar.appendChild(ui.speed);
     bar.appendChild(ui.queue);
     bar.appendChild(ui.stop);
     paintVolume();
@@ -78,6 +82,8 @@
     ui.fill.style.width = d ? Math.min(100, el.currentTime / d * 100) + '%' : '0%';
     ui.time.textContent = H.time(el.currentTime) + ' / ' + H.time(d);
   }
+  // La vitesse vaut pour la barre tant qu'elle reste ouverte (d'une piste à l'autre : `defaultPlaybackRate`) ; la fermer la remet à 1×. Rien n'est retenu.
+  function setSpeed(rate) { H.setSpeed(el, rate, ui.speed); }
   function show() {
     var t = queue[idx];
     if (!t) return;
@@ -137,6 +143,7 @@
   function stop() {
     var back = H.focus && document.activeElement && bar.contains(document.activeElement);
     el.pause(); el.removeAttribute('src'); el.load();
+    setSpeed(1);
     queue = []; idx = -1; bar.hidden = true;
     save();
     document.body.classList.remove('has-audio');

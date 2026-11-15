@@ -6,6 +6,8 @@
 
   var QUALITIES = { auto: { k: 0, h: 0, label: H.t('Qualité d’origine') }, '1080': { k: 8000, h: 1080, label: '1080p · 8 Mb/s' }, '720': { k: 4000, h: 720, label: '720p · 4 Mb/s' }, '480': { k: 1500, h: 480, label: H.t('480p · 1,5 Mb/s') } };
   var MODES = { direct: H.t('Lecture directe'), remux: H.t('Son converti'), transcode: H.t('Image convertie') };
+  // La vitesse passe à l'épisode que « Suivant » (ou la fin de l'épisode) enchaîne, et à lui seul : toute autre ouverture du lecteur repart à 1×.
+  var carried = null;
 
   // Ce que ce navigateur sait lire, d'après lui-même.
   function capabilities(level) {
@@ -80,17 +82,21 @@
     var playBtn = H.button('', 'pause', { 'aria-label': H.t('Lecture / pause'), onclick: toggle });
     var bAudio = H.button(H.t('Audio'), 'audio', { onclick: pickAudio }), bSubs = H.button(H.t('Sous-titres'), 'subs', { onclick: pickSubs }), bQual = H.button(H.t('Qualité'), 'quality', { onclick: pickQuality });
     var bNext = H.button(H.t('Suivant'), 'next', { onclick: goNext, hidden: true });
+    var bSpeed = H.button(H.t('Vitesse'), 'speed', { class: 'spd', 'aria-label': H.t('Vitesse de lecture : {rate}', { rate: H.speedLabel(1) }), onclick: pickSpeed });
     var bFull = H.button('', 'full', { 'aria-label': H.t('Plein écran'), onclick: fullscreen });
     var bBack = H.button('', 'back', { 'aria-label': H.t('Retour'), onclick: function () { H.back('#/'); } });
     var ctl = h('div', { class: 'ctl' },
       h('div', { class: 'top' }, bBack, h('div', { class: 'txt' }, title, sub), pill),
       h('div', { class: 'bottom' }, h('div', { class: 'times' }, tCur, tEnd), seekbar,
-        h('div', { class: 'btns' }, playBtn, H.button('10 s', 'rew', { onclick: function () { nudge(-1, 10); } }), H.button('10 s', 'fwd', { onclick: function () { nudge(1, 10); } }), h('span', { class: 'sp' }), bAudio, bSubs, bQual, bNext, bFull)));
+        h('div', { class: 'btns' }, playBtn, H.button('10 s', 'rew', { onclick: function () { nudge(-1, 10); } }), H.button('10 s', 'fwd', { onclick: function () { nudge(1, 10); } }), h('span', { class: 'sp' }), bSpeed, bAudio, bSubs, bQual, bNext, bFull)));
     var err = h('div', { class: 'err', hidden: true });
     var el = h('section', { class: 'player idle' }, video, subPic, subBox, spin, osd, ctl, err);
 
     var plan = null, base = 0, level = 0, firstPlan = true, closing = false, pending = null, pendingTimer = null, hideTimer = null, tickTimer = null, reportTimer = null, lastReport = 0;
     var steps = 0, stepsTimer = null, audioIdx = null, subs = { cues: [], sel: '', pgs: null, shown: null }, subText = '';
+    var speed = 1;
+    if (carried && carried.id === id) setSpeed(carried.rate);
+    carried = null;
 
     function q() { return QUALITIES[H.pref('quality')] || QUALITIES.auto; }
     function cur() { var t = video.currentTime || 0; return plan && !plan.seekable ? base + t : t; }
@@ -166,7 +172,7 @@
     video.addEventListener('timeupdate', paintTime);
     video.addEventListener('ended', function () {
       report(true);
-      if (plan && plan.next) { H.go('#/play/' + plan.next.id, true); } else H.back(plan ? '#/i/' + plan.item : '#/');
+      if (plan && plan.next) { carry(); H.go('#/play/' + plan.next.id, true); } else H.back(plan ? '#/i/' + plan.item : '#/');
     });
 
     // --- Position ------------------------------------------------------------------
@@ -253,7 +259,7 @@
       if (wanted) { wanted = show; return; }
       var top = H.overlay.top(), box = top && top.querySelector('.menu.choice');
       var label = box && box.getAttribute('aria-label');
-      if (label !== H.t('Audio') && label !== H.t('Sous-titres') && label !== H.t('Qualité')) { show(); return; }
+      if (label !== H.t('Audio') && label !== H.t('Sous-titres') && label !== H.t('Qualité') && label !== H.t('Vitesse')) { show(); return; }
       wanted = show;
       H.overlay.close(function () { var next = wanted; wanted = null; if (next && document.body.contains(el)) next(); });
     }
@@ -278,6 +284,12 @@
       var opts = Object.keys(QUALITIES).map(function (k) { return { label: QUALITIES[k].label, detail: k === now ? MODES[plan.mode] : '', value: k }; });
       trackMenu(H.t('Qualité'), opts, now, function (v) { H.pref('quality', v); level = 0; open(cur()); });
     }
+    // La vitesse : le bouton l'affiche dès qu'elle n'est plus 1×. Un saut en son ou image convertis relance le flux (nouvelle source) : `defaultPlaybackRate` la garde, et `cur()` lit `currentTime`, déjà en temps du film.
+    function setSpeed(rate) { speed = H.setSpeed(video, rate, bSpeed, H.t('Vitesse')); }
+    function pickSpeed() {
+      H.speedMenu(speed, function (v) { if (v === speed) return; setSpeed(v); flash(H.speedLabel(speed)); }, trackMenu);
+    }
+    function carry() { if (plan && plan.next && speed !== 1) carried = { id: plan.next.id, rate: speed }; }
     function chooseDefaultSub() {
       var want = H.pref('subLang'), text = plan.subs.filter(function (s) { return s.text; }), list = text.concat(plan.subs.filter(function (s) { return s.image; })), pick = null;
       if (want === 'off') pick = null;
@@ -314,7 +326,7 @@
       if (text !== subText) { subText = text; H.clear(subBox); if (text) subBox.appendChild(cueNodes(text)); }
     }, 200);
     reportTimer = setInterval(function () { if (!video.paused && Date.now() - lastReport > 9000) report(); }, 10000);
-    function goNext() { if (plan && plan.next) { report(true); H.go('#/play/' + plan.next.id, true); } }
+    function goNext() { if (plan && plan.next) { report(true); carry(); H.go('#/play/' + plan.next.id, true); } }
 
     // --- Clavier et souris ----------------------------------------------------------------
     function eat(e) { e.preventDefault(); e.stopPropagation(); }
@@ -350,7 +362,7 @@
     return {
       el: el, full: true, nav: '#/play',
       lib: '',
-      shown: function () { show(); },
+      shown: function (fresh) { if (!fresh) setSpeed(1); show(); },          // un lecteur laissé en réserve puis rouvert (Lecture depuis la fiche) : c'est une nouvelle ouverture, elle repart à 1×
       onBack: function () {
         if (H.routed <= 1 && plan) { location.hash = '#/i/' + plan.item; return true; }
         return false;

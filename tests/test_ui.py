@@ -726,6 +726,108 @@ class TestVideoPlayer(UiCase):
         self.press("Escape", wait=600)
         self.assertNotIn("#/play/", self.page.url)                     # Retour ne rejoue pas l'épisode précédent
 
+    # --- Vitesse de lecture ------------------------------------------------------------
+    def rate(self):
+        return self.page.evaluate("document.querySelector('.player video').playbackRate")
+
+    def watch_loads(self):
+        """Compte les rechargements de la source de la vidéo à partir de maintenant (`loadstart`)."""
+        self.page.evaluate("(() => { var v = document.querySelector('.player video'); window.loads = 0; window.src0 = v.src; v.addEventListener('loadstart', function () { window.loads++; }); })()")
+
+    def pick_speed(self, label):
+        self.page.locator(".player .btn.spd").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt").filter(has=self.page.locator(".lbl", has_text=re.compile("^" + re.escape(label) + "$"))).click()
+        self.page.wait_for_selector(".veil", state="detached")
+
+    def test_the_speed_menu_changes_the_rate_without_reloading_and_comes_back_to_normal(self):
+        """« Vitesse » : 1,5× change `playbackRate` sans recharger la source (le film continue où il est, le son garde sa hauteur) ; le bouton l'affiche ; 1× se retrouve aux flèches dans le même menu."""
+        self.begin("films", "Direct")
+        self.wait_playing()
+        self.watch_loads()
+        self.page.locator(".player .btn", has_text="Vitesse").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.page.locator(".veil .opt .lbl").all_inner_texts(), ["0,75×", "1×", "1,25×", "1,5×", "2×"])
+        self.assertEqual(self.page.evaluate("document.activeElement.querySelector('.lbl').textContent"), "1×")     # le menu s'ouvre sur la vitesse en cours
+        self.page.locator(".veil .opt", has_text="1,5×").click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.assertEqual(self.rate(), 1.5)
+        self.assertTrue(self.page.evaluate("document.querySelector('.player video').preservesPitch !== false"))
+        before = self.video_time()
+        self.page.wait_for_timeout(1000)
+        self.assertGreater(self.video_time(), before + 1.1)                                         # elle avance plus vite qu'une seconde par seconde
+        self.assertEqual(self.page.evaluate("window.loads"), 0)
+        self.assertEqual(self.page.evaluate("document.querySelector('.player video').src === window.src0"), True)
+        self.assertEqual(self.page.inner_text(".player .btn.spd"), "1,5×")
+        self.assertIn("on", self.page.get_attribute(".player .btn.spd", "class").split())
+        # Retour à 1× à la télécommande : le menu s'ouvre sur 1,5×, 1× est deux crans plus haut.
+        self.page.locator(".player .btn.spd").focus()
+        self.press("Enter", wait=300)
+        self.assertEqual(self.page.evaluate("document.activeElement.querySelector('.lbl').textContent"), "1,5×")
+        self.press("ArrowUp", "ArrowUp")
+        self.assertEqual(self.page.evaluate("document.activeElement.querySelector('.lbl').textContent"), "1×")
+        self.press("Enter", wait=300)
+        self.assertEqual(self.rate(), 1)
+        self.assertEqual(self.page.inner_text(".player .btn.spd"), "Vitesse")
+        self.assertNotIn("on", self.page.get_attribute(".player .btn.spd", "class").split())
+        self.assertEqual(self.page.evaluate("window.loads"), 0)
+
+    def test_a_new_opening_of_the_player_starts_at_normal_speed(self):
+        """Rien n'est mémorisé : quitter le lecteur puis le rouvrir repart à 1×."""
+        entry = self.begin("films", "Direct")
+        self.wait_playing()
+        self.pick_speed("2×")
+        self.assertEqual(self.rate(), 2)
+        self.press("Escape", wait=600)
+        self.assertNotIn("#/play/", self.page.url)
+        self.page.evaluate(f"location.hash = '#/play/{entry}'")
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.assertEqual(self.rate(), 1)
+        self.assertEqual(self.page.inner_text(".player .btn.spd"), "Vitesse")
+        self.assertIsNone(self.page.evaluate("localStorage.getItem('hub.speed')"))
+
+    def test_with_converted_sound_the_speed_survives_a_jump_and_the_clock_stays_right(self):
+        """Son converti : un saut relance le flux depuis une autre origine ; la vitesse reste, et la position affichée suit `currentTime` (pas le temps écoulé)."""
+        self.begin("films", "Long")
+        self.wait_playing()
+        self.assertEqual(self.page.inner_text(".player .pill"), "Son converti")
+        self.pick_speed("1,5×")
+        self.page.locator(".player .seekbar").click(position={"x": 960, "y": 5})         # au milieu : ~45 s, le flux repart de là
+        self.page.wait_for_function("(() => { var m = /&start=([0-9.]+)/.exec(document.querySelector('.player video').src); return m && +m[1] > 30; })()", timeout=15000)
+        self.wait_playing()
+        self.assertEqual(self.rate(), 1.5)
+        shown = self.page.evaluate("(() => { var p = document.querySelector('.player .times span').textContent.split(':'); return +p[0] * 60 + +p[1]; })()")
+        start = float(re.search(r"&start=([\d.]+)", self.page.evaluate("document.querySelector('.player video').src")).group(1))
+        self.assertAlmostEqual(shown, start + self.video_time(), delta=1.5)
+        self.assertGreater(start, 30)
+
+    def test_the_next_episode_keeps_the_speed(self):
+        """La vitesse tient tant que le lecteur reste ouvert : « Suivant » enchaîne l'épisode à la même vitesse."""
+        eps = self.entries("series", "Vidéo Série")
+        self.open("#/play/" + eps[0]["id"])
+        self.page.wait_for_selector(".player video")
+        self.wait_playing(timeout=8000)
+        self.pick_speed("1,25×")
+        self.page.locator(".player .btn", has_text="Suivant").click()
+        self.page.wait_for_function(f"location.hash.indexOf('{eps[1]['id']}') >= 0", timeout=15000)
+        self.page.wait_for_function("(() => { var v = document.querySelector('.player video'); return v && v.currentTime > 0.3; })()", timeout=15000)
+        self.assertEqual(self.rate(), 1.25)
+        self.assertEqual(self.page.inner_text(".player .btn.spd"), "1,25×")
+
+    def test_a_speed_the_browser_refuses_is_not_offered(self):
+        """Un navigateur qui refuse une vitesse (exception à l'affectation) : elle n'est pas proposée."""
+        self.page.add_init_script("""(() => {
+            var d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
+            Object.defineProperty(HTMLMediaElement.prototype, 'playbackRate', { configurable: true, get: d.get,
+                set: function (v) { if (v > 1.5) throw new DOMException('non', 'NotSupportedError'); d.set.call(this, v); } });
+        })()""")
+        self.begin("films", "Direct")
+        self.wait_playing()
+        self.page.locator(".player .btn.spd").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.page.locator(".veil .opt .lbl").all_inner_texts(), ["0,75×", "1×", "1,25×", "1,5×"])
+
     def test_unplayable_file_shows_error_with_actions(self):
         broken = self.entries("films", "Sans Etiquette")[0]["id"]
         self.open("#/play/" + broken)
@@ -1808,6 +1910,48 @@ class TestMusicQueueAndPlaylists(UiCase):
         self.page.reload()
         self.page.wait_for_selector("#abar:not([hidden])")
         self.assertEqual(self.page.inner_text("#abar .ti"), "One More Time")
+
+    def test_the_music_bar_speed_changes_the_rate_keeps_it_from_track_to_track_and_restarts_at_normal(self):
+        """Barre de musique : 1,5× sans recharger la piste ; la piste suivante garde la vitesse ; 1× revient ; fermer la barre puis relancer un album repart à 1×."""
+        rate = "document.getElementById('audio').playbackRate"
+        self.page.add_init_script("HTMLMediaElement.prototype.play = function () { return Promise.resolve(); }")     # les pistes factices durent une seconde : sans lecture, la file reste sur la piste choisie
+        self.open_music()
+        card = self.view(".grid .card", has_text="Discovery")
+        card.hover()
+        card.locator(".qbtn").first.click()
+        self.page.wait_for_selector("#abar:not([hidden])")
+        self.assertEqual(self.page.inner_text("#abar .btn.spd"), "1×")
+        self.page.evaluate("(() => { var a = document.getElementById('audio'); window.loads = 0; window.src0 = a.src; a.addEventListener('loadstart', function () { window.loads++; }); })()")
+        self.page.locator("#abar .btn.spd").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertEqual(self.page.locator(".veil .opt .lbl").all_inner_texts(), ["0,75×", "1×", "1,25×", "1,5×", "2×"])
+        self.page.locator(".veil .opt", has_text="1,5×").click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.assertEqual(self.page.evaluate(rate), 1.5)
+        self.assertEqual(self.page.evaluate("window.loads"), 0)
+        self.assertTrue(self.page.evaluate("document.getElementById('audio').src === window.src0"))
+        self.assertEqual(self.page.inner_text("#abar .btn.spd"), "1,5×")
+        self.page.locator("#abar [aria-label='Piste suivante']").click()
+        self.page.wait_for_function("document.getElementById('audio').src !== window.src0")
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.page.evaluate(rate), 1.5)                         # la piste suivante, même vitesse
+        self.page.locator("#abar .btn.spd").focus()
+        self.press("Enter", wait=300)
+        self.press("ArrowUp", "ArrowUp", "Enter", wait=200)                      # à la télécommande : deux crans plus haut, 1×
+        self.assertEqual(self.page.evaluate(rate), 1)
+        self.assertEqual(self.page.inner_text("#abar .btn.spd"), "1×")
+        self.page.locator("#abar .btn.spd").click()
+        self.page.locator(".veil .opt", has_text="2×").click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.assertEqual(self.page.evaluate(rate), 2)
+        self.page.locator("#abar [aria-label='Fermer le lecteur']").click()
+        self.page.wait_for_selector("#abar", state="hidden")
+        card.hover()
+        card.locator(".qbtn").first.click()
+        self.page.wait_for_selector("#abar:not([hidden])")
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.page.evaluate(rate), 1)                           # une nouvelle ouverture repart à 1×
+        self.assertEqual(self.page.inner_text("#abar .btn.spd"), "1×")
 
     def test_create_a_playlist_from_an_album_and_play_it(self):
         self.open("#/i/" + self.item("musique", "Discovery")["id"])
