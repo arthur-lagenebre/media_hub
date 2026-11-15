@@ -676,6 +676,26 @@ class TestVideoPlayer(UiCase):
         self.assertEqual(self.page.locator(".veil").count(), 0)
         self.assertIn("#/play/", self.page.url)                        # Retour a fermé le menu, pas le film
 
+    def test_the_track_menus_never_pile_up(self):
+        """Un bouton « Audio », « Sous-titres » ou « Qualité » activé derrière un menu déjà ouvert (la télécommande, un double appui) ferme d'abord ce menu : une seule fenêtre à la fois."""
+        self.begin("films", "Long")
+        self.wait_playing()
+        menus = "Array.prototype.map.call(document.querySelectorAll('.veil .menu'), function (m) { return m.getAttribute('aria-label'); })"
+        button = "Array.prototype.filter.call(document.querySelectorAll('.player .btn'), function (b) { return b.textContent.indexOf(%r) >= 0; })[0].click()"
+        self.page.locator(".player .btn", has_text="Sous-titres").click()
+        self.page.wait_for_selector(".veil .opt")
+        for label, expected in (("Sous-titres", "Sous-titres"), ("Audio", "Audio"), ("Audio", "Audio"), ("Qualité", "Qualité"), ("Sous-titres", "Sous-titres")):
+            self.page.evaluate(button % label)
+            self.page.wait_for_function(f"(() => {{ var m = {menus}; return m.length === 1 && m[0] === {expected!r}; }})()", timeout=5000)
+        self.page.evaluate(button % "Audio")
+        self.page.evaluate(button % "Sous-titres")
+        self.page.wait_for_function(f"(() => {{ var m = {menus}; return m.length === 1 && m[0] === 'Sous-titres'; }})()", timeout=5000)
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.page.evaluate(menus), ["Sous-titres"])
+        self.press("Escape", wait=400)
+        self.assertEqual(self.page.locator(".veil").count(), 0)
+        self.assertIn("#/play/", self.page.url)                        # Retour a fermé le seul menu, pas le film
+
     def test_in_full_screen_the_menus_and_the_messages_show_over_the_film(self):
         """En plein écran, seul le lecteur est affiché : le menu « Sous-titres » et les messages doivent s'y poser, puis revenir dans la page à la sortie."""
         self.begin("films", "Long")
