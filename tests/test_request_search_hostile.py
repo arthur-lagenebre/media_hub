@@ -254,6 +254,7 @@ class TestTwoAccountsAtOnce(Together):
 
     def test_the_two_places_are_shared_by_every_account_and_a_memorised_search_needs_none(self):
         self.found(self.alice, "mémorisé", "movie")
+        self.tmdb.entered = threading.Semaphore(0)      # l'appel de « mémorisé » a laissé un jeton : sans remise à zéro, les deux acquire passeraient avec un seul fil entré
         self.tmdb.hold = threading.Event()
         threads = [threading.Thread(target=call, args=(self.hub, "GET", f"/api/requests/search?q=lent{n}&kind=movie"), kwargs={"headers": self.headers(who)})
                    for n, who in enumerate((self.alice, self.bob))]
