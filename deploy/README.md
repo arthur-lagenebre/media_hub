@@ -316,7 +316,7 @@ Le fichier doit avoir la **taille exacte** de l'original (`wc -c test-funnel.mkv
 - Un compte **sans** le droit « Envoyer » (avec son propre jeton) lance la même commande `curl` : `HTTP 403`, en une seconde ou deux. Si curl met des minutes, le serveur lit le fichier avant de refuser : c'est un défaut à signaler.
 - Faute de place : crée un fichier creux plus gros que l'espace libre du dataset de la boîte (vu à l'étape 1, plus `HUB_INBOX_KEEP_FREE` ; par exemple `truncate -s 2T gros.mkv`, qui n'occupe pas d'espace) et envoie-le avec la même commande : `HTTP 507` aussitôt, avant que le moindre octet ait été lu. curl peut afficher une erreur d'envoi en plus (la connexion est coupée) : ce qui compte est le code HTTP, quand il y en a un, et que la réponse arrive en quelques secondes. Vérifie ensuite qu'aucun fichier ni `.part` n'est apparu dans la boîte (`inbox/` ou `HubReception/`).
 
-Efface ensuite `test-funnel.mkv` de la boîte (téléchargement/suppression dans *Gestion*, ou `rm` sur le NAS). Si l'un de ces points échoue, mets le résultat (code, durée, journal `docker logs media-hub`) dans une issue ou au bas de `docs/TODO.md`.
+Efface ensuite `test-funnel.mkv` de la boîte (téléchargement/suppression dans *Gestion*, ou `rm` sur le NAS). Si l'un de ces points échoue, mets le résultat (code, durée, journal `docker logs media-hub`) dans une issue ou dans la page Notion des essais sur place (voir `docs/essais-sur-place.md`, qui y renvoie).
 
 ## Image Docker (facultative)
 

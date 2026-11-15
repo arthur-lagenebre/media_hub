@@ -16,7 +16,7 @@ HUB_SRV=<dossier> HUB_DATA=<dossier-données> python -m hub   # http://127.0.0.1
 
 - `hub/` : serveur (`server/app.py` routes, `server/jobs.py` tâches de fond, `db.py` SQLite, `scan/`, `media/`, `enrich.py`, `config.py`).
 - `hub/web/` : interface (HTML, CSS, JS ; espace de noms global `H` dans `core.js`).
-- `tests/`, `deploy/` (compose du NAS), `docs/` (API, décisions, TODO, pop-ups, agents).
+- `tests/`, `deploy/` (compose du NAS), `docs/` (API, décisions, pop-ups, agents). Les travaux restants (limites connues comprises) et les essais sur place sont dans Notion : `docs/TODO.md` et `docs/essais-sur-place.md` ne sont plus que des renvois.
 
 Le serveur (`hub-server`) et l'interface (`hub-ui`) sont deux domaines : ne modifie pas l'un en travaillant sur l'autre, décris ce qu'il faut. Les consignes détaillées de chaque domaine sont dans `.claude/rules/` (chargées selon les fichiers touchés) et dans `.claude/agents/`.
 
@@ -30,7 +30,7 @@ Le serveur (`hub-server`) et l'interface (`hub-ui`) sont deux domaines : ne modi
 
 ## Documentation à tenir à jour
 
-Toute route nouvelle : tableau « Interface HTTP » du README, `docs/api.md`, `docs/TODO.md`. Tout réglage `HUB_*` nouveau : tableau « Réglages » du README. `__version__` (`hub/__init__.py`) se règle une fois par PR, selon `/ship`.
+Toute route nouvelle : tableau « Interface HTTP » du README et `docs/api.md`. Tout réglage `HUB_*` nouveau : tableau « Réglages » du README. Une limite connue ou un travail resté ouvert va dans la page Notion (connecteur MCP du projet, `.mcp.json`) et dans la description de la PR, **jamais** dans `docs/TODO.md` ni `docs/essais-sur-place.md` ; sans accès à Notion, rends le texte à l'utilisateur pour qu'il le reporte. `__version__` (`hub/__init__.py`) se règle une fois par PR, selon `/ship`.
 
 ## Langue
 

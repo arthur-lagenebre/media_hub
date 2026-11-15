@@ -13,7 +13,7 @@ Le dépôt avance par **branches thématiques** (`accueil`, `titre-invisible`, `
 
 ## Étapes
 
-1. **Vérifier** : `python -m unittest discover -s tests` (serveur et interface). Rapporte le résultat exact (nombre de tests, échecs, erreurs, sautés) et ne continue pas si un point bloque. Une fonctionnalité ou une route nouvelle doit aussi se retrouver dans `docs/api.md` et `docs/TODO.md`.
+1. **Vérifier** : `python -m unittest discover -s tests` (serveur et interface). Rapporte le résultat exact (nombre de tests, échecs, erreurs, sautés) et ne continue pas si un point bloque. Une fonctionnalité ou une route nouvelle doit aussi se retrouver dans `docs/api.md` et dans le tableau « Interface HTTP » du README. Ses limites connues vont dans la description de la PR (l'utilisateur les reporte dans Notion) : `docs/TODO.md` n'est plus qu'un renvoi vers Notion, n'y ajoute rien.
 2. **Version** : lis le diff contre `main` et règle `__version__` (`hub/__init__.py`) selon ce que la PR change pour l'utilisateur, en une seule fois par PR, même avec plusieurs commits :
 
    | La PR… | `__version__` |

@@ -1,6 +1,6 @@
 # Décisions
 
-Ce qui a été tranché, surtout les « non », pour ne pas le refaire ni le reproposer. Chaque entrée dit ce qui a été décidé, pourquoi, et ce qui pourrait le rouvrir. Ce qui reste à faire est dans [TODO.md](TODO.md) ; ce qui a été fait, dans `git log` et dans les pull requests.
+Ce qui a été tranché, surtout les « non », pour ne pas le refaire ni le reproposer. Chaque entrée dit ce qui a été décidé, pourquoi, et ce qui pourrait le rouvrir. Ce qui reste à faire est dans la liste des travaux de Notion (voir [TODO.md](TODO.md), qui y renvoie) ; ce qui a été fait, dans `git log` et dans les pull requests.
 
 ## Refusé
 
