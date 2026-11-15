@@ -280,7 +280,7 @@ def entry_json(row, progress=None):
 
 
 def order_key(row):
-    return (row["season"] if row["season"] is not None else -1, row["disc"] or 0, row["number"] if row["number"] is not None else 1e9, row["rel"].casefold())
+    return (row["season"] if row["season"] is not None else -1, row["disc"] or 0, row["number"] if row["number"] is not None else 1e9, row["rel"].casefold(), row["rel"])
 
 
 # ---------------------------------------------------------------------------
@@ -1116,7 +1116,7 @@ def api_home(h, m, q):
         if lib.kind == "music":
             recent = recent_music(items, seen, 24)
         else:
-            recent = [with_seen(r, seen, quality, ratings) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort LIMIT 24", (lib.id,))]
+            recent = [with_seen(r, seen, quality, ratings) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort, id LIMIT 24", (lib.id,))]
         row = {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind, "recent": recent, "count": len(items)}
         if lib.kind in UNSEEN_KINDS:
             row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order, quality=quality, ratings=ratings)
@@ -1203,7 +1203,7 @@ def person_results(db, libs, rows, seen, ratings=None):
     quality = card_quality(db)
     results = []
     for lib in libs:
-        mine = sorted((r for r in rows.values() if r["lib"] == lib.id), key=lambda r: r["sort"])
+        mine = sorted((r for r in rows.values() if r["lib"] == lib.id), key=lambda r: (r["sort"], r["id"]))
         mine.sort(key=lambda r: r["year"] or "", reverse=True)          # sans année en dernier ; à égalité, par titre (le tri est stable)
         if mine:
             results.append({"id": lib.id, "label": labels.shown(db, lib), "kind": lib.kind, "items": [with_seen(r, seen, quality, ratings) for r in mine]})
@@ -1267,10 +1267,10 @@ def api_enrich_person(h, m, q):
 # Une bibliothèque
 # ---------------------------------------------------------------------------
 SORTS = {
-    "title": (lambda r: r["sort"], False),
-    "added": (lambda r: (r["added"], r["sort"]), True),
-    "year": (lambda r: (r["year"] or "0000", r["sort"]), True),
-    "year-asc": (lambda r: (r["year"] or "9999", r["sort"]), False),
+    "title": (lambda r: (r["sort"], r["id"]), False),          # chaque tri finit par l'identifiant : deux éléments de même titre gardent le même rang, quel que soit l'ordre de la base
+    "added": (lambda r: (r["added"], r["sort"], r["id"]), True),
+    "year": (lambda r: (r["year"] or "0000", r["sort"], r["id"]), True),
+    "year-asc": (lambda r: (r["year"] or "9999", r["sort"], r["id"]), False),
     "part": (lambda r: release_key(r), False),      # l'ordre d'une saga
     "rating": (lambda r: rating_key(r), False),     # « Mieux notés » : la clé range elle-même du mieux au moins bien noté
 }
@@ -1279,8 +1279,8 @@ RATED_TYPES = ("movie", "show")                     # les éléments qui se note
 MY_RATING_RANK = {"up": 0, "mid": 1, "down": 3}     # « Mon avis » : J'aime, Bof, sans avis (2), Je n'aime pas
 # Le tri « Titre » de la musique et des livres range par artiste / collection ; chez un artiste, les albums vont du plus ancien au plus récent, puis par nom (ceux sans année en dernier)
 TITLE_SORTS = {
-    "music": lambda r: (fold(r["grp"]) or "￿", r["year"] or "9999", r["sort"]),
-    "books": lambda r: (fold(r["grp"]), r["sort"]),
+    "music": lambda r: (fold(r["grp"]) or "￿", r["year"] or "9999", r["sort"], r["id"]),
+    "books": lambda r: (fold(r["grp"]), r["sort"], r["id"]),
 }
 
 
@@ -1307,7 +1307,7 @@ def release_key(row):
     """L'ordre d'une saga : par date de sortie. Le numéro posé sur le disque peut être celui d'un dossier de rangement (le MCU : Ant-Man 12, 20, 31), il ne départage que deux films sortis le même jour."""
     meta = meta_json(row["meta"])
     part = meta.get("part")
-    return (meta.get("date") or row["year"] or "9999", part is None, part or 0, row["sort"])
+    return (meta.get("date") or row["year"] or "9999", part is None, part or 0, row["sort"], row["id"])
 
 
 def number_films(films, ranks=None, start=1):
@@ -1420,7 +1420,7 @@ def artist_rows(rows):
         groups.setdefault(meta_json(row["meta"]).get("artist_id") or fold(row["grp"]), []).append(row)
     out = []
     for key, albums in groups.items():
-        albums.sort(key=lambda r: (r["year"] or "9999", r["sort"]))
+        albums.sort(key=lambda r: (r["year"] or "9999", r["sort"], r["id"]))
         name = artist_name(albums[0]["grp"])
         out.append({"id": key, "lib": albums[0]["lib"], "type": "artist", "title": name, "grp": name, "letter": initial(name), "year": "", "summary": "",
                     "sort": ("~" if fold(name) in UNKNOWN_ARTISTS else "") + fold(name), "genres": json.dumps(sorted({g for a in albums for g in safe_json(a["genres"], [])}), ensure_ascii=False),
@@ -1448,7 +1448,7 @@ def recent_music(rows, seen, limit):
         added = [a["added"] for a in albums]
         arrived = len(albums) > 1 and max(added) - min(added) <= ARTIST_ARRIVAL and fold(albums[0]["grp"]) not in UNKNOWN_ARTISTS
         entries += artist_rows(albums) if arrived else albums
-    entries.sort(key=lambda r: (-r["added"], r["sort"]))
+    entries.sort(key=lambda r: (-r["added"], r["sort"], r["id"]))
     return [artist_card(r) if r["type"] == "artist" else with_seen(r, seen) for r in entries[:limit]]
 
 
@@ -2858,7 +2858,7 @@ def api_sagas_films(h, m, q):
         limit = 40
     found = [(ident, row) for ident, row in sagafile.by_tmdb(movie_rows(h.hub)).items()
              if (not group or row["grp"] == group) and (not needle or needle in fold(row["title"]) or needle in fold(row["grp"]))]
-    found.sort(key=lambda f: release_key(f[1]) if group else (f[1]["sort"], f[1]["year"]))
+    found.sort(key=lambda f: release_key(f[1]) if group else (f[1]["sort"], f[1]["year"], f[1]["id"]))
     h.send_json({"films": [saga_film(ident, row) for ident, row in found[:limit]], "total": len(found)})
 
 

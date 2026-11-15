@@ -149,13 +149,8 @@ def tmdb_of(row):
 
 
 def by_tmdb(movies):
-    """{identifiant TMDB: ligne de la table items} pour les films qui portent cet identifiant (le premier gagne)."""
-    found = {}
-    for row in movies:
-        ident = tmdb_of(row)
-        if ident is not None:
-            found.setdefault(ident, row)
-    return found
+    """{identifiant TMDB: ligne de la table items} pour les films qui portent cet identifiant ; d'un film en plusieurs versions, la première par titre de tri puis identifiant (voir versions_by_tmdb)."""
+    return {ident: rows[0] for ident, rows in versions_by_tmdb(movies).items()}
 
 
 def versions_by_tmdb(movies):

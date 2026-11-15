@@ -96,9 +96,11 @@ class TestTmdbOf(unittest.TestCase):
         self.assertIsNone(sagas.tmdb_of({"meta": "pas du json"}))
         self.assertIsNone(sagas.tmdb_of({"meta": "[]"}))
 
-    def test_the_first_film_with_an_identifier_wins(self):
-        rows = [{"id": "a", "meta": '{"tmdb": 1}'}, {"id": "b", "meta": '{"tmdb": "movie/1"}'}, {"id": "c", "meta": "{}"}, {"id": "d", "meta": '{"tmdb": 2}'}]
-        self.assertEqual({k: r["id"] for k, r in sagas.by_tmdb(rows).items()}, {1: "a", 2: "d"})
+    def test_of_several_versions_the_first_by_title_then_identifier_wins_whatever_the_order(self):
+        rows = [{"id": "b", "sort": "x", "meta": '{"tmdb": "movie/1"}'}, {"id": "a", "sort": "x", "meta": '{"tmdb": 1}'}, {"id": "c", "sort": "x", "meta": "{}"},
+                {"id": "e", "sort": "y", "meta": '{"tmdb": 2}'}, {"id": "d", "sort": "z", "meta": '{"tmdb": 2}'}]
+        for order in (rows, rows[::-1]):
+            self.assertEqual({k: r["id"] for k, r in sagas.by_tmdb(order).items()}, {1: "a", 2: "e"})
 
 
 class TestReading(TempCase):
