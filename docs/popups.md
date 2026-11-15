@@ -27,6 +27,7 @@ Une déclinaison de plus se justifie par un besoin d'interaction que les quatre 
 ## Ce que le gabarit garantit (ne pas le refaire)
 
 - **Voile, Retour, Échap** : `H.overlay` empile les fenêtres ; Retour (télécommande) ou Échap ferme celle du dessus, un clic sur le voile aussi. Le focus revient sur ce qui avait ouvert la fenêtre.
+- **Plein écran** : le voile (et le toast) se pose sur l'élément en plein écran s'il y en a un (le lecteur), sinon dans `body`, et le suit quand on entre en plein écran ou qu'on en sort ; posé dans `body` pendant le plein écran, il serait invisible derrière le film.
 - **Fermée sans avoir agi** : l'option `cancel` de `H.form` et de `H.confirm` est appelée une fois la fenêtre fermée sans avoir agi (Annuler, voile, Retour, Échap) ; `done` l'est quand la personne a agi.
 - **Quitter une page** : une page de `H.route` peut définir `leave()`, qui rend `{title, lead, ok, accept}` pour demander confirmation avant de la quitter (un envoi en cours), ou rien si elle peut partir ; la question est un **confirm** dont `cancel` remet l'adresse de la page.
 - **Focus** : `data-autofocus` désigne l'élément qui reçoit le focus (sinon le premier). Une fenêtre qui détruit quelque chose met le focus sur **Annuler** (Entrée ne détruit rien) ; un menu met le focus sur la valeur courante.

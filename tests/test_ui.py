@@ -676,6 +676,28 @@ class TestVideoPlayer(UiCase):
         self.assertEqual(self.page.locator(".veil").count(), 0)
         self.assertIn("#/play/", self.page.url)                        # Retour a fermé le menu, pas le film
 
+    def test_in_full_screen_the_menus_and_the_messages_show_over_the_film(self):
+        """En plein écran, seul le lecteur est affiché : le menu « Sous-titres » et les messages doivent s'y poser, puis revenir dans la page à la sortie."""
+        self.begin("films", "Long")
+        self.wait_playing()
+        self.page.locator(".player .btn[aria-label='Plein écran']").click()
+        self.page.wait_for_function("!!document.fullscreenElement")
+        self.page.locator(".player .btn", has_text="Sous-titres").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.assertTrue(self.page.evaluate("document.fullscreenElement.contains(document.querySelector('.veil'))"))
+        seen = "(() => { var o = document.querySelector(%s), r = o.getBoundingClientRect(); return o.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); })()"
+        self.assertTrue(self.page.evaluate(seen % "'.veil .opt'"))                                  # le choix est à l'écran, pas derrière le film
+        self.assertTrue(self.page.evaluate("!!document.activeElement.closest('.veil')"))             # et la télécommande y est
+        self.page.locator(".veil .opt").nth(1).click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.page.evaluate("Hub.toast('Essai plein écran', 10000)")
+        self.assertTrue(self.page.evaluate("document.fullscreenElement.contains(document.getElementById('toast'))"))
+        self.page.evaluate("document.exitFullscreen()")
+        self.page.wait_for_function("!document.fullscreenElement && document.getElementById('toast').parentNode === document.body")      # l'événement `fullscreenchange` suit de peu
+        self.press("Escape", wait=600)                                                               # le lecteur quitté, les messages marchent encore
+        self.page.evaluate("Hub.toast('Après le lecteur')")
+        self.assertEqual(self.page.inner_text("#toast"), "Après le lecteur")
+
     def test_end_of_episode_goes_to_next_one(self):
         eps = self.entries("series", "Vidéo Série")
         self.open("#/play/" + eps[0]["id"])
