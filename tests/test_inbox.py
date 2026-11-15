@@ -37,7 +37,7 @@ class TempCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.db = Database(self.tmp / "hub.db")
         for uid in ("alice", "bob", "carol"):
-            add_user(self.db, uid)                   # le nom du compte est son identifiant : le dossier a le même nom
+            add_user(self.db, uid, inbox_dir=uid)    # le nom du compte est son identifiant, et la base lui donne déjà ce dossier (comme après `migrate`) : un dossier posé à la main par un test est le sien
         self.inbox = make(self.tmp, self.db)
 
     def files(self, account="alice"):

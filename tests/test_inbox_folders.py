@@ -111,7 +111,7 @@ class TestAccountFolder(FolderCase):
         self.assertEqual(self.inbox.folder_for(uid), "Léa")
         self.assertEqual(self.put("a.mkv", account=uid)["account"], "Léa")
         self.assertEqual(self.dirs(), ["Léa"])
-        self.assertEqual(self.inbox.owners(), {"Léa": "Marie"})
+        self.assertEqual(self.inbox.owners()["Léa"], "Marie")
 
     def test_a_second_use_does_not_make_another_folder(self):
         uid = self.user("Léa", "9f8e7d6c5b4a3210")
@@ -162,13 +162,14 @@ class TestAccountFolder(FolderCase):
             self.assertEqual(self.recorded(uid), f"Léa{n}", bad)
         self.assertEqual(self.dirs(), [f"Léa{n}" for n in range(6)])                     # un dossier par compte, pas un de plus
 
-    def test_a_dubious_folder_name_in_the_base_does_not_hide_an_old_folder_named_after_the_identifier(self):
+    def test_a_dubious_folder_name_in_the_base_gives_a_new_folder_and_leaves_an_old_one_named_after_the_identifier_as_it_is(self):
         uid = self.user("Arthur", "default", inbox_dir="../x")
         (self.tmp / "inbox" / "default").mkdir(parents=True)
         (self.tmp / "inbox" / "default" / "ancien.mkv").write_bytes(b"1")
-        self.assertEqual(self.put("neuf.mkv", account=uid)["account"], "default")
-        self.assertEqual(self.recorded(uid), "default")
-        self.assertEqual(self.dirs(), ["default"])
+        self.assertEqual(self.put("neuf.mkv", account=uid)["account"], "Arthur")
+        self.assertEqual(self.recorded(uid), "Arthur")
+        self.assertEqual(self.dirs(), ["Arthur", "default"])
+        self.assertEqual((self.tmp / "inbox" / "default" / "ancien.mkv").read_bytes(), b"1")
 
     def test_a_folder_made_for_a_name_the_base_does_not_keep_is_removed_when_empty(self):
         uid = self.user("Léa", "1")
@@ -232,15 +233,26 @@ class TestAccountFolder(FolderCase):
         self.assertEqual(self.put("b.mkv", account=uid)["account"], "Léa")
         self.assertEqual(self.dirs(), ["Léa"])
 
-    def test_a_folder_named_after_the_identifier_is_taken_over_as_it_is(self):
-        """Un dossier d'avant, que `migrate` n'a pas encore renommé : le compte continue d'y envoyer, rien n'est perdu ni dupliqué."""
+    def test_a_folder_named_after_the_identifier_is_taken_over_by_the_migration_not_by_an_upload(self):
+        """Un dossier d'avant n'est repris que par `migrate`, lancé au démarrage avant tout envoi : un envoi ne prend jamais un dossier que la base ne lui donne pas."""
         uid = self.user("Arthur", "default")
         (self.tmp / "inbox" / "default").mkdir(parents=True)
         (self.tmp / "inbox" / "default" / "ancien.mkv").write_bytes(b"1")
-        self.assertEqual(self.put("neuf.mkv", account=uid)["account"], "default")
-        self.assertEqual(self.dirs(), ["default"])
-        self.assertEqual(self.recorded(uid), "default")
-        self.assertEqual(sorted(f["name"] for f in self.inbox.listing(uid)), ["ancien.mkv", "neuf.mkv"])
+        self.assertEqual(self.put("neuf.mkv", account=uid)["account"], "Arthur")
+        self.assertEqual(self.dirs(), ["Arthur", "default"])
+        self.assertEqual([f["name"] for f in self.inbox.listing(uid)], ["neuf.mkv"])
+
+    def test_the_folder_of_a_deleted_account_named_like_an_identifier_is_not_given_to_the_account_with_that_identifier(self):
+        """Un compte nommé « default » envoie puis est supprimé ; l'administrateur d'identifiant `default`, sans dossier, envoie à son tour : il n'hérite pas de `default/`."""
+        gone = self.user("default", "bb")
+        self.assertEqual(self.put("souvenir.mkv", b"12345", account=gone)["account"], "default")
+        self.db.execute("DELETE FROM users WHERE id=?", (gone,))
+        boss = self.user("admin", "default", role="admin")
+        self.assertEqual(self.put("neuf.mkv", account=boss)["account"], "admin")
+        self.assertEqual(self.recorded(boss), "admin")
+        self.assertEqual([f["name"] for f in self.inbox.listing(boss)], ["neuf.mkv"])
+        self.assertNotIn("default", self.inbox.owners())                             # la liste de l'administrateur le montre comme celui d'un compte supprimé
+        self.assertEqual((self.tmp / "inbox" / "default" / "souvenir.mkv").read_bytes(), b"12345")
 
     def test_an_old_folder_named_after_the_identifier_is_not_taken_when_another_account_holds_that_name(self):
         """L'administrateur d'identifiant `default` et un second compte NOMMÉ « default » : celui-ci envoie d'abord et obtient `default/` ; l'administrateur n'y est pas admis."""

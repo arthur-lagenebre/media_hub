@@ -112,6 +112,15 @@ class TestSegmentsOfEveryForm(unittest.TestCase):
         for raw in ("CONSOLE", "COM0", "COM10", "CONN", "NULL", "AUXX", "LPT"):
             self.assertEqual(inbox.clean_dir(raw), (raw,), raw)
 
+    def test_superscript_ports_and_console_devices_are_reserved_too(self):
+        for raw in ("COM¹", "com²", "COM³", "LPT¹", "lpt²", "LPT³", "CONIN$", "conout$"):
+            self.assertFalse(inbox.is_folder_name(raw), ascii(raw))
+            self.assertEqual(inbox.clean_folder(raw), "_" + raw, ascii(raw))
+            self.assertEqual(inbox.clean_name(raw + ".mkv"), "_" + raw + ".mkv", ascii(raw))
+            self.assertEqual(inbox.clean_dir(raw + ".x"), ("_" + raw + ".x",), ascii(raw))
+        for raw in ("COM⁴", "LPT⁰", "CONIN", "CONOUT", "CONERR$"):
+            self.assertTrue(inbox.is_folder_name(raw), ascii(raw))
+
     def test_a_short_name_is_an_ordinary_name(self):
         self.assertEqual(inbox.clean_dir("PROGRA~1/Docume~1"), ("PROGRA~1", "Docume~1"))
         self.assertTrue(inbox.is_stored_name("FILMS~1.mkv"))
