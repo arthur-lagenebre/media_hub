@@ -1229,6 +1229,7 @@
     var list = [];
     function row(r) {
       var what = h('div', { class: 'what' }, h('b', null, requestTitle(r)), h('span', { class: 'rqstatus' }, requestStatus(r)),
+        r.status === 'added' && !r.item ? h('span', { class: 'rqhint' }, H.t('Pas encore visible pour toi : demande à l’administrateur où le trouver.')) : null,      // ajoutée sans élément qu'il voit (bibliothèque cachée, ou marquée avant le scan) : ne dit pas où, voir docs/decisions.md
         r.note ? h('span', { class: 'rqnote' }, H.t('Ton message : « {note} »', { note: r.note })) : null,
         r.asked ? h('span', null, H.t('Demandé le {date}', { date: H.date(r.asked) })) : null);
       return h('div', { class: 'line reqrow', 'data-request': r.id, 'data-status': r.status }, requestPicture(r), what,

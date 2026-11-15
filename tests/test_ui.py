@@ -6457,6 +6457,23 @@ class TestRequestsInTheUi(RequestsUiCase):
         page.keyboard.press("Escape")                                                                       # Retour remonte aux paramètres
         self.shown(page, "#/settings?tab=compte")
 
+    def test_an_added_request_the_account_cannot_open_says_to_ask_the_administrator(self):
+        """Ajoutée, mais sans élément que le compte voit (une bibliothèque qui lui est cachée, ou marquée ajoutée avant le scan) : la ligne le dit, sans dire où, au lieu de rester muette."""
+        rid = self.ask("alice", 297762)["id"]
+        self.call("admin", f"/api/requests/{rid}/status", {"status": "added"})
+        self.ask("alice", 9500)
+        page = self.session("alice")
+        page.goto(self.base + "/#/requests")
+        self.count_rows(page, 2)
+        added, pending = self.rows(page).filter(has_text="Wonder Woman"), self.rows(page).filter(has_text="Absent Personne")
+        self.assertEqual(added.locator(".rqhint").inner_text(), "Pas encore visible pour toi : demande à l’administrateur où le trouver.")
+        self.assertEqual(added.locator("a").count(), 0)                                                     # rien à ouvrir
+        self.assertEqual(pending.locator(".rqhint").count(), 0)
+        english = self.session("alice", lang="en")
+        english.goto(self.base + "/#/requests")
+        self.count_rows(english, 2)
+        self.assertEqual(self.rows(english).locator(".rqhint").inner_text(), "Not visible to you yet: ask the administrator where to find it.")
+
     # --- L'accueil ---------------------------------------------------------------
     def test_an_arrived_request_is_on_the_home_until_it_is_opened(self):
         self.ask("alice", 1000)
