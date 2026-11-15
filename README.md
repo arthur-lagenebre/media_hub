@@ -212,10 +212,10 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 2706 tests : 2246 serveur + 460 interface
+python -m unittest discover -s tests          # la suite complète (une trentaine de minutes)
 ```
 
-`tests/test_ui.py` (et `tests/test_labels_ui.py`, et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 460 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+Les tests d'interface (les classes dérivées de `UiCase`, définie dans `tests/test_ui.py`, quel que soit leur fichier) pilotent l'interface dans Chromium avec Playwright ; ils sont ignorés si Playwright ou ffmpeg manquent. Le nombre exact de tests, réussis et sautés, figure dans la description de chaque PR.
 
 ### Intégration continue (GitHub Actions)
 
