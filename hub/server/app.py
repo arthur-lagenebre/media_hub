@@ -3169,11 +3169,12 @@ def api_request_delete(h, m, q):
 
 @route("POST", r"/api/requests/([0-9]{1,15})/status")
 def api_request_status(h, m, q):
-    """L'administrateur passe une demande à `added`, `declined` (`reason` : un motif facultatif, 200 caractères au plus) ou la remet en `pending` ; rend la demande comme `GET /api/requests`."""
+    """L'administrateur passe une demande à `added`, `declined` (`reason` : un motif facultatif, 200 caractères au plus) ou la remet en `pending` ; rend la demande comme `GET /api/requests`.
+    409 pour remettre en attente une demande dont l'élément est déjà dans la médiathèque (la lecture suivante la repasserait à `added`)."""
     require_admin(h)
     body = strict_body_dict(h)
     rid = int(m.group(1))
-    request_call(hub_requests.set_status, h.hub.db, rid, body.get("status"), body.get("reason"))
+    request_call(hub_requests.set_status, h.hub.db, rid, body.get("status"), body.get("reason"), h.hub.cfg.libraries)
     changed = next((r for r in hub_requests.everything(h.hub.db, h.hub.cfg, h.user["id"]) if r["id"] == rid), None)
     if changed is None:                     # supprimée entre le changement et la relecture (une autre requête)
         raise HttpError(404, "demande inconnue")
