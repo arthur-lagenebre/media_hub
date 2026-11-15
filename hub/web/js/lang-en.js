@@ -766,6 +766,7 @@
     'Une idée, une amélioration ou un bug du hub, à proposer à l’administrateur, et ce qu’il en a fait': 'An idea, an improvement or a bug of the hub, to suggest to the administrator, and what they did with it',
     'Une idée pour le hub, quelque chose à améliorer, un bug : l’administrateur lit tes suggestions et te répond ici. Personne d’autre ne les voit.': 'An idea for the hub, something to improve, a bug: the administrator reads your suggestions and answers you here. Nobody else sees them.',
     'Proposer une amélioration': 'Suggest an improvement',
+    'Pour proposer une amélioration, utilise un ordinateur, une tablette ou un téléphone.': 'To suggest an improvement, use a computer, a tablet or a phone.',
     'Ce qui manque au hub, ce qui pourrait marcher mieux, ce qui ne marche pas. Pour un film ou une série, c’est « Mes demandes ».': 'What the hub lacks, what could work better, what doesn’t work. For a movie or a series, use “My requests”.',
     'Ta suggestion (1000 caractères au plus)': 'Your suggestion (1000 characters at most)',
     'Catégorie': 'Category',
