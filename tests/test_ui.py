@@ -7216,15 +7216,28 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         self.assertEqual(polar.locator(".card[data-key=polar1] .badge.mine").get_attribute("data-rating"), "mid")       # la pastille d'avis aussi
         self.assertEqual(page.evaluate("Hub.missing"), [])
 
-    def test_the_shelf_arrives_without_moving_the_focus(self):
+    def test_arriving_on_an_untouched_home_the_shelf_takes_the_focus_and_the_page_stays_at_the_top(self):
+        """Personne n'a encore bougé : le focus que l'accueil avait posé de lui-même (la première nouveauté) passe à la première suggestion, et la page reste en haut, sur « Bonjour »."""
         self.like("alice", "ancrepolar", "ancrewestern")
+        held, flow = [], {"hold": True}
         page, _ = self.opened("alice")
-        self.shelves(page).first.wait_for()
+        page.set_viewport_size({"width": 1280, "height": 520})
+        page.route("**" + self.ROUTE, lambda r: held.append(r) if flow["hold"] else r.continue_())
+        with page.expect_request(lambda r: r.url.endswith(self.ROUTE)):
+            page.reload()
+        page.wait_for_function("document.activeElement && document.activeElement.closest('.shelf.latest')")      # avant : la première nouveauté, posée par l'accueil
+        self.assertEqual(page.evaluate("scrollY"), 0)
+        flow["hold"] = False
+        held[0].continue_()
+        self.shelves(page).nth(1).wait_for()
+        first = self.shelves(page).first.locator(".card").first
         where = self.active(page)
-        self.assertIsNotNone(where)
-        self.assertNotIn("recommend", where["shelf"] or "")                                             # le focus est resté où l'accueil l'avait mis
+        self.assertEqual((where["key"], "recommend" in (where["shelf"] or "")), (first.get_attribute("data-key"), True))      # la même carte peut être aussi dans « Nouveautés »
+        self.assertEqual(page.evaluate("scrollY"), 0)                                                     # « Bonjour » reste en vue
+        self.assertTrue(page.evaluate("(() => { var r = document.querySelector('#views > .view:not([style*=\"none\"]) .greeting').getBoundingClientRect(); return r.top >= 0; })()"))
 
     def test_a_focused_card_pushed_down_by_the_arriving_shelves_stays_focused_and_in_view(self):
+        """Une carte que la personne a choisie (ici, aux flèches) garde le focus et reste en vue quand les suggestions arrivent au-dessus."""
         self.like("alice", "ancrepolar", "ancrewestern")
         held, flow = [], {"hold": True}
         page, _ = self.opened("alice")
@@ -7234,8 +7247,10 @@ class TestRecommendationsInTheUi(unittest.TestCase):
             page.reload()
         first = self.view(page, ".shelf.latest .card").first
         first.wait_for()
-        first.focus()
-        key = first.get_attribute("data-key")
+        page.wait_for_function("document.activeElement && document.activeElement.closest('.shelf.latest')")
+        page.keyboard.press("ArrowRight")                                                                 # la personne a bougé
+        key = page.evaluate("document.activeElement.getAttribute('data-key')")
+        self.assertNotEqual(key, first.get_attribute("data-key"))
         self.assertEqual(self.shelves(page).count(), 0)
         flow["hold"] = False
         held[0].continue_()
