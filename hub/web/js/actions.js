@@ -198,8 +198,17 @@
         }), d.tmdb || null, choose);
       }).catch(fail);
     }
-    return [H.button(H.t('Changer la fiche TMDB'), 'edit', { 'data-key': 'tmdb', onclick: function () {
+    var change = H.button(H.t('Changer la fiche TMDB'), 'edit', { 'data-key': 'tmdb', onclick: function () {
       H.prompt(H.t('Nom de la série, ou adresse de sa fiche TMDB'), d.title, H.t('Chercher'), function (text) { if (TMDB_URL.test(text)) choose(text); else search(text); });
+    } });
+    if (!d.pinned) return [change];
+    // Une fiche choisie dans le hub (`pinned`) se retire : la série est enrichie de nouveau d'après le nom de son dossier. Si TMDB ne trouve rien sans ce choix, le serveur le garde et le dit (404) : le message reste dans la fenêtre.
+    // Le bouton disparaît une fois la fiche rétablie : le focus passe d'abord sur « Changer la fiche TMDB », que la fiche redessinée retrouve.
+    return [change, H.button(H.t('Revenir à la fiche automatique'), 'refresh', { 'data-key': 'tmdb-auto', onclick: function () {
+      H.confirm({ title: H.t('Revenir à la fiche automatique ?'), ok: H.t('Revenir'),
+        lead: [H.t('La fiche choisie à la main est oubliée : le hub cherche de nouveau la série d’après le nom de son dossier.')],
+        submit: function () { return H.api('/api/item/' + d.id + '/tmdb', { tmdb: null }); },
+        done: function () { H.toast(H.t('Fiche automatique rétablie')); try { change.focus(); } catch (e) { /* tant pis */ } done(); } });
     } })];
   };
   // Le bouton « … » d'une couverture de tome : le même menu que celui d'un épisode.

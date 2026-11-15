@@ -2940,6 +2940,47 @@ class TestTmdbSheet(UiCase):
         self.page.locator(".menu .opt", has_text="2017").click()
         self.until(lambda: self.view(".info .doubt").count() == 0)                # le doute est levé : on a choisi
 
+    # --- Revenir à la fiche automatique -------------------------------------------
+    def pin(self, tmdb):
+        self.api("/api/item/" + self.dark["id"] + "/tmdb", {"tmdb": tmdb})
+        self.until(lambda: self.sheet().get("tmdb") == tmdb and self.sheet().get("pinned"))
+
+    def back_button(self):
+        return self.view(".actions .btn", has_text="Revenir à la fiche automatique")
+
+    def test_without_a_choice_there_is_no_way_back(self):
+        self.open_sheet()
+        self.assertEqual(self.back_button().count(), 0)
+
+    def test_a_choice_is_removed_and_the_sheet_of_the_folder_name_comes_back(self):
+        self.pin(2567)
+        self.open_sheet()
+        self.back_button().wait_for()
+        self.back_button().click()
+        box = self.page.locator(".veil .menu.confirm")
+        box.locator(".btn.primary").click()
+        box.wait_for(state="detached")
+        self.back_button().wait_for(state="detached")
+        self.view(".actions .btn", has_text="Changer la fiche TMDB").wait_for()
+        self.page.wait_for_function("document.activeElement && document.activeElement.getAttribute('data-key') === 'tmdb'")    # le focus ne se perd pas avec le bouton
+        self.assertEqual(self.page.inner_text("#toast"), "Fiche automatique rétablie")
+        self.until(lambda: self.sheet().get("tmdb") == 70523)                     # la plus connue des deux « Dark » : celle que trouve le nom du dossier
+        self.assertNotIn("pinned", self.sheet())
+        self.assertEqual(self.sheet()["summary"], "Fiche 70523")
+
+    def test_when_tmdb_finds_nothing_without_the_choice_the_window_says_so_and_stays(self):
+        self.pin(2567)
+        message = "TMDB ne trouve pas cette série sans choix manuel : la fiche choisie est gardée"
+        self.page.route("**/api/item/*/tmdb", lambda route: route.fulfill(status=404, content_type="application/json", body=json.dumps({"error": message})) if route.request.method == "POST" else route.continue_())
+        self.open_sheet()
+        self.back_button().click()
+        box = self.page.locator(".veil .menu.confirm")
+        box.locator(".btn.primary").click()
+        box.locator(".formerr", has_text=message).wait_for()
+        self.assertEqual(box.count(), 1)                                            # la fenêtre reste ouverte
+        self.assertEqual(self.sheet().get("tmdb"), 2567)
+        self.assertTrue(self.sheet().get("pinned"))
+
     def test_a_film_has_no_such_button(self):
         self.open("#/i/" + self.item("films", "Inception")["id"])
         self.view(".actions .btn").first.wait_for()
