@@ -5685,8 +5685,13 @@ class InboxUiCase(unittest.TestCase):
         }
         function build(node) { return node.children ? folder(node.name, node.children.map(build), node.failAfter) : leaf(node.name, node.text, node.broken); }
         var specs = Array.isArray(spec) ? spec : [spec], el = document.querySelector('#views > .view.upload:not([style*="none"])');
-        var dt = { types: ['Files'], files: specs.map(function (s) { return new File(s.children ? [] : [s.text], s.name); }),
-                   items: specs.map(function (s) { var entry = s.children ? build(s) : { isFile: true, isDirectory: false, name: s.name }; return { webkitGetAsEntry: function () { return entry; } }; }) };
+        var files = [], items = specs.map(function (s) {                    // comme le navigateur : `items` a aussi les textes glissés (`{"string": …}`), `files` seulement les fichiers et dossiers
+            if (s.string !== undefined) return { kind: 'string', type: 'text/plain', webkitGetAsEntry: function () { return null; }, getAsFile: function () { return null; } };
+            var file = new File(s.children ? [] : [s.text], s.name), entry = s.children ? build(s) : { isFile: true, isDirectory: false, name: s.name };
+            files.push(file);
+            return { kind: 'file', webkitGetAsEntry: function () { return entry; }, getAsFile: function () { return file; } };
+        });
+        var dt = { types: ['Files'], files: files, items: items };
         var event = new Event('drop', { bubbles: true, cancelable: true });
         Object.defineProperty(event, 'dataTransfer', { value: dt });
         el.dispatchEvent(event);
@@ -5707,6 +5712,32 @@ class InboxUiCase(unittest.TestCase):
         self.confirm(page)
         self.folders(page, "done").wait_for()
         self.assertEqual(self.tree(), ["Mini/Sous/m2.srt", "Mini/m1.srt"])
+
+    def test_text_dropped_with_a_folder_and_a_file_does_not_shift_them(self):
+        """Un texte glissé avec un dossier et un fichier est dans `items`, pas dans `files` : le dossier reste un dossier, le fichier part sous son nom."""
+        page = self.upload_page()
+        posts = self.posts(page)
+        page.evaluate(self.DROP, [{"string": "un texte"}, {"name": "Dossier", "children": [{"name": "d.srt", "text": "d"}]}, {"name": "seul.srt", "text": "s"}])
+        self.assertIn("Envoyer le dossier « Dossier » : 1 fichier", self.dialog(page).locator(".lead").inner_text())
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.wait_for(lambda: self.sends(page, "done").count() == 2)
+        self.assertEqual(self.tree(), ["Dossier/d.srt", "seul.srt"])
+        self.assertEqual(len(posts), 2)
+
+    def test_my_uploads_are_read_once_after_a_folder_not_during(self):
+        """Pendant l'envoi d'un dossier, « Mes envois » n'est pas relue (elle reconstruirait la liste sous le focus) : une seule lecture quand la file se vide."""
+        page = self.upload_page()
+        reads = []
+        page.on("request", lambda r: reads.append(r.url) if r.method == "GET" and "/api/inbox" in r.url else None)
+        self.throttle(page, 40_000)
+        root = self.make_folder("Lot", {f"f{n}.mkv": bytes([65 + n]) * 30_000 for n in range(4)})
+        self.pick_folder(page, root)
+        self.confirm(page)
+        self.folders(page, "done").wait_for(timeout=30000)
+        page.wait_for_timeout(2000)
+        self.assertEqual(len(reads), 1, reads)
+        self.assertEqual(page.locator("#views > .view:visible .mine-file").count(), 4)
 
     def test_several_folders_dropped_with_a_file_are_confirmed_one_after_the_other(self):
         page = self.upload_page()
