@@ -13,7 +13,7 @@ Le dépôt avance par **branches thématiques** (`accueil`, `titre-invisible`, `
 
 ## Étapes
 
-1. **Vérifier** : `python -m unittest discover -s tests` (serveur et interface). Rapporte le résultat exact (nombre de tests, échecs, erreurs, sautés) et ne continue pas si un point bloque. Une fonctionnalité ou une route nouvelle doit aussi se retrouver dans `docs/api.md` et dans le tableau « Interface HTTP » du README. Ses limites connues vont dans la description de la PR (l'utilisateur les reporte dans Notion) : `docs/TODO.md` n'est plus qu'un renvoi vers Notion, n'y ajoute rien.
+1. **Vérifier** : `python -m unittest discover -s tests` (serveur et interface). Rapporte le résultat exact (nombre de tests, échecs, erreurs, sautés) et ne continue pas si un point bloque. Une fonctionnalité ou une route nouvelle doit aussi se retrouver dans `docs/api.md` et dans le tableau « Interface HTTP » du README. Ses limites connues vont dans la description de la PR (`/merged` les reporte dans Notion après la fusion) : `docs/TODO.md` n'est plus qu'un renvoi vers Notion, n'y ajoute rien.
 2. **Version** : lis le diff contre `main` et règle `__version__` (`hub/__init__.py`) selon ce que la PR change pour l'utilisateur, en une seule fois par PR, même avec plusieurs commits :
 
    | La PR… | `__version__` |
@@ -30,7 +30,7 @@ Le dépôt avance par **branches thématiques** (`accueil`, `titre-invisible`, `
    - **Preuve** : les tests ajoutés (écrits avant le code et vus échouer quand c'est le cas), les totaux de tests qui passent, mutator ou captures d'écran s'ils ont servi.
    Termine par la ligne d'attribution demandée par l'environnement.
 5. **Ne commite jamais** un secret, une base de données, un cache, un fichier de la médiathèque ni de la configuration locale. Relis `git status` avant `git add` et ajoute les fichiers un par un, pas `git add -A`.
-6. **Push** de la branche (`git push -u origin <branche>`), puis **PR** vers `main` avec `gh pr create` : titre court dans la même forme que les commits, description qui dit le *pourquoi*, ce qui change pour l'utilisateur, la preuve (tests) et les limites connues. Termine la description avec la ligne d'attribution demandée par l'environnement.
+6. **Push** de la branche (`git push -u origin <branche>`), puis **PR** vers `main` avec `gh pr create` : titre court dans la même forme que les commits, description qui dit le *pourquoi*, ce qui change pour l'utilisateur, la preuve (tests) et les limites connues. Si le travail vient d'une ou plusieurs cartes du backlog Notion, ajoute pour chacune une ligne `Carte Notion : <lien>` : `/merged` s'en sert pour les mettre à jour après la fusion. Termine la description avec la ligne d'attribution demandée par l'environnement.
 7. Donne le lien de la PR. Ne fusionne pas : c'est à l'utilisateur de le faire (ensuite, `/merged`).
 
 ## Garde-fous

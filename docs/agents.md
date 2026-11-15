@@ -88,7 +88,7 @@ git worktree add ../media_hub-<lot> -b <branche> main
 - **Une session par worktree**, et le dossier principal reste à celle qui y travaille déjà : ne change pas de branche dans un dossier où une autre session a des modifications non commitées.
 - **Écris le dossier dans la demande** que reçoit l'agent d'implémentation (« travaille dans `D:\Projets\media_hub-lot2` »), puisqu'il démarre sans connaître la conversation.
 - **Un relecteur ne change jamais de branche** : il lit avec `git diff` et `git show`, et lance ses tests sur une copie extraite par `git archive`.
-- **Après la fusion** : `git worktree remove ../media_hub-<lot>`, puis `/merged` pour ranger les branches.
+- **Après la fusion** : `/merged` retire le worktree du lot (s'il est propre), supprime sa branche et met à jour les cartes Notion ; `/release vX.Y.Z` publie ensuite la version, si tu le décides.
 
 ## Ce qu'ils ne font pas
 
