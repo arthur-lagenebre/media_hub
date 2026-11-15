@@ -184,8 +184,25 @@
     for (var i = 0; i < text.length; i++) x = (x * 31 + text.charCodeAt(i)) % 360;
     return x;
   };
+  // --- Plein écran : la scène -------------------------------------------------------------
+  // En plein écran, le navigateur n'affiche que l'élément mis en plein écran (le lecteur) : une fenêtre ou un message posé dans `body` existe mais reste invisible, derrière le film.
+  // Fenêtres et messages se posent donc sur la scène (l'élément en plein écran, sinon `body`), et la suivent quand on entre en plein écran ou qu'on en sort.
+  function stage() { return document.fullscreenElement || document.webkitFullscreenElement || document.body; }
+  var toastBox = null;          // gardé ici : le message peut être resté dans un lecteur qu'on a quitté depuis
+  function toastEl() { return toastBox || (toastBox = document.getElementById('toast')); }
+  function onStage(node) { var host = stage(); if (node && node.parentNode !== host) host.appendChild(node); }
+  function restage() {
+    var a = document.activeElement;
+    onStage(toastEl());
+    overlays.forEach(onStage);
+    if (a && a !== document.activeElement && document.body.contains(a)) H.focus.set(a, true);       // déplacer un nœud lui ôte le focus : la télécommande le retrouve
+  }
+  document.addEventListener('fullscreenchange', restage);
+  document.addEventListener('webkitfullscreenchange', restage);
+
   H.toast = function (message, ms) {
-    var box = document.getElementById('toast');
+    var box = toastEl();
+    onStage(box);
     box.textContent = message;
     box.classList.add('on');
     clearTimeout(H.toast.timer);
@@ -202,7 +219,7 @@
       back.hubClose = onClose;
       back.hubCancel = onCancel;
       back.opener = document.activeElement;
-      document.body.appendChild(back);
+      stage().appendChild(back);
       overlays.push(back);
       try { history.pushState({ ov: overlays.length }, ''); } catch (e) { /* tant pis : Échap fermera */ }
       H.focus.first(back);
