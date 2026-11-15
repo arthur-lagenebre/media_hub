@@ -71,7 +71,7 @@ jobs:
           fi
 
       # Les survivants et les mutants tués d'un run servent au suivant (passe différentielle).
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: media_hub/.metrics/mutate
           key: mutate-${{ github.run_id }}
