@@ -1,7 +1,7 @@
 # Image de media_hub (facultative : le compose de ce dossier monte les sources dans python:3.13-slim).
 # Construite par .github/workflows/image.yml avec media_library comme contexte nommé :
 #   docker buildx build -f deploy/Dockerfile --build-context media_library=../media_library .
-FROM python:3.13-slim
+FROM python:3.15-slim
 
 # ffmpeg (remux, transcodage, sous-titres) est cherché dans le PATH ; Pillow est facultatif (pochettes plus légères).
 RUN apt-get update \
