@@ -1764,6 +1764,8 @@ def api_item(h, m, q):
     out["resume"] = resume_target(rows, progress)
     if item["type"] == "show":
         out["seasons"] = meta.get("seasons", [])
+        if hub.db.kv_get(enrich.pin_key(item)):
+            out["pinned"] = True                    # la fiche TMDB a été choisie à la main dans le hub : `POST /api/item/<id>/tmdb` avec `{"tmdb": null}` la retire
         by_season = season_badges(rows, found)
         if by_season:
             out["season_badges"] = by_season
@@ -2609,13 +2611,20 @@ def api_item_tmdb_search(h, m, q):
 
 @route("POST", r"/api/item/(\w+)/tmdb")
 def api_item_tmdb(h, m, q):
-    """Fixe la fiche TMDB d'une série (`{"tmdb": 4615}`, ou l'adresse de sa fiche) et l'enrichit à nouveau. Le choix reste dans la base du hub : la médiathèque n'est pas touchée. Administrateur seulement."""
+    """Fixe la fiche TMDB d'une série (`{"tmdb": 4615}`, ou l'adresse de sa fiche) et l'enrichit à nouveau. Le choix reste dans la base du hub : la médiathèque n'est pas touchée. Administrateur seulement.
+    `{"tmdb": null}` retire le choix : la série est enrichie comme avant (le nom du dossier décide) ; 404 si TMDB ne la trouve pas ainsi, et le choix reste."""
     item, lib, client, posters = tmdb_show(h, m.group(1))
-    found = TMDB_SHOW_RE.match(str(h.body_json().get("tmdb", "")).strip())
-    if not found:
+    body = h.body_json()
+    unpin = "tmdb" in body and body["tmdb"] is None
+    found = None if unpin else TMDB_SHOW_RE.match(str(body.get("tmdb", "")).strip())
+    if not unpin and not found:
         raise HttpError(400, "tmdb doit être l'identifiant d'une série TMDB, ou l'adresse de sa fiche")
     try:
-        enrich.choose_show(client, posters, h.hub.db, lib, item, int(found.group(1)))
+        if unpin:
+            if enrich.unpin_show(client, posters, h.hub.db, lib, item) is None:
+                raise HttpError(404, "TMDB ne trouve pas cette série sans choix manuel : la fiche choisie est gardée")
+        else:
+            enrich.choose_show(client, posters, h.hub.db, lib, item, int(found.group(1)))
     except (tmdb.TmdbError, tmdb.TmdbAuthError) as e:
         raise tmdb_failure(e)
     except OSError as e:
