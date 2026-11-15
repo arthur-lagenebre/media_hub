@@ -210,7 +210,7 @@
     // Lues à l'ouverture de l'onglet et après chaque action ; le compteur de la barre et de l'onglet suit (/api/state relu par poll).
     var reqList = null, reqError = '', reqFilter = 'all', reqLoading = false, reqToken = 0;
     var REQ_FILTERS = [['all', H.t('Toutes')], ['pending', H.t('En attente')], ['added', H.t('Ajoutées')], ['declined', H.t('Refusées')]];
-    // Relit la liste, puis met le focus sur `key`, à défaut sur `fallback` (une ligne voisine, quand celle qu'on vient de traiter sort du filtre), à défaut sur le filtre.
+    // Relit la liste, puis met le focus sur `key` (une clé, ou plusieurs essayées dans l'ordre), à défaut sur `fallback` (une ligne voisine, quand celle qu'on vient de traiter sort du filtre), à défaut sur le filtre.
     // Une réponse arrivée après une autre lecture (un filtre changé entre-temps) est ignorée.
     function loadRequests(key, fallback) {
       var mine = ++reqToken;
@@ -221,7 +221,7 @@
         reqList = got.list; reqError = got.error;
         if (closed || activeTab() !== 'demandes') return;
         render();
-        if (key && !H.focus.key(el, key, true) && !(fallback && H.focus.key(el, fallback, true))) H.focus.key(el, 'rf-' + reqFilter, true);
+        if (key) [].concat(key, fallback || [], 'rf-' + reqFilter).some(function (k) { return H.focus.key(el, k, true); });
       });
     }
     function afterRequest(key, fallback) { return loadRequests(key, fallback).then(function () { return poll(); }); }
@@ -253,14 +253,15 @@
       if (r.status === 'pending') {
         buttons.push(H.button(H.t('Marquer ajouté'), 'check', { 'data-key': 'rq-added-' + r.id, onclick: function () { setRequest(r, 'added'); } }));
         buttons.push(H.button(H.t('Refuser'), 'close', { 'data-key': 'rq-declined-' + r.id, onclick: function () { declineRequest(r); } }));
-      } else buttons.push(H.button(H.t('Remettre en attente'), 'refresh', { 'data-key': 'rq-pending-' + r.id, onclick: function () { setRequest(r, 'pending'); } }));
+      } else if (!(r.status === 'added' && r.item)) buttons.push(H.button(H.t('Remettre en attente'), 'refresh', { 'data-key': 'rq-pending-' + r.id, onclick: function () { setRequest(r, 'pending'); } }));
       buttons.push(H.button(H.t('Supprimer'), 'trash', { 'data-key': 'rq-del-' + r.id, 'aria-label': H.t('Supprimer la demande de « {title} »', { title: R.title(r) }), onclick: function () { deleteRequest(r); } }));
       return h('div', { class: 'line reqrow', 'data-request': r.id, 'data-status': r.status }, R.picture(r), what, buttons);
     }
     // Le bouton qui remplace celui qu'on vient d'utiliser : « Marquer ajouté » et « Refuser » deviennent « Remettre en attente », et l'inverse.
+    // Une demande ajoutée dont l'élément est là n'a pas « Remettre en attente » (le serveur la refuserait) : le focus va à son « Ouvrir ».
     function setRequest(r, status) {
       var next = R.neighbour(reqList || [], r, 'rq-del-');          // la ligne peut sortir du filtre : le focus va alors à sa voisine
-      H.api('/api/requests/' + r.id + '/status', { status: status }).then(function () { return afterRequest(status === 'pending' ? 'rq-added-' + r.id : 'rq-pending-' + r.id, next); })
+      H.api('/api/requests/' + r.id + '/status', { status: status }).then(function () { return afterRequest(status === 'pending' ? 'rq-added-' + r.id : ['rq-pending-' + r.id, 'open-' + r.id], next); })
         .catch(function (e) { H.toast(e.message, 5000); });
     }
     function declineRequest(r) {
