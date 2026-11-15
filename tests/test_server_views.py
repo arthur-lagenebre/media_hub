@@ -638,7 +638,7 @@ class TestScrub(unittest.TestCase):
 
     def scrub(self, text, repo=True, libs=None, inbox=None):
         cfg = types.SimpleNamespace(libraries=[types.SimpleNamespace(path=p) for p in (libs if libs is not None else [self.films])], data=self.data, repo=self.repo if repo else None,
-                                    inbox=inbox or self.data / "inbox")
+                                    inbox=inbox or self.data / "inbox", tmdb_key="")
         return app.Hub.scrub(types.SimpleNamespace(cfg=cfg), text)
 
     def test_the_folders_of_the_server_are_hidden_in_every_spelling(self):
