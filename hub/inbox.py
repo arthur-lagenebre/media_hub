@@ -245,7 +245,8 @@ class Inbox:
 
     def folder_for(self, uid):
         """Le nom du dossier du compte, créé à la première utilisation. Sous le verrou des noms : deux envois d'un même compte, ou de deux comptes, ne se partagent jamais un dossier.
-        Un dossier nommé d'après l'identifiant (celui d'avant ce changement, que `migrate` n'a pas encore renommé) est repris tel quel. Sinon : le nom du compte nettoyé, avec « (2) »… s'il est pris à la casse près. 400 pour un compte inconnu."""
+        Sinon : le nom du compte nettoyé, avec « (2) »… s'il est pris à la casse près. 400 pour un compte inconnu. Un dossier nommé d'après l'identifiant (celui d'avant) n'est jamais repris ici : seul `migrate`, au démarrage,
+        le rend à son compte. Ici, il pourrait être celui d'un compte supprimé qui portait ce nom, et passerait à un autre compte."""
         with self._names:
             row = self.db.one("SELECT name, inbox_dir FROM users WHERE id=?", (uid,))
             if row is None:
@@ -256,13 +257,7 @@ class Inbox:
                 self._mkdir(current)
                 return current
             stale = current or ""                  # une valeur qui n'est pas un nom de dossier (base touchée à la main) : le compte est traité comme neuf, et la valeur est réécrite avant tout dossier
-            if self._old_folder_is_his(uid):
-                return self._record(uid, uid, stale)
             return self._new_folder(uid, row["name"], stale)
-
-    def _old_folder_is_his(self, uid):
-        """Existe-t-il un dossier nommé d'après l'identifiant `uid` (celui d'avant), et aucun autre compte ne le tient-il dans la base ?"""
-        return is_folder_name(uid) and self._is_real_folder(self.root / uid) and not self._held_by_other(uid, uid)
 
     def _new_folder(self, uid, account_name, stale):
         """Le premier nom libre (« nom », « nom (2) »…) devient le dossier du compte : créé, puis fixé dans la base. 409 si SAME_NAME noms sont pris."""
