@@ -21,6 +21,13 @@ from hub.server.app import HttpError
 PASSWORD = "un-mot-de-passe-ok"
 
 
+def without_token(case, hub, cookie, row):
+    """Le cookie `hub=…`, son jeton remplacé par `<jeton>` après avoir vérifié qu'il est un jeton de session valable de `row` (il porte l'heure d'émission : on ne peut pas le prévoir)."""
+    token = re.match(r"hub=([^;]+);", cookie).group(1)
+    case.assertEqual(accounts.user_for_token(hub.db, hub.secret, token)["id"], row["id"])
+    return cookie.replace(token, "<jeton>", 1)
+
+
 class RootCase(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
@@ -217,6 +224,69 @@ class TestAccess(RootCase):
         self.assertEqual(rig.user, accounts.public(self.alice))
 
 
+class TestSessionRenewal(RootCase):
+    """`/api/state` remplace un jeton de session à mi-vie (ou de l'ancienne forme) : en cookie pour le navigateur, dans `token` pour un client natif."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = accounts.create(self.hub.db, "alice", PASSWORD)
+
+    def aged(self, days):
+        return accounts.session_token(self.hub.secret, self.alice, app.time.time() - days * 86400)
+
+    def legacy(self):
+        return f"{self.alice['id']}.{accounts._mac(self.hub.secret, self.alice['id'], self.alice['token_version'])}"
+
+    def state(self, headers, path="/api/state"):
+        return call(self.hub, "GET", path, headers=headers)[1]
+
+    def assert_fresh(self, token):
+        self.assertEqual(accounts.user_for_token(self.hub.db, self.hub.secret, token)["id"], self.alice["id"])
+        self.assertFalse(accounts.session_due(token))
+
+    def test_a_young_token_is_left_alone(self):
+        for headers in ({"Cookie": f"hub={self.aged(1)}"}, {"Authorization": f"Bearer {self.aged(1)}"}):
+            reply = self.state(headers)
+            self.assertEqual(reply.status, 200)
+            self.assertNotIn("set-cookie", reply.headers)
+            self.assertNotIn("token", reply.json())
+
+    def test_a_cookie_past_half_its_life_is_replaced_by_a_cookie(self):
+        reply = self.state({"Cookie": f"hub={self.aged(accounts.SESSION_DAYS // 2 + 1)}"})
+        self.assertEqual(reply.status, 200)
+        self.assertNotIn("token", reply.json())                                  # le cookie est HttpOnly : il ne passe pas par le corps
+        cookie = reply.headers["set-cookie"]
+        self.assertTrue(cookie.endswith(f"; Path=/; Max-Age={accounts.SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax"), cookie)
+        self.assert_fresh(re.match(r"hub=([^;]+);", cookie).group(1))
+
+    def test_a_bearer_token_past_half_its_life_is_replaced_in_the_answer(self):
+        reply = self.state({"Authorization": f"Bearer {self.aged(accounts.SESSION_DAYS - 1)}"})
+        self.assertEqual(reply.status, 200)
+        self.assertNotIn("set-cookie", reply.headers)
+        self.assert_fresh(reply.json()["token"])
+
+    def test_the_old_form_is_replaced_at_the_first_visit(self):
+        reply = self.state({"Cookie": f"hub={self.legacy()}"})
+        self.assertEqual(reply.status, 200)
+        self.assert_fresh(re.match(r"hub=([^;]+);", reply.headers["set-cookie"]).group(1))
+        self.assert_fresh(self.state({"Authorization": f"Bearer {self.legacy()}"}).json()["token"])
+
+    def test_an_expired_token_is_refused(self):
+        for headers in ({"Cookie": f"hub={self.aged(accounts.SESSION_DAYS)}"}, {"Authorization": f"Bearer {self.aged(accounts.SESSION_DAYS + 1)}"}):
+            self.assertEqual(self.state(headers).status, 401, headers)
+
+    def test_only_the_state_renews(self):
+        self.hub.images.get.return_value = None
+        reply = self.state({"Cookie": f"hub={self.aged(accounts.SESSION_DAYS - 1)}"}, "/img/item/x")
+        self.assertEqual(reply.status, 404)
+        self.assertNotIn("set-cookie", reply.headers)
+
+    def test_the_renewed_cookie_is_secure_behind_the_proxy_in_https(self):
+        headers = {"Cookie": f"hub={self.aged(accounts.SESSION_DAYS - 1)}", "X-Forwarded-Proto": "https"}
+        reply = call(self.hub, "GET", "/api/state", headers=headers, rig=coming_from("127.0.0.1"))[1]
+        self.assertTrue(reply.headers["set-cookie"].endswith("; Secure"))
+
+
 class TestFail(RootCase):
     def fail(self, status, target="/x", method="GET", **attrs):
         rig = self.rig(method, target, body=b"abc" if method == "POST" else b"")
@@ -390,7 +460,7 @@ class TestLogin(RootCase):
     def test_the_right_password_gives_a_session_cookie_and_goes_home(self):
         reply = self.form("alice", PASSWORD)
         self.assertEqual((reply.status, reply.headers["location"]), (303, "/"))
-        self.assertEqual(reply.headers["set-cookie"], f"hub={self.hub.session_token(self.alice)}; Path=/; Max-Age={90 * 86400}; HttpOnly; SameSite=Lax")
+        self.assertEqual(without_token(self, self.hub, reply.headers["set-cookie"], self.alice), f"hub=<jeton>; Path=/; Max-Age={accounts.SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax")
         self.sleep.assert_called_once_with(accounts.Throttle.BASE)
 
     def test_the_wrong_password_goes_back_to_the_login_and_slows_the_next_try(self):
@@ -534,15 +604,16 @@ class TestSecureCookie(RootCase):
 
     def test_the_cookie_is_secure_behind_the_proxy_in_https(self):
         reply = self.login(proto="https")
-        self.assertEqual(reply.headers["set-cookie"], f"hub={self.hub.session_token(self.alice)}; Path=/; Max-Age={90 * 86400}; HttpOnly; SameSite=Lax; Secure")
+        self.assertEqual(without_token(self, self.hub, reply.headers["set-cookie"], self.alice), f"hub=<jeton>; Path=/; Max-Age={accounts.SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax; Secure")
         self.assertTrue(self.login("::1", "HTTPS").headers["set-cookie"].endswith("; Secure"))
 
     def test_the_cookie_stays_as_it_was_without_https(self):
-        plain = f"hub={self.hub.session_token(self.alice)}; Path=/; Max-Age={90 * 86400}; HttpOnly; SameSite=Lax"
-        self.assertEqual(self.login(PROXY).headers["set-cookie"], plain)
-        self.assertEqual(self.login(PROXY, "http").headers["set-cookie"], plain)
-        self.assertEqual(self.login(PROXY, "").headers["set-cookie"], plain)
-        self.assertEqual(self.login(LAN).headers["set-cookie"], plain)                                   # http://192.168.0.42:8080
+        plain = f"hub=<jeton>; Path=/; Max-Age={accounts.SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax"
+        cookie = lambda reply: without_token(self, self.hub, reply.headers["set-cookie"], self.alice)      # noqa: E731
+        self.assertEqual(cookie(self.login(PROXY)), plain)
+        self.assertEqual(cookie(self.login(PROXY, "http")), plain)
+        self.assertEqual(cookie(self.login(PROXY, "")), plain)
+        self.assertEqual(cookie(self.login(LAN)), plain)                                   # http://192.168.0.42:8080
 
     def test_the_local_network_cannot_ask_for_secure_by_the_header(self):
         for source in (LAN, "100.101.102.103", "fe80::1"):
@@ -584,7 +655,8 @@ class TestToken(RootCase):
     def test_the_right_password_gives_the_two_tokens(self):
         _, reply = self.ask({"user": "alice", "password": PASSWORD})
         out = reply.json()
-        self.assertEqual((reply.status, out["token"], out["media_token"], out["user"]), (200, self.hub.session_token(self.alice), self.hub.media_token(self.alice), accounts.public(self.alice)))
+        self.assertEqual((reply.status, out["media_token"], out["user"]), (200, self.hub.media_token(self.alice), accounts.public(self.alice)))
+        self.assertEqual(accounts.user_for_token(self.hub.db, self.hub.secret, out["token"])["id"], self.alice["id"])
 
     def test_a_password_that_is_not_a_text_or_a_name_that_is_not_a_text_counts_as_a_failure(self):
         for body in ({"user": "alice", "password": 1234}, {"user": 5, "password": PASSWORD}, {"user": ["alice"], "password": PASSWORD}, {"user": "alice"}, [1], {}):

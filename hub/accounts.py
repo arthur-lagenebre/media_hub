@@ -3,8 +3,10 @@
 Un compte a un identifiant, un nom (unique, sans tenir compte de la casse), un mot de passe haché et un rôle (`admin` ou `user`). L'identifiant est le « profil » de la progression, des playlists et des clés `dismiss:` de `kv` ;
 le premier compte créé reçoit l'identifiant `default` : c'est celui d'avant les comptes, il garde donc ce que le profil unique avait accumulé.
 
-Le jeton de session n'est pas gardé : c'est `HMAC(secret, "session:<identifiant>:<token_version>")`, présenté sous la forme `<identifiant>.<mac>`. Changer un mot de passe, ou demander de déconnecter les autres appareils, incrémente `token_version`, ce qui invalide d'un coup tous les jetons du compte.
-Le jeton de média (`?token=`) est propre au compte, sous la même forme `<identifiant>.<mac>` : il désigne donc qui demande un fichier, et les droits s'appliquent à lui comme à la session. Il est révoqué avec les sessions (même `token_version`).
+Le jeton de session n'est pas gardé : c'est `HMAC(secret, "session:<identifiant>:<token_version>:<émis>")`, présenté sous la forme `<identifiant>.<émis>.<mac>`, `émis` étant l'heure d'émission (secondes Unix). Il ne vaut que `SESSION_DAYS` jours ; passé la moitié, `/api/state` en rend un neuf, si bien qu'un appareil dont on se sert reste connecté et qu'un appareil oublié perd l'accès.
+Changer un mot de passe, ou demander de déconnecter les autres appareils, incrémente `token_version`, ce qui invalide d'un coup tous les jetons du compte.
+L'ancienne forme `<identifiant>.<mac>` (sans date, `HMAC(secret, "session:<identifiant>:<token_version>")`) vaut encore le temps d'une version, et `/api/state` la remplace aussitôt (`LEGACY_SESSIONS`).
+Le jeton de média (`?token=`) est propre au compte, sous la forme `<identifiant>.<mac>`, sans date : il désigne donc qui demande un fichier, et les droits s'appliquent à lui comme à la session. Il est révoqué avec les sessions (même `token_version`).
 
 Les droits : pour chaque bibliothèque, un compte peut *voir* (liste, fiches, images), *lire* (la lecture en ligne : vidéo, musique, livres, sous-titres) et *télécharger*. Une bibliothèque sans ligne dans `rights` est ouverte (tout permis) : un compte d'avant les droits n'a rien perdu. Lire et télécharger supposent voir ; ils sont indépendants l'un de l'autre. Un administrateur a tous les droits, sans ligne.
 """
@@ -31,7 +33,10 @@ MAX_NAME = 40
 SCRYPT = (1 << 14, 8, 1)            # n, r, p : ~16 Mo et quelques dizaines de ms
 SCRYPT_MAXMEM = 64 << 20
 PBKDF2_ROUNDS = 600_000             # repli quand l'OpenSSL de Python n'a pas scrypt
-TOKEN_FORM = re.compile(r"\w{1,64}\.[0-9a-f]{64}", re.ASCII)       # `<identifiant>.<mac>` : rien d'autre n'est un jeton de session
+TOKEN_FORM = re.compile(r"(\w{1,64})\.([0-9a-f]{64})", re.ASCII)       # `<identifiant>.<mac>` : le jeton de média, et l'ancienne forme du jeton de session
+SESSION_FORM = re.compile(r"(\w{1,64})\.([0-9]{1,12})\.([0-9a-f]{64})", re.ASCII)       # `<identifiant>.<émis>.<mac>` : le jeton de session
+SESSION_DAYS = 180                  # durée de vie d'un jeton de session (et du cookie) ; renouvelé par /api/state passé la moitié
+LEGACY_SESSIONS = True              # accepter encore `<identifiant>.<mac>` en session, remplacé à la première visite de /api/state : à retirer à la version suivante
 
 
 class AccountError(Exception):
@@ -204,28 +209,49 @@ def authenticate(db, name, password):
 # ---------------------------------------------------------------------------
 # Jeton de session
 # ---------------------------------------------------------------------------
-def _mac(secret, uid, version, purpose="session"):
-    return hmac.new(secret.encode(), f"{purpose}:{uid}:{version}".encode(), hashlib.sha256).hexdigest()
+def _mac(secret, uid, version, purpose="session", issued=None):
+    text = f"{purpose}:{uid}:{version}" if issued is None else f"{purpose}:{uid}:{version}:{issued}"
+    return hmac.new(secret.encode(), text.encode(), hashlib.sha256).hexdigest()
 
 
-def session_token(secret, row):
-    return f"{row['id']}.{_mac(secret, row['id'], row['token_version'])}"
+def session_token(secret, row, issued=None):
+    """Le jeton de session du compte, émis maintenant (ou à `issued`, secondes Unix) : `<identifiant>.<émis>.<mac>`."""
+    issued = int(time.time() if issued is None else issued)
+    return f"{row['id']}.{issued}.{_mac(secret, row['id'], row['token_version'], 'session', issued)}"
 
 
 def media_token(secret, row):
-    """Le jeton de média du compte (`?token=` sur /media, /img, /book et /api/subs) : un autre domaine du même HMAC, donc un jeton de session n'y vaut rien, ni l'inverse."""
+    """Le jeton de média du compte (`?token=` sur /media, /img, /book et /api/subs) : un autre domaine du même HMAC, donc un jeton de session n'y vaut rien, ni l'inverse. Il ne porte pas de date."""
     return f"{row['id']}.{_mac(secret, row['id'], row['token_version'], 'media')}"
 
 
-def user_for_token(db, secret, token, purpose="session"):
-    """Le compte qui porte ce jeton (`<identifiant>.<mac>`), ou None : jeton mal formé, compte supprimé, mot de passe changé depuis. `purpose` : `session` ou `media`."""
-    if not TOKEN_FORM.fullmatch(token):
+def _token_parts(token, purpose):
+    """(identifiant, émis ou None, mac) si le texte a la forme d'un jeton de ce genre, sinon None."""
+    found = SESSION_FORM.fullmatch(token) if purpose == "session" else None
+    if found:
+        return found.group(1), int(found.group(2)), found.group(3)
+    found = TOKEN_FORM.fullmatch(token) if purpose != "session" or LEGACY_SESSIONS else None
+    return (found.group(1), None, found.group(2)) if found else None
+
+
+def user_for_token(db, secret, token, purpose="session", now=None):
+    """Le compte qui porte ce jeton, ou None : jeton mal formé, périmé (session émise il y a `SESSION_DAYS` jours ou plus), compte supprimé, mot de passe changé depuis. `purpose` : `session` ou `media`."""
+    parts = _token_parts(token, purpose)
+    if parts is None:
         return None
-    uid, _, mac = token.partition(".")
+    uid, issued, mac = parts
+    if issued is not None and (time.time() if now is None else now) - issued >= SESSION_DAYS * 86400:
+        return None
     row = by_id(db, uid)
-    if row is None or not hmac.compare_digest(mac.encode("utf-8", "replace"), _mac(secret, uid, row["token_version"], purpose).encode()):
+    if row is None or not hmac.compare_digest(mac.encode("utf-8", "replace"), _mac(secret, uid, row["token_version"], purpose, issued).encode()):
         return None
     return row
+
+
+def session_due(token, now=None):
+    """Ce jeton de session (déjà vérifié) est-il à remplacer ? Oui pour l'ancienne forme sans date, et passé la moitié de `SESSION_DAYS`."""
+    found = SESSION_FORM.fullmatch(token)
+    return found is None or (time.time() if now is None else now) - int(found.group(2)) >= SESSION_DAYS * 86400 / 2
 
 
 # ---------------------------------------------------------------------------
