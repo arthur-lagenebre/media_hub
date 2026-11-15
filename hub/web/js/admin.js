@@ -1,10 +1,10 @@
-/* La page Administration (#/admin), réservée à l'administrateur : la médiathèque (bibliothèques, sagas, entretien, tâches), les demandes, la boîte de réception, les comptes et le serveur.
+/* La page Administration (#/admin), réservée à l'administrateur : la médiathèque (bibliothèques, sagas, entretien, tâches), les demandes, les suggestions, la boîte de réception, les comptes et le serveur.
    Paramètres (#/settings, views.js) ne garde que ce qui concerne le compte connecté. Les routes sont protégées côté serveur par le rôle : cette page ne fait que les rassembler. */
 (function () {
   'use strict';
-  var H = window.Hub, h = H.h, R = H.requests;
+  var H = window.Hub, h = H.h, R = H.requests, S = H.suggestions;
 
-  var TABS = [{ id: 'mediatheque', label: H.t('Médiathèque') }, { id: 'demandes', label: H.t('Demandes') }, { id: 'inbox', label: H.t('Boîte de réception') },
+  var TABS = [{ id: 'mediatheque', label: H.t('Médiathèque') }, { id: 'demandes', label: H.t('Demandes') }, { id: 'suggestions', label: H.t('Suggestions') }, { id: 'inbox', label: H.t('Boîte de réception') },
     { id: 'comptes', label: H.t('Comptes') }, { id: 'serveur', label: H.t('Serveur') }];
   var OLD_TABS = { gestion: 'mediatheque', taches: 'mediatheque' };          // les anciens noms d'onglets : les adresses et le choix mémorisé y mènent encore
 
@@ -23,6 +23,7 @@
     function choose(id) {
       tab = id; H.pref('admin.tab', id);
       if (id === 'demandes' && !reqLoading) { reqList = null; reqError = ''; }          // l'onglet se relit à chaque fois qu'on y entre : pas de liste périmée
+      if (id === 'suggestions' && !sgLoading) { sgList = null; sgError = ''; }
       render(); H.focus.key(el, 'tab-' + id);
     }
     function tabBar() {
@@ -30,7 +31,8 @@
       return h('div', { class: 'tabs', role: 'tablist' }, TABS.map(function (t) {
         return h('button', { class: 'chip tab f' + (t.id === active ? ' on' : '') + (t.id === 'mediatheque' && busy ? ' busy' : ''), role: 'tab', 'aria-selected': t.id === active ? 'true' : 'false', 'data-key': 'tab-' + t.id,
           'data-autofocus': t.id === active ? '1' : null, onclick: function () { choose(t.id); } }, t.label,
-          t.id === 'demandes' && H.session.pending > 0 ? h('span', { class: 'pend', 'aria-label': H.t('{n} en attente', { n: H.plural(H.session.pending, 'demande') }) }, String(H.session.pending)) : null);
+          t.id === 'demandes' && H.session.pending > 0 ? h('span', { class: 'pend', 'aria-label': H.t('{n} en attente', { n: H.plural(H.session.pending, 'demande') }) }, String(H.session.pending)) : null,
+          t.id === 'suggestions' && H.session.suggestions > 0 ? h('span', { class: 'pend', 'aria-label': H.t('{n} en attente', { n: H.plural(H.session.suggestions, 'suggestion') }) }, String(H.session.suggestions)) : null);
       }));
     }
     function render() {
@@ -45,6 +47,7 @@
       if (active === 'mediatheque') mediatheque(body);
       else if (active === 'inbox') body.appendChild(H.upload.adminPanel());
       else if (active === 'demandes') requestsTab(body);
+      else if (active === 'suggestions') suggestionsTab(body);
       else if (active === 'comptes') body.appendChild(usersPanel());
       else serverFacts(body);
       el.appendChild(body);
@@ -274,6 +277,72 @@
         done: function () { H.toast(H.t('Demande supprimée : {title}', { title: R.title(r) })); afterRequest(R.neighbour(reqList || [], r, 'rq-del-') || 'rf-' + reqFilter); } });
     }
 
+    // --- Suggestions : les idées et les remarques des comptes sur le hub, filtrées par état et par catégorie ------------------
+    // Lues à l'ouverture de l'onglet et après chaque action ; la pastille de la barre et de l'onglet suit (/api/state relu par poll).
+    var sgList = null, sgError = '', sgStatus = 'all', sgCategory = 'all', sgLoading = false, sgToken = 0;
+    function loadSuggestions(key, fallback) {
+      var mine = ++sgToken, query = [];
+      if (sgStatus !== 'all') query.push('status=' + sgStatus);
+      if (sgCategory !== 'all') query.push('category=' + sgCategory);
+      sgLoading = true;
+      return H.api('/api/suggestions' + (query.length ? '?' + query.join('&') : '')).then(function (res) { return { list: res.suggestions || [], error: '' }; }, function (e) { return { list: null, error: e.message }; }).then(function (got) {
+        if (mine !== sgToken) return;
+        sgLoading = false;
+        sgList = got.list; sgError = got.error;
+        if (closed || activeTab() !== 'suggestions') return;
+        render();
+        if (key && !H.focus.key(el, key, true) && !(fallback && H.focus.key(el, fallback, true))) H.focus.key(el, 'sf-' + sgStatus, true);
+      });
+    }
+    function afterSuggestion(key, fallback) { return loadSuggestions(key, fallback).then(function () { return poll(); }); }
+    function suggestionFilters(pairs, current, label, prefix, pick) {
+      return h('div', { class: 'chips', role: 'group', 'aria-label': label }, [['all', prefix === 'sf-' ? H.t('Toutes') : H.t('Toutes catégories')]].concat(pairs).map(function (f) {
+        var on = current === f[0];
+        return h('button', { class: 'chip f' + (on ? ' on' : ''), type: 'button', 'data-key': prefix + f[0], 'aria-pressed': on ? 'true' : 'false',
+          onclick: function () { if (current === f[0]) return; pick(f[0]); sgList = null; sgError = ''; loadSuggestions(prefix + f[0]); } }, f[1]);
+      }));
+    }
+    function suggestionsTab(body) {
+      if (sgList === null && !sgError && !sgLoading) loadSuggestions();
+      var panel = h('section', { class: 'panel suggestions' }, h('h2', null, H.t('Suggestions')),
+        h('p', { class: 'muted' }, H.t('Les idées et les remarques des comptes sur le hub. Chacune reste entre son auteur et toi : il voit l’état que tu lui donnes et ta réponse.')));
+      panel.appendChild(suggestionFilters(S.statuses, sgStatus, H.t('Filtrer les suggestions par état'), 'sf-', function (v) { sgStatus = v; }));
+      panel.appendChild(suggestionFilters(S.categories, sgCategory, H.t('Filtrer les suggestions par catégorie'), 'sc-', function (v) { sgCategory = v; }));
+      if (sgError) panel.appendChild(h('p', { class: 'muted' }, sgError, ' ', h('button', { class: 'btn f', type: 'button', 'data-key': 'sg-retry', onclick: function () { sgList = null; sgError = ''; loadSuggestions('sf-' + sgStatus); } }, H.t('Réessayer'))));
+      else if (!sgList) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
+      else if (!sgList.length) panel.appendChild(h('p', { class: 'muted sgempty' }, sgStatus === 'all' && sgCategory === 'all' ? H.t('Aucune suggestion pour l’instant : un compte en propose une depuis Paramètres > Mon compte > Mes suggestions.') : H.t('Aucune suggestion ne correspond à ces filtres.')));
+      (sgList || []).forEach(function (s) { panel.appendChild(adminSuggestionRow(s)); });
+      body.appendChild(panel);
+    }
+    // Une suggestion : catégorie, état, texte, réponse, auteur et date, puis Répondre et Supprimer. Le nom et le texte viennent des comptes : toujours en texte.
+    function adminSuggestionRow(s) {
+      var who = (s.user && s.user.name) || H.t('compte supprimé');
+      return h('div', { class: 'line sgrow', 'data-suggestion': s.id, 'data-status': s.status },
+        S.what(s, h('span', null, H.t('{name} · proposée le {date}', { name: who, date: H.date(s.created) }))),
+        H.button(H.t('Répondre'), 'edit', { 'data-key': 'sg-answer-' + s.id, 'aria-label': H.t('Répondre à la suggestion de {name}', { name: who }), onclick: function () { answer(s, who); } }),
+        H.button(H.t('Supprimer'), 'trash', { 'data-key': 'sg-del-' + s.id, 'aria-label': H.t('Supprimer la suggestion de {name}', { name: who }), onclick: function () { deleteSuggestion(s, who); } }));
+    }
+    // Donner un état et, si on veut, une réponse que l'auteur lira. La réponse d'avant est préremplie : la vider l'efface.
+    function answer(s, who) {
+      var status = S.choice(S.statuses, s.status, H.t('État'), 'sg-st-');
+      H.form({ title: H.t('Suggestion de {name}', { name: who }), ok: H.t('Enregistrer'), cls: 'sganswer',
+        lead: [s.text],
+        fields: [{ key: 'reply', label: H.t('Ta réponse (facultative, 500 caractères au plus)'), type: 'textarea', maxlength: 500, value: s.reply || '' }],
+        extra: [status.el],
+        submit: function (v) { return H.api('/api/suggestions/' + s.id + '/status', { status: status.current(), reply: v.reply }); },
+        done: function () { H.toast(H.t('Suggestion enregistrée')); afterSuggestion('sg-answer-' + s.id, neighbour(s)); } });
+    }
+    function neighbour(s) {
+      var list = sgList || [], i = list.indexOf(s), next = list[i + 1] || list[i - 1];
+      return next ? 'sg-answer-' + next.id : null;
+    }
+    function deleteSuggestion(s, who) {
+      H.confirm({ title: H.t('Supprimer la suggestion de {name} ?', { name: who }), ok: H.t('Supprimer'), danger: true,
+        lead: [H.t('Elle disparaît aussi pour son auteur, avec ta réponse. Cela ne s’annule pas.')],
+        submit: function () { return H.api('/api/suggestions/' + s.id + '/delete', {}).catch(R.gone); },
+        done: function () { H.toast(H.t('Suggestion supprimée')); afterSuggestion(neighbour(s) || 'sf-' + sgStatus); } });
+    }
+
     // --- Comptes : la liste des comptes, leurs droits, leurs mots de passe (serveur avec comptes) -----------------------
     function usersPanel() {
       if (!H.session.auth) return h('section', { class: 'panel' }, h('h2', null, H.t('Comptes')), H.openServerNote());
@@ -470,6 +539,6 @@
       }).catch(function (e) { if (!closed) H.toast(e.message, 5000); });
     }
     poll();
-    return { el: el, nav: '#/admin', refresh: function () { if (activeTab() === 'demandes' && !reqLoading) loadRequests(); return poll(); }, destroy: function () { closed = true; clearTimeout(timer); } };          // au retour (une fiche, une saga) : la liste des demandes a pu changer
+    return { el: el, nav: '#/admin', refresh: function () { if (activeTab() === 'demandes' && !reqLoading) loadRequests(); if (activeTab() === 'suggestions' && !sgLoading) loadSuggestions(); return poll(); }, destroy: function () { closed = true; clearTimeout(timer); } };          // au retour (une fiche, une saga) : la liste des demandes a pu changer
   });
 })();

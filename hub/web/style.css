@@ -535,6 +535,21 @@ html:not([data-device="pc"]) .card.wanted.ask:hover:not(:focus) .rqbtn:not(.on) 
 .panel.requests .chips { margin: 0.6rem 0 0.2rem; }
 @media (max-width: 40rem) { .reqrow .poster.rqpic { width: 2.4rem; padding-top: 3.6rem; } }
 .myrequests > .tools { padding-top: 0; }
+
+/* Mes suggestions (.mysuggestions), et l'onglet « Suggestions » de l'administrateur (.panel.suggestions) : le texte garde ses retours à la ligne */
+.mysuggestions { padding-bottom: 3rem; }
+.mysuggestions h1 { padding: 1.4rem var(--gut) 0.6rem; }
+.mysuggestions .intro { margin: 0 var(--gut) 1rem; max-width: var(--prose); line-height: 1.5; }
+.mysuggestions > .tools { padding-top: 0; }
+.sgrow .what .sgstatus { color: var(--text); font-weight: 650; }
+.sgrow[data-status="declined"] .what .sgstatus { color: #ffa595; }
+.sgrow[data-status="done"] .what .sgstatus { color: #9bd16b; }
+.sgrow .what .sgtext, .sgrow .what .sgreply { margin: 0.3rem 0 0; max-width: var(--prose); line-height: 1.45; white-space: pre-line; overflow-wrap: anywhere; }
+.sgrow .what .sgtext { color: var(--text); }
+.sgrow .what .sgreply { font-style: italic; }
+.panel.suggestions > .chips { margin-bottom: 0.5rem; }
+.menu.form textarea.field { resize: vertical; min-height: 7rem; line-height: 1.4; }
+.menu.sganswer .lead { white-space: pre-line; overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }
 /* Demander un film ou une série (#/request) : le champ et le choix de la sorte, puis les résultats de TMDB, en lignes de texte (pas d'affiche) */
 .reqsearch { padding-bottom: 3rem; }
 .reqsearch h1 { padding: 1.4rem var(--gut) 0.6rem; }

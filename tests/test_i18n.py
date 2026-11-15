@@ -372,7 +372,7 @@ class TestEnglishInTheBrowser(UiCase):
     def test_the_administration_page_is_in_english(self):
         self.open("#/admin?tab=mediatheque")
         self.assertEqual(self.view("h1").inner_text(), "Administration")
-        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Media library", "Requests", "Inbox", "Accounts", "Server"])
+        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Media library", "Requests", "Suggestions", "Inbox", "Accounts", "Server"])
         self.assertIn("Libraries", self.view(".panel h2").all_inner_texts())
         self.assertEqual(self.page.locator("#nav [data-nav='#/admin']").get_attribute("aria-label"), "Administration")
 
