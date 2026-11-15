@@ -24,7 +24,7 @@ Le serveur (`hub-server`) et l'interface (`hub-ui`) sont deux domaines : ne modi
 
 - Branches thématiques en kebab-case (`accueil`, `titre-invisible`), **jamais de commit direct sur `main`**, fusion par pull request **faite par l'utilisateur**. Pas de PR sans son accord.
 - Messages de commit **en français** : `<Sujet> : <ce qui change>`, puis pourquoi / quoi / preuve. Ajouter les fichiers un par un.
-- `/ship` livre (tests complets, version, commits, PR) ; `/merged` range après une fusion ; `/refresh` nettoie les branches fusionnées ; `/worktree <lot>` isole une session parallèle ; `/check` lance les tests des modules touchés.
+- `/ship` livre (tests complets, version, commits, PR) ; `/merged` range après une fusion (branche, worktree, cartes Notion) ; `/release vX.Y.Z` pose l'étiquette de version et publie l'image (seulement à la demande de l'utilisateur) ; `/refresh` nettoie les branches fusionnées ; `/worktree <lot>` isole une session parallèle ; `/check` lance les tests des modules touchés.
 - **Une session par lot = un worktree** (`../media_hub-<lot>`) : jamais de `checkout`, `stash` ni `clean` dans un dossier où une autre session a des modifications.
 - Un hook (`.claude/hooks/guard-git.py`) refuse push forcé, `--no-verify`, `git branch -D`, `git add -A`, commit sur `main` et `gh pr merge`. Un autre demande confirmation avant de lancer un agent d'implémentation entre 23 h et 6 h.
 
