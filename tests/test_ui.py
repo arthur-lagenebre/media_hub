@@ -475,14 +475,11 @@ class TestDetailPages(UiCase):
     def test_admin_runs_an_update(self):
         self.open("#/admin")
         self.view(".panel").first.wait_for()
-        self.view("button", has_text="Tout mettre à jour").click()
-        status = self.view(".job", has_text="Mise à jour · tout").locator(".jt span")       # la liste montre d'abord les mises à jour du démarrage, terminées : c'est la nouvelle qu'on attend
-        status.wait_for()
-        for _ in range(60):
-            if status.inner_text() == "terminée":
-                break
-            self.page.wait_for_timeout(500)
-        self.assertEqual(status.inner_text(), "terminée")
+        with self.page.expect_response(lambda r: r.url.endswith("/api/scan") and r.request.method == "POST") as started:
+            self.view("button", has_text="Tout mettre à jour").click()
+        job = started.value.json()["job"]                                                    # la tâche qu'on vient de lancer, pas une ligne du démarrage ni une autre qui porterait le même titre
+        self.assertEqual(job["label"], "Mise à jour · tout")
+        expect(self.view(f'.job[data-job="{job["id"]}"] .jt span')).to_have_text("terminée", timeout=60_000)
 
 
 def probe_summary(width, height, hdr=False, audio=(), subs=()):
@@ -3159,6 +3156,43 @@ class TestHeroImage(UiCase):
         self.page.set_viewport_size({"width": 390, "height": 800})
         for name, target in self.pages().items():
             self.assertAlmostEqual(self.gap(target), 0, delta=1, msg=name)
+
+
+LONG_TITLE = "Les Aventures anticonstitutionnellement extraordinaires du capitaine Abracadabrantesque"
+
+
+class TestHeroOnANarrowPhone(UiCase):
+    """L'en-tête de la fiche tient dans l'écran d'un téléphone étroit : un titre long, tous les badges et les boutons passent à la ligne au lieu d'être coupés au bord droit."""
+
+    @classmethod
+    def add_media(cls, root):
+        fixtures.write_video(root / "srv" / "Films" / f"{LONG_TITLE} (2021)" / f"{LONG_TITLE} (2021).mkv", seconds=4, size="160x90")
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        db = cls.run_.hub.db
+        entry = db.one("SELECT e.id FROM entries e JOIN items i ON i.id = e.item_id WHERE i.title=?", (LONG_TITLE,))["id"]
+        db.set_probe(entry, probe_summary(3840, 2160, True, ("fre", "eng", "ger", "ita", "spa"), ("fre", "eng", "ger", "ita", "spa", "por")))
+
+    def test_the_header_of_a_long_film_fits_a_narrow_phone(self):
+        for width in (360, 390):
+            with self.subTest(width=width):
+                context = self.browser.new_context(viewport={"width": width, "height": 780}, has_touch=True)
+                self.addCleanup(context.close)
+                context.add_init_script("localStorage.setItem('hub.device', JSON.stringify('phone'))")
+                self.page = context.new_page()
+                self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                self.open("#/i/" + self.item("films", LONG_TITLE)["id"])
+                self.view(".hero .tags").wait_for()
+                self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), "phone")
+                inner, own, outer = self.view(".hero-in").evaluate("el => [el.scrollWidth, el.clientWidth, el.parentElement.clientWidth]")
+                self.assertLessEqual(inner, outer)                                        # rien de caché par le `overflow: hidden` de `.hero`
+                self.assertLessEqual(inner, own)                                          # ni ne déborde dans la marge de l'encart
+                room = self.view(".hero-in").bounding_box()
+                for sel in (".hero .actions .btn", ".hero .tags .tag", ".hero h1"):
+                    for box in [b.bounding_box() for b in self.view(sel).all()]:
+                        self.assertLessEqual(box["x"] + box["width"], room["x"] + room["width"] + 0.5, (sel, box, room))
 
 
 class TestGenreFromAddress(UiCase):
