@@ -158,6 +158,18 @@ def by_tmdb(movies):
     return found
 
 
+def versions_by_tmdb(movies):
+    """{identifiant TMDB: [lignes]} : toutes les versions d'un film (version cinéma, version longue…), triées par titre de tri puis identifiant pour un ordre qui ne dépend pas de la base."""
+    found = {}
+    for row in movies:
+        ident = tmdb_of(row)
+        if ident is not None:
+            found.setdefault(ident, []).append(row)
+    for rows in found.values():
+        rows.sort(key=lambda r: (r["sort"], r["id"]))
+    return found
+
+
 class Sagas:
     def __init__(self, path):
         self.path = Path(path)
@@ -195,11 +207,12 @@ class Sagas:
         return self._load()[2]
 
     def of_movies(self, movies):
-        """{nom: [(film, rang)]} dans l'ordre du fichier, pour les sagas dont au moins un film est dans la bibliothèque. `movies` : lignes de la table items ; le rang est la place du film dans la liste (de 1 à N), films absents compris."""
-        owned = by_tmdb(movies)
+        """{nom: [(film, rang)]} dans l'ordre du fichier, pour les sagas dont au moins un film est dans la bibliothèque. `movies` : lignes de la table items ; le rang est la place du film dans la liste (de 1 à N), films absents compris.
+        Les versions d'un même film (même identifiant TMDB) y sont toutes, au même rang, comme dans les sagas des étiquettes."""
+        owned = versions_by_tmdb(movies)
         out = {}
         for name, films in self.all():
-            here = [(owned[ident], rank) for rank, ident in enumerate(films, 1) if ident in owned]
+            here = [(row, rank) for rank, ident in enumerate(films, 1) for row in owned.get(ident, ())]
             if here:
                 out[name] = here
         return out

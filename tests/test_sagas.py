@@ -145,9 +145,18 @@ class TestReading(TempCase):
 
     def test_the_sagas_of_the_movies_we_own_keep_the_rank_in_the_list(self):
         self.write({"sagas": [{"name": "A", "films": [10, 20, 30]}, {"name": "B", "films": [40]}, {"name": "C", "films": [30]}]})
-        movies = [{"id": "m30", "meta": '{"tmdb": 30}'}, {"id": "m10", "meta": '{"tmdb": 10}'}]
+        movies = [{"id": "m30", "sort": "c", "meta": '{"tmdb": 30}'}, {"id": "m10", "sort": "a", "meta": '{"tmdb": 10}'}]
         found = Sagas(self.path).of_movies(movies)
         self.assertEqual({name: [(row["id"], rank) for row, rank in here] for name, here in found.items()}, {"A": [("m10", 1), ("m30", 3)], "C": [("m30", 1)]})
+
+    def test_every_version_of_a_film_is_in_the_saga_with_the_same_rank(self):
+        """Version cinéma et version longue portent le même identifiant : comme dans les sagas des étiquettes, les deux sont dans la saga, au même rang, dans un ordre qui ne dépend pas de la base."""
+        self.write({"sagas": [{"name": "A", "films": [10, 20]}]})
+        movies = [{"id": "m20", "sort": "b", "meta": '{"tmdb": 20}'}, {"id": "m10z", "sort": "a", "meta": '{"tmdb": 10}'},
+                  {"id": "m10y", "sort": "a", "meta": '{"tmdb": 10}'}, {"id": "m10x", "sort": "a longue", "meta": '{"tmdb": 10}'}]
+        for rows in (movies, movies[::-1]):
+            found = Sagas(self.path).of_movies(rows)
+            self.assertEqual([(row["id"], rank) for row, rank in found["A"]], [("m10y", 1), ("m10z", 1), ("m10x", 1), ("m20", 2)])
 
 
 class TestSaving(TempCase):
