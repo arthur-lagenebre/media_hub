@@ -132,6 +132,7 @@
   // --- Demander un film absent (voir docs/api.md, « Demandes ») ------------------------------------
   // Une demande n'est qu'une liste d'attente que l'administrateur lit : le hub ne télécharge rien. `request` d'une case grisée : {status, mine}, absent quand personne ne l'a demandé.
   H.canRequest = function () { return !!H.session.canRequest; };
+  H.canSearchRequests = function () { return !!H.session.requestSearch; };          // chercher dans TMDB un titre à demander : le droit, et une clé TMDB sur le serveur
   // Ce que montre la case selon la demande : `line` (l'état, en toutes lettres), `pill` (ce que fait Entrée), `act` (« ask » : demander, « withdraw » : retirer la sienne) ; sans `act`, rien à faire.
   var ASK = {
     none: { pill: H.t('Demander'), act: 'ask' },
@@ -150,18 +151,18 @@
     if (state === 'other') return H.t('Déjà demandé : « {title} ». Demander aussi', { title: title });
     return H.t('Demander « {title} »', { title: title });
   }
-  // La fenêtre « Demander » (un form : le message facultatif). Le refus du serveur (plafond, refusée, déjà là) reste dans la fenêtre ; un film déjà dans la médiathèque propose de l'ouvrir.
-  // `done(demande)` reçoit la réponse du serveur une fois la fenêtre fermée.
+  // La fenêtre « Demander » (un form : le message facultatif), pour un film ou une série (`m.kind` : « show » ; un film sans `kind`). Le refus du serveur (plafond, refusée, déjà là) reste dans la fenêtre ;
+  // un titre déjà dans la médiathèque propose de l'ouvrir. `done(demande)` reçoit la réponse du serveur une fois la fenêtre fermée.
   function askFor(m, done) {
-    var found = null;
+    var found = null, show = m.kind === 'show';
     var open = H.button(H.t('Ouvrir la fiche'), 'play', { 'data-key': 'req-open', hidden: true, onclick: function () { var id = found; H.overlay.close(function () { H.go('#/i/' + id); }); } });
     H.form({ title: H.t('Demander « {title} »', { title: m.title }), ok: H.t('Demander'),
-      lead: [H.t('L’administrateur verra ta demande et ajoutera le film s’il le peut. Rien n’est téléchargé tout seul.')],
+      lead: [show ? H.t('L’administrateur verra ta demande et ajoutera la série s’il le peut. Rien n’est téléchargé tout seul.') : H.t('L’administrateur verra ta demande et ajoutera le film s’il le peut. Rien n’est téléchargé tout seul.')],
       fields: [{ key: 'note', label: H.t('Un mot pour l’administrateur (facultatif, 200 caractères au plus)'), maxlength: 200 }],
       extra: [open],
       submit: function (v) {
         open.hidden = true;
-        var body = { kind: 'movie', tmdb: m.tmdb, title: m.title };
+        var body = { kind: show ? 'show' : 'movie', tmdb: m.tmdb, title: m.title };
         if (v.note) body.note = v.note;
         if (/^\d{4}$/.test(String(m.year || ''))) body.year = String(m.year);
         return H.api('/api/requests', body).catch(function (e) {
@@ -182,7 +183,7 @@
         var id = m.request && m.request.id;
         if (typeof id === 'number') return H.api('/api/requests/' + id + '/delete', {}).catch(goneAlready);
         return H.api('/api/requests?mine=1').then(function (res) {
-          var mine = (res.requests || []).filter(function (r) { return r.kind === 'movie' && r.tmdb === m.tmdb; })[0];
+          var mine = (res.requests || []).filter(function (r) { return r.kind === (m.kind || 'movie') && r.tmdb === m.tmdb; })[0];
           return mine ? H.api('/api/requests/' + mine.id + '/delete', {}).catch(goneAlready) : null;            // déjà retirée (un autre appareil) : rien à faire
         });
       },
@@ -517,6 +518,8 @@
   });
 
   // --- Bibliothèque ----------------------------------------------------------------
+  // « Genre : Tous » : le nom d'un bouton de filtre en gras, sa valeur en poids normal ; la largeur du bouton est fixée par le CSS (.flt), la valeur trop longue est coupée
+  function filterLabel(btn, name, value) { btn.title = H.t('{name} :', { name: name }) + ' ' + value; H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('b', null, H.t('{name} :', { name: name })), ' ', h('span', { class: 'val' }, value)])); }
   var SORTS = {
     movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')], ['rating', H.t('Mieux notés')], ['my-rating', H.t('Mon avis')]],      // films et séries ; « Mieux notés » : la note TMDB ; « Mon avis » : celui du compte (J'aime, Bof, sans avis, Je n'aime pas)
     books: [['title', H.t('Collection')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')]]
@@ -551,8 +554,7 @@
     var empty = h('div', { class: 'blank', hidden: true });
     var el = h('section', { class: 'library' }, h('h1', null, lib ? H.libLabel(lib) : H.t('Bibliothèque')), kind === 'books' ? quick : null, tools, grid, empty, sentinel);
 
-    // « Genre : Tous » : le nom du filtre en gras, sa valeur en poids normal ; la largeur du bouton est fixée par le CSS (.flt), la valeur trop longue est coupée
-    function label(btn, name, value) { btn.title = H.t('{name} :', { name: name }) + ' ' + value; H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('b', null, H.t('{name} :', { name: name })), ' ', h('span', { class: 'val' }, value)])); }
+    var label = filterLabel;
     function paint() {
       label(bGenre, H.t('Genre'), st.genre || H.t('Tous'));
       label(bSort, H.t('Tri'), (sorts.filter(function (s) { return s[0] === st.sort; })[0] || sorts[0])[1]);
@@ -1086,7 +1088,11 @@
         H.clear(out);
         var people = res.people || [];
         if (people.length) out.appendChild(peopleRow(people));
-        if (!res.results.length && !people.length) { out.appendChild(h('p', { class: 'muted' }, H.t('Aucun résultat pour « {q} ».', { q: q }))); return; }
+        if (!res.results.length && !people.length) {
+          out.appendChild(h('p', { class: 'muted' }, H.t('Aucun résultat pour « {q} ».', { q: q })));
+          if (H.canSearchRequests()) out.appendChild(h('div', { class: 'notfound' }, h('a', { class: 'btn f', href: '#/request?q=' + encodeURIComponent(q), 'data-key': 'req-notfound' }, H.icon('plus'), h('span', { class: 'lbl' }, H.t('Pas trouvé ? Demander « {q} »', { q: q })))));      // ce texte, cherché dans TMDB pour le demander
+          return;
+        }
         shelves(res.results).forEach(function (sec) { out.appendChild(sec); });
       }).catch(function (e) { H.clear(out).appendChild(h('p', { class: 'muted' }, e.message)); });
     }
@@ -1197,8 +1203,9 @@
   // Ce que le compte voit : ses demandes et son message, jamais qui d'autre a demandé le même film.
   H.route(/^\/requests$/, function () {
     var out = h('div', { class: 'panel reqlist' });
-    var intro = h('p', { class: 'intro muted' }, H.t('Les films que tu as demandés à l’administrateur. Le hub ne télécharge rien : l’administrateur ajoute le film s’il le peut.'));
-    var el = h('section', { class: 'myrequests' }, h('h1', null, H.t('Mes demandes')), intro, out);
+    var intro = h('p', { class: 'intro muted' }, H.t('Les films et les séries que tu as demandés à l’administrateur. Le hub ne télécharge rien : l’administrateur les ajoute s’il le peut.'));
+    var add = H.canSearchRequests() ? h('div', { class: 'tools' }, h('a', { class: 'btn f', href: '#/request', 'data-key': 'req-new' }, H.icon('plus'), h('span', { class: 'lbl' }, H.t('Nouvelle demande')))) : null;
+    var el = h('section', { class: 'myrequests' }, h('h1', null, H.t('Mes demandes')), intro, add, out);
     var list = [];
     function row(r) {
       var what = h('div', { class: 'what' }, h('b', null, requestTitle(r)), h('span', { class: 'rqstatus' }, requestStatus(r)),
@@ -1213,7 +1220,7 @@
         submit: function () { return H.api('/api/requests/' + r.id + '/delete', {}).catch(goneAlready); },
         done: function () { H.toast(H.t('Demande retirée : {title}', { title: requestTitle(r) })); load(neighbourKey(list, r, 'rm-')); } });
     }
-    function show(focusKey) {
+    function show(focusKey, keep) {
       var key = focusKey || (document.activeElement && out.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null);
       H.clear(out);
       if (!H.canRequest()) out.appendChild(h('p', { class: 'muted' }, H.t('L’administrateur t’a retiré le droit de demander des films ; tes demandes déjà faites restent ici.')));
@@ -1223,16 +1230,108 @@
       }
       list.forEach(function (r) { out.appendChild(row(r)); });
       if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;          // une réponse tardive : la page a été quittée
-      if (!(key && H.focus.key(out, key, true))) H.focus.first();
+      var kept = keep && document.activeElement && el.contains(document.activeElement) && !out.contains(document.activeElement);          // au retour, « Nouvelle demande » garde le focus
+      if (!(key && H.focus.key(out, key, true)) && !kept) H.focus.first();
     }
-    function load(focusKey) {
-      return H.api('/api/requests?mine=1').then(function (res) { list = res.requests || []; show(focusKey); }).catch(function (e) {
+    function load(focusKey, keep) {
+      return H.api('/api/requests?mine=1').then(function (res) { list = res.requests || []; show(focusKey, keep); }).catch(function (e) {
         H.clear(out).appendChild(h('p', { class: 'muted' }, e.message));
         out.appendChild(h('button', { class: 'btn f', 'data-autofocus': '1', onclick: function () { load(); } }, H.t('Réessayer')));
       });
     }
     load();
-    return { el: el, nav: '#/settings', refresh: function () { load(); } };
+    return { el: el, nav: '#/settings', refresh: function () { load(null, true); } };
+  });
+
+  // #/request?q=<texte>&kind=movie|show : chercher dans TMDB (par le serveur : GET /api/requests/search) un film ou une série que la médiathèque n'a pas, pour le demander.
+  // Chaque résultat dit ce qu'on peut en faire, comme une case grisée (ASK) : « Demander » (la même fenêtre), « Demandé » (retirer la sienne), « Demander aussi », « Refusé » ; « Ouvrir » quand il est déjà là.
+  // La recherche part 400 ms après la dernière frappe, ou sur Entrée (qui mène alors au premier résultat) ; une réponse périmée (une recherche est partie depuis) est ignorée.
+  // Une erreur (429, 502, 503…) s'affiche à la place de l'état, sans effacer les résultats d'avant. Titres et résumés viennent de TMDB : toujours en texte.
+  var REQUEST_KINDS = [['', H.t('Les deux')], ['movie', H.t('Films')], ['show', H.t('Séries')]];
+  function today() {
+    var d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+  // Un résultat de la recherche : sa sorte, son titre, son année, son résumé sur deux lignes, et son bouton. Il se refait sur place quand on le demande ou qu'on retire sa demande ; le focus reste sur son bouton.
+  function requestHit(r) {
+    var row = h('div', { class: 'line rqhit', 'data-kind': r.kind });
+    var others = r.request && !r.request.mine ? r.request : null;           // la demande d'un autre compte : ce que redevient le résultat quand on retire la sienne
+    function paint(focus) {
+      var state = r.item ? null : askState(r.request), look = state ? ASK[state] : null, act = look && look.act, key = 'rq-' + r.kind + '-' + r.tmdb, action = null;
+      if (r.item) action = h('a', { class: 'btn f', href: '#/i/' + r.item, 'data-key': key, 'aria-label': H.t('Ouvrir « {title} »', { title: r.title }) }, H.icon('play'), h('span', { class: 'lbl' }, H.t('Ouvrir')));
+      else if (act) action = H.button(look.pill, act === 'withdraw' ? 'check' : 'plus', { class: act === 'withdraw' ? 'on' : null, 'data-key': key, 'aria-label': askLabel(state, r.title), onclick: function () {
+        if (act === 'withdraw') withdrawFrom(r, function () { H.toast(H.t('Demande retirée : {title}', { title: r.title })); r.request = others; paint(true); });
+        else askFor(r, function (res) { H.toast(H.t('Demandé : {title}', { title: r.title })); r.request = { status: res.status, mine: true, id: res.id }; paint(true); });
+      } });
+      // La sorte : les mots de H.plural (« film », « série »), la majuscule vient du CSS ; une clé « Film » traduirait aussi un dossier nommé « Film » dans les messages du serveur (H.tr)
+      var head = h('div', { class: 'rqhead' }, h('span', { class: 'rqkind' }, r.kind === 'show' ? H.t('série') : H.t('film')), h('b', { class: 'rqtitle' }, r.title || '?'),
+        r.year ? h('span', { class: 'rqyear' }, r.year) : null, r.date && r.date > today() ? h('span', { class: 'rqsoon' }, H.t('À venir')) : null);
+      H.clear(row).appendChild(h('div', { class: 'what' }, head, look && look.line ? h('span', { class: 'rqstate' }, look.line) : null, r.overview ? h('p', { class: 'rqsum' }, r.overview) : null));
+      if (action) row.appendChild(action);
+      if (focus && action && document.body.contains(row)) H.focus.set(action, true);
+    }
+    paint(false);
+    return row;
+  }
+  H.route(/^\/request$/, function (m, query) {
+    var title = H.t('Demander un film ou une série');
+    if (!H.canSearchRequests()) {          // sans le droit, ou sans clé TMDB sur le serveur : la page le dit et ramène aux demandes
+      var why = H.canRequest() ? H.t('La recherche de titres à demander n’est pas configurée sur ce serveur. Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée.')
+        : H.t('L’administrateur t’a retiré le droit de demander des films et des séries.');
+      var closed = h('section', { class: 'blank' }, h('h1', null, title), h('p', null, why), h('a', { class: 'btn f', href: '#/requests', 'data-autofocus': '1' }, H.t('Mes demandes')));
+      return { el: closed, nav: '#/settings' };
+    }
+    var kind = query && (query.kind === 'movie' || query.kind === 'show') ? query.kind : '';
+    var seq = 0, timer = null, asked = null, toResults = false;          // `seq` : la dernière recherche partie ; `asked` : ce qu'elle cherchait (sorte et texte), effacé après une erreur
+    var say = h('p', { class: 'rqsay muted', role: 'status' }), list = h('div', { class: 'rqhits' });
+    var input = h('input', { class: 'f field big', type: 'search', maxlength: '100', autocomplete: 'off', value: (query && query.q) || '',
+      placeholder: H.t('Titre d’un film ou d’une série'), 'aria-label': H.t('Titre à chercher dans TMDB'), 'data-autofocus': H.device === 'tv' ? null : '1',      // sur la télé, le champ n'ouvre pas le clavier à l'arrivée
+      oninput: function () { clearTimeout(timer); timer = setTimeout(run, 400); },
+      onkeydown: function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); toResults = true; run(); }
+        else if (e.key === 'Escape') { e.preventDefault(); H.focus.set(pick, true); }          // Retour sort d'abord du champ
+      } });
+    var pick = H.button('', null, { class: 'flt wide', 'data-key': 'rq-kind', onclick: function () {
+      H.menu(H.t('Type'), REQUEST_KINDS.map(function (k) { return { label: k[1], value: k[0] }; }), kind, function (v) { kind = v; paint(); run(); });
+    } });
+    var el = h('section', { class: 'reqsearch' }, h('h1', null, title),
+      h('p', { class: 'intro muted' }, H.t('Cherche dans TMDB un film ou une série que la médiathèque n’a pas, puis demande-le à l’administrateur. Le hub ne télécharge rien : l’administrateur l’ajoute s’il le peut.')),
+      h('div', { class: 'tools' }, input, pick), say, list);
+    function paint() { filterLabel(pick, H.t('Type'), REQUEST_KINDS.filter(function (k) { return k[0] === kind; })[0][1]); }
+    function tell(text, error) { say.textContent = text; say.classList.toggle('err', !!error); }
+    function landOnResults() {            // après Entrée : le premier résultat, pour la télécommande
+      toResults = false;
+      var first = list.querySelector('.f');
+      if (first && document.body.contains(el) && el.style.display !== 'none' && !H.overlay.isOpen() && (document.activeElement === input || document.activeElement === document.body)) H.focus.set(first);
+    }
+    function run() {
+      var q = input.value.trim(), what = kind + '|' + q;
+      if (q.length < 2) { seq++; asked = null; toResults = false; list.removeAttribute('aria-busy'); H.clear(list); tell(q ? H.t('Tape au moins deux lettres.') : ''); return; }
+      if (what === asked) { if (toResults && !list.hasAttribute('aria-busy')) landOnResults(); return; }          // déjà cherché (ou en cours) : rien à redemander
+      var mine = ++seq;
+      asked = what;
+      list.setAttribute('aria-busy', 'true');
+      tell(H.t('Recherche…'));
+      H.api('/api/requests/search?q=' + encodeURIComponent(q) + (kind ? '&kind=' + kind : '')).then(function (res) {
+        if (mine !== seq) return;          // une recherche est partie depuis : celle-ci est périmée
+        var results = (res && res.results) || [];
+        list.removeAttribute('aria-busy');
+        H.clear(list);
+        results.forEach(function (r) { list.appendChild(requestHit(r)); });
+        tell(results.length ? '' : H.t('Aucun titre trouvé dans TMDB pour « {q} ».', { q: q }));
+        if (toResults) landOnResults();
+      }, function (e) {
+        if (mine !== seq) return;
+        asked = null; toResults = false;          // la même recherche pourra être relancée (Entrée)
+        list.removeAttribute('aria-busy');
+        tell(e.message, true);
+      });
+    }
+    paint();
+    if (input.value.trim()) run();          // « Pas trouvé ? » : le texte de la recherche habituelle, cherché tout de suite
+    return { el: el, nav: '#/settings',
+      onBack: function () { if (document.activeElement !== input) return false; H.focus.set(pick, true); return true; },          // la touche Retour de la télécommande, pendant la saisie
+      destroy: function () { clearTimeout(timer); seq++; } };
   });
 
   // --- Gestion ---------------------------------------------------------------------
@@ -1519,7 +1618,7 @@
     // « Mes demandes » : la page des demandes du compte, depuis « Mon compte ».
     function myRequestsLine() {
       return h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Mes demandes')),
-        h('span', null, H.canRequest() ? H.t('Les films que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film ; tes demandes déjà faites restent visibles'))),
+        h('span', null, H.canRequest() ? H.t('Les films et les séries que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film ni de série ; tes demandes déjà faites restent visibles'))),
         h('a', { class: 'btn f', href: '#/requests', 'data-key': 'my-requests' }, H.icon('queue'), h('span', { class: 'lbl' }, H.t('Mes demandes'))));
     }
     function accounts(body) {

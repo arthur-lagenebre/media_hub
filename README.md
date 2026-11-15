@@ -152,7 +152,7 @@ Un compte à qui l'administrateur a donné le droit **Envoyer** (`POST /api/user
 
 ## Demandes
 
-Un compte demande un film (ou une série) qui manque : depuis la case grisée d'une saga ou de la fiche d'une personne. Ce n'est qu'une **liste d'attente que l'administrateur lit** : le hub ne télécharge rien et n'écrit pas dans la médiathèque. L'administrateur ajoute le film lui-même ; la demande passe à « ajoutée » d'elle-même quand le film (reconnu par son étiquette TMDB) arrive dans une bibliothèque, et le demandeur le voit sur son accueil. Il peut aussi la refuser, avec un motif : elle ne peut plus être refaite tant qu'il ne l'a pas remise en attente ou supprimée.
+Un compte demande un film (ou une série) qui manque : depuis la case grisée d'une saga ou de la fiche d'une personne, ou en le cherchant dans TMDB (le serveur seul parle à TMDB, avec la clé `TMDB_KEY` ; sans elle, pas de recherche) : page *Demander un film ou une série*, ouverte par *Nouvelle demande* dans *Mes demandes* ou par « Pas trouvé ? » sous une recherche de la médiathèque restée vide. Ce n'est qu'une **liste d'attente que l'administrateur lit** : le hub ne télécharge rien et n'écrit pas dans la médiathèque. L'administrateur ajoute le film lui-même ; la demande passe à « ajoutée » d'elle-même quand le film (reconnu par son étiquette TMDB) arrive dans une bibliothèque, et le demandeur le voit sur son accueil. Il peut aussi la refuser, avec un motif : elle ne peut plus être refaite tant qu'il ne l'a pas remise en attente ou supprimée.
 
 Chacun voit ses demandes ; d'un film demandé par un autre, il ne sait que « déjà demandé », sans nom ni nombre. Le droit « Peut demander » est donné à tout compte et se retire compte par compte ; `HUB_REQUEST_MAX` borne les demandes en attente de chacun. Pas de notification hors du hub. Détail dans [docs/api.md](docs/api.md#demandes).
 
@@ -186,6 +186,7 @@ Le contrat complet pour un client tiers (champs, codes d'erreur, authentificatio
 | `GET /api/users`, `POST /api/users`, `POST /api/user/<id>/password\|delete\|rights` | comptes (administrateur seulement) : lister (avec leurs droits par bibliothèque), créer, régler ce qu'un compte voit et télécharge, donner un nouveau mot de passe (à un autre compte ; pour le sien, l'administrateur redonne l'actuel, `current`), supprimer (avec sa progression et ses playlists ; jamais le dernier administrateur) |
 | `POST /api/user/<id>/upload` | (administrateur) `{"upload": true}` : donne ou retire le droit d'envoyer dans la boîte de réception (400 pour un administrateur, qui envoie toujours) |
 | `GET /api/requests`, `POST /api/requests`, `POST /api/requests/<id>/delete\|status\|ack` | demandes de films et de séries (voir [Demandes](#demandes)) : `?mine=1` ses demandes, sans : toutes avec les demandeurs (administrateur) ; demander `{"kind": "movie"\|"show", "tmdb", "note"?}` (201, ou 200 en rejoignant une demande ; 409 déjà là, refusée ou plafond), retirer la sienne (l'administrateur : la demande entière), changer le statut (administrateur), acquitter une arrivée. Champs ajoutés : `can_request` et `requests_pending` (administrateur) dans `/api/state`, `requests_ready` dans `/api/home`, `request` sur les films absents des sagas et des personnes |
+| `GET /api/requests/search?q=&kind=` | (compte qui peut demander) cherche un film (`kind=movie`), une série (`kind=show`) ou les deux dans TMDB pour le demander : `{"results": [{"kind", "tmdb", "title", "year", "date", "overview", "request"?, "item"?}]}`, 10 par sorte au plus (première page), texte seul ; `q` de 2 à 100 caractères (400). 403 sans le droit, 503 sans clé TMDB ou deux recherches déjà en cours, 429 au-delà de 30 recherches par minute et par compte (les créations de demande qui interrogent TMDB, `POST /api/requests`, comptent dans la même cadence), 502 si TMDB ne répond pas. `GET /img/request/<id>` : l'affiche d'une demande (ses demandeurs et l'administrateur ; 404 sinon), téléchargée par la tâche « Affiches des demandes » après chaque nouvelle demande. Voir [docs/api.md](docs/api.md#chercher-un-titre-à-demander) |
 | `POST /api/user/<id>/request` | (administrateur) `{"request": false}` : retire ou rend le droit de demander (donné par défaut ; 400 pour un administrateur, qui demande toujours) |
 | `POST /api/inbox?name=&dir=`, `GET /api/inbox`, `GET /api/inbox/<dossier>/<nom>?dir=`, `DELETE /api/inbox/<dossier>/<nom>?dir=` | boîte de réception (voir [Boîte de réception](#boîte-de-réception-les-envois)) : envoyer un fichier en corps brut (`Content-Length` obligatoire), lister (`?mine=1` : seulement les siens), télécharger (administrateur) et supprimer (administrateur, ou son propre fichier) |
 | `POST /api/me/password` | chacun change son propre mot de passe (`{"current": "…", "new": "…"}`) ; les autres sessions du compte sont fermées |
@@ -211,10 +212,10 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 2612 tests : 2167 serveur + 445 interface
+python -m unittest discover -s tests          # 2706 tests : 2246 serveur + 460 interface
 ```
 
-`tests/test_ui.py` (et `tests/test_labels_ui.py`, et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 445 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
+`tests/test_ui.py` (et `tests/test_labels_ui.py`, et un test de `tests/test_popups.py`) pilote l'interface dans Chromium (Playwright, 460 tests) ; ils sont ignorés si Playwright ou ffmpeg manquent.
 
 ### Intégration continue (GitHub Actions)
 

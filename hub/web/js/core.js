@@ -104,11 +104,12 @@
 
   // Qui est connecté : rempli à partir de /api/state (démarrage, page Gestion). Serveur ouvert (`auth` faux) : un seul profil, administrateur.
   // Masquer une action n'est qu'un confort : le serveur refuse (403) ce que le rôle ne permet pas.
-  // `canRequest` : le compte peut demander un film (`can_request`) ; `pending` : les demandes en attente, que /api/state ne donne qu'à l'administrateur (0 sinon).
-  H.session = { auth: false, user: null, settings: {}, canRequest: false, pending: 0 };
+  // `canRequest` : le compte peut demander un film (`can_request`) ; `requestSearch` : il peut aussi chercher dans TMDB un titre à demander (`request_search` : le droit, et une clé TMDB sur le serveur) ;
+  // `pending` : les demandes en attente, que /api/state ne donne qu'à l'administrateur (0 sinon).
+  H.session = { auth: false, user: null, settings: {}, canRequest: false, requestSearch: false, pending: 0 };
   H.setSession = function (state) {
     H.session = { auth: !!(state && state.auth), user: (state && state.user) || null, settings: (state && state.settings) || {},
-      canRequest: !!(state && state.can_request), pending: state && typeof state.requests_pending === 'number' ? state.requests_pending : 0 };
+      canRequest: !!(state && state.can_request), requestSearch: !!(state && state.request_search), pending: state && typeof state.requests_pending === 'number' ? state.requests_pending : 0 };
   };
   // Les réglages du compte (gardés sur le serveur : ils le suivent d'un appareil à l'autre) ; `name` : « music_view »...
   H.setting = function (name) { return (H.session.settings || {})[name]; };
