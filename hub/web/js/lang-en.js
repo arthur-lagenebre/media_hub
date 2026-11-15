@@ -251,6 +251,11 @@
     'Fiche TMDB enregistrée': 'TMDB entry saved',
     'Quelle série ?': 'Which series?',
     'Changer la fiche TMDB': 'Change TMDB entry',
+    'Revenir à la fiche automatique': 'Back to the automatic entry',
+    'Revenir à la fiche automatique ?': 'Back to the automatic entry?',
+    'Revenir': 'Go back',
+    'La fiche choisie à la main est oubliée : le hub cherche de nouveau la série d’après le nom de son dossier.': 'The entry chosen by hand is forgotten: the hub looks the series up again from its folder name.',
+    'Fiche automatique rétablie': 'Automatic entry restored',
     'Nom de la série, ou adresse de sa fiche TMDB': 'Series name, or address of its TMDB page',
 
     // --- Barre audio, musique ---
