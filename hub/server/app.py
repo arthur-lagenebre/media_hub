@@ -3154,12 +3154,17 @@ def request_image(h, m, q):
     send_poster(h, q, f"request:{row['kind']}:{row['tmdb']}", hub.cfg.data / "tmdb" / hub_requests.poster_file(row["kind"], row["tmdb"]))
 
 
+def withdrawn(h, m, call, withdraw):
+    """Le corps commun des routes `…/<id>/delete` des demandes et des suggestions : `withdraw(db, compte, id, administrateur ?)` passé par `call` (son erreur devient la réponse), puis `{"ok": true}`."""
+    h.body_json()
+    call(withdraw, h.hub.db, h.user["id"], int(m.group(1)), h.user["role"] == "admin")
+    h.send_json({"ok": True})
+
+
 @route("POST", r"/api/requests/([0-9]{1,15})/delete")
 def api_request_delete(h, m, q):
     """Un compte retire sa demande ; l'administrateur supprime la demande entière. 404 pour une demande inconnue ou qui n'est pas celle du compte."""
-    h.body_json()
-    request_call(hub_requests.withdraw, h.hub.db, h.user["id"], int(m.group(1)), h.user["role"] == "admin")
-    h.send_json({"ok": True})
+    withdrawn(h, m, request_call, hub_requests.withdraw)
 
 
 @route("POST", r"/api/requests/([0-9]{1,15})/status")
@@ -3224,9 +3229,7 @@ def api_suggestion_status(h, m, q):
 @route("POST", r"/api/suggestions/([0-9]{1,15})/delete")
 def api_suggestion_delete(h, m, q):
     """L'auteur retire sa suggestion ; l'administrateur supprime n'importe laquelle. 404 pour une suggestion inconnue ou qui n'est pas celle du compte."""
-    h.body_json()
-    suggestion_call(suggestions.withdraw, h.hub.db, h.user["id"], int(m.group(1)), h.user["role"] == "admin")
-    h.send_json({"ok": True})
+    withdrawn(h, m, suggestion_call, suggestions.withdraw)
 
 
 def make_server(cfg):
