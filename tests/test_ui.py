@@ -6911,6 +6911,56 @@ class TestSuggestionsInTheUi(RequestsUiCase):
         self.assertIn("New", self.sg_rows(page).first.inner_text())
         self.assertIn("Suggest an improvement", self.view(page, "[data-key=sg-new]").inner_text())
 
+    TV_HINT = "Pour proposer une amélioration, utilise un ordinateur, une tablette ou un téléphone."
+
+    def test_a_television_lists_and_withdraws_but_does_not_propose(self):
+        self.suggest("alice", "Une idée")
+        page = self.session("alice", device="tv")
+        self.open(page, "#/suggestions")
+        self.count_sg_rows(page, 1)
+        self.assertEqual(self.view(page, "[data-key=sg-new]").count(), 0)                                  # pas de texte long à la télécommande
+        self.assertEqual(self.view(page, ".sgtv").inner_text(), self.TV_HINT)
+        self.assertIn("Nouvelle", self.sg_rows(page).first.inner_text())
+        self.sg_rows(page).first.locator("button", has_text="Retirer").click()                              # retirer reste possible
+        self.dialog(page).locator(".btn.danger").click()
+        self.view(page, ".sgempty").wait_for()
+        self.assertEqual(self.call("alice", "/api/suggestions?mine=1")["suggestions"], [])
+
+    def test_a_television_hint_is_in_english(self):
+        page = self.session("alice", lang="en", device="tv")
+        self.open(page, "#/suggestions")
+        self.view(page, ".sgempty").wait_for()
+        self.assertEqual(self.view(page, ".sgtv").inner_text(), "To suggest an improvement, use a computer, a tablet or a phone.")
+
+    def test_a_pc_still_proposes_and_shows_no_hint(self):
+        page = self.session("alice", device="pc")
+        self.open(page, "#/suggestions")
+        self.view(page, "[data-key=sg-new]").wait_for()
+        self.assertEqual(self.view(page, ".sgtv").count(), 0)
+
+    def test_the_administrator_on_a_television_filters_and_deletes_but_does_not_answer(self):
+        self.suggest("alice", "Un mode sombre plus sombre", "evolution")
+        self.suggest("bob", "La recherche oublie les accents", "bug")
+        page = self.session("admin", device="tv")
+        self.open(page, "#/admin?tab=suggestions")
+        self.count_sg_rows(page, 2)
+        rows = self.sg_rows(page)
+        self.assertEqual(rows.locator("button", has_text="Répondre").count(), 0)                            # répondre ouvre un texte long
+        self.assertEqual(rows.locator("button", has_text="Supprimer").count(), 2)
+        self.view(page, "[data-key=sc-bug]").click()                                                        # les filtres restent
+        self.count_sg_rows(page, 1)
+        rows.first.locator("button", has_text="Supprimer").click()
+        self.dialog(page).locator(".btn.danger").click()
+        self.view(page, ".sgempty").wait_for()
+        self.assertEqual([s["text"] for s in self.call("admin", "/api/suggestions")["suggestions"]], ["Un mode sombre plus sombre"])
+
+    def test_the_administrator_on_a_pc_still_answers(self):
+        self.suggest("alice", "Une idée")
+        page = self.session("admin", device="pc")
+        self.open(page, "#/admin?tab=suggestions")
+        self.count_sg_rows(page, 1)
+        self.assertEqual(self.sg_rows(page).first.locator("button", has_text="Répondre").count(), 1)
+
 
 class TestRequestSearchInTheUi(RequestsUiCase):
     """Demander un film ou une série que la médiathèque n'a pas : la page « Demander un film ou une série » (#/request), qui cherche dans TMDB par le serveur (TMDB simulé : FakeRequestTmdb),

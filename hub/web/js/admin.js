@@ -315,11 +315,12 @@
       body.appendChild(panel);
     }
     // Une suggestion : catégorie, état, texte, réponse, auteur et date, puis Répondre et Supprimer. Le nom et le texte viennent des comptes : toujours en texte.
+    // Sur télévision, pas de « Répondre » : la réponse est un texte long (H.canSuggest).
     function adminSuggestionRow(s) {
       var who = (s.user && s.user.name) || H.t('compte supprimé');
       return h('div', { class: 'line sgrow', 'data-suggestion': s.id, 'data-status': s.status },
         S.what(s, h('span', null, H.t('{name} · proposée le {date}', { name: who, date: H.date(s.created) }))),
-        H.button(H.t('Répondre'), 'edit', { 'data-key': 'sg-answer-' + s.id, 'aria-label': H.t('Répondre à la suggestion de {name}', { name: who }), onclick: function () { answer(s, who); } }),
+        H.canSuggest() ? H.button(H.t('Répondre'), 'edit', { 'data-key': 'sg-answer-' + s.id, 'aria-label': H.t('Répondre à la suggestion de {name}', { name: who }), onclick: function () { answer(s, who); } }) : null,
         H.button(H.t('Supprimer'), 'trash', { 'data-key': 'sg-del-' + s.id, 'aria-label': H.t('Supprimer la suggestion de {name}', { name: who }), onclick: function () { deleteSuggestion(s, who); } }));
     }
     // Donner un état et, si on veut, une réponse que l'auteur lira. La réponse d'avant est préremplie : la vider l'efface.
@@ -334,7 +335,7 @@
     }
     function neighbour(s) {
       var list = sgList || [], i = list.indexOf(s), next = list[i + 1] || list[i - 1];
-      return next ? 'sg-answer-' + next.id : null;
+      return next ? (H.canSuggest() ? 'sg-answer-' : 'sg-del-') + next.id : null;
     }
     function deleteSuggestion(s, who) {
       H.confirm({ title: H.t('Supprimer la suggestion de {name} ?', { name: who }), ok: H.t('Supprimer'), danger: true,

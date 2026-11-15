@@ -40,6 +40,8 @@
   // --- Barre du haut ----------------------------------------------------------
   // Le compte peut déposer des fichiers dans la boîte de réception (droit « Envoyer »). Jamais sur une télévision : choisir des fichiers à la télécommande ne marche pas.
   H.canUpload = function () { var me = H.session.user; return !!(me && me.can_upload) && H.device !== 'tv'; };
+  // Rédiger une suggestion ou y répondre (un texte long) : pas sur une télévision non plus. Écrire à la télécommande est pénible et, dans le champ de texte de H.form, les flèches déplacent le focus, pas le curseur.
+  H.canSuggest = function () { return H.device !== 'tv'; };
   H.nav = {
     build: function () {
       var nav = H.clear(document.getElementById('nav'));
@@ -1298,7 +1300,8 @@
   H.route(/^\/suggestions$/, function () {
     var out = h('div', { class: 'panel sglist' });
     var intro = h('p', { class: 'intro muted' }, H.t('Une idée pour le hub, quelque chose à améliorer, un bug : l’administrateur lit tes suggestions et te répond ici. Personne d’autre ne les voit.'));
-    var add = h('div', { class: 'tools' }, H.button(H.t('Proposer une amélioration'), 'plus', { 'data-key': 'sg-new', onclick: function () { propose(); } }));
+    var add = H.canSuggest() ? h('div', { class: 'tools' }, H.button(H.t('Proposer une amélioration'), 'plus', { 'data-key': 'sg-new', onclick: function () { propose(); } }))
+      : h('p', { class: 'muted sgtv' }, H.t('Pour proposer une amélioration, utilise un ordinateur, une tablette ou un téléphone.'));          // sur télévision : lire, retirer, pas rédiger (H.canSuggest)
     var el = h('section', { class: 'mysuggestions' }, h('h1', null, H.t('Mes suggestions')), intro, add, out);
     var list = [];
     function row(s) {
