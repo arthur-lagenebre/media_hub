@@ -207,7 +207,8 @@ class TestAccess(RootCase):
 
     def test_a_forged_session_is_refused(self):
         token = self.hub.session_token(self.alice)
-        for headers in ({"Cookie": f"hub={token}junk"}, {"Cookie": f"hub={token[:-1]}0"}, {"Authorization": f"Basic {token}"}, {"Authorization": "Bearer"}, {"Cookie": f"xhub={token}"}):
+        tampered = token[:-1] + ("1" if token[-1] == "0" else "0")          # toujours différent : le jeton porte l'heure, son dernier caractère change à chaque seconde
+        for headers in ({"Cookie": f"hub={token}junk"}, {"Cookie": f"hub={tampered}"}, {"Authorization": f"Basic {token}"}, {"Authorization": "Bearer"}, {"Cookie": f"xhub={token}"}):
             self.assertEqual(call(self.hub, "GET", "/api/state", headers=headers)[1].status, 401, headers)
 
     def test_the_media_token_only_opens_the_files(self):
