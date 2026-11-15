@@ -470,6 +470,9 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .epwrap { position: relative; }
 .epwrap .ep { padding-right: 4rem; }
 .btn.epmore { position: absolute; right: 0.9rem; top: 50%; transform: translateY(-50%); background: transparent; padding: 0.5rem; }
+/* Vitesse de lecture : chiffres à chasse fixe (le bouton ne bouge pas d'une vitesse à l'autre) ; hors 1×, le bouton est cerné (.btn.on). */
+.btn.spd .lbl { font-variant-numeric: tabular-nums; }
+#abar .btn.spd { min-width: 3.4rem; justify-content: center; font-weight: 700; }
 #abar .qn { margin-left: 0.3rem; font-size: 0.75rem; color: var(--mute); font-variant-numeric: tabular-nums; }
 .qlist { min-height: 4rem; }
 .qrow { display: flex; align-items: center; border-radius: 0.6rem; }
