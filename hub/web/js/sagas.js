@@ -7,7 +7,7 @@
 
   function fail(e) { H.toast(e && e.message ? e.message : H.t('Impossible pour le moment.'), 5000); }
   function editHref(name) { return '#/sagas?g=' + encodeURIComponent(name); }
-  // Un film absent de la médiathèque porte le titre que l'enrichissement TMDB a trouvé (« Sagas (TMDB) » dans Gestion), sinon rien.
+  // Un film absent de la médiathèque porte le titre que l'enrichissement TMDB a trouvé (« Sagas (TMDB) » dans Administration), sinon rien.
   function filmTitle(f) { return f.item ? f.item.title : (f.title || H.t('Film absent de la médiathèque')); }
   var NEW = {};                       // la valeur de « Nouvelle saga… » dans un menu : aucun nom de saga ne peut l'égaler
   function inLibrary(saga) { return saga.films.filter(function (f) { return f.item; }).length; }
@@ -105,7 +105,7 @@
     function load() {
       return H.api('/api/sagas').then(function (d) { data = d; render(); }).catch(function (e) {
         H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Sagas')), h('p', null, e.status === 403 ? H.t('Les sagas se composent depuis un compte administrateur.') : e.message),
-          h('a', { class: 'btn f', href: '#/settings?tab=gestion', 'data-autofocus': '1' }, H.t('Retour à la gestion'))));
+          h('a', { class: 'btn f', href: '#/admin?tab=mediatheque', 'data-autofocus': '1' }, H.t('Retour à l’administration'))));
       });
     }
     function find(n) { for (var i = 0; i < data.sagas.length; i++) if (data.sagas[i].name === n) return i; return -1; }
@@ -147,7 +147,7 @@
       show(warning());
       el.appendChild(h('p', { class: 'muted lead' }, H.t('Une saga est une liste de films dans l’ordre de ton choix : une trilogie que TMDB ne réunit pas, l’ordre du MCU… Elle s’ajoute à la saga de l’étiquette du fichier. Quand un film est dans plusieurs sagas, la grille le range dans la première de cette liste : monte celle que tu veux voir en vignette.')));
       el.appendChild(h('div', { class: 'tools' }, H.button(H.t('Nouvelle saga'), 'plus', { class: 'primary', 'data-autofocus': '1', 'data-key': 'new', onclick: create }),
-        H.button(H.t('Retour à la gestion'), 'back', { onclick: function () { H.go('#/settings?tab=gestion'); } })));
+        H.button(H.t('Retour à l’administration'), 'back', { onclick: function () { H.go('#/admin?tab=mediatheque'); } })));
       if (!data.sagas.length) el.appendChild(h('p', { class: 'muted lead' }, H.t('Aucune saga pour l’instant.')));
       var panel = h('section', { class: 'panel' });
       data.sagas.forEach(function (s, k) {
@@ -200,7 +200,7 @@
       el.appendChild(h('p', { class: 'muted lead' }, H.t('{count}. Le numéro de chaque film est sa place dans la liste : en laissant un film absent à sa place, ceux qui suivent gardent leur numéro.', { count: count(saga) })));
       el.appendChild(h('div', { class: 'tools' },
         H.button(H.t('Ajouter des films'), 'plus', { class: 'primary', 'data-autofocus': '1', 'data-key': 'add', onclick: addFilms }),
-        H.button(H.t('Trier par date de sortie'), 'refresh', { 'data-key': 'sort', disabled: films.length < 2, title: films.some(function (f) { return !f.item && !f.date; }) ? H.t('Les films absents dont la date est inconnue passent à la fin : « Sagas (TMDB) » dans Gestion les date.') : H.t('Du plus ancien au plus récent.'),
+        H.button(H.t('Trier par date de sortie'), 'refresh', { 'data-key': 'sort', disabled: films.length < 2, title: films.some(function (f) { return !f.item && !f.date; }) ? H.t('Les films absents dont la date est inconnue passent à la fin : « Sagas (TMDB) » dans Administration les date.') : H.t('Du plus ancien au plus récent.'),
           onclick: function () { edit(function (list) { var sorted = byDate(list); list.length = 0; Array.prototype.push.apply(list, sorted); }, 'sort'); } }),
         H.button(H.t('Renommer'), 'edit', { 'data-key': 'rename', onclick: rename }),
         H.button(H.t('Supprimer la saga'), 'trash', { 'data-key': 'delete', onclick: remove }),
@@ -250,7 +250,7 @@
     }
 
     load();
-    return { el: el, nav: '#/settings', refresh: load };
+    return { el: el, nav: '#/admin', refresh: load };
   });
 
   // --- « Ajouter à une saga » (fiche d'un film) ---------------------------------------------

@@ -13,7 +13,7 @@ Ce qui n'est **pas** un pop-up et reste à part : le **toast** (`H.toast`, messa
 
 ## Une seconde action dans un form
 
-`H.form({..., alt: {label, submit}})` ajoute un bouton entre l'action et Annuler (« Rétablir « Séries » » dans *Renommer la bibliothèque*, `Paramètres > Gestion > Bibliothèques`). Il passe par le même chemin que `submit` : un seul envoi à la fois, l'erreur du serveur s'affiche dans la fenêtre qui reste ouverte, `done` reçoit la réponse. Le pied passe en colonne (`stacked`). `fields[0].value` préremplit le champ, qui s'ouvre sélectionné. Le nom écrit dans le titre ou un bouton vient de l'utilisateur : `H.t('…{name}…', {name})` le met en texte, jamais en HTML.
+`H.form({..., alt: {label, submit}})` ajoute un bouton entre l'action et Annuler (« Rétablir « Séries » » dans *Renommer la bibliothèque*, `Administration > Médiathèque > Bibliothèques`). Il passe par le même chemin que `submit` : un seul envoi à la fois, l'erreur du serveur s'affiche dans la fenêtre qui reste ouverte, `done` reçoit la réponse. Le pied passe en colonne (`stacked`). `fields[0].value` préremplit le champ, qui s'ouvre sélectionné. Le nom écrit dans le titre ou un bouton vient de l'utilisateur : `H.t('…{name}…', {name})` le met en texte, jamais en HTML.
 
 ## Choisir la déclinaison
 

@@ -1,4 +1,4 @@
-/* Les envois de fichiers : la page « Envoyer » (un compte qui a le droit d'envoyer) et le panneau « Boîte de réception » de Paramètres (administrateur).
+/* Les envois de fichiers : la page « Envoyer » (un compte qui a le droit d'envoyer) et le panneau « Boîte de réception » d'Administration (administrateur).
    Rien n'entre dans une bibliothèque : le serveur range les fichiers dans une boîte de réception, et l'administrateur les range lui-même (docs/decisions.md).
    Les fichiers partent un par un, par XMLHttpRequest (fetch ne rend pas la progression d'un envoi) : le serveur en accepte deux à la fois au plus et refuse le suivant en 429.
    Un dossier (choisi ou glissé) part de même, fichier par fichier, avec `dir` : son chemin relatif, nom du dossier choisi en tête ; une seule ligne l'annonce, dépliable. Avant le départ, ce que le serveur refuserait (type, caché, trop profond, vide) est écarté, et la personne confirme.
@@ -496,7 +496,7 @@
     };
   });
 
-  // --- Paramètres > Boîte de réception (administrateur) --------------------------------
+  // --- Administration > Boîte de réception --------------------------------
   // Tous les envois, du plus récent au plus ancien : on les télécharge ou on les supprime. Aucun bouton ne les range dans une bibliothèque (décision : docs/decisions.md).
   U.adminPanel = function () {
     var panel = h('section', { class: 'panel inbox' }), body = h('div');

@@ -1595,7 +1595,7 @@ class TestStackedCards(UiCase):
 
 
 class TestSagaEditor(UiCase):
-    """L'éditeur de sagas (Gestion > Sagas) et « Ajouter à une saga » de la fiche d'un film. Inception : 27205 ; Man of Steel : 49521 ; Batman v Superman : 209112."""
+    """L'éditeur de sagas (Administration > Médiathèque > Sagas) et « Ajouter à une saga » de la fiche d'un film. Inception : 27205 ; Man of Steel : 49521 ; Batman v Superman : 209112."""
 
     def setUp(self):
         super().setUp()
@@ -1608,7 +1608,7 @@ class TestSagaEditor(UiCase):
     def test_gestion_leads_to_the_editor(self):
         self.open("#/admin")
         self.view("a.btn", has_text="Composer").click()
-        self.page.wait_for_selector("#views > .sagaedit .line")               # l'éditeur est chargé : jusque-là, les `.line` visibles sont ceux de Gestion. `.sagaedit` est la racine de la vue : on cherche dedans
+        self.page.wait_for_selector("#views > .sagaedit .line")               # l'éditeur est chargé : jusque-là, les `.line` visibles sont ceux d'Administration. `.sagaedit` est la racine de la vue : on cherche dedans
         self.assertEqual(self.view(".line b").all_inner_texts(), ["Ma saga"])
 
     def test_the_lead_and_the_empty_page_use_the_prose_width(self):
@@ -2038,7 +2038,7 @@ class TestLogin(unittest.TestCase):
 
 
 class TestRightsInTheUi(unittest.TestCase):
-    """L'administrateur règle les droits d'un compte dans Paramètres > Comptes ; le compte ne voit plus la bibliothèque fermée et n'a plus le bouton de téléchargement là où il est retiré."""
+    """L'administrateur règle les droits d'un compte dans Administration > Comptes ; le compte ne voit plus la bibliothèque fermée et n'a plus le bouton de téléchargement là où il est retiré."""
 
     def api(self, base, path, body=None, token=""):
         headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})}
@@ -2064,7 +2064,7 @@ class TestRightsInTheUi(unittest.TestCase):
                 browser = pw.chromium.launch()
                 admin = browser.new_page()
                 self.sign_in(admin, base, "admin", "secret")
-                admin.goto(base + "/#/settings?tab=comptes")
+                admin.goto(base + "/#/admin?tab=comptes")
                 admin.locator(f'[data-key="rights-{alice["id"]}"]').click()
                 admin.locator(".rights").wait_for()
                 size = admin.evaluate("(() => { var m = document.querySelector('.menu.rightsbox'); var r = document.querySelector('.rights .rrow'); return [m.scrollHeight, m.clientHeight, m.getBoundingClientRect().height, innerHeight, r.getBoundingClientRect().height, getComputedStyle(m).fontFamily]; })()")
@@ -3246,7 +3246,6 @@ class TestPersonMissingUi(UiCase):
 
     def open_libraries_detail(self):
         self.open("#/admin")
-        self.view("[data-key=libs-toggle]").click()
         self.view("[data-key=scan-films]").wait_for()
 
     def test_a_category_has_its_own_button_for_the_people_of_its_series(self):
@@ -3273,7 +3272,6 @@ class TestPersonMissingUi(UiCase):
     def test_the_category_buttons_need_a_tmdb_key_too(self):
         self.run_.hub.cfg.tmdb_key = ""
         self.open("#/admin")
-        self.view("[data-key=libs-toggle]").click()
         self.view("[data-key=scan-films]").wait_for()
         self.assertEqual(self.view("[data-key^=people-]").count(), 0)
 
@@ -4133,7 +4131,7 @@ class TestSignOutOthers(unittest.TestCase):
                     self.assertEqual(context.request.get(base + "/api/state").status, 200)
                 page = here.new_page()
                 page.goto(base + "/#/settings")
-                page.locator(".tabs .tab", has_text="Comptes").click()
+                page.locator(".tabs .tab", has_text="Mon compte").click()
                 page.locator("[data-key=signout-others]").click()
                 dialog = page.locator("[role=dialog]")
                 dialog.locator("input[type=password]").fill("faux")
@@ -4153,7 +4151,7 @@ class TestSignOutOthers(unittest.TestCase):
 
 
 class TestSettings(UiCase):
-    """La page « Paramètres » : des onglets en haut, qui restent affichés, au lieu d'une seule longue page de gestion."""
+    """Deux pages à onglets : « Paramètres » (#/settings), ce qui concerne le compte connecté, et « Administration » (#/admin), ce qui concerne la médiathèque et les autres comptes."""
 
     def tabs(self):
         return self.view(".tabs .tab").all_inner_texts()
@@ -4164,77 +4162,101 @@ class TestSettings(UiCase):
     def titles(self):
         return self.view(".panel h2").all_inner_texts()
 
+    def selected(self):
+        return self.view(".tabs .tab[aria-selected=true]").inner_text()
+
     def test_the_films_library_can_reread_its_covers(self):
         film = self.item("films", "Inception")
         urllib.request.urlopen(self.base + "/img/item/" + film["id"] + "?w=160").read()          # la vignette est dans le cache
         cache = self.run_.hub.images.cache
         before = len(list(cache.glob("*.jpg")))
         self.assertGreater(before, 0)
-        self.open("#/settings")
-        self.view("[data-key=libs-toggle]").click()                                                  # les bibliothèques sont repliées tant qu'on ne les déplie pas
+        self.open("#/admin")
         self.view("[data-key=covers-films]").click()
         self.page.locator("#toast.on", has_text="Covers à relire").wait_for()
         self.assertLess(len(list(cache.glob("*.jpg"))), before)
         self.assertEqual(self.view("[data-key^=covers-]").count(), 1)                              # seule la bibliothèque de films a ce bouton
         urllib.request.urlopen(self.base + "/img/item/" + film["id"] + "?w=160").read()          # et elle se refait à la demande
 
-    def test_the_page_is_called_settings_and_opens_on_the_management_tab(self):
+    def test_the_settings_keep_only_what_concerns_the_account(self):
         self.open("#/settings")
         self.view(".panel").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Paramètres")
         self.assertEqual(self.page.locator("#nav .tool[data-nav='#/settings']").get_attribute("aria-label"), "Paramètres")
-        self.assertEqual(self.tabs(), ["Gestion", "Boîte de réception", "Préférences", "Comptes", "Demandes"])
-        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Gestion")
-        self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Tâches", "Serveur"])
+        self.assertEqual(self.tabs(), ["Préférences", "Mon compte", "À propos"])
 
-    def test_the_server_panel_credits_tmdb_with_its_logo(self):
-        """Les conditions de l'API TMDB demandent la mention et le logo."""
-        self.open("#/settings")
+    def test_the_administration_has_its_own_entry_and_opens_on_the_media_library(self):
+        self.open("#/")
+        entries = self.page.locator("#nav .tool[data-nav]")
+        self.assertEqual([entries.nth(i).get_attribute("data-nav") for i in range(entries.count())][-2:], ["#/admin", "#/settings"])      # juste avant l'engrenage
+        self.assertEqual(self.page.locator("#nav .tool[data-nav='#/admin']").get_attribute("aria-label"), "Administration")
+        self.page.locator("#nav .tool[data-nav='#/admin']").click()
+        self.shown("#/admin")
+        self.view(".panel").first.wait_for()
+        self.assertEqual(self.view("h1").inner_text(), "Administration")
+        self.assertEqual(self.tabs(), ["Médiathèque", "Demandes", "Boîte de réception", "Comptes", "Serveur"])
+        self.assertEqual(self.selected(), "Médiathèque")
+        self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Tâches"])
+        self.assertEqual(self.page.locator("#nav .tool[data-nav='#/admin']").get_attribute("aria-current"), "page")
+
+    def test_the_about_tab_credits_tmdb_with_its_logo(self):
+        """Les conditions de l'API TMDB demandent la mention et le logo : dans Paramètres > À propos, que tous les comptes voient, et plus dans le panneau Serveur."""
+        self.open("#/settings?tab=apropos")
         credit = self.view(".credit-tmdb")
         credit.wait_for()
         self.assertIn("n’est ni approuvé ni certifié par TMDB", credit.inner_text())
         logo = credit.locator("img")
         self.assertEqual(logo.get_attribute("alt"), "TMDB")
         self.until(lambda: logo.evaluate("img => img.complete && img.naturalWidth > 0"))          # le fichier est bien servi
+        self.assertIn("Version", self.view("dl").inner_text())
+        self.open("#/admin?tab=serveur")
+        self.view(".panel dl").wait_for()
+        self.assertEqual(self.view(".credit-tmdb").count(), 0)
 
-    def test_the_old_address_still_leads_to_the_page(self):
-        self.open("#/admin")
+    def test_the_old_management_addresses_lead_to_the_administration(self):
+        for old, new in (("gestion", "Médiathèque"), ("taches", "Médiathèque"), ("serveur", "Serveur"), ("inbox", "Boîte de réception"), ("demandes", "Demandes"), ("comptes", "Comptes")):
+            self.open("#/settings?tab=" + old)
+            self.shown("#/admin?tab=" + {"gestion": "mediatheque", "taches": "mediatheque"}.get(old, old))
+            self.view(".tabs").wait_for()
+            self.assertEqual(self.view("h1").inner_text(), "Administration", old)
+            self.until(lambda: self.selected().startswith(new))
+        self.open("#/admin?tab=gestion")                                                           # l'ancien nom de l'onglet, dans la nouvelle adresse
         self.view(".tabs").wait_for()
-        self.assertEqual(self.view("h1").inner_text(), "Paramètres")
+        self.assertEqual(self.selected(), "Médiathèque")
 
     def test_each_tab_has_its_own_panels(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        for name, titles in (("Préférences", ["Interface", "Lecture", "Affichage"]), ("Comptes", ["Mon compte"]), ("Gestion", ["Bibliothèques", "Sagas", "Entretien", "Tâches", "Serveur"])):
+        for name, titles in (("Préférences", ["Interface", "Lecture", "Affichage"]), ("Mon compte", ["Mon compte"]), ("À propos", ["À propos"])):
             self.tab(name)
-            self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == name)
+            self.until(lambda: self.selected() == name)
             self.assertEqual(self.titles(), titles, name)
+        self.open("#/admin")
+        self.view(".tabs").wait_for()
+        for name, titles in (("Comptes", ["Comptes"]), ("Serveur", ["Serveur"]), ("Médiathèque", ["Bibliothèques", "Sagas", "Entretien", "Tâches"])):
+            self.tab(name)
+            self.until(lambda: self.selected() == name)
+            self.assertEqual(self.titles(), titles, name)
+        self.tab("Serveur")
+        self.until(lambda: self.selected() == "Serveur")
         self.assertIn("Version", self.view("dl").inner_text())
 
-    def test_the_libraries_are_folded_until_unfolded(self):
-        """Tout mettre à jour reste à portée ; le détail des bibliothèques se déplie à la demande, et reste déplié tant qu'on est sur la page."""
-        self.open("#/settings")
+    def test_the_libraries_are_always_unfolded(self):
+        """Chaque bibliothèque a sa ligne et ses boutons dès l'ouverture : plus de « Détail par bibliothèque » à déplier, même pendant une mise à jour."""
+        self.open("#/admin")
         self.view(".panel").first.wait_for()
-        toggle = self.view("[data-key=libs-toggle]")
-        self.assertEqual(toggle.get_attribute("aria-expanded"), "false")
-        self.assertEqual(self.view("[data-lib]").count(), 0)
-        self.assertEqual(self.view("[data-key^=scan-]").count(), 1)                                  # « Tout mettre à jour » seul
         total = len(self.api("/api/state")["libraries"])
-        self.assertIn(str(total), toggle.inner_text())
-        toggle.click()
-        self.assertEqual(toggle.get_attribute("aria-expanded"), "true")
-        self.assertEqual(self.view("[data-lib]").count(), total)
-        self.assertEqual(self.page.evaluate("document.activeElement.getAttribute('data-key')"), "libs-toggle")
-        self.view("[data-key=scan-all]").click()                                                     # la page se reconstruit pendant la mise à jour : le détail reste déplié
+        self.assertEqual(self.view("[data-key=libs-toggle]").count(), 0)
+        self.assertEqual(self.view(".line[data-lib]").count(), total)
+        self.assertEqual(self.view("[data-key^=scan-]").count(), total + 1)                        # « Tout mettre à jour » et un bouton par bibliothèque
+        self.view("[data-key=scan-all]").click()                                                     # la page se reconstruit pendant la mise à jour : les lignes restent
         self.page.wait_for_timeout(2500)
-        self.assertEqual(self.view("[data-lib]").count(), total)
-        self.view("[data-key=libs-toggle]").click()
-        self.assertEqual(self.view("[data-lib]").count(), 0)
+        self.assertEqual(self.view(".line[data-lib]").count(), total)
 
     def test_the_former_tabs_lead_to_their_new_place(self):
-        for old, new in (("lecture", "Préférences"), ("interface", "Préférences"), ("taches", "Gestion"), ("serveur", "Gestion")):
+        for old in ("lecture", "interface"):
             self.open("#/settings?tab=" + old)
-            self.until(lambda: self.view(".tabs .tab[aria-selected=true]").inner_text() == new)
+            self.until(lambda: self.selected() == "Préférences")
 
     def test_the_preferences_are_one_tab_in_three_panels(self):
         """Interface : l'appareil, la taille du texte et la langue. Lecture : la vidéo et le son. Affichage : les rayons de l'accueil et l'ouverture des bibliothèques."""
@@ -4248,7 +4270,7 @@ class TestSettings(UiCase):
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
-        self.open("#/settings")
+        self.open("#/admin")
         self.view(".tabs").wait_for()
         self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         self.page.wait_for_timeout(200)
@@ -4256,11 +4278,10 @@ class TestSettings(UiCase):
         top = self.view(".tabs").evaluate("el => el.getBoundingClientRect().top")
         self.assertTrue(0 <= top < 120, top)
 
-    def test_a_button_of_the_management_tab_does_not_scroll_the_page_back_to_the_top(self):
+    def test_a_button_of_the_media_library_tab_does_not_scroll_the_page_back_to_the_top(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
-        self.open("#/settings")
+        self.open("#/admin")
         self.view(".tabs").wait_for()
-        self.view("[data-key=libs-toggle]").click()
         button = self.view("[data-key^='scan-']:not([data-key='scan-all'])").last
         button.click()                                  # Playwright amène le bouton à l'écran avant de cliquer : on mesure après
         before = self.page.evaluate("window.scrollY")
@@ -4285,25 +4306,32 @@ class TestSettings(UiCase):
         self.until(lambda: self.api("/api/me/settings")["settings"]["music_view"] == "albums")
 
     def test_the_tab_chosen_is_remembered(self):
+        """Chaque page garde le sien : choisir un onglet d'Administration ne change pas celui de Paramètres."""
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        self.tab("Préférences")
+        self.tab("Mon compte")
+        self.open("#/admin")
+        self.view(".tabs").wait_for()
+        self.tab("Comptes")
         self.page.reload()
         self.view(".tabs").wait_for()
-        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Préférences")
-        self.open("#/settings?tab=comptes")
+        self.assertEqual(self.selected(), "Comptes")
+        self.open("#/settings")
         self.view(".tabs").wait_for()
-        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Comptes")
+        self.assertEqual(self.selected(), "Mon compte")
+        self.open("#/settings?tab=preferences")
+        self.view(".tabs").wait_for()
+        self.assertEqual(self.selected(), "Préférences")
 
     def test_the_tabs_are_reached_with_the_remote(self):
-        self.open("#/settings?tab=gestion")
+        self.open("#/admin?tab=mediatheque")
         self.view(".tabs .tab").first.wait_for()
-        self.view(".tabs .tab", has_text="Gestion").focus()
-        self.press("ArrowRight", "ArrowRight", "Enter", wait=300)          # Gestion, Boîte de réception, Préférences
-        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Préférences")
+        self.view(".tabs .tab", has_text="Médiathèque").focus()
+        self.press("ArrowRight", "ArrowRight", "Enter", wait=300)          # Médiathèque, Demandes, Boîte de réception
+        self.assertEqual(self.selected(), "Boîte de réception")
 
     def test_the_tasks_unfold_one_by_one_or_all_at_once(self):
-        self.open("#/settings")
+        self.open("#/admin")
         self.view(".tabs").wait_for()
         self.view(".job").first.wait_for()
         jobs = self.view(".job .jhead")
@@ -4332,7 +4360,7 @@ class TestSettings(UiCase):
             log("ligne finale")
         self.addCleanup(lambda: (grow.set(), bottom.set(), self.run_.wait_jobs()))
         self.run_.hub.jobs._submit("Essai défilement", work)
-        self.open("#/settings?tab=gestion")
+        self.open("#/admin?tab=mediatheque")
         job = self.view(".job", has_text="Essai défilement")
         job.locator(".jhead").click()
         pre = job.locator("pre")
@@ -4365,7 +4393,7 @@ class TestSettings(UiCase):
             finish.wait(20)          # la tâche reste en cours : sa fin referait toute la page
         self.addCleanup(lambda: (grow.set(), finish.set(), self.run_.wait_jobs()))
         self.run_.hub.jobs._submit("Essai sélection", work)
-        self.open("#/settings?tab=gestion")
+        self.open("#/admin?tab=mediatheque")
         job = self.view(".job", has_text="Essai sélection")
         job.locator(".jhead").click()
         self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 99') >= 0")
@@ -4381,8 +4409,8 @@ class TestSettings(UiCase):
         self.addCleanup(lambda: (release.set(), self.run_.wait_jobs()))
         self.run_.hub.jobs._submit("Essai minuteur", lambda log: release.wait(30))
         self.open("#/")
-        self.page.evaluate("location.hash = '#/settings?tab=gestion'")
-        self.shown("#/settings?tab=gestion")
+        self.page.evaluate("location.hash = '#/admin?tab=mediatheque'")
+        self.shown("#/admin?tab=mediatheque")
         self.view(".job", has_text="Essai minuteur").wait_for()
         self.page.evaluate("""() => {          // les réponses de /api/jobs arrivent une seconde plus tard ; on compte les appels
           var fetchNow = window.fetch; window.jobsCalls = 0;
@@ -4407,7 +4435,7 @@ class TestSettings(UiCase):
             release.wait(20)
         self.addCleanup(lambda: (release.set(), self.run_.wait_jobs()))
         self.run_.hub.jobs._submit("Essai long", work)
-        self.open("#/settings?tab=gestion")
+        self.open("#/admin?tab=mediatheque")
         first = self.view(".job", has_text="Essai long")
         first.locator(".jhead").click()
         self.page.wait_for_function("document.querySelector('.job pre').textContent.indexOf('ligne 99') >= 0")
@@ -4421,7 +4449,7 @@ class TestSettings(UiCase):
         self.assertEqual(self.view(".job", has_text="Essai long").locator("pre").evaluate("el => el.scrollTop"), 80)
 
     def test_every_task_of_the_history_is_listed_not_only_the_last_six(self):
-        self.open("#/settings?tab=gestion")
+        self.open("#/admin?tab=mediatheque")
         self.view(".job").first.wait_for()
         listed = self.view(".job").count()
         self.assertEqual(listed, min(30, len(self.api("/api/jobs")["jobs"])))
@@ -4429,7 +4457,7 @@ class TestSettings(UiCase):
 
 class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
     @unittest.skipUnless(sync_playwright, "Playwright absent")
-    def test_only_the_tabs_for_everyone_are_shown(self):
+    def test_only_the_settings_are_shown_and_the_administration_is_out_of_reach(self):
         tmp = tempfile.mkdtemp()
         try:
             run = Running(tmp, password="secret")
@@ -4446,14 +4474,21 @@ class TestSettingsOfAnOrdinaryAccount(unittest.TestCase):
                 page = context.new_page()
                 page.goto(base + "/#/settings")
                 page.wait_for_selector(".tabs .tab")
-                self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Préférences", "Comptes"])
-                page.locator(".tabs .tab", has_text="Comptes").click()
+                self.assertEqual(page.locator(".tabs .tab").all_inner_texts(), ["Préférences", "Mon compte", "À propos"])
+                self.assertEqual(page.locator("#nav [data-nav='#/admin']").count(), 0)                 # pas d'entrée Administration dans la barre
+                page.locator(".tabs .tab", has_text="Mon compte").click()
                 page.wait_for_selector(".panel h2")
                 self.assertEqual(page.locator(".panel h2").all_inner_texts(), ["Mon compte"])
-                page.goto(base + "/#/settings?tab=serveur")                       # un onglet réservé à l'administrateur ne s'ouvre pas : l'ancien « Serveur » non plus
-                shown = page.locator("#views > .view:visible .tabs .tab[aria-selected=true]")       # l'ancienne page reste, cachée, derrière la nouvelle
-                shown.wait_for()
-                self.assertEqual(shown.inner_text(), "Préférences")
+                page.locator(".tabs .tab", has_text="À propos").click()
+                page.locator("#views > .view:visible .credit-tmdb img").wait_for()                     # la mention TMDB, que ce compte ne voyait jamais
+                for old in ("serveur", "gestion", "demandes"):                                         # un onglet parti dans Administration ne s'ouvre pas pour lui
+                    page.goto(base + "/#/settings?tab=" + old)
+                    shown = page.locator("#views > .view:visible .tabs .tab[aria-selected=true]")       # l'ancienne page reste, cachée, derrière la nouvelle
+                    shown.wait_for()
+                    self.assertEqual(shown.inner_text(), "Préférences", old)
+                page.goto(base + "/#/admin")                                                           # l'ancienne adresse de ses paramètres y mène encore
+                page.wait_for_function("location.hash === '#/settings'")
+                self.assertEqual(page.locator("#views > .view:visible h1").inner_text(), "Paramètres")
                 browser.close()
             run.stop()
         finally:
@@ -4584,7 +4619,7 @@ class InboxUiCase(unittest.TestCase):
     def admin_inbox(self, **kw):
         """La liste de la boîte de réception, vue par l'administrateur."""
         page = self.session("admin", **kw)
-        page.goto(self.base + "/#/settings?tab=inbox")
+        page.goto(self.base + "/#/admin?tab=inbox")
         page.locator("#views > .view:visible .inbox-file").first.wait_for()
         return page, page.locator("#views > .view:visible .inbox-file")
 
@@ -4642,8 +4677,8 @@ class InboxUiCase(unittest.TestCase):
                     self.assertEqual(page.locator("#views > .view:visible .upload").count(), 0)
 
     def rights_box(self, page, who):
-        """La boîte « Droits de {nom} » du compte `who`, ouverte depuis Paramètres > Comptes."""
-        page.goto(self.base + "/#/settings?tab=comptes")
+        """La boîte « Droits de {nom} » du compte `who`, ouverte depuis Administration > Comptes."""
+        page.goto(self.base + "/#/admin?tab=comptes")
         page.locator(f'[data-key="rights-{who["id"]}"]').click()
         page.locator(".menu.rightsbox").wait_for()
         return page.locator(".menu.rightsbox")
@@ -4666,7 +4701,7 @@ class InboxUiCase(unittest.TestCase):
     def test_the_administrator_gives_and_withdraws_the_right_in_the_rights_box(self):
         self.reset_rights(self.bob)
         page = self.session("admin")
-        page.goto(self.base + "/#/settings?tab=comptes")
+        page.goto(self.base + "/#/admin?tab=comptes")
         line = page.locator(f'[data-user="{self.bob["id"]}"]')
         line.wait_for()
         self.assertEqual(page.locator(f'[data-key="upload-{self.bob["id"]}"]').count(), 0)               # plus de pastille à part dans la ligne du compte
@@ -4695,7 +4730,7 @@ class InboxUiCase(unittest.TestCase):
 
     def test_an_administrator_always_sends_and_has_no_box_for_it(self):
         page = self.session("admin")
-        page.goto(self.base + "/#/settings?tab=comptes")
+        page.goto(self.base + "/#/admin?tab=comptes")
         line = page.locator(f'[data-user="{self.admin_id}"]')
         line.wait_for()
         self.assertIn("toujours", line.locator("[data-upload]").inner_text())
@@ -5006,7 +5041,7 @@ class InboxUiCase(unittest.TestCase):
         self.put("alice", "Récent.mkv", b"recent", mtime=1_700_200_000)
         self.put("admin", "Du patron.zip", b"zip", mtime=1_700_100_000)
         page = self.session("admin")
-        page.goto(self.base + "/#/settings?tab=inbox")
+        page.goto(self.base + "/#/admin?tab=inbox")
         rows = page.locator("#views > .view:visible .inbox-file")
         rows.first.wait_for()
         self.assertEqual(page.locator("#views > .view:visible .tabs .tab[aria-selected=true]").inner_text(), "Boîte de réception")
@@ -5042,9 +5077,10 @@ class InboxUiCase(unittest.TestCase):
 
     def test_only_the_administrator_has_the_inbox_tab(self):
         page = self.session("alice")
-        page.goto(self.base + "/#/settings?tab=inbox")
+        page.goto(self.base + "/#/admin?tab=inbox")
+        page.wait_for_function("location.hash === '#/settings'")                                  # renvoyée à ses paramètres
         page.wait_for_selector("#views > .view:visible .tabs .tab")
-        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Préférences", "Comptes"])
+        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Préférences", "Mon compte", "À propos"])
         self.assertEqual(page.context.request.get(self.base + "/api/inbox").status, 403)
 
     # --- Le dossier d'un compte porte son nom --------------------------------------------
@@ -5189,12 +5225,12 @@ class InboxUiCase(unittest.TestCase):
     def test_the_inbox_tab_and_the_upload_choice_are_in_english(self):
         self.put("alice", "Film.mkv", b"f" * 2000)
         page = self.session("admin", lang="en")
-        page.goto(self.base + "/#/settings?tab=inbox")
+        page.goto(self.base + "/#/admin?tab=inbox")
         page.locator("#views > .view:visible .inbox-file").wait_for()
-        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Management", "Inbox", "Preferences", "Accounts", "Requests"])
+        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Media library", "Requests", "Inbox", "Accounts", "Server"])
         self.assertEqual(page.locator("#views > .view:visible .inbox-file .btn").all_inner_texts(), ["Download", "Delete"])
         self.assertEqual(page.locator("#views > .view:visible .inbox .total").inner_text(), "1 file · 2 KB")
-        page.goto(self.base + "/#/settings?tab=comptes")
+        page.goto(self.base + "/#/admin?tab=comptes")
         page.locator(f'[data-key="rights-{self.bob["id"]}"]').click()
         page.locator(".menu.rightsbox .rrow[data-upload-right]").wait_for()
         self.assertEqual(page.locator(".menu.rightsbox .rrow[data-upload-right] b").inner_text(), "Upload files")
@@ -5262,7 +5298,7 @@ class InboxUiCase(unittest.TestCase):
         self.assertEqual(self.sends(page).locator("img").count(), 0)                           # du texte, jamais du HTML
         self.assertIsNone(page.evaluate("window.pwned"))
         admin = self.session("admin")
-        admin.goto(self.base + "/#/settings?tab=inbox")
+        admin.goto(self.base + "/#/admin?tab=inbox")
         row = admin.locator("#views > .view:visible .inbox-file")
         row.first.wait_for()
         self.assertEqual(row.locator("b").inner_text(), kept)
@@ -6341,7 +6377,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         rid = self.ask("alice", 9500)["id"]
         self.call("admin", f"/api/requests/{rid}/status", {"status": "declined", "reason": "Pas en <i>France</i>"})
         page = self.session("alice")
-        self.open(page, "#/settings?tab=comptes")
+        self.open(page, "#/settings?tab=compte")
         link = self.view(page, "[data-key=my-requests]")
         self.assertTrue(link.evaluate("e => e.classList.contains('f')"))
         link.click()
@@ -6368,7 +6404,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.view(page, ".reqempty").wait_for()                                                            # l'état vide est expliqué
         self.assertIn("case grisée", self.view(page, ".reqempty").inner_text())
         page.keyboard.press("Escape")                                                                       # Retour remonte aux paramètres
-        self.shown(page, "#/settings?tab=comptes")
+        self.shown(page, "#/settings?tab=compte")
 
     # --- L'accueil ---------------------------------------------------------------
     def test_an_arrived_request_is_on_the_home_until_it_is_opened(self):
@@ -6437,10 +6473,10 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.ask("bob", 1000, "Bob aussi")
         self.ask("alice", 9500)
         page = self.session("admin")
-        gear = page.locator("#nav [data-nav='#/settings'] .pend")
+        gear = page.locator("#nav [data-nav='#/admin'] .pend")
         gear.wait_for()
         self.assertEqual(gear.inner_text(), "2")
-        self.open(page, "#/settings?tab=demandes")
+        self.open(page, "#/admin?tab=demandes")
         rows = self.rows(page)
         rows.first.wait_for()
         self.assertTrue(self.view(page, ".tabs .tab[aria-selected=true]").inner_text().startswith("Demandes"))
@@ -6451,7 +6487,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.assertIn("En attente", both.inner_text())
         both.locator("button", has_text="Marquer ajouté").click()
         both.locator(".rqstatus", has_text="Ajouté").wait_for()
-        page.wait_for_function("(() => { var c = document.querySelector(\"#nav [data-nav='#/settings'] .pend\"); return !!c && c.textContent === '1'; })()")
+        page.wait_for_function("(() => { var c = document.querySelector(\"#nav [data-nav='#/admin'] .pend\"); return !!c && c.textContent === '1'; })()")
         one = rows.filter(has_text="Absent Personne")
         one.locator("button", has_text="Refuser").click()
         box = self.dialog(page)
@@ -6460,7 +6496,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         box.locator(".btn.primary").click()
         one.locator(".rqstatus", has_text="Refusé").wait_for()
         self.assertIn("Pas disponible", one.inner_text())
-        page.locator("#nav [data-nav='#/settings'] .pend").wait_for(state="detached")
+        page.locator("#nav [data-nav='#/admin'] .pend").wait_for(state="detached")
         self.view(page, "[data-key=rf-declined]").click()                                                  # le filtre « Refusées »
         self.count_rows(page, 1)
         self.view(page, "[data-key=rf-all]").click()
@@ -6504,7 +6540,7 @@ class TestRequestsInTheUi(RequestsUiCase):
     def test_a_request_deleted_elsewhere_leaves_the_administrator_list(self):
         rid = self.ask("alice", 1000)["id"]
         page = self.session("admin")
-        self.open(page, "#/settings?tab=demandes")
+        self.open(page, "#/admin?tab=demandes")
         self.rows(page).first.wait_for()
         self.rows(page).locator("button", has_text="Supprimer").click()
         self.call("admin", f"/api/requests/{rid}/delete", {})
@@ -6516,7 +6552,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.ask("alice", 1000)
         self.ask("alice", 9500)
         page = self.session("admin")
-        self.open(page, "#/settings?tab=demandes")
+        self.open(page, "#/admin?tab=demandes")
         self.rows(page).first.wait_for()
         self.view(page, "[data-key=rf-pending]").click()
         page.wait_for_function("(() => { var b = document.querySelector('#views > .view:not([style*=\"none\"]) [data-key=rf-pending]'); return b && b.classList.contains('on') && document.querySelectorAll('#views > .view:not([style*=\"none\"]) .reqrow').length === 2; })()")
@@ -6532,7 +6568,7 @@ class TestRequestsInTheUi(RequestsUiCase):
     def test_a_failed_load_can_be_retried_and_the_tab_is_read_again_when_reopened(self):
         page = self.session("admin")
         page.route("**/api/requests", lambda route: route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "base verrouillée"})))
-        self.open(page, "#/settings?tab=demandes")
+        self.open(page, "#/admin?tab=demandes")
         retry = self.view(page, "[data-key=rq-retry]")
         retry.wait_for()
         self.assertIn("base verrouillée", self.view(page, ".panel").inner_text())
@@ -6549,7 +6585,7 @@ class TestRequestsInTheUi(RequestsUiCase):
     def test_the_administrator_tab_is_reached_with_the_remote(self):
         self.ask("alice", 1000)
         page = self.session("admin", device="tv")
-        self.open(page, "#/settings?tab=demandes")
+        self.open(page, "#/admin?tab=demandes")
         self.rows(page).first.wait_for()
         self.view(page, "[data-key=rf-all]").focus()
         page.keyboard.press("ArrowDown")
@@ -6559,7 +6595,7 @@ class TestRequestsInTheUi(RequestsUiCase):
 
     def test_the_right_to_request_is_set_in_the_rights_box(self):
         page = self.session("admin")
-        page.goto(self.base + "/#/settings?tab=comptes")
+        page.goto(self.base + "/#/admin?tab=comptes")
         line = page.locator(f'[data-user="{self.bob["id"]}"]')
         line.wait_for()
         self.assertIn("Peut demander : oui", line.locator("[data-rights]").inner_text())
@@ -6616,7 +6652,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.view(page, ".panel .line b", ).filter(has_text="Your requests have arrived").wait_for()          # le réglage du rayon de l'accueil
         self.assertEqual(page.evaluate("Hub.missing"), [])
         admin = self.session("admin", lang="en")
-        self.open(admin, "#/settings?tab=demandes")
+        self.open(admin, "#/admin?tab=demandes")
         self.rows(admin).first.wait_for()
         self.assertIn("1 requester", self.rows(admin).inner_text())
         self.assertEqual(admin.evaluate("Hub.missing"), [])
@@ -7037,7 +7073,7 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         self.run_.wait_jobs()                                                                                # « Affiches des demandes », lancée par la création
         loaded = """() => { var imgs = document.querySelectorAll('#views > .view:not([style*="none"]) .reqrow .rqpic img');
             return imgs.length === 2 && Array.prototype.every.call(imgs, function (i) { return i.complete && i.naturalWidth > 0; }); }"""
-        for name, hash in (("alice", "#/requests"), ("admin", "#/settings?tab=demandes")):
+        for name, hash in (("alice", "#/requests"), ("admin", "#/admin?tab=demandes")):
             with self.subTest(name=name):
                 page = self.session(name)
                 self.open(page, hash)

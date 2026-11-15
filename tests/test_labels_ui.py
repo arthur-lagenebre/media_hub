@@ -1,4 +1,4 @@
-"""Renommer une bibliothèque depuis Paramètres > Gestion : l'administrateur change le nom AFFICHÉ (jamais l'identifiant), ou rétablit le nom d'origine.
+"""Renommer une bibliothèque depuis Administration > Médiathèque : l'administrateur change le nom AFFICHÉ (jamais l'identifiant), ou rétablit le nom d'origine.
 
 Interface dans Chromium (Playwright, comme test_ui) : la fenêtre, ses erreurs, la mise à jour de la barre, de l'accueil et des titres sans recharger, le texte jamais interprété
 comme du HTML, la mise en page d'un nom de 40 caractères, la non-traduction d'un nom choisi en anglais, le compte ordinaire qui n'a pas le bouton.
@@ -46,13 +46,9 @@ class RenameCase(UiCase):
     def nav_texts(self):
         return self.page.locator("#nav .link").all_inner_texts()
 
-    def management(self, hash="#/settings?tab=gestion"):
-        """La page Gestion, bibliothèques dépliées."""
+    def management(self, hash="#/admin?tab=mediatheque"):
+        """Administration > Médiathèque : les bibliothèques sont toujours dépliées."""
         self.open(hash)
-        toggle = self.view("[data-key=libs-toggle]")
-        toggle.wait_for()
-        if toggle.get_attribute("aria-expanded") != "true":
-            toggle.click()
         self.view("[data-key=rename-series]").wait_for()
 
     def dialog(self):
@@ -106,9 +102,8 @@ class TestRenameDialog(RenameCase):
         self.shown("#/l/series")
         self.assertEqual(self.view("h1").inner_text(), "Séries")
         self.page.evaluate("window.sameDocument = 1")                                                        # disparaît si la page est rechargée
-        self.page.locator("#nav .tool[data-nav='#/settings']").click()
-        self.shown("#/settings")
-        self.view("[data-key=libs-toggle]").click()
+        self.page.locator("#nav .tool[data-nav='#/admin']").click()
+        self.shown("#/admin")
         self.view("[data-key=rename-series]").click()
         self.dialog().locator("input").fill("Feuilletons")
         self.dialog().locator(".btns .btn.primary").click()
@@ -117,7 +112,7 @@ class TestRenameDialog(RenameCase):
         self.until(lambda: "Feuilletons" in self.nav_texts())
         self.assertEqual(self.nav_texts(), ["Films", "Feuilletons", "Musique", "Livres"])                 # la barre, au même rang
         self.assertEqual(self.api("/api/state")["libraries"][1]["id"], "series")                                       # l'identifiant, lui, n'a pas bougé
-        self.assertEqual(self.view(".line[data-lib=series] .what b").inner_text(), "Feuilletons")                     # le détail de la page Gestion
+        self.assertEqual(self.view(".line[data-lib=series] .what b").inner_text(), "Feuilletons")                     # la ligne d'Administration > Médiathèque
         self.assertEqual(self.view("[data-key=rename-series]").get_attribute("aria-label"), "Renommer la bibliothèque Feuilletons")
         self.until(lambda: self.focused() == "Renommer la bibliothèque Feuilletons")                                    # le focus est rendu au bouton Renommer
         self.page.go_back()                                                                                            # retour à la page des séries, gardée en réserve avant le renommage : refaite avec le nouveau nom
@@ -340,12 +335,11 @@ class TestRenamedNameLayout(RenameCase):
         self.page.set_viewport_size({"width": width, "height": 800})
         self.api("/api/library/series/label", {"label": name})
         self.hide_home_shelves()
-        ready = {"#/": ".libtile[data-lib=series]", "#/l/series": "h1", "#/settings?tab=gestion": "[data-key=libs-toggle]", "#/search": "input[type=search]"}
+        ready = {"#/": ".libtile[data-lib=series]", "#/l/series": "h1", "#/admin?tab=mediatheque": "[data-key=rename-series]", "#/search": "input[type=search]"}
         for hash, signal in ready.items():
             self.open(hash)
             self.view(signal).wait_for()                                                                                   # la page est construite
-            if hash.startswith("#/settings"):
-                self.view("[data-key=libs-toggle]").click()
+            if hash.startswith("#/admin"):
                 self.view(".line[data-lib=series]").wait_for()
             self.settled()
             self.assertLessEqual(self.overflow(), 0, f"{name[:6]}… défile en largeur à {width}px sur {hash}")
@@ -497,11 +491,11 @@ class TestRenameOfAnOrdinaryAccount(unittest.TestCase):
             page = browser.new_page()
             self.sign_in(page, "lea", "motdepasse12")
             self.assertEqual(page.locator("#nav .link").all_inner_texts()[1], "Feuilletons")                                  # elle voit le nom choisi...
-            for hash in ("#/settings", "#/settings?tab=gestion"):
+            for hash in ("#/settings", "#/admin?tab=mediatheque"):
                 page.goto(self.base + "/" + hash)
                 shown = page.locator("#views > .view:visible .tabs .tab[aria-selected=true]")
                 shown.wait_for()
-                self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Préférences", "Comptes"])      # ...mais pas l'onglet Gestion
+                self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Préférences", "Mon compte", "À propos"])      # ...mais pas l'administration
                 self.assertEqual(page.locator("[data-key^=rename-]").count(), 0)                                               # ...ni le bouton
             status = page.evaluate("fetch('/api/library/series/label', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'Pirate' }) }).then(r => r.status)")
             self.assertEqual(status, 403)                                                                                      # le serveur refuse de toute façon
@@ -517,7 +511,7 @@ class TestRenameOfAnOrdinaryAccount(unittest.TestCase):
             browser = pw.chromium.launch()
             page = browser.new_page()
             self.sign_in(page, "admin", "secret")
-            page.goto(self.base + "/#/settings?tab=comptes")
+            page.goto(self.base + "/#/admin?tab=comptes")
             page.locator(f'[data-key="rights-{self.alice}"]').click()
             row = page.locator(".rights .rrow[data-lib=series]")
             row.wait_for()

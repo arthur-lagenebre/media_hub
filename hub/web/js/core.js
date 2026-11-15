@@ -54,6 +54,8 @@
     // L'avis personnel : une forme par avis, pour qu'on les distingue sans la couleur (pouce levé, trait, pouce baissé)
     like: 'M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z',
     soso: 'M4 10.5h16v3H4z',
+    // L'entrée Administration de la barre du haut : une clé à molette, distincte de l'engrenage des paramètres.
+    admin: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z',
     dislike: 'M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z'
   };
   H.icon = function (name, cls) {
@@ -102,7 +104,7 @@
     });
   };
 
-  // Qui est connecté : rempli à partir de /api/state (démarrage, page Gestion). Serveur ouvert (`auth` faux) : un seul profil, administrateur.
+  // Qui est connecté : rempli à partir de /api/state (démarrage, Paramètres, Administration). Serveur ouvert (`auth` faux) : un seul profil, administrateur.
   // Masquer une action n'est qu'un confort : le serveur refuse (403) ce que le rôle ne permet pas.
   // `canRequest` : le compte peut demander un film (`can_request`) ; `requestSearch` : il peut aussi chercher dans TMDB un titre à demander (`request_search` : le droit, et une clé TMDB sur le serveur) ;
   // `pending` : les demandes en attente, que /api/state ne donne qu'à l'administrateur (0 sinon).
@@ -138,7 +140,7 @@
   };
 
   // --- Appareil : pc, phone, tablet ou tv ----------------------------------------------
-  // Le navigateur ne dit pas « je suis une télé » : on le devine à son identifiant (Tizen, webOS, Fire TV…), puis au toucher. Approximatif, donc modifiable dans Gestion.
+  // Le navigateur ne dit pas « je suis une télé » : on le devine à son identifiant (Tizen, webOS, Fire TV…), puis au toucher. Approximatif, donc modifiable dans Paramètres.
   H.devices = [['auto', H.t('Automatique')], ['pc', H.t('Ordinateur')], ['phone', H.t('Smartphone')], ['tablet', 'Tablette'], ['tv', H.t('Télévision')]];
   H.detectDevice = function () {
     var ua = navigator.userAgent || '', touch = (navigator.maxTouchPoints || 0) > 1;

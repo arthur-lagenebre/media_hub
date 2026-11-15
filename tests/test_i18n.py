@@ -311,7 +311,8 @@ class TestEnglishInTheBrowser(UiCase):
 
     def test_the_main_pages_have_every_text(self):
         for path in ("#/", "#/l/films", "#/l/series", "#/l/musique", "#/l/livres", "#/search", "#/playlists", "#/sagas",
-                     "#/settings?tab=gestion", "#/settings?tab=preferences", "#/settings?tab=comptes"):
+                     "#/admin?tab=mediatheque", "#/admin?tab=demandes", "#/admin?tab=inbox", "#/admin?tab=comptes", "#/admin?tab=serveur",
+                     "#/settings?tab=preferences", "#/settings?tab=compte", "#/settings?tab=apropos"):
             with self.subTest(path=path):
                 self.open(path)
                 self.page.wait_for_timeout(250)
@@ -366,14 +367,19 @@ class TestEnglishInTheBrowser(UiCase):
     def test_the_settings_page_is_in_english(self):
         self.open("#/settings")
         self.assertEqual(self.view("h1").inner_text(), "Settings")
-        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Management", "Inbox", "Preferences", "Accounts", "Requests"])
+        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Preferences", "My account", "About"])
+
+    def test_the_administration_page_is_in_english(self):
+        self.open("#/admin?tab=mediatheque")
+        self.assertEqual(self.view("h1").inner_text(), "Administration")
+        self.assertEqual(self.view(".tabs .tab").all_inner_texts(), ["Media library", "Requests", "Inbox", "Accounts", "Server"])
         self.assertIn("Libraries", self.view(".panel h2").all_inner_texts())
+        self.assertEqual(self.page.locator("#nav [data-nav='#/admin']").get_attribute("aria-label"), "Administration")
 
     def test_the_people_buttons_of_the_libraries_are_in_english(self):
         self.run_.hub.cfg.tmdb_key = "fake"
         self.addCleanup(setattr, self.run_.hub.cfg, "tmdb_key", "")
-        self.open("#/settings")
-        self.view("[data-key=libs-toggle]").click()
+        self.open("#/admin?tab=mediatheque")
         self.view("[data-key=scan-films]").wait_for()
         self.assertEqual(self.view("[data-key=people-films]").inner_text(), "Missing movies")
         self.assertEqual(self.view("[data-key=people-series]").inner_text(), "People’s movies (TMDB)")
