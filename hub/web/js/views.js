@@ -425,16 +425,20 @@
   }
   // Les rayons de suggestions arrivent après l'accueil, sans le retenir : ils se posent devant `spot` (juste après « Reprendre »), seulement si l'accueil qui les a demandés est toujours celui-là (`still()`).
   // Un échec ou une réponse vide ne montre rien. Le focus ne bouge pas : la carte qui l'a reste en vue si les rayons l'ont poussée vers le bas.
+  // Ces rayons sont du contenu comme les autres : sur un accueil qui n'en avait aucun, ils prennent la place de la phrase et des tuiles des bibliothèques (`libraryTiles`), et le focus d'une tuile passe à leur première carte.
   function recommendations(spot, still) {
     H.api('/api/recommendations').then(function (data) {
       var shelves = (data && data.shelves || []).filter(function (s) { return s.anchor && s.items && s.items.length; });
       var home = spot.parentNode;
       if (!shelves.length || !still() || !home) return;
-      shelves.forEach(function (s) { home.insertBefore(recommendShelf(s), spot); });
-      var note = home.querySelector('.libtiles-note');          // « Rien à reprendre ni à découvrir » ne dit plus vrai
+      var drawn = shelves.map(function (s) { return home.insertBefore(recommendShelf(s), spot); });
+      var a = document.activeElement, tiles = home.querySelector('.libtiles'), note = home.querySelector('.libtiles-note');
+      var lost = tiles && a && tiles.contains(a);
       if (note) note.parentNode.removeChild(note);
-      var a = document.activeElement;
-      if (a && home.style.display !== 'none' && home.contains(a) && (spot.compareDocumentPosition(a) & 4) && !H.overlay.isOpen()) H.focus.set(a);
+      if (tiles) tiles.parentNode.removeChild(tiles);
+      if (home.style.display === 'none' || H.overlay.isOpen()) return;
+      if (lost) H.focus.set(firstIn(drawn[0]));
+      else if (a && home.contains(a) && (spot.compareDocumentPosition(a) & 4)) H.focus.set(a);
     }).catch(function () { /* rien : l'accueil reste tel qu'il est */ });
   }
   // La pochette d'une tuile de bibliothèque : celle de son dernier ajout (pour un artiste, celle de son album), ou rien.

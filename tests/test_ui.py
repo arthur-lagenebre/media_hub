@@ -7221,7 +7221,8 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), key)             # le focus n'a pas bougé
         self.assertTrue(page.evaluate("(() => { var r = document.activeElement.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })()"))     # et la carte est restée en vue
 
-    def test_shelves_arriving_on_a_home_of_tiles_take_away_the_sentence_and_keep_the_tiles(self):
+    def test_shelves_arriving_on_a_home_of_tiles_take_the_place_of_the_sentence_and_the_tiles(self):
+        """Les suggestions sont du contenu : arrivées sur un accueil sans autre rayon, elles remplacent la phrase et les tuiles des bibliothèques, et le focus d'une tuile passe à leur première carte."""
         self.call("alice", "/api/me/settings", {"home_latest": "hide", "home_unseen": "hide"})
         self.like("alice", "ancrepolar", "ancrewestern")
         held, flow = [], {"hold": True}
@@ -7229,12 +7230,25 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         page.route("**" + self.ROUTE, lambda r: held.append(r) if flow["hold"] else r.continue_())
         with page.expect_request(lambda r: r.url.endswith(self.ROUTE)):
             page.reload()
-        self.view(page, ".libtiles-note").wait_for()                                                       # avant : la phrase et les tuiles
+        self.view(page, ".libtiles-note").wait_for()                                                       # avant : la phrase et les tuiles, la première avec le focus
+        page.wait_for_function("document.activeElement && document.activeElement.classList.contains('libtile')")
         flow["hold"] = False
         held[0].continue_()
         self.shelves(page).nth(1).wait_for()
         self.assertEqual(self.view(page, ".libtiles-note").count(), 0)
-        self.assertGreater(self.view(page, ".libtiles a.libtile").count(), 0)
+        self.assertEqual(self.view(page, ".libtiles").count(), 0)
+        first = self.shelves(page).first.locator(".card").first
+        self.assertEqual(page.evaluate("document.activeElement.getAttribute('data-key')"), first.get_attribute("data-key"))
+
+    def test_shelves_arriving_on_a_home_that_has_other_shelves_never_bring_tiles(self):
+        """Avec « Pas encore vu » à côté des suggestions, l'accueil n'a jamais de tuiles, ni avant ni après leur arrivée."""
+        self.call("alice", "/api/me/settings", {"home_latest": "hide"})
+        self.like("alice", "ancrepolar", "ancrewestern")
+        page, _ = self.opened("alice")
+        self.shelves(page).nth(1).wait_for()
+        self.view(page, ".shelf.unseen .card").first.wait_for()
+        self.assertEqual(self.view(page, ".libtiles").count(), 0)
+        self.assertEqual(self.view(page, ".libtiles-note").count(), 0)
 
     def test_with_a_single_liked_film_there_is_no_shelf(self):
         self.like("alice", "ancrepolar")
