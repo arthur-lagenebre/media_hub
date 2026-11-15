@@ -6578,6 +6578,40 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.count_rows(page, 1)
         self.assertEqual([(r["tmdb"], r["status"]) for r in self.call("admin", "/api/requests")["requests"]], [(9500, "pending")])
 
+    def arrive(self, title, tmdb):
+        """Le film `title` (TMDB `tmdb`) arrive dans la médiathèque ; il en repart à la fin du test."""
+        arrived = self.films / f"{title} (2014)" / f"{title} (2014).mkv"
+        fixtures.write_mkv(arrived, fixtures.movie_blocks(title, "Arrivé.", "2014-01-01", f"movie/{tmdb}", "Drame"))
+        self.addCleanup(self.rescan)
+        self.addCleanup(shutil.rmtree, arrived.parent, True)
+        self.rescan()
+
+    def test_a_request_whose_film_is_there_cannot_be_put_back_to_pending(self):
+        """Le serveur refuse (409) de remettre en attente une demande dont le film est là : le bouton n'est pas proposé. Une demande refusée le garde."""
+        self.ask("alice", 1000)
+        declined = self.ask("alice", 9500)["id"]
+        self.call("admin", f"/api/requests/{declined}/status", {"status": "declined"})
+        self.arrive("Film intermédiaire", 1000)
+        page = self.session("admin")
+        self.open(page, "#/admin?tab=demandes")
+        self.count_rows(page, 2)
+        there, refused = self.rows(page).filter(has_text="Film intermédiaire"), self.rows(page).filter(has_text="Absent Personne")
+        self.assertEqual(there.locator(".rqstatus").inner_text(), "Ajouté")
+        self.assertEqual(there.locator("button", has_text="Remettre en attente").count(), 0)
+        self.assertEqual(there.locator("a", has_text="Ouvrir").count(), 1)
+        self.assertEqual(refused.locator("button", has_text="Remettre en attente").count(), 1)
+
+    def test_marking_added_a_request_whose_film_arrived_meanwhile_keeps_the_focus_on_its_row(self):
+        """La liste a été lue avant l'arrivée du film : après « Marquer ajouté », « Remettre en attente » n'existe pas ; le focus va à « Ouvrir » de la même ligne, pas à la voisine."""
+        rid = self.ask("alice", 1000)["id"]
+        self.ask("alice", 9500)
+        page = self.session("admin")
+        self.open(page, "#/admin?tab=demandes")
+        self.count_rows(page, 2)
+        self.arrive("Film intermédiaire", 1000)
+        self.rows(page).filter(has_text="Film intermédiaire").locator("button", has_text="Marquer ajouté").click()
+        page.wait_for_function("k => document.activeElement && document.activeElement.getAttribute('data-key') === k", arg=f"open-{rid}")
+
     # --- Une demande qui disparaît ailleurs, un filtre, une erreur de chargement --------------
     def test_a_request_withdrawn_elsewhere_closes_the_window_on_the_card(self):
         rid = self.ask("alice", 1000)["id"]
