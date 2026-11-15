@@ -532,6 +532,27 @@ class TestChosenSheet(TempCase):
             self.enrich(show_id=777)
         self.assertIsNone(self.db.kv_get(enrich.pin_key(self.row)))
 
+    def unpin(self, resolve=42):
+        with mock.patch.object(enrich.lookup, "resolve_show_id", **({"side_effect": resolve} if callable(resolve) else {"return_value": resolve})) as patched:
+            found = enrich.unpin_show(self.tmdb, self.tmp / "posters", self.db, self.lib, self.row)
+        return found, patched
+
+    def test_giving_up_the_choice_lets_the_folder_name_decide_again(self):
+        self.enrich(show_id=4615)
+        found, resolve = self.unpin()
+        self.assertEqual(resolve.call_args.args[2], "99")
+        self.assertIsNone(self.db.kv_get(enrich.pin_key(self.row)))
+        self.assertEqual(found[1]["tmdb"], 42)
+
+    def test_the_choice_is_kept_when_tmdb_fails_or_finds_nothing_without_it(self):
+        self.enrich(show_id=4615)
+        self.assertIsNone(self.unpin(resolve=None)[0])
+        self.assertEqual(self.db.kv_get(enrich.pin_key(self.row)), 4615)
+        self.tmdb.series = mock.Mock(side_effect=enrich.TmdbError("HTTP 500"))
+        with self.assertRaises(enrich.TmdbError):
+            self.unpin()
+        self.assertEqual(self.db.kv_get(enrich.pin_key(self.row)), 4615)
+
     def test_the_choice_survives_what_a_scan_does_with_the_enrichment(self):
         self.enrich(show_id=4615)
         self.assertNotIn(enrich.pin_key(self.row), scan.enriched_for(self.db, "series").keys())

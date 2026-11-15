@@ -382,11 +382,16 @@ def withdraw(db, uid, rid, admin):
             raise
 
 
-def set_status(db, rid, status, reason):
-    """L'administrateur passe une demande à « added », « declined » (avec un motif facultatif) ou la remet en « pending ». Le motif n'est gardé que pour un refus ; `ack` revient à 0 pour tous ses demandeurs (une arrivée suivante se montrera de nouveau)."""
+def set_status(db, rid, status, reason, libs=()):
+    """L'administrateur passe une demande à « added », « declined » (avec un motif facultatif) ou la remet en « pending ». Le motif n'est gardé que pour un refus ; `ack` revient à 0 pour tous ses demandeurs (une arrivée suivante se montrera de nouveau).
+    409 pour remettre en attente une demande dont l'élément est dans l'une des bibliothèques `libs` (objets Library) : la lecture suivante la repasserait à « added » (voir `promote`). Pour « ce n'est pas la bonne version », la refuser avec un motif."""
     if status not in STATUSES:
         raise RequestError(400, "statut inconnu (pending, added ou declined)")
     reason = _text(reason, "motif") if status == "declined" else ""
+    if status == "pending":
+        row = db.one("SELECT kind, tmdb FROM requests WHERE id=?", (rid,))
+        if row is not None and (row["kind"], row["tmdb"]) in owned(db, libs):
+            raise RequestError(409, "L'élément est déjà dans la médiathèque : la demande ne peut pas rester en attente.")
     with db.write_lock:
         conn = db.connection()
         try:

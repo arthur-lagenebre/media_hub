@@ -353,6 +353,18 @@ class TestMigration(FolderCase):
         self.assertEqual(self.tree(), before)
         self.assertEqual((self.recorded("default"), self.recorded("3f9a1c0e5b7d2a46")), recorded)
 
+    def test_a_dubious_folder_name_in_the_base_does_not_stop_the_old_folder_from_being_renamed(self):
+        """Une valeur qui n'est pas un nom de dossier (base touchée à la main) compte comme absente : l'ancien dossier est rendu au compte, et la valeur est remplacée."""
+        for n, bad in enumerate(("../x", "a/b", " ")):
+            with self.subTest(bad=bad):
+                uid = f"{n:016x}"
+                self.legacy(uid, f"Léa{n}")
+                self.db.execute("UPDATE users SET inbox_dir=? WHERE id=?", (bad, uid))
+                self.assertEqual(self.inbox.migrate(), 1)
+                self.assertEqual(self.recorded(uid), f"Léa{n}")
+                self.assertTrue((self.tmp / "inbox" / f"Léa{n}" / "film.mkv").is_file())
+                self.assertFalse((self.tmp / "inbox" / uid).exists())
+
     def test_a_new_inbox_is_not_a_migration(self):
         add_user(self.db, "default", "Arthur")
         self.assertEqual(self.inbox.migrate(), 0)

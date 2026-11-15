@@ -175,6 +175,20 @@ def choose_show(tmdb, posters, db, lib, item, show_id):
         raise
 
 
+def unpin_show(tmdb, posters, db, lib, item):
+    """Retire la fiche TMDB choisie à la main et enrichit la série comme avant ce choix (le nom du dossier décide) ; rend ce que rend enrich_show.
+    Si TMDB échoue, ou ne trouve rien sans le choix (None), le choix est rendu : mieux vaut la fiche choisie qu'une série sans fiche."""
+    before = db.kv_get(pin_key(item))
+    db.kv_delete(pin_key(item))
+    found = None
+    try:
+        found = enrich_show(tmdb, posters, db, lib, item)
+    finally:
+        if found is None and before:
+            db.kv_set(pin_key(item), before)
+    return found
+
+
 def enrich_shows(cfg, db, lib, log=print, force=False):
     tmdb, posters = tmdb_client(cfg)
     done = failed = 0

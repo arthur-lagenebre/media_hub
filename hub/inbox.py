@@ -576,8 +576,9 @@ class Inbox:
         with self._names:
             if not self._old_folder_to_rename(uid):
                 return 0                              # déjà renommé, rien d'ancien à renommer, ou ce dossier est celui d'un autre compte
-            if self.folder_of(uid) is None:
-                self._record(uid, uid)               # l'ancien dossier est déjà celui du compte, tel quel : si la suite échoue, la base le dit
+            current = self.folder_of(uid)
+            if current is None or not is_folder_name(current):
+                self._record(uid, uid, current or "")      # l'ancien dossier est déjà celui du compte, tel quel : si la suite échoue, la base le dit ; une valeur qui n'est pas un nom de dossier est remplacée
             target = self._target_name(uid, account_name)
             if target == uid:
                 return 0
@@ -585,9 +586,10 @@ class Inbox:
             return 1
 
     def _old_folder_to_rename(self, uid):
-        """Le dossier nommé d'après l'identifiant `uid` est-il à renommer ? Non s'il l'a déjà été (la base a un autre nom), s'il n'existe pas (ou est un lien, une jonction), ou si un autre compte, nommé comme cet identifiant, le tient."""
+        """Le dossier nommé d'après l'identifiant `uid` est-il à renommer ? Non s'il l'a déjà été (la base a un autre nom), s'il n'existe pas (ou est un lien, une jonction), ou si un autre compte, nommé comme cet identifiant, le tient.
+        Une valeur de la base qui n'est pas un nom de dossier (base touchée à la main) compte comme absente : elle ne désigne aucun dossier."""
         current = self.folder_of(uid)
-        if (current is not None and current != uid) or not is_folder_name(uid) or not self._is_real_folder(self.root / uid):
+        if (current is not None and is_folder_name(current) and current != uid) or not is_folder_name(uid) or not self._is_real_folder(self.root / uid):
             return False
         return not self._held_by_other(uid, uid)
 

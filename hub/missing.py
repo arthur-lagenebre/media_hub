@@ -71,7 +71,7 @@ def owned_films(db, libs):
     owned = set()
     for lib in libs:
         if lib.kind == "movies":
-            owned.update(sagafile.by_tmdb(db.query("SELECT meta FROM items WHERE lib=? AND type='movie'", (lib.id,))))
+            owned.update(ident for ident in map(sagafile.tmdb_of, db.query("SELECT meta FROM items WHERE lib=? AND type='movie'", (lib.id,))) if ident is not None)
     shows = [lib.id for lib in libs if lib.kind == "shows"]
     if shows:
         rows = db.query(f"SELECT meta FROM entries WHERE lib IN ({','.join('?' * len(shows))}) AND meta LIKE ?", [*shows, '%"movie/%'])
