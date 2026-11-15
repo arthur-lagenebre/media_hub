@@ -230,14 +230,14 @@ def scan_movies(lib, known, enriched=None):
 # ---------------------------------------------------------------------------
 def _videos(folder):
     try:
-        return sorted((p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in naming.VIDEO_EXTS and not naming.EXTRA_NAME_RE.search(p.stem)), key=lambda p: p.name.casefold())
+        return sorted((p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in naming.VIDEO_EXTS and not naming.EXTRA_NAME_RE.search(p.stem)), key=lambda p: (p.name.casefold(), p.name))
     except OSError:
         return []
 
 
 def _subdirs(folder):
     try:
-        return sorted((p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(SKIPPED_PREFIXES) and not naming.SKIP_DIR_RE.match(p.name)), key=lambda p: p.name.casefold())
+        return sorted((p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(SKIPPED_PREFIXES) and not naming.SKIP_DIR_RE.match(p.name)), key=lambda p: (p.name.casefold(), p.name))
     except OSError:
         return []
 
@@ -311,7 +311,7 @@ def _show_item(lib, folder, container, seasons, found, enriched):
 
 def _show_entries(lib, item, found):
     entries = []
-    for season, path, rel, size, mtime, info, duration in sorted(found, key=lambda f: (f[0], f[5].get("number") or naming.detect_episode_number(f[1].name) or 9999, f[1].name.casefold())):
+    for season, path, rel, size, mtime, info, duration in sorted(found, key=lambda f: (f[0], f[5].get("number") or naming.detect_episode_number(f[1].name) or 9999, f[1].name.casefold(), f[1].name)):
         number = info.get("number")
         if number is None:
             number = naming.detect_episode_number(path.name)

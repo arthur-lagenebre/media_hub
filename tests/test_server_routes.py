@@ -910,9 +910,23 @@ class TestTmdbSheetRoutes(RouteCase):
         self.assertEqual((client, posters, db, lib.id, row["id"], show_id), (self.client, self.root / "posters", self.db, "lib", "s1", 4615))
 
     def test_what_is_not_a_series_of_tmdb_is_refused(self):
-        for given in ("", "Hercule", "https://example.com/tv/4615", "https://www.themoviedb.org/movie/4615", "movie/4615", -4, None, [4615], {}):
+        for given in ("", "Hercule", "https://example.com/tv/4615", "https://www.themoviedb.org/movie/4615", "movie/4615", -4, [4615], {}):
             self.assertEqual(self.post("/api/item/s1/tmdb", {"tmdb": given}).status, 400, given)
         self.assertEqual(self.post("/api/item/s1/tmdb", {}).status, 400)
+        self.choose_show.assert_not_called()
+
+    def test_null_gives_up_the_choice_and_the_detail_says_when_there_is_one(self):
+        with mock.patch.object(app.enrich, "unpin_show", return_value=({"name": "Hercule"}, {"year": "1995"})) as unpin:
+            self.assertNotIn("pinned", self.get("/api/item/s1").json())
+            self.db.kv_set(app.enrich.pin_key({"id": "s1"}), 4615)
+            self.assertIs(self.get("/api/item/s1").json()["pinned"], True)
+            reply = self.post("/api/item/s1/tmdb", {"tmdb": None})
+            self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
+            client, posters, db, lib, row = unpin.call_args.args
+            self.assertEqual((client, db, lib.id, row["id"]), (self.client, self.db, "lib", "s1"))
+            unpin.return_value = None
+            reply = self.post("/api/item/s1/tmdb", {"tmdb": None})
+            self.assertEqual((reply.status, reply.json()), (404, {"error": "TMDB ne trouve pas cette série sans choix manuel : la fiche choisie est gardée"}))
         self.choose_show.assert_not_called()
 
     def test_only_a_series_has_a_sheet_to_choose(self):

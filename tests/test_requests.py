@@ -508,14 +508,22 @@ class TestArrival(RequestCase):
         self.own("films", "m2", 2)
         self.assertEqual((self.get(self.alice, "/api/home").json()["requests_ready"], self.mine(self.alice)[0]["status"]), ([], "added"))
 
-    def test_putting_back_a_request_whose_film_is_there_makes_it_arrive_again_on_the_next_read(self):
+    def test_a_request_whose_film_is_there_cannot_be_put_back_on_hold(self):
+        """La lecture suivante la repasserait à « ajoutée » : le serveur refuse plutôt que de promettre ce qu'il ne tiendra pas. Rien ne change, même pas l'accusé de réception."""
         rid = self.ask(self.alice, 2).json()["id"]
         self.own("films", "m2", 2)
         self.mine(self.alice)
         self.post(self.alice, f"/api/requests/{rid}/ack")
-        reply = self.set_status(rid, "pending")                                       # le film est là : la lecture le voit aussitôt
-        self.assertEqual((reply.status, reply.json()["status"], reply.json()["item"]), (200, "added", "m2"))
-        self.assertEqual([r["id"] for r in self.get(self.alice, "/api/home").json()["requests_ready"]], [rid])
+        reply = self.set_status(rid, "pending")
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "L'élément est déjà dans la médiathèque : la demande ne peut pas rester en attente."}))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "added")
+        self.assertEqual(self.get(self.alice, "/api/home").json()["requests_ready"], [])
+
+    def test_a_declined_request_whose_film_is_absent_can_be_put_back_on_hold(self):
+        rid = self.ask(self.alice, 2).json()["id"]
+        self.set_status(rid, "declined", "non")
+        reply = self.set_status(rid, "pending")
+        self.assertEqual((reply.status, reply.json()["status"]), (200, "pending"))
 
     def test_readers_at_the_same_time_all_see_the_arrival_and_it_is_written_once(self):
         self.ask(self.alice, 2)
