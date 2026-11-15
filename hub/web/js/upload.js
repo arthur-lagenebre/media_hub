@@ -121,7 +121,7 @@
       return { el: h('section', { class: 'blank' }, h('h1', null, H.t('Envoyer')), h('p', null, reason)), nav: '#/upload', shown: function () { H.toast(reason, 5000); H.go('#/', true); } };
     }
     var el = h('section', { class: 'upload' });
-    var items = [], jobs = [], seq = 0, current = null, stopped = false, alive = true, over = 0, types = null, offers = [], offering = false, loadTimer = null;
+    var items = [], jobs = [], seq = 0, current = null, stopped = false, alive = true, over = 0, types = null, offers = [], offering = false, stale = false;
     // `items` : les lignes de la page (un fichier, ou un dossier) ; `jobs` : tous les fichiers à envoyer, ceux d'un dossier compris, dans l'ordre de la file.
     var list = h('div', { class: 'sends' });
     var sendPanel = h('section', { class: 'panel', hidden: true }, h('h2', null, H.t('Envois')), list);
@@ -185,6 +185,7 @@
       item.xhr = null;
       paint(item);
       pump();
+      settle();
     }
     function fail(item, text) { item.state = 'error'; item.error = text; release(item); }
     function answered(item, xhr) {
@@ -192,8 +193,8 @@
       try { data = JSON.parse(xhr.responseText); } catch (e) { data = null; }
       if (xhr.status === 201 && data) {
         item.state = 'done'; item.kept = data.name; item.sent = item.total;
+        stale = true;                    // « Mes envois » le montrera quand la file sera vide (release → settle)
         release(item);
-        refresh();
       } else if (xhr.status === 401) {
         expire(item);
       } else if (xhr.status === 429) {                                    // d'autres envois occupent le serveur : le fichier reprend sa place dans la file, on réessaie plus tard
@@ -207,8 +208,9 @@
     function expire(item) {            // la session a pris fin : rien ne passera plus, la file s'arrête (les fichiers restent listés pour qu'on sache ce qui n'est pas parti)
       stopped = true;
       jobs.forEach(function (i) {
-        if (i === item || i.state === 'wait') { clearTimeout(i.hold); i.hold = null; i.state = 'error'; i.error = H.t('Arrêté : la session a expiré.'); i.xhr = null; paint(i); }
+        if (i === item || i.state === 'wait') { clearTimeout(i.hold); i.hold = null; i.state = 'error'; i.error = H.t('Arrêté : la session a expiré.'); i.xhr = null; paint(i, true); }
       });
+      groupsOf(jobs).forEach(paintFolder);
       current = null;
       expired.hidden = false;
     }
@@ -217,16 +219,24 @@
         if (item.xhr.readyState === 4) { item.state = 'cancel'; release(item); } else item.xhr.abort();       // fini (on cherche pourquoi il a échoué) : rien à interrompre ; sinon onabort fait le reste, et le serveur efface le .part
         return;
       }
-      if (item.state === 'wait') { clearTimeout(item.hold); item.hold = null; item.state = 'cancel'; paint(item); if (!quiet) pump(); }
+      if (item.state === 'wait') { clearTimeout(item.hold); item.hold = null; item.state = 'cancel'; paint(item, quiet); if (!quiet) pump(); }     // `quiet` : l'appelant redessine les dossiers et relance la file
+    }
+    function groupsOf(some) {          // les dossiers de ces fichiers, chacun une fois : à redessiner après une boucle de `paint(…, true)`
+      var groups = [];
+      some.forEach(function (i) { if (i.group && groups.indexOf(i.group) < 0) groups.push(i.group); });
+      return groups;
     }
     function cancelThese(some) {       // d'abord ceux qui attendent : l'annulation de l'envoi en cours ne doit pas lancer le suivant
       some.forEach(function (i) { if (i.state === 'wait') cancel(i, true); });
+      groupsOf(some).forEach(paintFolder);
       some.forEach(function (i) { if (i.state === 'send') cancel(i); });
+      settle();
     }
     function cancelAll() { cancelThese(jobs.slice()); }
     function retry(some) {             // les fichiers en erreur repartent, en queue de file
       if (stopped) return;
-      some.forEach(function (i) { if (i.state === 'error') { i.state = 'wait'; i.error = ''; i.note = ''; i.sent = 0; paint(i); } });
+      some.forEach(function (i) { if (i.state === 'error') { i.state = 'wait'; i.error = ''; i.note = ''; i.sent = 0; paint(i, true); } });
+      groupsOf(some).forEach(paintFolder);
       pump();
     }
     function dismiss(item) {
@@ -316,7 +326,7 @@
       });
       items.push(group);
       list.appendChild(buildFolder(group));
-      group.files.forEach(function (item) { group.details.appendChild(build(item)); paint(item); });
+      group.files.forEach(function (item) { group.details.appendChild(build(item)); paint(item, true); });       // la ligne du dossier une seule fois, après : sinon N dessins de N fichiers
       paintFolder(group);
       sendPanel.hidden = false;
       pump();
@@ -359,7 +369,7 @@
       item.button = button; item.mode = mode;
       if (had) H.focus.set(button || (item.group && item.group.button) || choose, true);
     }
-    function paint(item) {
+    function paint(item, quiet) {      // `quiet` : sans redessiner la ligne de son dossier (une boucle sur les fichiers d'un dossier la redessine une fois, à la fin)
       var st = item.state, text = '', percent = 0;
       item.node.className = 'line ' + (item.group ? 'sendfile ' : 'send ') + st;
       item.node.setAttribute('data-state', st);
@@ -375,7 +385,7 @@
       item.meter.set(percent);
       // « Annuler » tant que l'envoi est à faire ou en cours ; ensuite « Retirer de la liste » (un fichier seul) ou « Réessayer » (un fichier en erreur d'un dossier)
       act(item, active(item) ? 'cancel' : item.group ? (st === 'error' && !stopped ? 'retry' : '') : 'drop');
-      if (item.group) paintFolder(item.group);
+      if (item.group && !quiet) paintFolder(item.group);
     }
     function paintFolder(group) {
       var done = 0, failed = 0, cancelled = 0, live = 0, sending = 0, sent = 0;
@@ -425,13 +435,12 @@
         if (e.status === 403) { H.toast(H.t('Tu n’as pas le droit d’envoyer des fichiers.'), 5000); H.go('#/', true); } else H.toast(e.message, 5000);
       });
     }
-    function refresh() {               // un fichier est arrivé : « Mes envois » le montre, sans relire toute la liste à chacun des fichiers d'un dossier
-      if (busy()) {
-        if (!loadTimer) loadTimer = setTimeout(function () { loadTimer = null; load(); }, 1500);
-      } else {
-        clearTimeout(loadTimer); loadTimer = null;
-        load();
-      }
+    // Des fichiers sont arrivés (`stale`) : « Mes envois » est relue une fois, quand la file est vide. Pas pendant : chaque lecture parcourt toute la boîte côté serveur
+    // et reconstruit la liste, ce qui ôterait le focus d'un bouton « Supprimer ». La progression reste visible dans les envois en cours.
+    function settle() {
+      if (!stale || busy() || !alive) return;
+      stale = false;
+      load();
     }
     function remove(f, i) {
       H.confirm({ title: H.t('Supprimer ce fichier ?'), ok: H.t('Supprimer'), danger: true,
@@ -454,10 +463,17 @@
     el.addEventListener('drop', function (e) {
       if (!hasFiles(e)) return;
       e.preventDefault(); over = 0; zone.classList.remove('over');
-      var dt = e.dataTransfer, files = [], folders = [];
-      for (var i = 0; i < dt.files.length; i++) {            // les entrées se lisent pendant l'événement : elles ne valent plus après
-        var entry = dt.items && dt.items[i] && dt.items[i].webkitGetAsEntry ? dt.items[i].webkitGetAsEntry() : null;
-        if (entry && entry.isDirectory) folders.push(entry); else files.push(dt.files[i]);
+      var dt = e.dataTransfer, files = [], folders = [], i;
+      if (dt.items && dt.items.length) {                     // `items` a aussi les textes glissés, que `files` n'a pas : on ne lit que `items`, pour que les deux listes ne se décalent pas
+        for (i = 0; i < dt.items.length; i++) {              // les entrées se lisent pendant l'événement : elles ne valent plus après
+          var it = dt.items[i];
+          if (it.kind !== 'file') continue;
+          var entry = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null, file;
+          if (entry && entry.isDirectory) folders.push(entry);
+          else if ((file = it.getAsFile())) files.push(file);
+        }
+      } else {
+        for (i = 0; i < dt.files.length; i++) files.push(dt.files[i]);      // un navigateur sans `items` : pas de dossier, seulement des fichiers
       }
       addFiles(files);
       folders.forEach(function (entry) {
@@ -492,7 +508,7 @@
         if (!busy()) return null;
         return { title: H.t('Quitter la page ?'), lead: [H.t('Des envois sont en cours ou en attente : si tu quittes cette page, ils seront annulés.')], ok: H.t('Quitter et annuler'), accept: cancelAll };
       },
-      destroy: function () { alive = false; offers = []; clearTimeout(loadTimer); cancelAll(); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('dragover', stray); window.removeEventListener('drop', stray); }
+      destroy: function () { alive = false; offers = []; cancelAll(); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('dragover', stray); window.removeEventListener('drop', stray); }
     };
   });
 

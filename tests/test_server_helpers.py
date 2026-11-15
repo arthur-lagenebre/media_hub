@@ -31,11 +31,11 @@ class TestOrderKey(unittest.TestCase):
         return app.order_key({"season": None, "disc": None, "number": None, "rel": "A/Piste.flac", **over})
 
     def test_a_file_without_season_or_number_goes_first_by_season_and_last_by_number(self):
-        self.assertEqual(self.key(), (-1, 0, 1e9, "a/piste.flac"))
+        self.assertEqual(self.key(), (-1, 0, 1e9, "a/piste.flac", "A/Piste.flac"))
 
     def test_the_numbers_are_kept_whatever_they_are(self):
-        self.assertEqual(self.key(season=0, disc=2, number=0), (0, 2, 0, "a/piste.flac"))
-        self.assertEqual(self.key(season=3, disc=0, number=7), (3, 0, 7, "a/piste.flac"))
+        self.assertEqual(self.key(season=0, disc=2, number=0), (0, 2, 0, "a/piste.flac", "A/Piste.flac"))
+        self.assertEqual(self.key(season=3, disc=0, number=7), (3, 0, 7, "a/piste.flac", "A/Piste.flac"))
 
     def test_the_tracks_of_an_album_go_by_disc_then_number_then_name(self):
         rows = [self.key(disc=2, number=1), self.key(disc=1, number=2), self.key(disc=1, number=1), self.key(disc=1, number=None)]
@@ -230,18 +230,42 @@ class TestSagaJson(unittest.TestCase):
 
 class TestReleaseKey(unittest.TestCase):
     def key(self, meta=None, year="", sort="titre"):
-        return app.release_key({"meta": json.dumps(meta or {}), "year": year, "sort": sort})
+        return app.release_key({"meta": json.dumps(meta or {}), "year": year, "sort": sort, "id": "x"})
 
     def test_the_date_of_the_sheet_wins_then_the_year_then_the_end_of_time(self):
-        self.assertEqual(self.key({"date": "2001-05-04"}, "1999"), ("2001-05-04", True, 0, "titre"))
-        self.assertEqual(self.key({}, "1999"), ("1999", True, 0, "titre"))
-        self.assertEqual(self.key(), ("9999", True, 0, "titre"))
+        self.assertEqual(self.key({"date": "2001-05-04"}, "1999"), ("2001-05-04", True, 0, "titre", "x"))
+        self.assertEqual(self.key({}, "1999"), ("1999", True, 0, "titre", "x"))
+        self.assertEqual(self.key(), ("9999", True, 0, "titre", "x"))
 
     def test_the_number_only_separates_films_of_the_same_day(self):
-        self.assertEqual(self.key({"part": 3}), ("9999", False, 3, "titre"))
-        self.assertEqual(self.key({"part": 0}), ("9999", False, 0, "titre"))
+        self.assertEqual(self.key({"part": 3}), ("9999", False, 3, "titre", "x"))
+        self.assertEqual(self.key({"part": 0}), ("9999", False, 0, "titre", "x"))
         rows = [self.key({"date": "2001", "part": 2}, sort="b"), self.key({"date": "2001"}, sort="a"), self.key({"date": "2001", "part": 1}, sort="c")]
         self.assertEqual([r[3] for r in sorted(rows)], ["c", "b", "a"])
+
+
+class TestTiesAreBrokenByIdentifier(unittest.TestCase):
+    """Deux éléments que le tri ne distingue pas (même titre, même année, même date d'ajout) gardent le même ordre, quel que soit celui dans lequel la base les rend."""
+
+    def rows(self):
+        base = {"sort": "alien", "title": "Alien", "year": "1979", "added": 100, "grp": "Scott", "meta": "{}"}
+        return [dict(base, id=ident) for ident in ("c", "a", "b")]
+
+    def assertStable(self, key, reverse=False):
+        rows = self.rows()
+        orders = {tuple(r["id"] for r in sorted(order, key=key, reverse=reverse)) for order in (rows, rows[::-1], rows[1:] + rows[:1])}
+        self.assertEqual(len(orders), 1, orders)
+
+    def test_every_library_sort_breaks_ties_by_identifier(self):
+        for name, (key, reverse) in app.SORTS.items():
+            with self.subTest(sort=name):
+                self.assertStable(key, reverse)
+        for kind, key in app.TITLE_SORTS.items():
+            with self.subTest(kind=kind):
+                self.assertStable(key)
+
+    def test_the_order_of_a_saga_breaks_ties_by_identifier(self):
+        self.assertStable(app.release_key)
 
 
 class TestSectionsJson(unittest.TestCase):

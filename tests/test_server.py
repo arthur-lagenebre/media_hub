@@ -287,7 +287,7 @@ class TestAlbumCover(unittest.TestCase):
                          {"Album Sans": (False, ""), "Album Avec": (True, "Cover.PNG"), "Album Rien": (False, "")})
 
     def test_albums_of_an_artist_go_by_year_then_name(self):
-        rows = [{"grp": grp, "year": year, "sort": sort} for grp, year, sort in (
+        rows = [{"grp": grp, "year": year, "sort": sort, "id": sort} for grp, year, sort in (
             ("Daft Punk", "2013", "random access memories"), ("Daft Punk", "2001", "discovery"), ("Daft Punk", "", "inconnu"), ("Daft Punk", "2001", "alive"),
             ("Air", "2004", "talkie walkie"), ("", "1999", "sans artiste"))]
         ordered = [r["sort"] for r in sorted(rows, key=TITLE_SORTS["music"])]

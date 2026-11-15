@@ -718,6 +718,7 @@
     'Les films et les séries que tu as demandés à l’administrateur, et où ils en sont': 'The movies and series you asked the administrator for, and where they stand',
     'Tu ne peux plus demander de film ni de série ; tes demandes déjà faites restent visibles': 'You can no longer request movies or series; the requests you already made stay visible',
     'L’administrateur t’a retiré le droit de demander des films ; tes demandes déjà faites restent ici.': 'The administrator took away your right to request movies; the requests you already made stay here.',
+    'Pas encore visible pour toi : demande à l’administrateur où le trouver.': 'Not visible to you yet: ask the administrator where to find it.',
     'Tu n’as aucune demande pour l’instant. Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée : « Demander ».': 'You have no requests yet. A movie missing from a saga, or from a person’s filmography, is requested from its greyed-out box: “Request”.',
     'Ton message : « {note} »': 'Your note: “{note}”',
     'Demandé le {date}': 'Requested on {date}',

@@ -4,7 +4,7 @@ Ce qui a été tranché, surtout les « non », pour ne pas le refaire ni le rep
 
 ## Refusé
 
-- **Épingler les images Docker** (`python:3.13-slim`, `tailscale/tailscale:stable`) **et la version de Pillow** (non, 5 novembre 2026). Inutile pour un NAS à la maison. *À rouvrir si* chaque redéploiement doit donner exactement la même chose.
+- **Épingler les images Docker** (`python:3.13-slim` du compose, `python:3.15-slim` de l'image toute faite, `tailscale/tailscale:stable`) **et la version de Pillow** (non, 5 novembre 2026). Inutile pour un NAS à la maison. *À rouvrir si* chaque redéploiement doit donner exactement la même chose.
 - **Un zip pour télécharger** un album, une saison ou une série (non). Toujours un fichier à la fois, enchaînés par le navigateur : une coupure ne fait perdre qu'un fichier, et la reprise se fait par requête `Range`. Le bouton de téléchargement est masqué sur la télé (`data-device="tv"`), dont les navigateurs téléchargent mal.
 - **Écrire l'affiche choisie dans le `.mkv`** (déconseillé). `mkvpropedit` est absent du conteneur, le film peut être ouvert en lecture pendant l'écriture. Si le besoin vient, le faire en ligne de commande côté `media_library`.
 - **Une passe globale de qualité du code** (`crapper`, `dryer`, `mutator`) **tant qu'une série de PR n'a pas touché beaucoup de fichiers Python d'un coup** (mesuré le 3 novembre 2026 : ni duplication ni mutant survivant dans le code récent, CRAP sous 10 partout). *À refaire* avant une publication.

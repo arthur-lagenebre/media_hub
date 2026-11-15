@@ -245,8 +245,20 @@
     }
 
     // --- Pistes ---------------------------------------------------------------------
+    // Un menu de pistes (Audio, Sous-titres, Qualité) à la fois : un bouton activé derrière un menu déjà ouvert (la télécommande, un double appui) ferme d'abord celui-ci.
+    // La fermeture passe par l'historique, donc s'achève plus tard : `wanted` garde le dernier menu demandé entre-temps, et lui seul s'ouvre.
+    var wanted = null;
+    function trackMenu(title, options, current, onPick) {
+      var show = function () { H.menu(title, options, current, onPick); };
+      if (wanted) { wanted = show; return; }
+      var top = H.overlay.top(), box = top && top.querySelector('.menu.choice');
+      var label = box && box.getAttribute('aria-label');
+      if (label !== H.t('Audio') && label !== H.t('Sous-titres') && label !== H.t('Qualité')) { show(); return; }
+      wanted = show;
+      H.overlay.close(function () { var next = wanted; wanted = null; if (next && document.body.contains(el)) next(); });
+    }
     function pickAudio() {
-      H.menu(H.t('Audio'), plan.audio.map(function (a) { return { label: H.tr(a.label) + (a.commentary ? ' ' + H.t('(commentaires)') : ''), value: a.index }; }), audioIdx, function (v) {
+      trackMenu(H.t('Audio'), plan.audio.map(function (a) { return { label: H.tr(a.label) + (a.commentary ? ' ' + H.t('(commentaires)') : ''), value: a.index }; }), audioIdx, function (v) {
         if (v === audioIdx) return;
         audioIdx = v; open(cur());
       });
@@ -255,7 +267,7 @@
       var opts = [{ label: H.t('Désactivés'), value: '' }].concat(plan.subs.map(function (s) {
         return { label: H.tr(s.label), detail: s.text ? H.tr(s.where) : s.image ? H.t('image · {where}', { where: H.tr(s.where) }) : H.t('image, non prise en charge'), value: s.id, disabled: !s.text && !s.image };
       }));
-      H.menu(H.t('Sous-titres'), opts, subs.sel, function (v) {
+      trackMenu(H.t('Sous-titres'), opts, subs.sel, function (v) {
         setSub(v);
         var track = plan.subs.filter(function (s) { return s.id === v; })[0];
         H.pref('subLang', v ? (track && track.lang) || 'any' : 'off');
@@ -264,7 +276,7 @@
     function pickQuality() {
       var now = H.pref('quality') || 'auto';
       var opts = Object.keys(QUALITIES).map(function (k) { return { label: QUALITIES[k].label, detail: k === now ? MODES[plan.mode] : '', value: k }; });
-      H.menu(H.t('Qualité'), opts, now, function (v) { H.pref('quality', v); level = 0; open(cur()); });
+      trackMenu(H.t('Qualité'), opts, now, function (v) { H.pref('quality', v); level = 0; open(cur()); });
     }
     function chooseDefaultSub() {
       var want = H.pref('subLang'), text = plan.subs.filter(function (s) { return s.text; }), list = text.concat(plan.subs.filter(function (s) { return s.image; })), pick = null;
