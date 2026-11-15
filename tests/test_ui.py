@@ -676,6 +676,26 @@ class TestVideoPlayer(UiCase):
         self.assertEqual(self.page.locator(".veil").count(), 0)
         self.assertIn("#/play/", self.page.url)                        # Retour a fermé le menu, pas le film
 
+    def test_the_track_menus_never_pile_up(self):
+        """Un bouton « Audio », « Sous-titres » ou « Qualité » activé derrière un menu déjà ouvert (la télécommande, un double appui) ferme d'abord ce menu : une seule fenêtre à la fois."""
+        self.begin("films", "Long")
+        self.wait_playing()
+        menus = "Array.prototype.map.call(document.querySelectorAll('.veil .menu'), function (m) { return m.getAttribute('aria-label'); })"
+        button = "Array.prototype.filter.call(document.querySelectorAll('.player .btn'), function (b) { return b.textContent.indexOf(%r) >= 0; })[0].click()"
+        self.page.locator(".player .btn", has_text="Sous-titres").click()
+        self.page.wait_for_selector(".veil .opt")
+        for label, expected in (("Sous-titres", "Sous-titres"), ("Audio", "Audio"), ("Audio", "Audio"), ("Qualité", "Qualité"), ("Sous-titres", "Sous-titres")):
+            self.page.evaluate(button % label)
+            self.page.wait_for_function(f"(() => {{ var m = {menus}; return m.length === 1 && m[0] === {expected!r}; }})()", timeout=5000)
+        self.page.evaluate(button % "Audio")
+        self.page.evaluate(button % "Sous-titres")
+        self.page.wait_for_function(f"(() => {{ var m = {menus}; return m.length === 1 && m[0] === 'Sous-titres'; }})()", timeout=5000)
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.page.evaluate(menus), ["Sous-titres"])
+        self.press("Escape", wait=400)
+        self.assertEqual(self.page.locator(".veil").count(), 0)
+        self.assertIn("#/play/", self.page.url)                        # Retour a fermé le seul menu, pas le film
+
     def test_in_full_screen_the_menus_and_the_messages_show_over_the_film(self):
         """En plein écran, seul le lecteur est affiché : le menu « Sous-titres » et les messages doivent s'y poser, puis revenir dans la page à la sortie."""
         self.begin("films", "Long")
@@ -5665,8 +5685,13 @@ class InboxUiCase(unittest.TestCase):
         }
         function build(node) { return node.children ? folder(node.name, node.children.map(build), node.failAfter) : leaf(node.name, node.text, node.broken); }
         var specs = Array.isArray(spec) ? spec : [spec], el = document.querySelector('#views > .view.upload:not([style*="none"])');
-        var dt = { types: ['Files'], files: specs.map(function (s) { return new File(s.children ? [] : [s.text], s.name); }),
-                   items: specs.map(function (s) { var entry = s.children ? build(s) : { isFile: true, isDirectory: false, name: s.name }; return { webkitGetAsEntry: function () { return entry; } }; }) };
+        var files = [], items = specs.map(function (s) {                    // comme le navigateur : `items` a aussi les textes glissés (`{"string": …}`), `files` seulement les fichiers et dossiers
+            if (s.string !== undefined) return { kind: 'string', type: 'text/plain', webkitGetAsEntry: function () { return null; }, getAsFile: function () { return null; } };
+            var file = new File(s.children ? [] : [s.text], s.name), entry = s.children ? build(s) : { isFile: true, isDirectory: false, name: s.name };
+            files.push(file);
+            return { kind: 'file', webkitGetAsEntry: function () { return entry; }, getAsFile: function () { return file; } };
+        });
+        var dt = { types: ['Files'], files: files, items: items };
         var event = new Event('drop', { bubbles: true, cancelable: true });
         Object.defineProperty(event, 'dataTransfer', { value: dt });
         el.dispatchEvent(event);
@@ -5687,6 +5712,32 @@ class InboxUiCase(unittest.TestCase):
         self.confirm(page)
         self.folders(page, "done").wait_for()
         self.assertEqual(self.tree(), ["Mini/Sous/m2.srt", "Mini/m1.srt"])
+
+    def test_text_dropped_with_a_folder_and_a_file_does_not_shift_them(self):
+        """Un texte glissé avec un dossier et un fichier est dans `items`, pas dans `files` : le dossier reste un dossier, le fichier part sous son nom."""
+        page = self.upload_page()
+        posts = self.posts(page)
+        page.evaluate(self.DROP, [{"string": "un texte"}, {"name": "Dossier", "children": [{"name": "d.srt", "text": "d"}]}, {"name": "seul.srt", "text": "s"}])
+        self.assertIn("Envoyer le dossier « Dossier » : 1 fichier", self.dialog(page).locator(".lead").inner_text())
+        self.confirm(page)
+        self.folders(page, "done").wait_for()
+        self.wait_for(lambda: self.sends(page, "done").count() == 2)
+        self.assertEqual(self.tree(), ["Dossier/d.srt", "seul.srt"])
+        self.assertEqual(len(posts), 2)
+
+    def test_my_uploads_are_read_once_after_a_folder_not_during(self):
+        """Pendant l'envoi d'un dossier, « Mes envois » n'est pas relue (elle reconstruirait la liste sous le focus) : une seule lecture quand la file se vide."""
+        page = self.upload_page()
+        reads = []
+        page.on("request", lambda r: reads.append(r.url) if r.method == "GET" and "/api/inbox" in r.url else None)
+        self.throttle(page, 40_000)
+        root = self.make_folder("Lot", {f"f{n}.mkv": bytes([65 + n]) * 30_000 for n in range(4)})
+        self.pick_folder(page, root)
+        self.confirm(page)
+        self.folders(page, "done").wait_for(timeout=30000)
+        page.wait_for_timeout(2000)
+        self.assertEqual(len(reads), 1, reads)
+        self.assertEqual(page.locator("#views > .view:visible .mine-file").count(), 4)
 
     def test_several_folders_dropped_with_a_file_are_confirmed_one_after_the_other(self):
         page = self.upload_page()
@@ -6405,6 +6456,23 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.assertIn("case grisée", self.view(page, ".reqempty").inner_text())
         page.keyboard.press("Escape")                                                                       # Retour remonte aux paramètres
         self.shown(page, "#/settings?tab=compte")
+
+    def test_an_added_request_the_account_cannot_open_says_to_ask_the_administrator(self):
+        """Ajoutée, mais sans élément que le compte voit (une bibliothèque qui lui est cachée, ou marquée ajoutée avant le scan) : la ligne le dit, sans dire où, au lieu de rester muette."""
+        rid = self.ask("alice", 297762)["id"]
+        self.call("admin", f"/api/requests/{rid}/status", {"status": "added"})
+        self.ask("alice", 9500)
+        page = self.session("alice")
+        page.goto(self.base + "/#/requests")
+        self.count_rows(page, 2)
+        added, pending = self.rows(page).filter(has_text="Wonder Woman"), self.rows(page).filter(has_text="Absent Personne")
+        self.assertEqual(added.locator(".rqhint").inner_text(), "Pas encore visible pour toi : demande à l’administrateur où le trouver.")
+        self.assertEqual(added.locator("a").count(), 0)                                                     # rien à ouvrir
+        self.assertEqual(pending.locator(".rqhint").count(), 0)
+        english = self.session("alice", lang="en")
+        english.goto(self.base + "/#/requests")
+        self.count_rows(english, 2)
+        self.assertEqual(self.rows(english).locator(".rqhint").inner_text(), "Not visible to you yet: ask the administrator where to find it.")
 
     # --- L'accueil ---------------------------------------------------------------
     def test_an_arrived_request_is_on_the_home_until_it_is_opened(self):
