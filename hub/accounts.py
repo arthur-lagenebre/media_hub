@@ -23,6 +23,7 @@ from functools import partial
 
 from . import prefs
 from . import requests
+from . import suggestions
 
 FIRST_ID = "default"
 ROLES = ("admin", "user")
@@ -402,7 +403,7 @@ def revoke_sessions(db, uid):
 
 
 def delete(db, uid):
-    """Supprime le compte, ses droits, sa progression, ses avis, ses demandes (une demande qui n'a plus de demandeur disparaît), ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction.
+    """Supprime le compte, ses droits, sa progression, ses avis, ses demandes (une demande qui n'a plus de demandeur disparaît), ses suggestions, ses playlists et ses clés `dismiss:` ; jamais le dernier administrateur. Une seule transaction.
     Son dossier de la boîte de réception et les fichiers qu'il contient restent en place (rien n'est perdu) : le lien (`users.inbox_dir`) disparaît avec la ligne, et l'administrateur voit ce dossier sous son nom comme celui d'un compte supprimé."""
     with db.write_lock:
         conn = db.connection()
@@ -416,6 +417,7 @@ def delete(db, uid):
             conn.execute("DELETE FROM rights WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM ratings WHERE user_id=?", (uid,))
             requests.forget_user(conn, uid)
+            suggestions.forget_user(conn, uid)
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE profile=?)", (uid,))
             conn.execute("DELETE FROM playlists WHERE profile=?", (uid,))
             prefix = f"dismiss:{uid}:"

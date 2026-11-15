@@ -81,7 +81,7 @@ Trois façons de se présenter :
 
 ```json
 {"version": "…", "api": 1, "libraries": [{"id": "films", "label": "Films", "default_label": "Films", "kind": "movies", "count": 120, "scanned": 1730000000, "exists": true, "play": true, "download": true}],
- "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin", "can_upload": true, "can_request": true}, "can_request": true, "request_search": true, "requests_pending": 0, "settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"}, "busy": false, "streams": 0, "max_streams": 2}
+ "ffmpeg": true, "ffprobe": true, "tmdb": false, "auth": true, "user": {"id": "default", "name": "admin", "role": "admin", "can_upload": true, "can_request": true}, "can_request": true, "request_search": true, "requests_pending": 0, "suggestions_new": 0, "settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"}, "busy": false, "streams": 0, "max_streams": 2}
 ```
 
 - `libraries[].label` : le nom **affiché** de la bibliothèque (celui que l'administrateur a choisi avec `POST /api/library/<id>/label`, voir plus bas, sinon `default_label`) ; `libraries[].default_label` : son nom d'origine (celui de la configuration), où revenir. **L'identifiant `id` ne change jamais** : droits, préférences et données s'y accrochent ; un client s'en sert comme clé et n'écrit que `label`. Le même `label` s'écrit dans `GET /api/home`, `/api/search`, `/api/person`, `library` de `GET /api/library/<id>`, `/api/item/<id>` et `/api/artist/…`, et dans l'intitulé des tâches (`Mise à jour · Feuilletons`). Les droits d'un compte (`GET /api/users`) sont indexés par identifiant : le client y met les libellés de `/api/state`.
@@ -488,6 +488,28 @@ Un compte demande un film ou une série qui n'est pas dans la médiathèque ; l'
 | 502 | `TMDB ne répond pas, réessaie plus tard` | TMDB injoignable, délai de 10 s dépassé, réponse illisible ou inattendue, ou clé refusée ; un seul essai, et rien du message technique (ni l'URL, qui porte la clé). Le délai de 10 s vaut **par appel réseau** : sans `kind`, films puis séries sont deux appels successifs, une recherche peut donc durer jusqu'à 20 s |
 
 `GET /img/request/<id>?w=` : l'affiche d'une demande, comme `GET /img/item/<id>` (même `w`, `ETag`, 304) ; pour ses demandeurs et l'administrateur. 404 `pas d'affiche` quand elle n'a pas (encore) d'affiche, et pour la demande d'un autre compte ou une demande inconnue (les deux répondent pareil). Accepte `?token=<media_token>` comme les autres images.
+
+## Suggestions
+
+Un compte propose une amélioration du **hub lui-même** (« le lecteur devrait… », un bug, une idée) ; l'administrateur la lit, lui donne un état et, s'il veut, une réponse que l'auteur lit. Ce ne sont pas des suggestions de films : celles-là sont les [demandes](#demandes). Additif : `API_VERSION` reste 1.
+
+**Qui voit quoi.** Chaque suggestion reste entre son auteur et l'administrateur : un compte ne lit que les siennes. **Tout compte** peut suggérer, sans droit dédié et **sans plafond de nombre** ; seules les longueurs sont bornées.
+
+| Route | Qui | Corps | Réponse |
+| --- | --- | --- | --- |
+| `POST /api/suggestions` | tout compte | `{"category": "evolution" \| "improvement" \| "bug" \| "other", "text": "…"}` | **201** `<suggestion>`. 400 `catégorie inconnue (evolution, improvement, bug ou other)`, 400 `le texte est vide` (absent, ou blanc une fois les espaces de bord retirés), 400 `texte : un texte est attendu`, 400 `texte trop long (1000 caractères au plus)`, 400 `le corps doit être un objet JSON` |
+| `GET /api/suggestions?mine=1` | tout compte | | `{"suggestions": [<suggestion>]}` : les siennes, de la plus récente à la plus ancienne |
+| `GET /api/suggestions[?status=…][&category=…]` | administrateur | | `{"suggestions": [<suggestion> + "user"]}` : toutes, de la plus récente à la plus ancienne ; `status` et `category` en gardent une sorte. 403 `réservé à l'administrateur` ; 400 `statut inconnu (new, planned, done ou declined)`, 400 `catégorie inconnue (…)` |
+| `POST /api/suggestions/<id>/status` | administrateur | `{"status": "new" \| "planned" \| "done" \| "declined", "reply": "…"}` (`reply` facultatif, 500 caractères au plus : **absent, la réponse d'avant reste** ; `""` l'efface) | `<suggestion> + "user"` à jour. 400 `statut inconnu (…)`, 400 `réponse trop longue (500 caractères au plus)`, 400 `réponse : un texte est attendu`, 404 `suggestion inconnue`, 403 `réservé à l'administrateur` |
+| `POST /api/suggestions/<id>/delete` | l'auteur (la sienne) ; administrateur (toutes) | `{}` | `{"ok": true}`. 404 `suggestion inconnue` pour une suggestion inconnue ou qui n'est pas celle du compte (les deux répondent pareil) |
+
+**Objets.**
+
+- `<suggestion>` : `{"id", "category", "text", "status", "reply", "created", "updated"}`. `status` : `new` (pas encore traitée), `planned` (prévue), `done` (faite), `declined` (écartée) ; `reply` : la réponse de l'administrateur (`""` sans réponse) ; `created` / `updated` : horodatages Unix.
+- Pour l'administrateur, chacune porte en plus `user` : `{"id", "name"}`, son auteur (`name` vide pour un compte que la base n'a plus).
+- `GET /api/state` : `suggestions_new` (administrateur seulement, absent sinon) : le nombre de suggestions `new`.
+
+La suppression d'un compte emporte ses suggestions.
 
 ## Sagas composées à la main
 

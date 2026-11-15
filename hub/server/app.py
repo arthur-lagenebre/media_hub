@@ -46,6 +46,7 @@ from .. import prefs
 from .. import recommend
 from .. import requests as hub_requests
 from .. import request_search
+from .. import suggestions
 from .. import urls
 from .. import sagas as sagafile
 from ..sagas import Sagas
@@ -1012,7 +1013,7 @@ def api_state(h, m, q):
     headers, renewed = refreshed_session(h)
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
                  "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams,
-                 "can_request": h.user["can_request"], "request_search": bool(h.user["can_request"] and hub.finder.configured()), **requests_state(h), **renewed}, 200, headers)
+                 "can_request": h.user["can_request"], "request_search": bool(h.user["can_request"] and hub.finder.configured()), **requests_state(h), **suggestions_state(h), **renewed}, 200, headers)
 
 
 def next_entry(hub, entry):
@@ -3179,6 +3180,52 @@ def api_request_ack(h, m, q):
     """Le compte a vu que sa demande est arrivée : elle quitte `requests_ready` de son accueil. 404 pour une demande inconnue ou qui n'est pas la sienne."""
     h.body_json()
     request_call(hub_requests.acknowledge, h.hub.db, h.user["id"], int(m.group(1)))
+    h.send_json({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Suggestions (voir suggestions.py) : idées et remarques sur le hub, entre un compte et l'administrateur
+# ---------------------------------------------------------------------------
+suggestion_call = partial(module_call, suggestions.SuggestionError)
+
+
+def suggestions_state(h):
+    """Ce que `/api/state` dit des suggestions : leur nombre pas encore traité (`new`), pour l'administrateur seulement."""
+    return {"suggestions_new": suggestions.new_count(h.hub.db)} if h.user["role"] == "admin" else {}
+
+
+@route("GET", r"/api/suggestions")
+def api_suggestions(h, m, q):
+    """`?mine=1` : les suggestions du compte ; sans, toutes avec leurs auteurs, pour l'administrateur seulement (403 sinon), `?status=` et `?category=` en gardent une sorte."""
+    if q.get("mine") == "1":
+        h.send_json({"suggestions": suggestions.mine(h.hub.db, h.user["id"])})
+        return
+    require_admin(h)
+    h.send_json({"suggestions": suggestion_call(suggestions.everything, h.hub.db, q.get("status"), q.get("category"))})
+
+
+@route("POST", r"/api/suggestions")
+def api_suggestion_create(h, m, q):
+    """Le compte propose une amélioration du hub : `{"category": "evolution" | "improvement" | "bug" | "other", "text": "…"}` ; 201 et la suggestion. Tout compte, sans plafond."""
+    body = strict_body_dict(h)
+    h.send_json(suggestion_call(suggestions.create, h.hub.db, h.user["id"], body), 201)
+
+
+@route("POST", r"/api/suggestions/([0-9]{1,15})/status")
+def api_suggestion_status(h, m, q):
+    """L'administrateur donne un état (`new`, `planned`, `done`, `declined`) et, s'il veut, une réponse (`reply`, 500 caractères au plus ; absente, celle d'avant reste) ; rend la suggestion comme `GET /api/suggestions`."""
+    require_admin(h)
+    body = strict_body_dict(h)
+    sid = int(m.group(1))
+    suggestion_call(suggestions.set_status, h.hub.db, sid, body.get("status"), body.get("reply"))
+    h.send_json(suggestion_call(suggestions.one, h.hub.db, sid))          # supprimée entre-temps : 404, comme une inconnue
+
+
+@route("POST", r"/api/suggestions/([0-9]{1,15})/delete")
+def api_suggestion_delete(h, m, q):
+    """L'auteur retire sa suggestion ; l'administrateur supprime n'importe laquelle. 404 pour une suggestion inconnue ou qui n'est pas celle du compte."""
+    h.body_json()
+    suggestion_call(suggestions.withdraw, h.hub.db, h.user["id"], int(m.group(1)), h.user["role"] == "admin")
     h.send_json({"ok": True})
 
 

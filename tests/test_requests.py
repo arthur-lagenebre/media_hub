@@ -818,7 +818,7 @@ class TestMigration(unittest.TestCase):
         conn.close()
         db = Database(path)
         self.assertEqual(db.kv_get("schema"), database.SCHEMA_VERSION)
-        self.assertEqual(database.SCHEMA_VERSION, 8)
+        self.assertEqual(database.SCHEMA_VERSION, 9)
         self.assertEqual([tuple(r) for r in db.query("SELECT name, can_request FROM users ORDER BY name")], [("alice", 1), ("boss", 1)])
         self.assertEqual([tuple(r) for r in db.query("SELECT profile, entry_id, position FROM progress")], [(alice["id"], "e1", 12.5)])
         self.assertEqual([tuple(r) for r in db.query("SELECT p.name, t.entry_id FROM playlists p JOIN playlist_tracks t ON t.playlist_id = p.id")], [("Été", "t1")])
