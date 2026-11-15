@@ -254,6 +254,17 @@ def _poster(tmdb, folder, row, log):
     return True
 
 
+def _poster_outcome(tmdb, folder, row, log):
+    """Ce que devient l'affiche de `row` : "saved", "without" (TMDB n'en a pas) ou "failed" ; une clé refusée arrête la tâche."""
+    try:
+        return "saved" if _poster(tmdb, folder, row, log) else "without"
+    except TmdbAuthError:
+        raise RuntimeError("clé TMDB refusée par l'API") from None
+    except Exception as e:              # RecursionError d'un JSON trop imbriqué compris : seule cette affiche échoue, et rien du message (il peut porter l'URL, donc la clé)
+        log(f"  échec : {row['title']} ({type(e).__name__})")
+        return "failed"
+
+
 def fetch_posters(cfg, db, log, make=client):
     """Les affiches des demandes (sauf refusées) qui n'en ont pas et dont l'élément n'est dans aucune bibliothèque, depuis TMDB, dans HUB_DATA/tmdb. Un échec n'arrête que son affiche ;
     une clé refusée arrête la tâche. Rend {saved, failed, without} (`without` : TMDB n'en a pas)."""
@@ -268,15 +279,7 @@ def fetch_posters(cfg, db, log, make=client):
     todo = [r for r in rows if (r["kind"], r["tmdb"]) not in found and not (folder / hub_requests.poster_file(r["kind"], r["tmdb"])).is_file()]
     tmdb = make(cfg)
     for row in todo[:POSTERS_PER_RUN]:
-        try:
-            done = _poster(tmdb, folder, row, log)
-        except TmdbAuthError:
-            raise RuntimeError("clé TMDB refusée par l'API") from None
-        except Exception as e:              # RecursionError d'un JSON trop imbriqué compris : seule cette affiche échoue, et rien du message (il peut porter l'URL, donc la clé)
-            log(f"  échec : {row['title']} ({type(e).__name__})")
-            counts["failed"] += 1
-            continue
-        counts["saved" if done else "without"] += 1
+        counts[_poster_outcome(tmdb, folder, row, log)] += 1
     if len(todo) > POSTERS_PER_RUN:
         log(f"{len(todo) - POSTERS_PER_RUN} affiche(s) laissée(s) pour la prochaine fois.")
     log(f"{counts['saved']} affiche(s) téléchargée(s), {counts['without']} sans affiche sur TMDB, {counts['failed']} échec(s).")
