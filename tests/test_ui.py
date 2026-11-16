@@ -1881,6 +1881,46 @@ class TestCleanupConfirmation(UiCase):
         self.assertTrue(dialog.is_visible())                                                              # la fenêtre reste ouverte
         self.assertFalse([j for j in self.api("/api/jobs")["jobs"] if j["label"] == "Fichiers parasites · Nettoyage"])          # compter n'efface rien
 
+class TestBackupButton(UiCase):
+    """Administration > Serveur > Sauvegarde : le bouton télécharge l'archive de GET /api/backup sans quitter la page ; une erreur du serveur se lit dans un message."""
+
+    def open_server_tab(self):
+        self.open("#/admin?tab=serveur")
+        return self.view("[data-key=backup]")
+
+    def test_the_button_downloads_an_archive_of_the_hub_data(self):
+        button = self.open_server_tab()
+        self.assertIn("mot de passe", self.view(".panel", has_text="Sauvegarde").inner_text())          # l'archive se garde comme un mot de passe : la page le dit
+        with self.page.expect_download() as info:
+            button.click()
+        download = info.value
+        self.assertRegex(download.suggested_filename, r"^media_hub-\d+\.\d+\.\d+-\d{8}-\d{6}\.zip$")
+        with zipfile.ZipFile(download.path()) as z:
+            self.assertIn("hub.db", z.namelist())
+            self.assertIn("manifest.json", z.namelist())
+        self.page.locator("#toast", has_text="Sauvegarde téléchargée").wait_for()
+        self.assertEqual(self.page.evaluate("location.hash"), "#/admin?tab=serveur")          # on reste sur la page
+        self.until(lambda: button.is_enabled())
+
+    def test_a_server_error_is_shown_and_the_page_stays(self):
+        self.page.route("**/api/backup", lambda route: route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "sauvegarde impossible : disque plein"})))
+        self.open_server_tab().click()
+        self.page.locator("#toast", has_text="sauvegarde impossible : disque plein").wait_for()
+        self.assertEqual(self.page.evaluate("location.hash"), "#/admin?tab=serveur")
+        self.until(lambda: self.view("[data-key=backup]").is_enabled())                        # on peut réessayer
+
+    def test_the_button_is_reached_with_the_keyboard(self):
+        self.open_server_tab().wait_for()
+        self.view("[data-key=tab-serveur]").focus()
+        for _ in range(6):
+            if self.page.evaluate("document.activeElement.getAttribute('data-key')") == "backup":
+                break
+            self.press("ArrowDown")
+        self.assertEqual(self.page.evaluate("document.activeElement.getAttribute('data-key')"), "backup")
+        with self.page.expect_download():
+            self.press("Enter")
+
+
 class TestMusicQueueAndPlaylists(UiCase):
     def open_music(self):
         self.open("#/l/musique")
@@ -4487,7 +4527,7 @@ class TestSettings(UiCase):
             self.assertEqual(self.titles(), titles, name)
         self.open("#/admin")
         self.view(".tabs").wait_for()
-        for name, titles in (("Comptes", ["Comptes"]), ("Serveur", ["Serveur"]), ("Médiathèque", ["Bibliothèques", "Sagas", "Entretien", "Tâches"])):
+        for name, titles in (("Comptes", ["Comptes"]), ("Serveur", ["Serveur", "Sauvegarde"]), ("Médiathèque", ["Bibliothèques", "Sagas", "Entretien", "Tâches"])):
             self.tab(name)
             self.until(lambda: self.selected() == name)
             self.assertEqual(self.titles(), titles, name)

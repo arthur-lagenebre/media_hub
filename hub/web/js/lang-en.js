@@ -454,6 +454,14 @@
     'Comptes': 'Accounts',
     'Tâches': 'Tasks',
     'Serveur': 'Server',
+    'Sauvegarde': 'Backup',
+    'Télécharger une sauvegarde': 'Download a backup',
+    'Préparation…': 'Preparing…',
+    'Sauvegarde téléchargée : {name}': 'Backup downloaded: {name}',
+    'Données du hub': 'Hub data',
+    'Comptes, droits, progression, avis, playlists, demandes, sagas composées à la main, affiches choisies et photos d’artistes. Ni les médias, ni les caches, ni la boîte de réception.': 'Accounts, rights, progress, ratings, playlists, requests, hand-made sagas, chosen posters and artist photos. Not the media, the caches or the inbox.',
+    'L’archive contient les mots de passe (chiffrés de façon irréversible) et la clé qui garde les appareils connectés, sans autre protection : garde-la comme un mot de passe.': 'The archive holds the passwords (irreversibly hashed) and the key that keeps devices signed in, with no other protection: keep it like a password.',
+    'Pour restaurer : serveur arrêté, python -m hub restore <archive> (voir deploy/README.md, « Sauvegarder et restaurer »).': 'To restore: with the server stopped, python -m hub restore <archive> (see deploy/README.md, “Sauvegarder et restaurer”).',
     'jamais': 'never',
     'à l’instant': 'just now',
     'il y a {n} min': '{n} min ago',
@@ -1034,6 +1042,8 @@
     'réglage inconnu : {name}': 'unknown setting: {name}',
     'valeur inconnue pour {name} : {value}': 'unknown value for {name}: {value}',
 
+    // --- Sauvegarde (hub/backup.py, GET /api/backup) ---
+    'sauvegarde impossible : {why}': 'backup failed: {why}',
     // --- Boîte de réception (hub/inbox.py, routes /api/inbox) ---
     'nom du fichier attendu (?name=…)': 'file name expected (?name=…)',
     'nom du fichier vide ou illisible': 'file name empty or unreadable',

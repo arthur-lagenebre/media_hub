@@ -15,11 +15,16 @@ from pathlib import Path
 from unittest import mock
 
 from hub import __main__ as cli
-from hub import __version__, accounts, backup
+from hub import __version__, accounts, backup, runlock
 from hub.db import SCHEMA_VERSION, Database
 from tests.rig import MiniHub, call
 
 PASSWORD = "un-mot-de-passe-long"
+
+
+def contents(folder):
+    """Ce que contient `folder`, sans le fichier du verrou (hub.lock), qui reste après usage."""
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.name != runlock.NAME)
 
 
 def names_in(archive):
@@ -131,7 +136,7 @@ class TestRestore(BackupCase):
         self.make()
         target = self.empty_install()
         backup.restore(self.archive, target / "hub.db", target)
-        self.assertEqual(sorted(p.name for p in target.iterdir()), ["artists", "hub.db", "posters", "sagas.json"])
+        self.assertEqual([p for p in contents(target) if "/" not in p], ["artists", "hub.db", "posters", "sagas.json"])
 
     def test_an_existing_installation_is_not_replaced_without_being_asked(self):
         self.make()
@@ -155,6 +160,32 @@ class TestRestore(BackupCase):
         self.assertEqual((self.data / "posters" / "film.jpg").read_bytes(), b"affiche")
         self.assertTrue((self.data / "img" / "cache.jpg").exists())             # les caches ne sont pas touchés
         self.assertTrue((self.data / "inbox" / "alice" / "film.mkv").exists())
+
+    def test_a_restoration_is_refused_while_the_server_holds_the_data(self):
+        self.make()
+        server = runlock.hold(self.data)
+        self.addCleanup(runlock.release, server)
+        before, base = contents(self.data), (self.data / "hub.db").read_bytes()
+        with self.assertRaises(backup.BackupError) as said:
+            backup.restore(self.archive, self.data / "hub.db", self.data, replace=True)
+        self.assertIn("serveur", said.exception.message)
+        self.assertEqual(contents(self.data), before)
+        self.assertEqual((self.data / "hub.db").read_bytes(), base)
+
+    def test_the_restoration_holds_the_lock_while_it_works_and_frees_it_after(self):
+        self.make()
+        self.db.connection().close()
+        seen = []
+        real = backup._put_in_place
+        def watched(*args):
+            seen.append(runlock.hold(self.data))          # un serveur qui démarrerait pendant la restauration ne l'aurait pas
+            return real(*args)
+        with mock.patch.object(backup, "_put_in_place", watched):
+            backup.restore(self.archive, self.data / "hub.db", self.data, replace=True)
+        self.assertEqual(seen, [None])
+        after = runlock.hold(self.data)
+        self.addCleanup(runlock.release, after)
+        self.assertIsNotNone(after)
 
     def test_the_journal_files_of_the_old_base_do_not_survive_a_restoration(self):
         self.make()
@@ -187,7 +218,7 @@ class TestRefusal(BackupCase):
             backup.restore(self.archive, self.target / "hub.db", self.target)
         for word in words:
             self.assertIn(word, said.exception.message)
-        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual(contents(self.target), [])
 
     def edit_manifest(self, **fields):
         def change(name, data):
@@ -285,11 +316,11 @@ class TestRefusal(BackupCase):
 
     def test_a_refused_archive_leaves_an_existing_installation_as_it_was(self):
         self.edit_manifest(schema=SCHEMA_VERSION + 1)
-        before = sorted(p.relative_to(self.data).as_posix() for p in self.data.rglob("*"))
+        before = contents(self.data)
         base = (self.data / "hub.db").read_bytes()
         with self.assertRaises(backup.BackupError):
             backup.restore(self.archive, self.data / "hub.db", self.data, replace=True)
-        self.assertEqual(sorted(p.relative_to(self.data).as_posix() for p in self.data.rglob("*")), before)
+        self.assertEqual(contents(self.data), before)
         self.assertEqual((self.data / "hub.db").read_bytes(), base)
 
 

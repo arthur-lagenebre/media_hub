@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from hub import __main__ as cli
-from hub import accounts
+from hub import accounts, runlock
 from hub.db import Database
 
 PASSWORD = "un-mot-de-passe-long"
@@ -175,7 +175,7 @@ class Console(io.StringIO):
 
 def fake_config(tmp, **over):
     lib = types.SimpleNamespace(id="films", label="Films", kind="movies", path=Path(tmp) / "Films")
-    return types.SimpleNamespace(**{"bind": "127.0.0.1", "port": 8080, "libraries": [lib], "ffmpeg": "/usr/bin/ffmpeg", "repo": tmp, "password": "", **over})
+    return types.SimpleNamespace(**{"bind": "127.0.0.1", "port": 8080, "libraries": [lib], "ffmpeg": "/usr/bin/ffmpeg", "repo": tmp, "password": "", "data": Path(tmp) / "data", **over})
 
 
 class TestAnnounce(unittest.TestCase):
@@ -237,9 +237,10 @@ class TestAnnounce(unittest.TestCase):
 
 
 class TestMain(unittest.TestCase):
-    def serve(self, argv, serve_forever):
-        tmp = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, tmp, True)
+    def serve(self, argv, serve_forever, tmp=None):
+        if tmp is None:
+            tmp = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, tmp, True)
         hub = mock.Mock()
         hub.auth.return_value = True
         hub.inbox.check.return_value = None
@@ -260,6 +261,32 @@ class TestMain(unittest.TestCase):
         server.server_close.assert_called_once_with()
         self.assertIn("arrêt.", out)
         self.assertEqual(self.console.unflushed, "")
+
+    def test_the_server_holds_the_data_lock_while_it_serves_and_frees_it_on_exit(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        data = Path(tmp) / "data"
+        seen = []
+        def serving():
+            seen.append(runlock.hold(data))          # une restauration lancée pendant ce temps ne l'aurait pas
+            raise KeyboardInterrupt
+        self.serve([], serving, tmp)
+        self.assertEqual(seen, [None])
+        after = runlock.hold(data)
+        self.addCleanup(runlock.release, after)
+        self.assertIsNotNone(after)
+
+    def test_a_second_server_on_the_same_data_says_so_and_still_starts(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        other = runlock.hold(Path(tmp) / "data")
+        self.addCleanup(runlock.release, other)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            server, hub, _ = self.serve([], mock.Mock(side_effect=KeyboardInterrupt), tmp)
+        self.assertIn("ATTENTION", err.getvalue())
+        self.assertIn("autre serveur", err.getvalue())
+        server.serve_forever.assert_called_once_with()
 
     def test_user_hands_over_to_the_account_commands(self):
         with mock.patch.object(cli, "user_command") as users:
