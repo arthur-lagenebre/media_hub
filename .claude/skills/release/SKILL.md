@@ -35,7 +35,7 @@ Une étiquette `vX.Y.Z` poussée sur GitHub **publie une image** : le workflow `
 7. **Suivre l'image.** Le workflow `Image` démarre sur l'étiquette. Retrouve son passage avec `gh run list --workflow Image --branch vX.Y.Z --limit 1`, puis suis-le jusqu'au bout avec `gh run watch <id> --exit-status`. Il dure quelques minutes.
    - **Réussi** : donne le nom de l'image publiée (`ghcr.io/<propriétaire>/media_hub:X.Y.Z`, d'après le résumé du passage).
    - **Échoué** : donne la cause (`gh run view <id> --log-failed`). L'étiquette reste en place : ne la supprime pas. Dis ce qu'il faudrait faire (une nouvelle version corrigée) et laisse l'utilisateur décider.
-8. **Rendre compte** en peu de lignes : l'étiquette, son commit, les PR qu'elle contient, le résultat du workflow `Image`.
+8. **Rendre compte** en peu de lignes : l'étiquette, son commit, les PR qu'elle contient, le résultat du workflow `Image`. Si l'image est publiée, termine par **ce qu'il reste à faire sur le NAS** : dans TrueNAS, ouvrir l'app de media_hub (Applications > l'app > *Edit*), remplacer le numéro de `ghcr.io/arthur-lagenebre/media_hub:<ancien>` par `X.Y.Z` et enregistrer ; puis les vérifications de `deploy/README.md` (« Mettre à jour »). Cite aussi, s'il y en a, les consignes « Après une mise à jour du hub » du même fichier qui concernent les PR de cette version (un scan à relancer, par exemple). Tu ne touches pas au NAS : c'est l'utilisateur qui le fait.
 
 ## Garde-fous
 
