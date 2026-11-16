@@ -345,6 +345,8 @@
     'normale': 'normal',
     'Vitesse non prise en charge par ce navigateur.': 'This browser does not support that speed.',
     'Suivant': 'Next',
+    'Reculer de 10 s': 'Back 10 s',
+    'Avancer de 10 s': 'Forward 10 s',
     'Plein écran': 'Full screen',
     'Reprise à {time}': 'Resuming at {time}',
     'Lecture impossible': 'Can’t play this',

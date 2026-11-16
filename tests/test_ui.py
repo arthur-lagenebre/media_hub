@@ -643,6 +643,21 @@ class TestVideoPlayer(UiCase):
         self.assertEqual(self.page.locator(".cue i").count(), 1)      # l'italique est gardé
         self.assertIsNotNone(self.page.evaluate("localStorage.getItem('hub.subLang')"))     # le choix est mémorisé
 
+    def test_on_a_phone_every_control_stays_on_screen(self):
+        """Sur un téléphone, en hauteur comme en largeur, la rangée de boutons du lecteur ne passe plus sous le bord droit."""
+        self.begin("films", "Long")
+        self.wait_playing()
+        for size in ({"width": 390, "height": 844}, {"width": 844, "height": 390}):
+            self.page.set_viewport_size(size)
+            self.page.mouse.move(size["width"] / 2, size["height"] / 2)            # les contrôles réapparaissent
+            self.page.wait_for_function("!document.querySelector('.player .ctl').hidden", timeout=5000)
+            outside = self.page.evaluate("""() => [...document.querySelectorAll('.player .btns .btn')].filter(b => b.offsetParent)
+                .filter(b => { var r = b.getBoundingClientRect(); return r.left < 0 || r.right > innerWidth || r.bottom > innerHeight; })
+                .map(b => b.getAttribute('aria-label'))""")
+            self.assertEqual(outside, [], size)
+            sub = self.page.locator(".player .btn", has_text="Sous-titres")
+            self.assertEqual(sub.get_attribute("aria-label"), "Sous-titres")         # l'icône seule garde son nom
+
     def test_remote_seek_when_controls_hidden_and_resume(self):
         self.begin("films", "Direct")
         self.wait_playing()
