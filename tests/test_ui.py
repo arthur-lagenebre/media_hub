@@ -3705,12 +3705,10 @@ class TestLibraryToolbar(UiCase):
         before = self.widths()
         self.filters().nth(0).click()
         self.page.locator(".veil .opt", has_text="Science-Fiction").click()
-        self.page.wait_for_timeout(600)
-        self.assertEqual(self.filters().nth(0).inner_text(), "Genre : Science-Fiction")
+        expect(self.filters().nth(0)).to_have_text("Genre : Science-Fiction")         # le bouton se repeint à la réponse du serveur : on attend l'état, pas un délai
         self.filters().nth(1).click()
         self.page.locator(".veil .opt").nth(1).click()
-        self.page.wait_for_timeout(600)
-        self.assertNotEqual(self.filters().nth(1).inner_text(), "Tri : Titre")
+        expect(self.filters().nth(1)).to_have_text("Tri : Ajouts récents")
         self.assertEqual(self.widths(), before)
 
     def test_a_value_too_long_for_its_button_is_cut_and_the_button_does_not_grow(self):
