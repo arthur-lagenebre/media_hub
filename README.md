@@ -43,7 +43,7 @@ HUB_SRV=/chemin/vers/medias HUB_DATA=./demo-data python -m hub # http://127.0.0.
 
 ## Sur le NAS
 
-Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + media_hub), ffmpeg, mots de passe, télé.
+Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + l'image `ghcr.io/arthur-lagenebre/media_hub:<version>`, à un numéro précis : mettre à jour ou revenir en arrière, c'est changer ce numéro), ffmpeg, mots de passe, télé.
 
 ## Réglages (variables d'environnement)
 

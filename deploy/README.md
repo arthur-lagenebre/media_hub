@@ -10,6 +10,8 @@ media_hub  ── :8080 ──►  http://192.168.0.42:8080         (télé, à 
 
 **L'adresse `https://nas…` est ouverte à tout Internet** (Tailscale Funnel) : voir [Sécurité](#sécurité) et [Ouvrir à Internet (Funnel)](#ouvrir-à-internet-funnel) avant de la donner à quelqu'un.
 
+Le conteneur `media_hub` est l'**image publiée** à chaque version par le workflow `Image` : `ghcr.io/arthur-lagenebre/media_hub:<version>` (avec `media_library`, Pillow et un ffmpeg de Debian dedans), à un **numéro précis**, jamais `latest`. Mettre à jour, c'est changer ce numéro : voir [Mettre à jour](#mettre-à-jour) et [Revenir à la version d'avant](#revenir-à-la-version-davant). L'ancienne façon (sources montées dans `python:3.13-slim`) reste possible pour le développement ou un dépannage : voir [Variante : sources montées](#variante--sources-montées-dans-python313-slim).
+
 Le `media_hub` remplace l'ancien `updater` (page d'accueil + boutons « Mettre à jour » qui générait des pages HTML) : l'interface a son propre bouton de mise à jour. Tu peux garder le dossier Tailscale (`tailscale/`) tel quel : l'état de connexion est réutilisé, `serve.json` est le même.
 
 ## 1. Préparer les dossiers
@@ -18,13 +20,13 @@ Sur un dataset d'applications (ici `/mnt/tank/apps/media`, adapte) :
 
 ```text
 /mnt/tank/apps/media/
-  media_hub/          le dossier media_hub de cette archive
-  media_library/      le dossier media_library de cette archive
-  media_hub-data/     vide : base SQLite, cache d'images, Pillow (pylib/, installé au premier démarrage ; le supprimer pour le réinstaller), boîte de réception (inbox/, voir plus bas)
+  media_hub-data/     vide : base SQLite, cache d'images, boîte de réception (inbox/, voir plus bas)
   ffmpeg/             ffmpeg et ffprobe (étape 2)
   tailscale/          l'état Tailscale (vide au premier lancement)
   tailscale-config/   y copier deploy/serve.json
 ```
+
+Le code n'est plus copié sur le NAS : `media_hub` et `media_library` sont dans l'image, Pillow aussi. Les dossiers `media_hub/` et `media_library/` (et `media_hub-data/pylib/`) ne servent qu'à la [variante à sources montées](#variante--sources-montées-dans-python313-slim) : sans elle, tu peux les supprimer une fois la bascule vérifiée.
 
 Facultatif : un dataset à part, `/mnt/tank/HubReception`, pour la boîte de réception (voir [Boîte de réception](#boîte-de-réception)) ; il n'est utilisé que si tu actives son montage dans le compose.
 
@@ -35,8 +37,13 @@ Les bibliothèques gardent leur place (`/mnt/tank/media/Films`, `Series`, `Musiq
 Dans le shell du NAS :
 
 ```bash
-sh /mnt/tank/apps/media/media_hub/deploy/fetch-ffmpeg.sh /mnt/tank/apps/media/ffmpeg
+curl -fsSL -o /tmp/fetch-ffmpeg.sh https://raw.githubusercontent.com/arthur-lagenebre/media_hub/v0.25.0/deploy/fetch-ffmpeg.sh   # le dépôt est public ; ou copie deploy/fetch-ffmpeg.sh depuis ton poste
+sh /tmp/fetch-ffmpeg.sh /mnt/tank/apps/media/ffmpeg
 ```
+
+Si `ffmpeg/` contient déjà `ffmpeg` et `ffprobe`, rien à refaire : la bascule vers l'image ne le touche pas.
+
+L'image contient aussi le ffmpeg de Debian, mais le compose garde le ffmpeg figé : `HUB_FFMPEG: /opt/ffmpeg` l'emporte sur celui du `PATH` (voir `docs/decisions.md`). Attention : si `/opt/ffmpeg` ne contient pas l'outil (dossier vide, mauvais montage), le serveur se rabat **sans le dire** sur le ffmpeg de Debian ; `docker exec media-hub /opt/ffmpeg/ffmpeg -version` doit afficher `7.0.2`.
 
 Le script télécharge une version fixe (7.0.2) et refuse l'archive si sa somme SHA-256 n'est pas celle qu'il attend. Pour une autre version, changer `VERSION` et `SHA256` ensemble dans `fetch-ffmpeg.sh`.
 
@@ -46,16 +53,54 @@ Sans ffmpeg, le serveur ne sait que lire directement (fichiers compatibles) ; il
 
 1. Tailscale > Settings > Keys : crée une clé d'authentification (inutile si `tailscale/` contient déjà un état connecté).
 2. Copie `.env.example` en `.env`, à côté de `docker-compose.yml`, et remplis `TS_AUTHKEY`, `HUB_ADMIN` (nom du premier compte, `admin` par défaut), `HUB_PASSWORD` (son mot de passe, **obligatoire** : sans lui `docker compose up` refuse de démarrer, plutôt que de servir une médiathèque ouverte à tout le réseau local ; il ne sert qu'à créer ce premier compte), `TMDB_KEY` (facultative), `APPS`, `MEDIA`.
-3. TrueNAS : Apps > Discover Apps > Custom App > *Install via YAML* : colle `docker-compose.yml` (en remplaçant les `${...}` par leurs valeurs si l'éditeur ne lit pas le `.env`).
+3. TrueNAS : Apps > Discover Apps > Custom App > *Install via YAML* : colle `docker-compose.yml` (en remplaçant les `${...}` par leurs valeurs si l'éditeur ne lit pas le `.env`). TrueNAS télécharge l'image `ghcr.io/arthur-lagenebre/media_hub:<version>` du compose (voir [Si l'image ne se télécharge pas](#si-limage-ne-se-télécharge-pas)) : rien d'autre à installer, ni code, ni Pillow.
 4. Au premier démarrage, le serveur indexe les bibliothèques (quelques minutes pour des milliers de fichiers) ; l'avancement est dans le journal du conteneur et dans les *Tâches* de *Paramètres* > *Gestion* (en bas de la page).
 
 Vérification : `http://192.168.0.42:8080` demande le nom et le mot de passe (`HUB_ADMIN` / `HUB_PASSWORD`), puis affiche les bibliothèques.
+
+### Passer des sources montées à l'image (une fois)
+
+Pour une installation qui montait les sources dans `python:3.13-slim` (mises à jour par copie de `hub/` puis redémarrage) :
+
+1. **Garde une copie de l'ancien YAML** : TrueNAS > Applications > l'app > *Edit*, copie tout le texte dans un fichier sur ton poste. C'est ton retour arrière.
+2. Note la version qui tourne (*Paramètres* > *À propos*).
+3. Remplace le service `media_hub` par celui de `deploy/docker-compose.yml` : `image: ghcr.io/arthur-lagenebre/media_hub:0.25.0` ; retire `working_dir`, `command`, `PYTHONPATH`, `PYTHONUNBUFFERED`, `HUB_REPO` et les deux montages `${APPS}/media_hub` et `${APPS}/media_library`. **Garde** le montage `${APPS}/ffmpeg:/opt/ffmpeg:ro` et `HUB_FFMPEG`, les autres `HUB_*`, `TMDB_KEY`, `/data` et les bibliothèques. Le service `tailscale` ne change pas.
+4. *Save* : TrueNAS télécharge l'image et recrée le conteneur.
+5. Fais les vérifications de [Mettre à jour](#mettre-à-jour).
+
+**Les données ne bougent pas** : `media_hub-data` est monté au même endroit, la base, les comptes, la progression et la boîte de réception sont gardés. Si quelque chose ne va pas, recolle l'ancien YAML et enregistre. Une fois la bascule vérifiée, `media_hub/`, `media_library/` et `media_hub-data/pylib/` ne servent plus (garde-les tant que tu veux pouvoir revenir aux sources montées).
+
+### Ce qui change avec l'image
+
+- **Python 3.15** dans l'image (`python:3.15-slim`), au lieu de 3.13.
+- **`media_library` est figé dans l'image**, à la version de sa branche `main` au moment où l'étiquette du hub a été posée. Une modification de `media_library` n'atteint le hub qu'avec une **nouvelle version du hub** (et ses scripts lancés par `docker exec … /app/media_library/…` sont ceux de l'image).
+- **Pillow est inclus** : plus d'installation au premier démarrage ni de dossier `pylib/`.
+- Le code n'est plus sur le NAS : on ne corrige plus un fichier à chaud, une correction passe par une nouvelle version.
+
+## Mettre à jour
+
+1. Trouve le numéro : les étiquettes `vX.Y.Z` du dépôt (GitHub > *Tags*, ou *Packages* > `media_hub`), posées par `/release`, qui publie l'image `ghcr.io/arthur-lagenebre/media_hub:X.Y.Z` (sans le `v`). Attends que le workflow `Image` de l'étiquette soit vert.
+2. TrueNAS > Applications > l'app > *Edit* : dans le YAML, remplace le numéro de `image: ghcr.io/arthur-lagenebre/media_hub:<ancien>` par le nouveau, **jamais `latest`** (on ne saurait plus ce qui tourne ni à quoi revenir). Note l'ancien numéro.
+3. *Save* : TrueNAS télécharge l'image et redémarre le conteneur. Rien à copier, rien d'autre à redémarrer.
+4. Vérifie :
+   - *Paramètres* > *À propos* affiche la nouvelle version ;
+   - une lecture démarre (un film, et si possible un fichier qui passe en remux ou en transcodage, pour ffmpeg) ;
+   - l'accueil s'affiche avec ses rayons.
+5. Lis [Après une mise à jour du hub](#après-une-mise-à-jour-du-hub) : certaines versions demandent un scan.
+
+## Revenir à la version d'avant
+
+Remets l'ancien numéro dans le YAML de l'app (*Edit*), puis *Save*. Les données restent ; mais une version récente a pu modifier la base ou la boîte de réception d'une façon que l'ancienne ne connaît pas : lis d'abord [Retour arrière (version d'avant)](#retour-arrière-version-davant) de la boîte de réception. Pour revenir d'avant la bascule (sources montées), recolle l'ancien YAML gardé.
+
+### Si l'image ne se télécharge pas
+
+TrueNAS doit pouvoir télécharger l'image sans s'identifier : le **paquet ghcr.io doit être public**. Sur GitHub : profil > *Packages* > `media_hub` > *Package settings* > *Change visibility* > *Public*. Le dépôt public ne suffit pas toujours : un paquet publié par un workflow peut naître privé. Sinon TrueNAS devrait s'identifier à ghcr.io (un jeton GitHub enregistré sur le NAS), ce qu'on veut éviter. Vérifie depuis le shell du NAS : `docker pull ghcr.io/arthur-lagenebre/media_hub:0.25.0` (« unauthorized » ou « denied » : paquet privé ; « manifest unknown » : numéro inexistant, ou workflow `Image` pas encore fini).
 
 ## Comptes
 
 Chaque personne a son compte (progression, playlists, « Reprendre » à elle) ; les bibliothèques sont communes. `HUB_ADMIN` et `HUB_PASSWORD` ne servent qu'**une fois** : au démarrage, si la base n'a aucun compte, ils créent le premier (administrateur, identifiant `default`). Ensuite ils sont ignorés : changer `HUB_PASSWORD` dans le `.env` ne change plus le mot de passe (utilise `passwd` ci-dessous).
 
-**Mise à jour depuis une version sans comptes.** Remplace le dossier `media_hub`, ajoute `HUB_ADMIN` au `.env` (et à `docker-compose.yml` si tu le colles à la main), puis redémarre l'application. Le premier compte créé reprend la progression et les playlists existantes, rien n'est perdu. Chaque appareil (navigateur, télé, clients natifs) doit se reconnecter **une fois** avec le nom et le mot de passe ; les anciens jetons ne valent plus.
+**Mise à jour depuis une version sans comptes.** Passe à une version avec comptes (voir [Mettre à jour](#mettre-à-jour)), ajoute `HUB_ADMIN` au `.env` (et à `docker-compose.yml` si tu le colles à la main), puis redémarre l'application. Le premier compte créé reprend la progression et les playlists existantes, rien n'est perdu. Chaque appareil (navigateur, télé, clients natifs) doit se reconnecter **une fois** avec le nom et le mot de passe ; les anciens jetons ne valent plus.
 
 **Ajouter ou gérer des comptes.** Dans l'interface (*Paramètres* > *Comptes*, en administrateur), ou dans le shell du NAS (le conteneur s'appelle `media-hub` ; `-it` est nécessaire pour saisir le mot de passe sans l'afficher) :
 
@@ -75,7 +120,7 @@ Depuis le shell web de TrueNAS (Apps > media-hub > Shell), lance seulement `pyth
 
 **Sauvegarde.** Les comptes (noms, hachés de mots de passe), la progression et les playlists sont dans `hub.db`, sous `HUB_DATA` (ici `/mnt/tank/apps/media/media_hub-data`). Sauvegarde ce dossier (un snapshot du dataset suffit) ; sans lui, il faudrait recréer les comptes. Aucun mot de passe en clair n'y figure. Ce dossier contient aussi la [boîte de réception](#boîte-de-réception) (fichiers envoyés, parfois de plusieurs Go).
 
-**Hachage des mots de passe.** Le serveur utilise `scrypt` si l'OpenSSL de Python le fournit (c'est le cas de l'image `python:3.13-slim`). Vérifie-le :
+**Hachage des mots de passe.** Le serveur utilise `scrypt` si l'OpenSSL de Python le fournit (c'est le cas de l'image du hub, bâtie sur `python:3.15-slim`, comme de `python:3.13-slim`). Vérifie-le :
 
 ```bash
 docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt'))"
@@ -255,6 +300,8 @@ Il n'y a pas de réglage de taille par fichier ni par compte : la limite de data
 
 ### Retour arrière (version d'avant)
 
+Le retour lui-même se fait en remettant l'ancien numéro d'image (voir [Revenir à la version d'avant](#revenir-à-la-version-davant)) ; ce qui suit est à faire avant, si l'ancienne version date d'avant le renommage des dossiers de la boîte.
+
 Une ancienne version du hub cherche `inbox/<identifiant>/` et ne voit plus les dossiers renommés d'après le compte : **les fichiers ne sont pas perdus**, ils ne sont simplement plus listés (et le compte recevrait un dossier neuf nommé d'après l'identifiant). Deux issues : **rester sur la nouvelle version** (le plus simple), ou revenir en arrière en renommant les dossiers à la main, `<nom du compte>` vers `<identifiant>` (relevé avec `docker exec -it media-hub python -m hub user list` **avant** le retour), dans `media_hub-data/inbox/`. Une ancienne version ne connaît pas `HUB_INBOX` : si tu as activé le dataset, recopie d'abord son contenu dans `media_hub-data/inbox/`.
 
 ### Couper en urgence
@@ -318,15 +365,35 @@ Le fichier doit avoir la **taille exacte** de l'original (`wc -c test-funnel.mkv
 
 Efface ensuite `test-funnel.mkv` de la boîte (téléchargement/suppression dans *Gestion*, ou `rm` sur le NAS). Si l'un de ces points échoue, mets le résultat (code, durée, journal `docker logs media-hub`) dans une issue ou dans la page Notion des essais sur place (voir `docs/essais-sur-place.md`, qui y renvoie).
 
-## Image Docker (facultative)
+## L'image Docker
 
-Le compose ci-dessus monte les sources dans `python:3.13-slim`. À chaque étiquette de version (`vX.Y.Z`), `.github/workflows/image.yml` publie aussi une image toute faite, `ghcr.io/arthur-lagenebre/media_hub:<version>` (et `latest`), avec media_library, ffmpeg et Pillow dedans. Elle écoute `0.0.0.0:8080`, garde ses données dans `/data` et refuse de démarrer sans `HUB_PASSWORD` tant que la base n'a pas de compte. Les bibliothèques se montent sous `/srv`. Le compose n'a pas changé : l'image est une autre manière de déployer, pas un remplacement.
+C'est la voie de déploiement. À chaque étiquette de version (`vX.Y.Z`, posée par `/release`), `.github/workflows/image.yml` construit l'image (`deploy/Dockerfile`), l'essaie et la publie : `ghcr.io/arthur-lagenebre/media_hub:<version>` (et `latest`, que le compose n'utilise **pas**). Elle contient `media_library` (dans `/app/media_library`, `HUB_REPO` déjà réglé), le ffmpeg de Debian et Pillow. Elle écoute `0.0.0.0:8080`, garde ses données dans `/data` et refuse de démarrer sans `HUB_PASSWORD` tant que la base n'a pas de compte. Les bibliothèques se montent sous `/srv`. Le compose y ajoute le ffmpeg figé (`/opt/ffmpeg`), qui l'emporte sur celui de l'image.
+
+### Variante : sources montées dans `python:3.13-slim`
+
+L'ancienne façon, pour le développement ou un dépannage (essayer un correctif sans publier de version) : le code est copié sur le NAS (`${APPS}/media_hub` et `${APPS}/media_library`, voisins) et monté dans une image Python nue, et Pillow s'installe dans `media_hub-data/pylib` au premier démarrage. Une mise à jour = recopier `hub/` puis redémarrer l'application ; on ne sait plus exactement quelle version tourne. Dans le service `media_hub`, remplace `image:` et ajoute :
+
+```yaml
+    image: python:3.13-slim
+    working_dir: /app/media_hub
+    command: ["sh", "-c", "python -c 'import PIL' 2>/dev/null || pip install -q --disable-pip-version-check --target /data/pylib pillow || echo 'media_hub : Pillow non installé (facultatif)'; exec python -m hub"]
+    environment:            # à ajouter aux variables existantes
+      PYTHONPATH: /data/pylib
+      PYTHONUNBUFFERED: "1"
+      HUB_REPO: /app/media_library
+    volumes:                # à ajouter aux volumes existants
+      - ${APPS}/media_hub:/app/media_hub:ro
+      - ${APPS}/media_library:/app/media_library:ro
+```
+
+Pour revenir à l'image, remets la ligne `image: ghcr.io/arthur-lagenebre/media_hub:<version>` et retire ces lignes.
 
 ## Dépannage
 
 | Symptôme | Piste |
 | --- | --- |
-| « ffmpeg introuvable » dans le journal | le dossier monté en `/opt/ffmpeg` doit contenir `ffmpeg` **et** `ffprobe`, exécutables |
+| « ffmpeg introuvable » dans le journal | le dossier monté en `/opt/ffmpeg` doit contenir `ffmpeg` **et** `ffprobe`, exécutables (avec l'image, un `/opt/ffmpeg` vide fait plutôt prendre en silence le ffmpeg de Debian : `docker exec media-hub /opt/ffmpeg/ffmpeg -version`) |
+| L'app ne démarre pas après un changement de version : « unauthorized », « denied » ou « manifest unknown » | voir [Si l'image ne se télécharge pas](#si-limage-ne-se-télécharge-pas) : paquet ghcr.io privé, ou numéro sans image publiée (workflow `Image` échoué ou pas fini). Remets l'ancien numéro en attendant |
 | Image qui saccade en transcodage | `HUB_MAX_STREAMS=1`, ou lire en direct (H.264) : le plan de lecture annonce la raison |
 | 503 « trop de flux » | `HUB_MAX_STREAMS` atteint ; attendre ou l'augmenter |
 | Bibliothèque vide | le dossier doit s'appeler `Films`, `Series`, `Musique` ou `Livres` sous `/srv` (sinon `HUB_LIBRARIES`) |

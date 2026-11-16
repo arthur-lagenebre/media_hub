@@ -3,7 +3,9 @@
 # Deux conteneurs qui partagent le même réseau :
 #   tailscale  seul accès distant : rend le serveur joignable en HTTPS (https://nas.<ton-tailnet>.ts.net), avec Funnel (serve.json,
 #              AllowFunnel) donc par tout navigateur, sans Tailscale ; aucun autre port n'est ouvert vers l'extérieur ;
-#   media_hub  le serveur de la médiathèque, qui écoute sur le port 8080.
+#   media_hub  le serveur de la médiathèque, qui écoute sur le port 8080 : l'image publiée par le workflow « Image » à chaque version
+#              (ghcr.io/arthur-lagenebre/media_hub, avec media_library et Pillow dedans), rien à copier sur le NAS.
+# Mettre à jour : changer le numéro de version de l'image media_hub ci-dessous, puis enregistrer (deploy/README.md > « Mettre à jour »).
 # Sur la télé, à la maison : http://192.168.0.42:8080 (le port est publié sur le réseau local seulement).
 #
 # Remplace /mnt/tank/... par tes datasets. Les variables ${...} viennent du fichier .env voisin
@@ -29,7 +31,9 @@ services:
       - ${APPS}/tailscale-config/serve.json:/config/serve.json:ro   # copie serve.json à cet endroit (chemin absolu : TrueNAS n'a pas de dossier « courant »)
 
   media_hub:
-    image: python:3.13-slim
+    # Version déployée : à changer à chaque mise à jour (une étiquette vX.Y.Z du dépôt, sans le « v »), jamais « latest » : on sait ce qui tourne,
+    # et remettre le numéro d'avant suffit à revenir en arrière.
+    image: ghcr.io/arthur-lagenebre/media_hub:0.25.0
     container_name: media-hub
     restart: unless-stopped
     network_mode: service:tailscale    # même réseau que tailscale : 127.0.0.1:8080 est joignable par `tailscale serve`
@@ -46,18 +50,11 @@ services:
     cap_add:
       - DAC_OVERRIDE
       - FOWNER
-    working_dir: /app/media_hub
-    # Pillow est facultatif (pochettes plus légères) : installé une seule fois dans le dossier de données (/data/pylib, déjà dans PYTHONPATH), puis réutilisé
-    # sans réseau aux démarrages suivants. Si pip échoue, son message reste dans `docker logs media-hub` et le serveur démarre quand même, sans Pillow.
-    # Pour réinstaller ou mettre Pillow à jour : supprimer le dossier media_hub-data/pylib et redémarrer.
-    command: ["sh", "-c", "python -c 'import PIL' 2>/dev/null || pip install -q --disable-pip-version-check --target /data/pylib pillow || echo 'media_hub : Pillow non installé (facultatif)'; exec python -m hub"]
+    # Pas de `command` : celui de l'image lance `python -m hub` et refuse de démarrer sans HUB_PASSWORD tant que la base n'a pas de compte.
     environment:
-      PYTHONPATH: /data/pylib
-      PYTHONUNBUFFERED: "1"
       HUB_SRV: /srv
       HUB_DATA: /data
-      HUB_REPO: /app/media_library
-      HUB_FFMPEG: /opt/ffmpeg          # dossier qui contient ffmpeg et ffprobe (voir fetch-ffmpeg.sh)
+      HUB_FFMPEG: /opt/ffmpeg          # ffmpeg figé (7.0.2, voir fetch-ffmpeg.sh) : l'emporte sur celui de Debian que l'image contient aussi
       HUB_BIND: 0.0.0.0                # écoute aussi le réseau local : d'où le mot de passe obligatoire ci-dessous
       HUB_PORT: "8080"
       HUB_PASSWORD: "${HUB_PASSWORD:?définis HUB_PASSWORD dans le fichier .env (sinon le serveur serait ouvert à tout le réseau local)}"    # amorce le premier compte (administrateur) si la base n'en a aucun ; ensuite ignoré. Obligatoire : sans lui, `docker compose up` refuse de démarrer
@@ -72,8 +69,6 @@ services:
       HUB_INBOX_MAX_UPLOADS: "${HUB_INBOX_MAX_UPLOADS:-2}"       # envois simultanés
       TMDB_KEY: ${TMDB_KEY}
     volumes:
-      - ${APPS}/media_hub:/app/media_hub:ro
-      - ${APPS}/media_library:/app/media_library:ro
       - ${APPS}/media_hub-data:/data
       # Boîte de réception sur son propre dataset (facultatif) : décommente cette ligne ET « HUB_INBOX: /inbox » plus haut, ensemble. Crée d'abord le dataset
       # (README.md > « Boîte de réception ») : un montage vers un dossier qui n'existe pas empêche le conteneur de démarrer. Lecture et écriture, sans « :ro » :
