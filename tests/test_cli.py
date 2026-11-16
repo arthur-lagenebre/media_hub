@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import gc
 import io
 import os
 import re
@@ -188,6 +189,7 @@ class TestAnnounce(unittest.TestCase):
     def said(self, cfg, auth=True, inbox_problem=None):
         out, err = Console(), io.StringIO()
         hub = types.SimpleNamespace(db=Database(Path(self.tmp) / "hub.db"), auth=lambda: auth, inbox=types.SimpleNamespace(check=lambda: inbox_problem))
+        gc.collect()                    # une base d'un test précédent ramassée pendant la redirection écrirait son ResourceWarning dans `err`
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             cli.announce(cfg, hub)
         self.console = out
