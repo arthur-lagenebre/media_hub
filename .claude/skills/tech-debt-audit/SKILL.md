@@ -86,7 +86,7 @@ If a tool isn't installed, note it in the audit and move on rather than blocking
 
 ## Large repos: spawn subagents
 
-If the repo is >50k LOC or has >5 top-level modules, dispatch subagents (Task tool) in parallel — one per module — and synthesize their reports. Serial reading on a large repo eats the context window before findings can be written.
+If the repo is >50k LOC or has >5 top-level modules, dispatch subagents (Task tool, `model: sonnet`) in parallel — one per module — and synthesize their reports. Serial reading on a large repo eats the context window before findings can be written.
 
 Each subagent gets: scope (one module), the dimensions list above, the citation requirement, and a 200-finding cap. The main agent merges, dedupes, and ranks.
 
