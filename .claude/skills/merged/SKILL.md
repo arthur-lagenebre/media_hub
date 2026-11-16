@@ -31,7 +31,7 @@ L'utilisateur fusionne lui-même ses PR (voir `/ship`). Ce skill fait le rangeme
    - les cartes et lignes Notion modifiées ou créées, avec leur lien ;
    - ce qui dépendait de cette PR : une autre branche empilée dessus qu'il faut maintenant rebaser, ou une branche ouverte qui touche les mêmes fichiers (version comprise) et devra fusionner `main`.
 
-   **Version à étiqueter ?** Si `__version__` a changé dans cette PR (`git diff <mergeCommit>^1 <mergeCommit> -- hub/__init__.py`, avec `mergeCommit.oid` lu à l'étape 1) et que `git tag -l vX.Y.Z` ne renvoie rien, termine par la ligne : `Version X.Y.Z prête : /release vX.Y.Z publie l'image sur ghcr.io (à toi de décider).` Si le diff est vide ou si l'étiquette existe déjà, ne dis rien.
+   **Version à étiqueter ?** Si `__version__` a changé dans cette PR (`git diff <mergeCommit>^1 <mergeCommit> -- hub/__init__.py`, avec `mergeCommit.oid` lu à l'étape 1) et que `git tag -l vX.Y.Z` ne renvoie rien, termine par la ligne : `Version X.Y.Z prête : /release vX.Y.Z publie l'image sur ghcr.io (à toi de décider), puis mets X.Y.Z dans l'app TrueNAS.` Si le diff est vide ou si l'étiquette existe déjà, ne dis rien.
 
 ## Garde-fous
 
