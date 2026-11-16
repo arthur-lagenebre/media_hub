@@ -160,6 +160,16 @@ Chacun voit ses demandes ; d'un film demandé par un autre, il ne sait que « d�
 
 Un compte propose une amélioration du hub lui-même (une évolution, une amélioration, un bug, autre chose) depuis *Paramètres > Mon compte > Mes suggestions* : un texte de 1000 caractères au plus, rangé dans une catégorie. L'administrateur les lit dans *Administration > Suggestions* (filtres par état et par catégorie), leur donne un état (nouvelle, prévue, faite, écartée) et, s'il veut, une réponse que l'auteur lit dans *Mes suggestions*. Chaque suggestion reste entre son auteur et l'administrateur ; tout compte peut suggérer, sans plafond. La pastille de l'entrée Administration additionne les demandes en attente et les suggestions nouvelles. Pour un film ou une série, ce sont les [demandes](#demandes). Détail dans [docs/api.md](docs/api.md#suggestions).
 
+## Recommandations
+
+Les rayons « Parce que tu as aimé <titre> » de l'accueil se calculent sur le serveur, à partir des avis et de la progression du compte seulement (voir [docs/decisions.md](docs/decisions.md)). Leurs poids, seuils et plafonds sont en tête de `hub/recommend.py`. Pour les régler sur sa médiathèque, une commande montre les rayons d'un compte tels que l'accueil les calcule. Pour chaque carte, elle donne le score et ce qui le compose : chaque particularité partagée avec son poids, la note TMDB, le malus « ressemble à ce que le compte n'aime pas ». Elle montre aussi les ancres dont le rayon a été abandonné. Elle ne fait que lire, serveur allumé ou non : on change une constante, on relance, on compare.
+
+```bash
+python -m hub recommend <nom>                       # les rayons du jour, toutes les cartes
+python -m hub recommend <nom> --limit 5             # 5 cartes par rayon
+python -m hub recommend <nom> --day 2026-12-01      # les ancres d'un autre jour (leur ordre change chaque jour)
+```
+
 ## Interface HTTP
 
 Le contrat complet pour un client tiers (champs, codes d'erreur, authentification, plan de lecture) est dans [docs/api.md](docs/api.md). Résumé :

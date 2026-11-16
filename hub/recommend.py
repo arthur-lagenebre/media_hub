@@ -150,6 +150,15 @@ def shared(anchor, cand, scope):
     return sorted((f for f in found if f[0] > 0), key=lambda f: (-f[0], KINDS.index(f[1]), f[2]))
 
 
+Breakdown = namedtuple("Breakdown", "score common bonus malus")          # `common` : voir shared ; `bonus` : la note (quality) ; `malus` : la ressemblance avec ce que le compte n'aime pas (Scope.penalty)
+
+
+def breakdown(anchor, cand, scope):
+    """La proximité d'un candidat à l'ancre et ce qui la compose : la somme des particularités partagées, plus la note, moins le malus."""
+    common, bonus, malus = shared(anchor, cand, scope), quality(cand.vote), scope.penalty(cand)
+    return Breakdown(sum(w for w, _, _ in common) + bonus - malus, common, bonus, malus)
+
+
 def reached(idx, anchor, allowed, scope):
     """Les candidats permis (`allowed(id)`) qui partagent avec l'ancre au moins une particularité qui compte, autre que la décennie."""
     found = set()
@@ -164,8 +173,7 @@ def ranked(idx, anchor, allowed, scope):
     found = []
     for ident in reached(idx, anchor, allowed, scope):
         cand = idx["items"][ident]
-        common = shared(anchor, cand, scope)
-        score = sum(w for w, _, _ in common) + quality(cand.vote) - scope.penalty(cand)
+        score, common, _, _ = breakdown(anchor, cand, scope)
         if score > MIN_SCORE:
             found.append(((-score, -(cand.vote or 0), cand.sort, ident), cand, common))
     return [(cand, common) for _, cand, common in sorted(found, key=lambda f: f[0])]
@@ -187,22 +195,29 @@ def candidates(items, anchor, opinions, progress, readable, used):
                       and i != anchor.row["id"] and i not in used)
 
 
-def shelves(idx, opinions, progress, readable, profile, day):
-    """[(ancre, [(Item, explication)])] : au plus MAX_SHELVES rayons, [] sans assez de signal.
-
-    `opinions` : {id: (avis, date)} du compte ; `progress` : voir progress_of ; `readable` : les bibliothèques vidéo qu'il peut lire. Les ancres se choisissent parmi les ANCHOR_POOL plus récentes dans un ordre qui ne dépend que du compte et du jour (le même toute la journée, un autre demain), comme « Pas encore vu ». Un rayon de moins de SHELF_MIN éléments est abandonné ; un élément n'est jamais dans deux rayons."""
+def attempts(idx, opinions, progress, readable, profile, day):
+    """Chaque ancre essayée, dans l'ordre : (ancre, [(Item, explication)], gardé ?, Scope de sa sorte). S'arrête au MAX_SHELVES-ième rayon gardé ; rien sans assez de signal (moins de MIN_ANCHORS ancres possibles).
+    C'est le calcul de `shelves`, avec les rayons abandonnés en plus : `python -m hub recommend` les montre."""
     possible = anchors(idx, opinions, progress, readable)
     if len(possible) < MIN_ANCHORS:
-        return []
+        return
     possible.sort(key=lambda ident: hashlib.sha1(f"{day}:{profile}:{ident}".encode()).hexdigest())
-    items, used, out, scopes = idx["items"], set(), [], {}
+    items, used, kept, scopes = idx["items"], set(), 0, {}
     for anchor in (items[ident] for ident in possible):
         if anchor.type not in scopes:
             scopes[anchor.type] = Scope(idx, anchor.type, opinions, readable)
         found = shelf(idx, anchor, candidates(items, anchor, opinions, progress, readable, used), scopes[anchor.type])
-        if len(found) >= SHELF_MIN:
+        keep = len(found) >= SHELF_MIN
+        if keep:
             used.update(cand.row["id"] for cand, _ in found)
-            out.append((anchor, found))
-        if len(out) == MAX_SHELVES:
-            break
-    return out
+            kept += 1
+        yield anchor, found, keep, scopes[anchor.type]
+        if kept == MAX_SHELVES:
+            return
+
+
+def shelves(idx, opinions, progress, readable, profile, day):
+    """[(ancre, [(Item, explication)])] : au plus MAX_SHELVES rayons, [] sans assez de signal.
+
+    `opinions` : {id: (avis, date)} du compte ; `progress` : voir progress_of ; `readable` : les bibliothèques vidéo qu'il peut lire. Les ancres se choisissent parmi les ANCHOR_POOL plus récentes dans un ordre qui ne dépend que du compte et du jour (le même toute la journée, un autre demain), comme « Pas encore vu ». Un rayon de moins de SHELF_MIN éléments est abandonné ; un élément n'est jamais dans deux rayons."""
+    return [(anchor, found) for anchor, found, keep, _ in attempts(idx, opinions, progress, readable, profile, day) if keep]

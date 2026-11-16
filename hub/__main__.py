@@ -9,6 +9,8 @@
     python -m hub backup [archive.zip]         (sauvegarde base, sagas, affiches choisies, photos d'artistes ; serveur allumé ou non)
     python -m hub restore <archive.zip> [--replace]   (serveur arrêté ; --replace met l'installation actuelle de côté)
 
+    python -m hub recommend <nom> [--limit N] [--day AAAA-MM-JJ]   (les rayons « Parce que tu as aimé » du compte, chaque carte avec son score détaillé ; lecture seule)
+
 Les comptes se gèrent sans le serveur (il peut tourner pendant ce temps) : seule la base de HUB_DATA est lue. Pas d'inscription publique.
 """
 
@@ -113,6 +115,96 @@ def user_command(argv):
         raise SystemExit(e.message)
 
 
+FEATURE_LABELS = {"director": "réalisateur", "saga": "saga", "actor": "acteur", "genre": "genre", "decade": "décennie"}
+
+
+def card_count(text):
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("au moins 1")
+    return value
+
+
+def recommend_parser():
+    parser = argparse.ArgumentParser(prog="python -m hub recommend", description="Montre les rayons « Parce que tu as aimé » d'un compte tels que l'accueil les calcule, chaque carte avec son score et ce qui le compose, "
+                                     "pour régler les poids en tête de hub/recommend.py. Lecture seule ; le serveur peut tourner.")
+    parser.add_argument("name", help="nom du compte")
+    parser.add_argument("--limit", type=card_count, metavar="N", help="cartes montrées par rayon (par défaut : toutes)")
+    parser.add_argument("--day", metavar="AAAA-MM-JJ", help="le jour qui ordonne les ancres (par défaut : aujourd'hui)")
+    return parser
+
+
+def described(item):
+    return f"« {item.row['title']} »" + (f" ({item.row['year'][:4]})" if item.row["year"][:4] else "")
+
+
+def card_detail(rec, anchor, cand, scope, name):
+    """La carte et la ligne qui détaille son score : chaque particularité partagée avec son poids, la note, le malus."""
+    score, common, bonus, malus = rec.breakdown(anchor, cand, scope)
+    parts = [f"{FEATURE_LABELS[kind]} {text} {weight:+.2f}" for weight, kind, text in common]
+    if bonus:
+        parts.append(f"note TMDB {cand.vote:g} {bonus:+.2f}")
+    if malus:
+        parts.append(f"ressemble à ce que {name} n'aime pas {-malus:+.2f}")
+    return f"{score:6.2f}  {described(cand)}  [{cand.row['id']}]", " · ".join(parts)
+
+
+def settings_line(rec):
+    weights = " · ".join(f"{FEATURE_LABELS[kind]} {rec.WEIGHTS[kind]:g}" for kind in rec.KINDS)
+    return (f"réglages : {weights} · MAX_SHARE {rec.MAX_SHARE:g} · note autour de {rec.QUALITY_PIVOT:g} (×{rec.QUALITY_SLOPE:g}, ±{rec.QUALITY_CAP:g} au plus)"
+            f" · malus ×{rec.DOWN_WEIGHT:g} ({rec.DOWN_CAP:g} au plus)")
+
+
+def playable_video_libraries(db, row, libraries):
+    """Les bibliothèques vidéo que ce compte peut lire : celles où l'accueil cherche ses recommandations."""
+    from .server.app import UNSEEN_KINDS
+    granted = accounts.grants(db, row["id"])
+    return {lib.id for lib in libraries if lib.kind in UNSEEN_KINDS and accounts.allows(row["role"], granted, lib.id, "play")}
+
+
+def print_shelf(rec, anchor, found, scope, opinions, name, limit):
+    """Un rayon gardé : son ancre, puis ses cartes (`limit` au plus), chacune avec le détail de son score."""
+    print(f"Parce que tu as aimé {described(anchor)}, {'noté J’aime' if anchor.row['id'] in opinions else 'terminé sans avis'}  [{anchor.row['id']}]")
+    shown = found[:limit] if limit else found
+    for n, (cand, _) in enumerate(shown, 1):
+        card, detail = card_detail(rec, anchor, cand, scope, name)
+        print(f"  {n:>2}. {card}")
+        print(f"        {detail}")
+    if len(found) > len(shown):
+        print(f"      … et {len(found) - len(shown)} autres")
+
+
+def recommend_report(db, libraries, argv):
+    """Écrit les rayons du compte : chaque ancre essayée, dans l'ordre du jour, et pour un rayon gardé ses cartes, de la plus proche à la moins proche."""
+    args = recommend_parser().parse_args(argv)
+    from . import missing, recommend as rec
+    from .server.app import shown_rating
+    row = known_account(db, args.name)
+    name, uid, readable = row["name"], row["id"], playable_video_libraries(db, row, libraries)
+    opinions, progress = db.dated_ratings_for(uid), rec.progress_of(db, uid)
+    idx = rec.index(db, lambda meta: (shown_rating(meta.get("tmdb_rating")) or {}).get("vote"))          # comme GET /api/recommendations
+    day, possible = args.day or missing.today(), rec.anchors(idx, opinions, progress, readable)
+    liked = sum(ident in opinions for ident in possible)
+    print(f"{name}, le {day} : {len(possible)} ancre(s) possible(s) ({liked} aimée(s), {len(possible) - liked} terminée(s)) ; bibliothèques lisibles : {', '.join(sorted(readable)) or 'aucune'}")
+    print(settings_line(rec))
+    if len(possible) < rec.MIN_ANCHORS:
+        print(f"pas assez de signal : il faut au moins {rec.MIN_ANCHORS} films ou séries aimés ou terminés.")
+        return
+    for anchor, found, keep, scope in rec.attempts(idx, opinions, progress, readable, uid, day):
+        print()
+        if keep:
+            print_shelf(rec, anchor, found, scope, opinions, name, args.limit)
+        else:
+            print(f"Ancre {described(anchor)} [{anchor.row['id']}] : {len(found)} candidat(s), rayon abandonné (il en faut {rec.SHELF_MIN}).")
+
+
+def recommend_command(argv):
+    cfg = config.load()
+    config.use_media_library(cfg.repo)
+    from .db import Database
+    recommend_report(Database(cfg.data / "hub.db"), cfg.libraries, argv)
+
+
 def announce(cfg, hub):
     """Ce que le serveur dit au démarrage : l'adresse, les bibliothèques, et ce qui manque ou expose (sur la sortie d'erreur)."""
     print(f"media_hub {__version__} : http://{cfg.bind}:{cfg.port}", flush=True)
@@ -160,7 +252,7 @@ def restore_command(argv):
         print(f"l'installation d'avant est dans {done['aside']} : supprime ce dossier une fois le hub vérifié.")
 
 
-COMMANDS = {"user": "user_command", "backup": "backup_command", "restore": "restore_command"}      # par nom : la fonction se cherche à l'appel
+COMMANDS = {"user": "user_command", "backup": "backup_command", "restore": "restore_command", "recommend": "recommend_command"}      # par nom : la fonction se cherche à l'appel
 
 
 def main():
