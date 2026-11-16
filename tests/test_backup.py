@@ -233,9 +233,29 @@ class TestRefusal(BackupCase):
         rewrite(self.archive, lambda name, data: [] if name == "manifest.json" else [(name, data)])
         self.refused("manifest")
 
-    def test_a_damaged_file_is_refused(self):
-        rewrite(self.archive, lambda name, data: [(name, b"abime" if name == "posters/film.jpg" else data)])
-        self.refused("posters/film.jpg")
+    def test_a_manifest_that_is_not_json_is_refused(self):
+        rewrite(self.archive, lambda name, data: [(name, b"{pas du json" if name == "manifest.json" else data)])
+        self.refused("manifest.json", "illisible")
+
+    def test_a_manifest_that_is_not_an_object_is_refused(self):
+        rewrite(self.archive, lambda name, data: [(name, b"[]" if name == "manifest.json" else data)])
+        self.refused("manifest.json", "illisible")
+
+    def test_a_manifest_without_a_list_of_files_is_refused(self):
+        self.edit_manifest(files="hub.db")
+        self.refused("liste de fichiers")
+
+    def test_a_file_whose_size_differs_from_the_manifest_is_refused(self):
+        self.edit_manifest(files=[{**f, "size": f["size"] + 1} if f["path"] == "posters/film.jpg" else f for f in manifest_of(self.archive)["files"]])
+        self.refused("posters/film.jpg", "taille")
+
+    def test_a_listed_file_missing_from_the_archive_is_refused(self):
+        rewrite(self.archive, lambda name, data: [] if name == "posters/film.jpg" else [(name, data)])
+        self.refused("posters/film.jpg", "absent")
+
+    def test_a_damaged_file_of_the_same_size_is_refused_by_its_checksum(self):
+        rewrite(self.archive, lambda name, data: [(name, b"AFFICHE" if name == "posters/film.jpg" else data)])          # même taille que « affiche » : seule l'empreinte le voit
+        self.refused("posters/film.jpg", "empreinte")
 
     def test_a_file_the_manifest_does_not_list_is_refused(self):
         rewrite(self.archive, lambda name, data: [(name, data)] + ([("posters/intrus.jpg", b"x")] if name == "sagas.json" else []))

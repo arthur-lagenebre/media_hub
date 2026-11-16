@@ -136,15 +136,29 @@ def _allowed(name):
     return len(parts) == 2 and parts[0] in FOLDERS and parts[1] not in ("", ".", "..") and not parts[1].startswith(".")
 
 
-def _read_manifest(z):
+def _open(archive):
+    try:
+        return zipfile.ZipFile(archive)
+    except (zipfile.BadZipFile, OSError):
+        raise BackupError(f"{archive} n'est pas une archive zip lisible")
+
+
+def _load_manifest(z):
     try:
         manifest = json.loads(z.read(MANIFEST))
     except KeyError:
         raise BackupError("archive sans manifest.json : ce n'est pas une sauvegarde de media_hub")
     except ValueError:
         raise BackupError("manifest.json illisible : archive abîmée")
-    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
-        raise BackupError(f"format d'archive inconnu ({manifest.get('format') if isinstance(manifest, dict) else '?'}) : ce hub lit le format {FORMAT}")
+    if not isinstance(manifest, dict):
+        raise BackupError("manifest.json illisible : archive abîmée")
+    return manifest
+
+
+def _check_manifest(manifest):
+    """Le format, la version de la base et la liste des fichiers que dit le manifeste."""
+    if manifest.get("format") != FORMAT:
+        raise BackupError(f"format d'archive inconnu ({manifest.get('format')}) : ce hub lit le format {FORMAT}")
     schema = manifest.get("schema")
     if isinstance(schema, int) and schema > SCHEMA_VERSION:
         raise BackupError(f"archive d'un hub plus récent (base en version {schema}, ce hub n'en connaît que {SCHEMA_VERSION}) : mets le hub à jour avant de restaurer")
@@ -154,40 +168,51 @@ def _read_manifest(z):
     return manifest
 
 
+def _check_paths(listed):
+    """Chaque chemin du manifeste est un de ceux qu'une sauvegarde contient, et la base y est."""
+    refused = [name for name in listed if not _allowed(name)]
+    if refused:
+        raise BackupError(f"chemin refusé dans l'archive : {refused[0]!r}")
+    if BASE not in listed:
+        raise BackupError("archive sans hub.db")
+
+
+def _check_members(z, listed):
+    """L'archive contient exactement ce que liste le manifeste : ni intrus, ni manquant."""
+    present = {info.filename for info in z.infolist() if not info.is_dir()} - {MANIFEST}
+    extra = sorted(present - set(listed))
+    if extra:
+        raise BackupError(f"fichier que le manifeste ne liste pas : {extra[0]}")
+    missing = sorted(set(listed) - present)
+    if missing:
+        raise BackupError(f"fichier listé mais absent de l'archive : {missing[0]}")
+
+
+def _extract(z, name, entry, stage):
+    """Extrait un fichier dans `stage` en vérifiant sa taille et son empreinte."""
+    info = z.getinfo(name)
+    if info.file_size != entry.get("size"):
+        raise BackupError(f"{name} : taille différente de celle du manifeste (archive abîmée)")
+    target = stage / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    with z.open(info) as src, open(target, "wb") as dst:
+        for chunk in iter(lambda: src.read(CHUNK), b""):
+            digest.update(chunk)
+            dst.write(chunk)
+    if digest.hexdigest() != entry.get("sha256"):
+        raise BackupError(f"{name} : empreinte différente de celle du manifeste (archive abîmée)")
+
+
 def _check_and_extract(archive, stage):
     """Vérifie toute l'archive et l'extrait dans `stage` ; rend le manifeste. BackupError au premier défaut."""
-    try:
-        z = zipfile.ZipFile(archive)
-    except FileNotFoundError:
-        raise BackupError(f"archive introuvable : {archive}")
-    except (zipfile.BadZipFile, OSError):
-        raise BackupError(f"{archive} n'est pas une archive zip lisible")
-    with z:
-        manifest = _read_manifest(z)
+    with _open(archive) as z:
+        manifest = _check_manifest(_load_manifest(z))
         listed = {f.get("path"): f for f in manifest["files"]}
-        for name in listed:
-            if not _allowed(name):
-                raise BackupError(f"chemin refusé dans l'archive : {name!r}")
-        if BASE not in listed:
-            raise BackupError("archive sans hub.db")
-        present = {info.filename for info in z.infolist() if not info.is_dir()} - {MANIFEST}
-        for name in sorted(present - set(listed)):
-            raise BackupError(f"fichier que le manifeste ne liste pas : {name}")
+        _check_paths(listed)
+        _check_members(z, listed)
         for name, entry in listed.items():
-            if name not in present:
-                raise BackupError(f"fichier listé mais absent de l'archive : {name}")
-            info = z.getinfo(name)
-            if info.file_size != entry.get("size"):
-                raise BackupError(f"{name} : taille différente de celle du manifeste (archive abîmée)")
-            target = stage / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            digest = hashlib.sha256()
-            with z.open(info) as src, open(target, "wb") as dst:
-                for chunk in iter(lambda: src.read(CHUNK), b""):
-                    digest.update(chunk)
-                    dst.write(chunk)
-            if digest.hexdigest() != entry.get("sha256"):
-                raise BackupError(f"{name} : empreinte différente de celle du manifeste (archive abîmée)")
+            _extract(z, name, entry, stage)
     _check_base(stage / BASE)
     return manifest
 
@@ -226,17 +251,28 @@ def restore(archive, db_path, data, replace=False):
     stage = Path(tempfile.mkdtemp(prefix=".restauration-", dir=data))
     try:
         manifest = _check_and_extract(Path(archive), stage)
-        existing = [(name, path) for name, path in _targets(db_path, data) if path.exists()]
-        aside = None
-        if existing:
-            aside = data / f"{ASIDE}-{time.strftime('%Y%m%d-%H%M%S')}"
-            aside.mkdir()
-            for _, path in existing:
-                os.replace(path, aside / path.name)
-        for name, path in _targets(db_path, data):
-            if name and (stage / name).exists():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(stage / name, path)
-        return {"schema": manifest.get("schema"), "files": len(manifest["files"]), "aside": str(aside) if aside else None}
+        aside = _set_aside(db_path, data)
+        _put_in_place(stage, db_path, data)
+        return {"schema": manifest.get("schema"), "files": len(manifest["files"]), "aside": aside}
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+
+
+def _set_aside(db_path, data):
+    """Déplace ce qu'une restauration remplace dans `avant-restauration-<date>/` ; rend ce dossier (texte), ou None s'il n'y avait rien."""
+    existing = [path for _, path in _targets(db_path, data) if path.exists()]
+    if not existing:
+        return None
+    aside = data / f"{ASIDE}-{time.strftime('%Y%m%d-%H%M%S')}"
+    aside.mkdir()
+    for path in existing:
+        os.replace(path, aside / path.name)
+    return str(aside)
+
+
+def _put_in_place(stage, db_path, data):
+    """Déplace ce que `stage` a reçu de l'archive à sa place dans HUB_DATA."""
+    for name, path in _targets(db_path, data):
+        if name and (stage / name).exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(stage / name, path)
