@@ -80,15 +80,17 @@
     var fill = h('i'), thumb = h('b'), tCur = h('span'), tEnd = h('span');
     var seekbar = h('div', { class: 'seekbar f', role: 'slider', tabindex: '0', 'data-autofocus': '1', 'aria-label': H.t('Position dans le film') }, h('div', { class: 'track' }, fill, thumb));
     var playBtn = H.button('', 'pause', { 'aria-label': H.t('Lecture / pause'), onclick: toggle });
-    var bAudio = H.button(H.t('Audio'), 'audio', { onclick: pickAudio }), bSubs = H.button(H.t('Sous-titres'), 'subs', { onclick: pickSubs }), bQual = H.button(H.t('Qualité'), 'quality', { onclick: pickQuality });
-    var bNext = H.button(H.t('Suivant'), 'next', { onclick: goNext, hidden: true });
+    // Sur un écran étroit, ces boutons n'affichent que leur icône (style.css) : leur nom passe par aria-label.
+    var bAudio = H.button(H.t('Audio'), 'audio', { 'aria-label': H.t('Audio'), onclick: pickAudio }), bSubs = H.button(H.t('Sous-titres'), 'subs', { 'aria-label': H.t('Sous-titres'), onclick: pickSubs }), bQual = H.button(H.t('Qualité'), 'quality', { 'aria-label': H.t('Qualité'), onclick: pickQuality });
+    var bNext = H.button(H.t('Suivant'), 'next', { 'aria-label': H.t('Suivant'), onclick: goNext, hidden: true });
+    var bRew = H.button('10 s', 'rew', { 'aria-label': H.t('Reculer de 10 s'), onclick: function () { nudge(-1, 10); } }), bFwd = H.button('10 s', 'fwd', { 'aria-label': H.t('Avancer de 10 s'), onclick: function () { nudge(1, 10); } });
     var bSpeed = H.button(H.t('Vitesse'), 'speed', { class: 'spd', 'aria-label': H.t('Vitesse de lecture : {rate}', { rate: H.speedLabel(1) }), onclick: pickSpeed });
     var bFull = H.button('', 'full', { 'aria-label': H.t('Plein écran'), onclick: fullscreen });
     var bBack = H.button('', 'back', { 'aria-label': H.t('Retour'), onclick: function () { H.back('#/'); } });
     var ctl = h('div', { class: 'ctl' },
       h('div', { class: 'top' }, bBack, h('div', { class: 'txt' }, title, sub), pill),
       h('div', { class: 'bottom' }, h('div', { class: 'times' }, tCur, tEnd), seekbar,
-        h('div', { class: 'btns' }, playBtn, H.button('10 s', 'rew', { onclick: function () { nudge(-1, 10); } }), H.button('10 s', 'fwd', { onclick: function () { nudge(1, 10); } }), h('span', { class: 'sp' }), bSpeed, bAudio, bSubs, bQual, bNext, bFull)));
+        h('div', { class: 'btns' }, playBtn, bRew, bFwd, h('span', { class: 'sp' }), bSpeed, bAudio, bSubs, bQual, bNext, bFull)));
     var err = h('div', { class: 'err', hidden: true });
     var el = h('section', { class: 'player idle' }, video, subPic, subBox, spin, osd, ctl, err);
 
