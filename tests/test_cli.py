@@ -1,10 +1,11 @@
-"""Les commandes `python -m hub user ...` : de vrais comptes dans une vraie base de HUB_DATA, la saisie du mot de passe simulée."""
+"""Les commandes `python -m hub user ...` : de vrais comptes dans une vraie base de HUB_DATA, la saisie du mot de passe simulée. `python -m hub recommend` : sur le jeu d'essai des recommandations."""
 
 from __future__ import annotations
 
 import contextlib
 import io
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -16,6 +17,7 @@ from unittest import mock
 from hub import __main__ as cli
 from hub import accounts, runlock
 from hub.db import Database
+from tests.test_recommend import DAY, RecommendCase
 
 PASSWORD = "un-mot-de-passe-long"
 
@@ -292,6 +294,90 @@ class TestMain(unittest.TestCase):
         with mock.patch.object(cli, "user_command") as users:
             self.serve(["user", "list"], mock.Mock())
         users.assert_called_once_with(["list"])
+
+    def test_recommend_hands_over_to_its_command(self):
+        with mock.patch.object(cli, "recommend_command") as shown:
+            self.serve(["recommend", "alice"], mock.Mock())
+        shown.assert_called_once_with(["alice"])
+
+
+CARD = re.compile(r"^\s+\d+\.\s+(-?\d+\.\d\d)\s+.*\[(\w+)\]$")
+ANCHOR = re.compile(r"^Parce que .* \[(\w+)\]$")
+
+
+class TestRecommendCommand(RecommendCase):
+    """`python -m hub recommend <compte>` : les rayons du compte tels que l'accueil les montre, chaque carte avec son score et toutes les particularités qui l'expliquent."""
+
+    def report(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.recommend_report(self.db, self.hub.cfg.libraries, [*argv, "--day", DAY])
+        return out.getvalue()
+
+    def parsed(self, text):
+        """{ancre: [(identifiant, score, détail)]} : ce que la commande a écrit, rayon par rayon."""
+        shelves, lines = {}, text.splitlines()
+        for n, line in enumerate(lines):
+            if ANCHOR.match(line):
+                current = shelves.setdefault(ANCHOR.match(line).group(1), [])
+            elif CARD.match(line):
+                score, ident = CARD.match(line).groups()
+                current.append((ident, float(score), lines[n + 1].strip()))
+        return shelves
+
+    def test_the_cards_are_those_of_the_home_page_in_the_same_order(self):
+        self.rate(self.alice, "a1", "a2")
+        shown = {anchor: [c[0] for c in cards] for anchor, cards in self.parsed(self.report("alice")).items()}
+        self.assertEqual(shown, self.by_anchor(self.alice))
+        self.assertEqual(len(shown), 2)
+
+    def test_each_card_gives_every_shared_feature_and_its_score_is_their_sum(self):
+        self.rate(self.alice, "a1", "a2")
+        cards = {c[0]: c for c in self.parsed(self.report("alice"))["a1"]}
+        _, score, detail = cards["p1"]
+        for part in ("réalisateur Ridley +", "acteur Sigourney +", "genre SF +"):
+            self.assertIn(part, detail)                                     # toutes, pas seulement les deux que l'interface montre
+        parts = [float(p.rsplit(" ", 1)[1]) for p in detail.split(" · ")]
+        self.assertAlmostEqual(score, sum(parts), delta=0.01 * len(parts))
+        self.assertEqual([c[1] for c in self.parsed(self.report("alice"))["a1"]], sorted((c[1] for c in cards.values()), reverse=True))
+
+    def test_a_card_that_looks_like_a_film_not_liked_shows_its_malus(self):
+        self.rate(self.alice, "a1", "a2")
+        self.rate(self.alice, "c_down", value="down")                       # Prometheus, de Ridley : Gladiator lui ressemble
+        detail = {c[0]: c[2] for c in self.parsed(self.report("alice"))["a1"]}["c_dir"]
+        self.assertRegex(detail, r"ressemble à ce que alice n'aime pas -\d+\.\d\d$")
+
+    def test_an_anchor_with_too_few_neighbours_is_said_dropped(self):
+        self.rate(self.alice, "a1", "a3")
+        said = self.report("alice")
+        self.assertIn("« Seul »", said)
+        self.assertIn("rayon abandonné", said)
+        self.assertEqual(list(self.parsed(said)), ["a1"])
+
+    def test_too_little_signal_is_said_and_no_shelf_shown(self):
+        self.rate(self.alice, "a1")
+        said = self.report("alice")
+        self.assertIn("pas assez de signal", said)
+        self.assertEqual(self.parsed(said), {})
+
+    def test_limit_shortens_each_shelf_and_says_how_many_are_left(self):
+        self.rate(self.alice, "a1", "a2")
+        full = self.parsed(self.report("alice"))
+        short = self.parsed(said := self.report("alice", "--limit", "2"))
+        self.assertEqual({a: [c[0] for c in cards] for a, cards in short.items()}, {a: [c[0] for c in cards][:2] for a, cards in full.items()})
+        self.assertIn(f"… et {len(full['a1']) - 2} autres", said)
+
+    def test_nothing_from_a_library_the_account_cannot_play(self):
+        self.rate(self.bob, "a1", "a2")
+        said = self.report("bob")
+        self.assertNotIn("[p1]", said)
+        self.assertNotIn("[p2]", said)
+        self.assertEqual({a: [c[0] for c in cards] for a, cards in self.parsed(said).items()}, self.by_anchor(self.bob))
+
+    def test_an_unknown_account_is_refused(self):
+        with self.assertRaises(SystemExit) as stop:
+            self.report("personne")
+        self.assertIn("compte inconnu : personne", str(stop.exception))
 
 if __name__ == "__main__":
     unittest.main()
