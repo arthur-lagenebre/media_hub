@@ -172,6 +172,73 @@ class TestUploadRight(unittest.TestCase):
         self.assertFalse(accounts.public(accounts.by_id(self.db, self.alice["id"]))["can_upload"])
 
 
+class TestRename(unittest.TestCase):
+    """Un compte change de nom : l'identifiant reste, donc tout ce qui lui est attaché aussi."""
+
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        self.db = Database(root / "hub.db")
+        self.boss = accounts.create(self.db, "boss", "un-mot-de-passe")
+        self.alice = accounts.create(self.db, "alice", "un-mot-de-passe")
+
+    def refused(self, call, status):
+        with self.assertRaises(AccountError) as caught:
+            call()
+        self.assertEqual(caught.exception.status, status)
+        return caught.exception.message
+
+    def test_the_new_name_opens_the_door_and_the_old_one_no_longer_does(self):
+        row = accounts.rename(self.db, self.alice["id"], "  Alice   Martin ")
+        self.assertEqual((row["id"], row["name"]), (self.alice["id"], "Alice Martin"))
+        self.assertEqual(accounts.authenticate(self.db, "alice martin", "un-mot-de-passe")["id"], self.alice["id"])
+        self.assertEqual(self.refused(lambda: accounts.authenticate(self.db, "alice", "un-mot-de-passe"), 401), "mot de passe incorrect")
+
+    def test_a_name_taken_by_another_account_is_refused_whatever_its_case_or_spaces(self):
+        accounts.create(self.db, "Jean Paul", "un-mot-de-passe")
+        for name in ("BOSS", "Boss", " boss ", "jean   paul", "JEAN PAUL"):
+            self.assertEqual(self.refused(lambda: accounts.rename(self.db, self.alice["id"], name), 409), "ce nom est déjà pris", name)
+        self.assertEqual(accounts.by_id(self.db, self.alice["id"])["name"], "alice")
+
+    def test_a_name_that_differs_only_beyond_ascii_case_is_taken_too(self):
+        accounts.create(self.db, "Élodie", "un-mot-de-passe")           # NOCASE de SQLite ne plie que l'ASCII : la vérification, elle, plie tout
+        self.assertEqual(self.refused(lambda: accounts.rename(self.db, self.alice["id"], "éLODIE"), 409), "ce nom est déjà pris")
+
+    def test_its_own_name_in_another_case_is_accepted(self):
+        self.assertEqual(accounts.rename(self.db, self.alice["id"], "ALICE")["name"], "ALICE")
+        self.assertEqual(accounts.rename(self.db, self.alice["id"], "ALICE")["name"], "ALICE")      # deux fois : même état
+
+    def test_an_unknown_account_and_a_bad_name_are_refused(self):
+        self.assertEqual(self.refused(lambda: accounts.rename(self.db, "inconnu", "zoé"), 404), "compte inconnu")
+        for name in ("", "   ", None, 5, "x" * (accounts.MAX_NAME + 1), "a\nb\x00"):
+            self.refused(lambda: accounts.rename(self.db, self.alice["id"], name), 400)
+        self.assertEqual(accounts.by_id(self.db, self.alice["id"])["name"], "alice")
+
+    def test_everything_attached_to_the_account_stays(self):
+        uid = self.alice["id"]
+        self.db.save_progress(uid, "e1", 42.0, 100.0, False)
+        self.db.execute("INSERT INTO playlists(id, profile, name, created, updated) VALUES('p1', ?, 'Route', 1, 1)", (uid,))
+        self.db.set_rating(uid, "i1", "up")
+        accounts.set_rights(self.db, uid, {"films"}, {"films": {"download": False}})
+        accounts.set_can_upload(self.db, uid, True)
+        self.db.kv_set(prefs.KEY + uid, {"music_view": "artists"})
+        self.db.execute("UPDATE users SET inbox_dir='alice' WHERE id=?", (uid,))
+        before = dict(accounts.by_id(self.db, uid))
+        row = accounts.rename(self.db, uid, "Zoé")
+        self.assertEqual({**dict(row), "name": "alice"}, before)                  # token_version, inbox_dir, droits globaux : rien d'autre que le nom
+        self.assertEqual(self.db.progress_for(uid, ["e1"])["e1"]["position"], 42.0)
+        self.assertEqual([r["name"] for r in self.db.query("SELECT name FROM playlists WHERE profile=?", (uid,))], ["Route"])
+        self.assertEqual(self.db.ratings_for(uid), {"i1": "up"})
+        self.assertEqual(accounts.grants(self.db, uid), {"films": (True, True, False)})
+        self.assertEqual(self.db.kv_get(prefs.KEY + uid), {"music_view": "artists"})
+        self.assertEqual(accounts.by_id(self.db, self.boss["id"])["name"], "boss")
+
+    def test_a_session_token_survives_the_rename(self):
+        token = accounts.session_token("s", self.alice)
+        accounts.rename(self.db, self.alice["id"], "Zoé")
+        self.assertEqual(accounts.user_for_token(self.db, "s", token)["name"], "Zoé")
+
+
 class TestInterfaceKnowsTheMinimum(unittest.TestCase):
     def test_the_form_checks_and_announces_the_length_the_server_demands(self):
         """Le contrôle côté client et les libellés suivent `MIN_PASSWORD` : sinon la personne tape un mot de passe « assez long » et le serveur le refuse après l'envoi."""

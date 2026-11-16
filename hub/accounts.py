@@ -364,12 +364,37 @@ def create(db, name, password, role="user", check=True):
     with db.write_lock:
         conn = db.connection()
         try:
-            if any(r["name"].casefold() == name.casefold() for r in conn.execute("SELECT name FROM users")):
+            if _name_taken(conn, name):
                 raise AccountError(409, "ce nom est déjà pris")
             first = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone() is None
             uid, role = (FIRST_ID, "admin") if first else (secrets.token_hex(8), role)
             now = int(time.time())
             conn.execute("INSERT INTO users(id, name, pass_hash, role, token_version, created) VALUES(?,?,?,?,1,?)", (uid, name, hashed, role, now))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return by_id(db, uid)
+
+
+def _name_taken(conn, name, except_uid=None):
+    """Un autre compte que `except_uid` porte-t-il déjà ce nom, sans tenir compte de la casse ? `casefold` plie aussi ce que NOCASE de SQLite laisse (É / é)."""
+    wanted = name.casefold()
+    return any(r["name"].casefold() == wanted for r in conn.execute("SELECT id, name FROM users") if r["id"] != except_uid)
+
+
+def rename(db, uid, name):
+    """Change le nom du compte, rien d'autre : l'identifiant reste, donc la progression, les playlists, les avis, les droits, les réglages, les sessions (`token_version`) et le dossier de la boîte de réception (`inbox_dir`) aussi.
+    Son propre nom dans une autre casse est accepté. 409 si un autre compte porte ce nom, 404 pour un compte inconnu. Renvoie le compte à jour."""
+    name = clean_name(name)
+    with db.write_lock:
+        conn = db.connection()
+        try:
+            if conn.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone() is None:
+                raise AccountError(404, "compte inconnu")
+            if _name_taken(conn, name, except_uid=uid):
+                raise AccountError(409, "ce nom est déjà pris")
+            conn.execute("UPDATE users SET name=? WHERE id=?", (name, uid))
             conn.commit()
         except Exception:
             conn.rollback()
