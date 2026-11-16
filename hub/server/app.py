@@ -16,9 +16,11 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -36,6 +38,7 @@ from libraries.video import tmdb
 
 from .. import __version__
 from .. import accounts
+from .. import backup
 from .. import countries
 from .. import enrich
 from .. import labels
@@ -3018,6 +3021,24 @@ def api_inbox_file(h, m, q):
     require_admin(h)
     path = module_call(InboxError, h.hub.inbox.path_of, m.group(1), m.group(2), q.get("dir"))
     h.send_file(path, "application/octet-stream", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(path.name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
+
+@route("GET", r"/api/backup")
+def api_backup(h, m, q):
+    """Une sauvegarde des données du hub (voir backup.py), en pièce jointe `media_hub-<version>-<date>.zip` : administrateur seulement. Construite dans un dossier
+    temporaire de HUB_DATA, cohérente même si le serveur écrit, et effacée une fois envoyée : rien ne reste sur le serveur. Elle contient les hachés des
+    mots de passe et la clé des sessions : `no-store`, jamais gardée par un cache."""
+    require_admin(h)
+    work = Path(tempfile.mkdtemp(prefix=".sauvegarde-", dir=h.hub.cfg.data))
+    try:
+        name = backup.archive_name()
+        try:
+            backup.create(h.hub.db.path, h.hub.cfg.data, work / name)
+        except (backup.BackupError, OSError) as e:
+            raise HttpError(500, f"sauvegarde impossible : {getattr(e, 'message', e)}")
+        h.send_file(work / name, "application/zip", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 @route("DELETE", r"/api/inbox/([^/]+)/([^/]+)")

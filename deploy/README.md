@@ -149,7 +149,7 @@ docker exec -it media-hub python -m hub user rights alice --set Livres=none --se
 
 Depuis le shell web de TrueNAS (Apps > media-hub > Shell), lance seulement `python -m hub user …`. Le serveur peut tourner pendant ce temps. Il n'y a pas d'inscription publique.
 
-**Sauvegarde.** Les comptes (noms, hachés de mots de passe), la progression et les playlists sont dans `hub.db`, sous `HUB_DATA` (ici `/mnt/tank/apps/media/media_hub-data`). Sauvegarde ce dossier (un snapshot du dataset suffit) ; sans lui, il faudrait recréer les comptes. Aucun mot de passe en clair n'y figure. Ce dossier contient aussi la [boîte de réception](#boîte-de-réception) (fichiers envoyés, parfois de plusieurs Go).
+**Sauvegarde.** Les comptes, la progression, les playlists et le reste de ce qui ne se refait pas sont dans `media_hub-data` : voir [Sauvegarder et restaurer](#sauvegarder-et-restaurer).
 
 **Hachage des mots de passe.** Le serveur utilise `scrypt` si l'OpenSSL de Python le fournit (c'est le cas de l'image du hub, bâtie sur `python:3.15-slim`, comme de `python:3.13-slim`). Vérifie-le :
 
@@ -158,6 +158,47 @@ docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt')
 ```
 
 `True` : rien à faire. `False` : repli sur `pbkdf2` (600 000 tours), correct mais plus lent, environ 0,3 s à chaque connexion.
+
+## Sauvegarder et restaurer
+
+Une sauvegarde du hub est une archive `.zip` de ce qui ne se refait pas :
+
+| Dans l'archive | Contenu |
+| --- | --- |
+| `hub.db` | comptes (hachés des mots de passe), clé des sessions, droits, progressions, avis, playlists, demandes, suggestions, réglages des comptes, résultats de l'enrichissement |
+| `sagas.json` | les sagas composées à la main |
+| `posters/` | les affiches choisies à la main |
+| `artists/` | les photos d'artistes gardées hors de la Musique |
+| `manifest.json` | format, version du hub, version de la base, taille et empreinte de chaque fichier |
+
+Ni médias, ni caches (`img/`, `subs/`, `tmdb/`, `tmdb-cache/`, `musicbrainz-cache/` : ils se refont ; les affiches TMDB demandent plus d'une heure), ni boîte de réception (fichiers parfois de plusieurs Go : instantanés de leur dataset, voir [Sauvegarde et instantanés](#sauvegarde-et-instantanés)). Les photos `artist.webp` rangées dans la Musique suivent la Musique.
+
+**L'archive n'est pas chiffrée** : elle contient les hachés des mots de passe et la clé des sessions (une restauration garde les appareils connectés). Garde-la comme un mot de passe : pas dans un partage ouvert, pas en pièce jointe d'un courriel.
+
+### Sauvegarder
+
+Serveur allumé, au choix :
+
+- Depuis le navigateur, en administrateur : `GET /api/backup` (le bouton de *Paramètres* > *Gestion* arrive avec la partie interface) : l'archive arrive dans le navigateur, rien ne reste sur le NAS.
+- Dans le shell du NAS : `docker exec media-hub python -m hub backup`. L'archive va dans `media_hub-data/sauvegardes/media_hub-<version>-<date>.zip` (ou à l'endroit donné : `python -m hub backup /data/ma-sauvegarde.zip`). Pour une sauvegarde régulière : TrueNAS > System > Advanced > *Cron Jobs* > *Add*, commande `docker exec media-hub python -m hub backup`, utilisateur `root`, par exemple chaque nuit ; supprime de temps en temps les plus anciennes.
+
+La base est copiée par l'API de sauvegarde de SQLite : la copie est cohérente même si le serveur écrit pendant ce temps. Un instantané ZFS de `media_hub-data` reste une bonne sauvegarde de plus.
+
+### Restaurer
+
+**Serveur arrêté.** La restauration vérifie toute l'archive avant de toucher à quoi que ce soit, et refuse sans rien modifier une archive abîmée, d'un autre format, ou faite par un hub plus récent (mets d'abord le hub à la même version ou plus récente). Une archive d'un hub plus ancien est restaurée, puis la base est mise à jour au démarrage. Sur une installation qui a déjà une base, il faut `--replace` : l'installation actuelle (base, sagas, affiches, photos) est mise de côté dans `media_hub-data/avant-restauration-<date>/`, rien n'est effacé.
+
+1. TrueNAS > Apps > l'application > *Stop*.
+2. Copie l'archive sur le NAS, puis lance un conteneur temporaire de la même image, avec le dossier de données et l'archive :
+
+   ```bash
+   docker run --rm --user 1000:1000      -v /mnt/tank/apps/media/media_hub-data:/data      -v /mnt/tank/apps/media/sauvegarde.zip:/sauvegarde.zip:ro      ghcr.io/arthur-lagenebre/media_hub:<version> python -m hub restore /sauvegarde.zip --replace
+   ```
+
+   (`--user` : le même compte que le compose, voir [Compte du conteneur](#compte-du-conteneur).) Sur une installation neuve, sans base, `--replace` est inutile.
+3. *Start* l'application, connecte-toi, vérifie comptes et progression. Supprime ensuite `avant-restauration-<date>/`.
+
+**À la main, sans l'outil** (dépannage) : application arrêtée, décompresse l'archive, mets `hub.db`, `sagas.json`, `posters/` et `artists/` dans `media_hub-data` (en gardant les anciens de côté), **supprime `hub.db-wal` et `hub.db-shm`** s'ils existent (ils appartiennent à l'ancienne base), donne les fichiers au compte du conteneur (`chown -R 1000:1000`), puis redémarre.
 
 ## 4. Sur la télé
 

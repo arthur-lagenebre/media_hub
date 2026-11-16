@@ -1,0 +1,242 @@
+"""Sauvegarde et restauration des données propres au hub, sans les médias ni ce qui se refait.
+
+L'archive (un .zip) contient ce qui ne se refait pas :
+
+    hub.db         comptes (mots de passe hachés), clé des sessions, droits, progressions, avis, playlists, demandes, suggestions, réglages, enrichissement
+    sagas.json     les sagas composées à la main
+    posters/       les affiches choisies à la main
+    artists/       les photos d'artistes gardées hors de la Musique
+
+et `manifest.json` : format, version du hub, version du schéma de la base, et chaque fichier avec sa taille et son empreinte SHA-256.
+Les caches (img/, subs/, tmdb/, tmdb-cache/, musicbrainz-cache/), les outils (bin/, pylib/) et la boîte de réception n'y sont pas : ils se refont,
+ou se sauvegardent par instantané de leur dataset.
+
+**L'archive n'est pas chiffrée** (bibliothèque standard seulement) : elle contient les hachés des mots de passe et la clé des sessions, qui est gardée
+à la restauration (les appareils restent connectés). Elle se garde comme un mot de passe.
+
+La base est copiée par l'API de sauvegarde de SQLite, cohérente pendant que le serveur écrit (mode WAL) ; jamais par copie du fichier, qui perdrait
+ce qui est encore dans le journal.
+
+La restauration se fait serveur arrêté (`python -m hub restore`). Elle vérifie toute l'archive avant de toucher à quoi que ce soit : format connu,
+schéma pas plus récent que ce hub, chemins attendus seulement, tailles et empreintes, base SQLite intègre. Une archive refusée laisse l'installation
+telle qu'elle était. Sur une installation qui a déjà une base, il faut `replace=True` : ce qui est remplacé est mis de côté dans
+`avant-restauration-<date>/`, rien n'est effacé. Une base d'un schéma plus ancien est migrée au démarrage suivant (db.Database).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import sqlite3
+import tempfile
+import time
+import zipfile
+from pathlib import Path, PurePosixPath
+
+from . import __version__
+from .db import SCHEMA_VERSION
+
+FORMAT = 1                                   # monte si la forme de l'archive change au point qu'un hub d'avant ne saurait plus la lire
+BASE = "hub.db"
+MANIFEST = "manifest.json"
+FILES = ("sagas.json",)                      # fichiers facultatifs, à la racine de HUB_DATA
+FOLDERS = ("posters", "artists")             # dossiers facultatifs de HUB_DATA, à plat (un fichier par affiche ou photo)
+BACKUPS = "sauvegardes"                      # HUB_DATA/sauvegardes : où `python -m hub backup` écrit sans chemin donné
+ASIDE = "avant-restauration"                 # HUB_DATA/avant-restauration-<date> : ce qu'une restauration remplace
+TEMPORARY = (".tmp", ".part")                # une écriture en cours (images.write_atomic, enrich) : jamais sauvegardée
+CHUNK = 1 << 20
+
+
+class BackupError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+        self.message = message
+
+
+def archive_name(now=None):
+    """Le nom proposé pour une archive : `media_hub-<version>-<AAAAMMJJ-HHMMSS>.zip`."""
+    return f"media_hub-{__version__}-{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.zip"
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(CHUNK), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _schema_of(path):
+    """Le numéro de schéma gardé dans la base (`kv` « schema ») ; None s'il n'y en a pas."""
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT value FROM kv WHERE key='schema'").fetchone()
+    finally:
+        conn.close()
+    return int(json.loads(row[0])) if row else None
+
+
+def _copy_base(db_path, out):
+    """Copie cohérente de la base, journal WAL compris, par l'API de sauvegarde de SQLite."""
+    source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
+    target = sqlite3.connect(out)
+    try:
+        source.backup(target)
+        target.execute("PRAGMA journal_mode=DELETE")          # une seule pièce : pas de -wal à côté de la copie
+    finally:
+        target.close()
+        source.close()
+
+
+def _sources(data):
+    """[(chemin dans l'archive, fichier)] de ce qui accompagne la base."""
+    found = [(name, data / name) for name in FILES if (data / name).is_file()]
+    for folder in FOLDERS:
+        if (data / folder).is_dir():
+            found += [(f"{folder}/{path.name}", path) for path in sorted((data / folder).iterdir())
+                      if path.is_file() and not path.is_symlink() and not path.name.startswith(".") and not path.name.endswith(TEMPORARY)]
+    return found
+
+
+def create(db_path, data, out):
+    """Écrit l'archive `out` (remplacée si elle existe) et rend son manifeste. BackupError si la base manque. L'archive s'écrit à côté puis prend son nom
+    d'un bloc : une sauvegarde coupée ne laisse pas une archive tronquée sous le nom attendu."""
+    db_path, data, out = Path(db_path), Path(data), Path(out)
+    if not db_path.is_file():
+        raise BackupError(f"pas de base à sauvegarder : {db_path} n'existe pas")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=".sauvegarde-", dir=out.parent))
+    try:
+        base = work / BASE
+        _copy_base(db_path, base)
+        members = [(BASE, base)] + _sources(data)
+        manifest = {"format": FORMAT, "hub": __version__, "schema": _schema_of(base), "created": int(time.time()),
+                    "files": [{"path": name, "size": path.stat().st_size, "sha256": _sha256(path)} for name, path in members]}
+        partial = work / "archive.zip"
+        with zipfile.ZipFile(partial, "w") as z:
+            z.writestr(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=1))
+            for name, path in members:
+                z.write(path, name, zipfile.ZIP_DEFLATED if name.endswith((".db", ".json")) else zipfile.ZIP_STORED)
+        os.replace(partial, out)
+        return manifest
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _allowed(name):
+    """`name` est-il un chemin que l'archive peut contenir : la base, un fichier de FILES, ou un fichier à plat d'un dossier de FOLDERS ? Rien d'autre,
+    et surtout rien qui sorte de HUB_DATA (`..`, chemin absolu, lecteur Windows, antislash)."""
+    if not isinstance(name, str) or "\\" in name or ":" in name or name.startswith("/"):
+        return False
+    parts = PurePosixPath(name).parts
+    if name in (BASE, *FILES):
+        return True
+    return len(parts) == 2 and parts[0] in FOLDERS and parts[1] not in ("", ".", "..") and not parts[1].startswith(".")
+
+
+def _read_manifest(z):
+    try:
+        manifest = json.loads(z.read(MANIFEST))
+    except KeyError:
+        raise BackupError("archive sans manifest.json : ce n'est pas une sauvegarde de media_hub")
+    except ValueError:
+        raise BackupError("manifest.json illisible : archive abîmée")
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
+        raise BackupError(f"format d'archive inconnu ({manifest.get('format') if isinstance(manifest, dict) else '?'}) : ce hub lit le format {FORMAT}")
+    schema = manifest.get("schema")
+    if isinstance(schema, int) and schema > SCHEMA_VERSION:
+        raise BackupError(f"archive d'un hub plus récent (base en version {schema}, ce hub n'en connaît que {SCHEMA_VERSION}) : mets le hub à jour avant de restaurer")
+    files = manifest.get("files")
+    if not isinstance(files, list) or not all(isinstance(f, dict) for f in files):
+        raise BackupError("manifest.json sans liste de fichiers : archive abîmée")
+    return manifest
+
+
+def _check_and_extract(archive, stage):
+    """Vérifie toute l'archive et l'extrait dans `stage` ; rend le manifeste. BackupError au premier défaut."""
+    try:
+        z = zipfile.ZipFile(archive)
+    except FileNotFoundError:
+        raise BackupError(f"archive introuvable : {archive}")
+    except (zipfile.BadZipFile, OSError):
+        raise BackupError(f"{archive} n'est pas une archive zip lisible")
+    with z:
+        manifest = _read_manifest(z)
+        listed = {f.get("path"): f for f in manifest["files"]}
+        for name in listed:
+            if not _allowed(name):
+                raise BackupError(f"chemin refusé dans l'archive : {name!r}")
+        if BASE not in listed:
+            raise BackupError("archive sans hub.db")
+        present = {info.filename for info in z.infolist() if not info.is_dir()} - {MANIFEST}
+        for name in sorted(present - set(listed)):
+            raise BackupError(f"fichier que le manifeste ne liste pas : {name}")
+        for name, entry in listed.items():
+            if name not in present:
+                raise BackupError(f"fichier listé mais absent de l'archive : {name}")
+            info = z.getinfo(name)
+            if info.file_size != entry.get("size"):
+                raise BackupError(f"{name} : taille différente de celle du manifeste (archive abîmée)")
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            digest = hashlib.sha256()
+            with z.open(info) as src, open(target, "wb") as dst:
+                for chunk in iter(lambda: src.read(CHUNK), b""):
+                    digest.update(chunk)
+                    dst.write(chunk)
+            if digest.hexdigest() != entry.get("sha256"):
+                raise BackupError(f"{name} : empreinte différente de celle du manifeste (archive abîmée)")
+    _check_base(stage / BASE)
+    return manifest
+
+
+def _check_base(path):
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            ok = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        finally:
+            conn.close()
+        schema = _schema_of(path)
+    except (sqlite3.DatabaseError, ValueError, TypeError):
+        raise BackupError("hub.db n'est pas une base SQLite lisible (archive abîmée)")
+    if not ok:
+        raise BackupError("hub.db ne passe pas la vérification d'intégrité de SQLite (archive abîmée)")
+    if schema is not None and schema > SCHEMA_VERSION:
+        raise BackupError(f"hub.db est en version {schema}, ce hub n'en connaît que {SCHEMA_VERSION} : mets le hub à jour avant de restaurer")
+
+
+def _targets(db_path, data):
+    """[(chemin dans l'archive, emplacement)] de tout ce qu'une restauration remplace, journaux de la base compris."""
+    return ([(BASE, db_path), (None, Path(f"{db_path}-wal")), (None, Path(f"{db_path}-shm"))]
+            + [(name, data / name) for name in FILES] + [(folder, data / folder) for folder in FOLDERS])
+
+
+def restore(archive, db_path, data, replace=False):
+    """Remet l'archive en place, serveur arrêté. Rend {"schema", "files", "aside"} : `aside`, le dossier où l'ancienne installation a été mise de côté (None
+    s'il n'y avait rien). BackupError, sans rien modifier, si l'archive est refusée ou si une base existe déjà sans `replace`."""
+    db_path, data = Path(db_path), Path(data)
+    if not Path(archive).is_file():
+        raise BackupError(f"archive introuvable : {archive}")
+    data.mkdir(parents=True, exist_ok=True)
+    if db_path.exists() and not replace:
+        raise BackupError(f"une base existe déjà ({db_path}) : arrête le serveur, puis relance avec --replace (l'installation actuelle sera mise de côté dans {ASIDE}-<date>/, rien n'est effacé)")
+    stage = Path(tempfile.mkdtemp(prefix=".restauration-", dir=data))
+    try:
+        manifest = _check_and_extract(Path(archive), stage)
+        existing = [(name, path) for name, path in _targets(db_path, data) if path.exists()]
+        aside = None
+        if existing:
+            aside = data / f"{ASIDE}-{time.strftime('%Y%m%d-%H%M%S')}"
+            aside.mkdir()
+            for _, path in existing:
+                os.replace(path, aside / path.name)
+        for name, path in _targets(db_path, data):
+            if name and (stage / name).exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(stage / name, path)
+        return {"schema": manifest.get("schema"), "files": len(manifest["files"]), "aside": str(aside) if aside else None}
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
