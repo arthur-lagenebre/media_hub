@@ -186,7 +186,7 @@ La base est copiée par l'API de sauvegarde de SQLite : la copie est cohérente 
 
 ### Restaurer
 
-**Serveur arrêté.** La restauration vérifie toute l'archive avant de toucher à quoi que ce soit, et refuse sans rien modifier une archive abîmée, d'un autre format, ou faite par un hub plus récent (mets d'abord le hub à la même version ou plus récente). Une archive d'un hub plus ancien est restaurée, puis la base est mise à jour au démarrage. Sur une installation qui a déjà une base, il faut `--replace` : l'installation actuelle (base, sagas, affiches, photos) est mise de côté dans `media_hub-data/avant-restauration-<date>/`, rien n'est effacé.
+**Serveur arrêté.** Tant que le serveur tourne, il garde un verrou sur `media_hub-data/hub.lock` : la restauration le voit et refuse (« le serveur tourne sur ces données »), sans rien modifier. Le système libère ce verrou dès que le conteneur s'arrête, même brutalement ; le fichier `hub.lock`, vide, reste et ne gêne rien. La restauration vérifie toute l'archive avant de toucher à quoi que ce soit, et refuse sans rien modifier une archive abîmée, d'un autre format, ou faite par un hub plus récent (mets d'abord le hub à la même version ou plus récente). Une archive d'un hub plus ancien est restaurée, puis la base est mise à jour au démarrage. Sur une installation qui a déjà une base, il faut `--replace` : l'installation actuelle (base, sagas, affiches, photos) est mise de côté dans `media_hub-data/avant-restauration-<date>/`, rien n'est effacé.
 
 1. TrueNAS > Apps > l'application > *Stop*.
 2. Copie l'archive sur le NAS, puis lance un conteneur temporaire de la même image, avec le dossier de données et l'archive :

@@ -17,7 +17,8 @@ ou se sauvegardent par instantané de leur dataset.
 La base est copiée par l'API de sauvegarde de SQLite, cohérente pendant que le serveur écrit (mode WAL) ; jamais par copie du fichier, qui perdrait
 ce qui est encore dans le journal.
 
-La restauration se fait serveur arrêté (`python -m hub restore`). Elle vérifie toute l'archive avant de toucher à quoi que ce soit : format connu,
+La restauration se fait serveur arrêté (`python -m hub restore`) : elle prend le verrou de HUB_DATA (runlock.py), que le serveur garde tant qu'il tourne, et refuse
+s'il est déjà pris. Elle vérifie toute l'archive avant de toucher à quoi que ce soit : format connu,
 schéma pas plus récent que ce hub, chemins attendus seulement, tailles et empreintes, base SQLite intègre. Une archive refusée laisse l'installation
 telle qu'elle était. Sur une installation qui a déjà une base, il faut `replace=True` : ce qui est remplacé est mis de côté dans
 `avant-restauration-<date>/`, rien n'est effacé. Une base d'un schéma plus ancien est migrée au démarrage suivant (db.Database).
@@ -35,7 +36,7 @@ import time
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from . import __version__
+from . import __version__, runlock
 from .db import SCHEMA_VERSION
 
 FORMAT = 1                                   # monte si la forme de l'archive change au point qu'un hub d'avant ne saurait plus la lire
@@ -245,12 +246,22 @@ def restore(archive, db_path, data, replace=False):
     db_path, data = Path(db_path), Path(data)
     if not Path(archive).is_file():
         raise BackupError(f"archive introuvable : {archive}")
-    data.mkdir(parents=True, exist_ok=True)
+    lock = runlock.hold(data)
+    if lock is None:
+        raise BackupError(f"le serveur tourne sur ces données ({data}) : arrête-le avant de restaurer (rien n'a été modifié)")
+    try:
+        return _restore_locked(Path(archive), db_path, data, replace)
+    finally:
+        runlock.release(lock)
+
+
+def _restore_locked(archive, db_path, data, replace):
+    """La restauration elle-même, verrou de HUB_DATA tenu : aucun serveur ne démarre pendant ce temps (il le dirait)."""
     if db_path.exists() and not replace:
         raise BackupError(f"une base existe déjà ({db_path}) : arrête le serveur, puis relance avec --replace (l'installation actuelle sera mise de côté dans {ASIDE}-<date>/, rien n'est effacé)")
     stage = Path(tempfile.mkdtemp(prefix=".restauration-", dir=data))
     try:
-        manifest = _check_and_extract(Path(archive), stage)
+        manifest = _check_and_extract(archive, stage)
         aside = _set_aside(db_path, data)
         _put_in_place(stage, db_path, data)
         return {"schema": manifest.get("schema"), "files": len(manifest["files"]), "aside": aside}

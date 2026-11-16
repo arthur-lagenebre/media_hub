@@ -19,7 +19,7 @@ import getpass
 import sys
 from pathlib import Path
 
-from . import __version__, accounts, backup, config, labels
+from . import __version__, accounts, backup, config, labels, runlock
 
 
 def read_secret(prompt):
@@ -172,11 +172,21 @@ def main_with(argv):
         globals()[COMMANDS[argv[0]]](argv[1:])
         return
     cfg = config.load()
+    lock = runlock.hold(cfg.data)          # gardé tant que le serveur tourne : une restauration le voit et refuse (voir runlock.py)
+    try:
+        serve(cfg, lock)
+    finally:
+        runlock.release(lock)
+
+
+def serve(cfg, lock):
     config.use_media_library(cfg.repo)
     from .server.app import make_server
     server = make_server(cfg)
     hub = server.hub
     announce(cfg, hub)
+    if lock is None:
+        print(f"  ATTENTION : un autre serveur (ou une restauration) utilise déjà {cfg.data} : deux serveurs sur les mêmes données s'y contredisent ; arrête l'un des deux.", file=sys.stderr)
     hub.first_scan()
     hub.autoscan()
     hub.inbox.migrate()
