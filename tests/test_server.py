@@ -1119,6 +1119,10 @@ class TestNativeToken(unittest.TestCase):
         with mock.patch("hub.server.app.print") as printed, mock.patch.object(run.hub, "item", side_effect=RuntimeError("boum")):
             api.get(f"/api/item/x?token={token}", headers={"Authorization": f"Bearer {token}"})
             api.get(f"/api/item/x?%74oken={media}&a=1", headers={"Authorization": f"Bearer {token}"})       # la clé encodée ne contourne pas le masquage
+            # Le serveur répond avant d'écrire son journal : sans cette attente, le patch de print peut tomber avant la seconde ligne (échec vu sur la CI).
+            deadline = time.monotonic() + 5
+            while sum(" 500 GET " in f" {c.args[0]}" for c in printed.call_args_list) < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
         logged = " ".join(str(c.args[0]) for c in printed.call_args_list)
         self.assertIn("boum", logged)
         self.assertIn("token=***&a=1", logged)

@@ -396,6 +396,14 @@ body.has-audio #toast { bottom: 6rem; }
 .btns { display: flex; align-items: center; margin-top: 0.3rem; }
 .btns .btn { background: rgba(255, 255, 255, 0.14); margin-right: 0.6rem; }
 .btns .sp { flex: 1; }
+/* Lecteur sur un écran étroit (téléphone, en long comme en large) : la rangée ne tient pas, elle passait sous le bord droit. Les boutons y gardent leur icône seule (leur nom reste dans aria-label) ;
+   la vitesse garde son libellé hors 1× (« 1,5× », bouton .on). Si même ainsi la place manque (téléphone en hauteur), la rangée passe à la ligne au lieu de déborder. */
+.player .btns { flex-wrap: wrap; margin-top: -0.2rem; }
+.player .btns .btn { margin-top: 0.5rem; }
+@media (max-width: 56rem) {
+  .player .btns .btn:not(.on) .lbl { display: none; }
+  .player .btns .btn { margin-right: 0.45rem; }
+}
 .spin { position: absolute; top: 50%; left: 50%; width: 3.6rem; height: 3.6rem; margin: -1.8rem 0 0 -1.8rem; pointer-events: none; }
 .spin i { display: block; width: 100%; height: 100%; border-radius: 50%; border: 0.3rem solid rgba(255, 255, 255, 0.25); border-top-color: var(--accent); animation: turn 0.9s linear infinite; }
 @keyframes turn { to { transform: rotate(360deg); } }
