@@ -667,6 +667,16 @@ Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, te
 - `GET /book/<entry>/page/<n>` : l'image de la page `n` (404 `page inexistante`).
 - `GET /book/<entry>/epub/<chemin>` : un fichier de l'epub (XHTML, CSS, images), servi avec une politique `Content-Security-Policy` sans script. **Attention (jeton)** : les chapitres contiennent des liens relatifs (feuilles de style, images) ; une URL relative ne reprend pas le `?token=` de la page qui la contient, ces sous-ressources reçoivent donc un 302 vers `/login`. Un client natif qui affiche un chapitre doit ajouter lui-même `?token=<media_token>` à chaque requête (interception, ou réécriture des liens).
 
+## Sauvegarde
+
+| Route | Qui | Réponse |
+| --- | --- | --- |
+| `GET /api/backup` | administrateur (403 `réservé à l'administrateur` sinon) | l'archive en pièce jointe : `application/zip`, `Content-Disposition: attachment; filename*=UTF-8''media_hub-<version>-<AAAAMMJJ-HHMMSS>.zip`, `Cache-Control: private, no-store`, `Range` accepté. 500 `sauvegarde impossible : …` si elle ne peut pas être construite |
+
+L'archive contient `hub.db`, copiée par l'API de sauvegarde de SQLite (cohérente pendant que le serveur écrit), `sagas.json`, les fichiers de `posters/` et d'`artists/` quand ils existent, et `manifest.json` : `{"format": 1, "hub": "<version>", "schema": <SCHEMA_VERSION de la base>, "created": <horodatage Unix>, "files": [{"path", "size", "sha256"}]}`. Les médias, les caches (`img/`, `subs/`, `tmdb/`, `tmdb-cache/`, `musicbrainz-cache/`), les outils et la boîte de réception n'y sont pas. **Elle n'est pas chiffrée** : elle contient les hachés des mots de passe et la clé des sessions (gardée à la restauration). Construite dans un dossier temporaire de `HUB_DATA`, elle est effacée une fois envoyée.
+
+La restauration n'a pas de route : elle se fait serveur arrêté, par `python -m hub restore <archive> [--replace]`. Elle refuse sans rien modifier une archive d'un autre `format`, d'un `schema` plus récent que le hub, abîmée (taille, empreinte, intégrité SQLite) ou qui contient un chemin autre que ceux ci-dessus ; une base d'un schéma plus ancien est migrée au démarrage suivant.
+
 ## Tâches de fond (gestion)
 
 Une seule tâche tourne à la fois, les autres attendent. `POST /api/scan`, `/api/enrich`, `/api/enrich/person`, `/api/enrich/people` et `/api/cleanup` sont **réservés à l'administrateur** (403 `réservé à l'administrateur` sinon) ; `GET /api/jobs?log=1` (avec le journal des tâches) l'est aussi ; `GET /api/jobs` sans `log` reste ouvert à tout compte (c'est lui qui dit si le serveur est occupé). Redemander une tâche déjà en attente ou en cours renvoie celle-ci.

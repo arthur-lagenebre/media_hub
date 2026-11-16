@@ -6,6 +6,9 @@
     python -m hub user rm <nom>
     python -m hub user rights <nom> [--set <bibliothèque>=all|play|view|none ...]   (ce que le compte voit, lit et télécharge)
 
+    python -m hub backup [archive.zip]         (sauvegarde base, sagas, affiches choisies, photos d'artistes ; serveur allumé ou non)
+    python -m hub restore <archive.zip> [--replace]   (serveur arrêté ; --replace met l'installation actuelle de côté)
+
 Les comptes se gèrent sans le serveur (il peut tourner pendant ce temps) : seule la base de HUB_DATA est lue. Pas d'inscription publique.
 """
 
@@ -14,8 +17,9 @@ from __future__ import annotations
 import argparse
 import getpass
 import sys
+from pathlib import Path
 
-from . import __version__, accounts, config, labels
+from . import __version__, accounts, backup, config, labels
 
 
 def read_secret(prompt):
@@ -127,9 +131,45 @@ def announce(cfg, hub):
         print(f"  ATTENTION : HUB_PASSWORD fait moins de {accounts.MIN_PASSWORD} caractères (accepté pour les installations d'avant, mais trop court si le hub est ouvert à Internet ; il ne sert qu'à créer le premier compte).", file=sys.stderr)
 
 
+def backup_command(argv):
+    parser = argparse.ArgumentParser(prog="python -m hub backup", description="Sauvegarde les données propres au hub (base, sagas, affiches choisies, photos d'artistes), sans les médias ni les caches. Le serveur peut tourner pendant ce temps.")
+    parser.add_argument("archive", nargs="?", help=f"fichier .zip à écrire (par défaut : HUB_DATA/{backup.BACKUPS}/<nom daté>)")
+    args = parser.parse_args(argv)
+    data = config.load().data
+    out = Path(args.archive) if args.archive else data / backup.BACKUPS / backup.archive_name()
+    try:
+        manifest = backup.create(data / "hub.db", data, out)
+    except (backup.BackupError, OSError) as e:
+        raise SystemExit(f"sauvegarde impossible : {getattr(e, 'message', e)}")
+    print(f"sauvegarde écrite : {out} ({len(manifest['files'])} fichiers, base en version {manifest['schema']}).")
+    print("Elle contient les hachés des mots de passe et la clé des sessions, sans chiffrement : garde-la comme un mot de passe.")
+
+
+def restore_command(argv):
+    parser = argparse.ArgumentParser(prog="python -m hub restore", description="Restaure une sauvegarde de `python -m hub backup` ou de Gestion. Serveur arrêté.")
+    parser.add_argument("archive", help="le fichier .zip de la sauvegarde")
+    parser.add_argument("--replace", action="store_true", help=f"remplace une installation existante (mise de côté dans HUB_DATA/{backup.ASIDE}-<date>/, rien n'est effacé)")
+    args = parser.parse_args(argv)
+    data = config.load().data
+    try:
+        done = backup.restore(args.archive, data / "hub.db", data, replace=args.replace)
+    except (backup.BackupError, OSError) as e:
+        raise SystemExit(f"restauration refusée : {getattr(e, 'message', e)}")
+    print(f"sauvegarde restaurée dans {data} ({done['files']} fichiers, base en version {done['schema']} ; elle sera mise à jour au démarrage si besoin).")
+    if done["aside"]:
+        print(f"l'installation d'avant est dans {done['aside']} : supprime ce dossier une fois le hub vérifié.")
+
+
+COMMANDS = {"user": "user_command", "backup": "backup_command", "restore": "restore_command"}      # par nom : la fonction se cherche à l'appel
+
+
 def main():
-    if sys.argv[1:2] == ["user"]:
-        user_command(sys.argv[2:])
+    main_with(sys.argv[1:])
+
+
+def main_with(argv):
+    if argv[:1] and argv[0] in COMMANDS:
+        globals()[COMMANDS[argv[0]]](argv[1:])
         return
     cfg = config.load()
     config.use_media_library(cfg.repo)
