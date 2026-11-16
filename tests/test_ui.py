@@ -4444,6 +4444,128 @@ class TestSignOutOthers(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestRenameAccount(unittest.TestCase):
+    """« Changer mon nom » (Paramètres > Mon compte) et « Renommer » (Administration > Comptes), à la télécommande."""
+
+    def setUp(self):
+        if not sync_playwright:
+            self.skipTest("Playwright absent")
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.run_ = Running(self.tmp, password="secret")
+        self.addCleanup(self.run_.stop)
+        self.base = f"http://127.0.0.1:{self.run_.port}"
+        token = self.api("/api/token", {"password": "secret"})["token"]
+        self.alice = self.api("/api/users", {"name": "alice", "password": "motdepasse12"}, token)
+        self.pw = sync_playwright().start()
+        self.addCleanup(self.pw.stop)
+        self.browser = self.pw.chromium.launch()
+        self.addCleanup(self.browser.close)
+
+    def api(self, path, body, token=""):
+        headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})}
+        return json.load(urllib.request.urlopen(urllib.request.Request(self.base + path, data=json.dumps(body).encode(), headers=headers)))
+
+    def login_status(self, name, password):
+        try:
+            return urllib.request.urlopen(urllib.request.Request(self.base + "/api/token", data=json.dumps({"user": name, "password": password}).encode(), headers={"Content-Type": "application/json"})).status
+        except urllib.error.HTTPError as e:
+            e.close()
+            return e.code
+
+    def sign_in(self, name, password):
+        page = self.browser.new_page()
+        page.goto(self.base + "/login")
+        page.fill("input[name=user]", name)
+        page.fill("input[type=password]", password)
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#nav .link", state="attached")
+        return page
+
+    def focused_key(self, page, key):
+        page.wait_for_function("k => document.activeElement && document.activeElement.getAttribute('data-key') === k", arg=key)
+
+    def wait_selected(self, page):
+        """Le nom prérempli a le focus et il est sélectionné (H.form le sélectionne un instant après l'ouverture) : ce qu'on tape le remplace."""
+        page.wait_for_function("(() => { var e = document.activeElement; return !!e && e.matches('[role=dialog] input[type=text]') && e.value.length > 0 && e.selectionStart === 0 && e.selectionEnd === e.value.length; })()")
+
+    def test_an_account_changes_its_name_with_the_remote_and_sees_it_everywhere(self):
+        page = self.sign_in("alice", "motdepasse12")
+        page.goto(self.base + "/#/settings?tab=compte")
+        page.locator("[data-key=mypw]").focus()
+        page.keyboard.press("ArrowLeft")                                                           # à côté de « Changer mon mot de passe »
+        self.focused_key(page, "myname")
+        page.keyboard.press("Enter")
+        dialog = page.locator("[role=dialog]")
+        name = dialog.locator("input[autocomplete=username]")
+        name.wait_for()
+        self.assertEqual(name.input_value(), "alice")                                             # prérempli
+        self.wait_selected(page)
+        page.keyboard.type("Zoé")                                                                   # le texte prérempli est sélectionné : il est remplacé
+        page.keyboard.press("Enter")                                                                # Entrée passe au mot de passe
+        self.assertTrue(dialog.locator("input[type=password]").evaluate("e => e === document.activeElement"))
+        page.keyboard.type("faux-mot-de-passe")
+        page.keyboard.press("Enter")
+        page.wait_for_function("document.querySelector('.formerr').textContent.length > 0")
+        self.assertIn("incorrect", dialog.locator(".formerr").inner_text())
+        dialog.locator("input[type=password]").fill("motdepasse12")
+        dialog.locator("input[type=password]").press("Enter")
+        page.wait_for_function("document.getElementById('toast').textContent.includes('Nom changé')")
+        self.assertEqual(page.locator("#toast").inner_text(), "Nom changé. Utilise-le à ta prochaine connexion.")
+        self.focused_key(page, "myname")                                                            # le focus revient au bouton
+        page.locator("#views > .view:visible .panel .what b", has_text="Zoé").wait_for()           # Mon compte
+        page.goto(self.base + "/#/")
+        page.locator(".greeting", has_text="Bonjour Zoé").wait_for()                               # l'accueil
+        self.assertEqual((self.login_status("Zoé", "motdepasse12"), self.login_status("alice", "motdepasse12")), (200, 401))
+
+    def test_an_empty_name_is_refused_before_the_server(self):
+        page = self.sign_in("alice", "motdepasse12")
+        page.goto(self.base + "/#/settings?tab=compte")
+        page.locator("[data-key=myname]").click()
+        dialog = page.locator("[role=dialog]")
+        dialog.locator("input[autocomplete=username]").fill("   ")
+        dialog.locator("input[type=password]").fill("motdepasse12")
+        dialog.locator("input[type=password]").press("Enter")
+        dialog.locator(".formerr", has_text="nom").wait_for()
+        self.assertEqual(self.login_status("alice", "motdepasse12"), 200)
+
+    def test_the_administrator_renames_an_account_with_the_remote(self):
+        page = self.sign_in("admin", "secret")
+        page.goto(self.base + "/#/admin?tab=comptes")
+        key = f"ren-{self.alice['id']}"
+        page.locator(f'[data-key="pw-{self.alice["id"]}"]').focus()
+        page.keyboard.press("ArrowLeft")                                                           # à côté de « Mot de passe »
+        self.focused_key(page, key)
+        self.assertEqual(page.locator(f'[data-key="{key}"]').get_attribute("aria-label"), "Renommer le compte de alice")
+        page.keyboard.press("Enter")
+        dialog = page.locator("[role=dialog]")
+        field = dialog.locator("input")
+        field.wait_for()
+        self.assertEqual(field.input_value(), "alice")
+        self.wait_selected(page)
+        page.keyboard.type("ADMIN")
+        page.keyboard.press("Enter")
+        dialog.locator(".formerr", has_text="déjà pris").wait_for()                               # la fenêtre reste ouverte avec le refus du serveur
+        field.fill("Zoé")
+        field.press("Enter")
+        page.locator(f'[data-user="{self.alice["id"]}"] .what b', has_text="Zoé").wait_for()
+        self.focused_key(page, key)
+        self.assertIn("Zoé", page.locator("#toast").inner_text())
+        self.assertEqual(self.login_status("Zoé", "motdepasse12"), 200)
+
+    def test_the_administrator_renames_their_own_account_with_their_password(self):
+        page = self.sign_in("admin", "secret")
+        page.goto(self.base + "/#/admin?tab=comptes")
+        page.locator('[data-key="ren-default"]').click()
+        dialog = page.locator("[role=dialog]")
+        self.assertEqual(dialog.locator("input[type=password]").count(), 1)                        # son propre compte : même formulaire que « Changer mon nom »
+        dialog.locator("input[autocomplete=username]").fill("Chef")
+        dialog.locator("input[type=password]").fill("secret")
+        dialog.locator("input[type=password]").press("Enter")
+        page.locator('[data-user="default"] .what b', has_text="Chef").wait_for()
+        self.focused_key(page, "ren-default")
+
+
 class TestSettings(UiCase):
     """Deux pages à onglets : « Paramètres » (#/settings), ce qui concerne le compte connecté, et « Administration » (#/admin), ce qui concerne la médiathèque et les autres comptes."""
 

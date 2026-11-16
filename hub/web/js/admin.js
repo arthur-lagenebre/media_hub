@@ -357,6 +357,7 @@
         panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' ' + H.t('(toi)') : '')),
           h('span', null, (H.roles[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours') + ' · ' + H.t('Peut demander : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
           u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger, envoyer, demander', { name: u.name }), onclick: function () { rightsOf(u); } }),
+          H.button(H.t('Renommer'), 'edit', { 'data-key': 'ren-' + u.id, 'aria-label': H.t('Renommer le compte de {name}', { name: u.name }), onclick: function () { renameOf(u, mine); } }),
           H.button(H.t('Mot de passe'), 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': H.t('Changer le mot de passe de {name}', { name: u.name }), onclick: function () { passwordOf(u, mine); } }),
           H.button(H.t('Supprimer'), 'trash', { 'data-key': 'del-' + u.id, 'aria-label': H.t('Supprimer le compte de {name}', { name: u.name }), onclick: function () { deleteUser(u, mine); } })));
       });
@@ -473,6 +474,17 @@
       if (failed.rights) return applied.upload ? H.t('« Envoyer des fichiers » est enregistré, mais pas les droits de bibliothèque : {error}', { error: failed.rights }) : H.t('Les droits de bibliothèque n’ont pas été enregistrés : {error}', { error: failed.rights });
       if (failed.upload) return applied.rights ? H.t('Les droits de bibliothèque sont enregistrés, mais pas « Envoyer des fichiers » : {error}', { error: failed.upload }) : H.t('« Envoyer des fichiers » n’a pas été enregistré : {error}', { error: failed.upload });
       return '';
+    }
+    function renameOf(u, mine) {
+      if (mine) { H.changeMyName(function () { refreshUsers('ren-' + u.id); }); return; }          // son propre compte : même formulaire que « Changer mon nom » (avec le mot de passe actuel)
+      H.form({ title: H.t('Renommer le compte de {name}', { name: u.name }), ok: H.t('Renommer'),
+        lead: [H.t('La personne se connectera avec le nouveau nom ; sa session, sa progression et ses playlists restent.')],
+        fields: [{ key: 'name', label: H.t('Nouveau nom'), value: u.name }],
+        submit: function (v) {
+          if (!v.name) return H.t('Saisis un nom.');
+          return H.api('/api/user/' + encodeURIComponent(u.id) + '/rename', { name: v.name });
+        },
+        done: function (row) { H.toast(H.t('Compte renommé : {name}', { name: row.name })); refreshUsers('ren-' + u.id); } });
     }
     function passwordOf(u, mine) {
       if (mine) { H.changeMyPassword(function () { H.focus.key(el, 'pw-' + u.id); }); return; }          // son propre compte : même formulaire que « Changer mon mot de passe » (le serveur exige le mot de passe actuel)

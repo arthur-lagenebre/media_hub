@@ -1454,6 +1454,22 @@
     if (pw !== again) return H.t('Les deux mots de passe ne sont pas identiques.');
     return '';
   };
+  // Changer son propre nom (le serveur exige le mot de passe actuel ; la session reste valable). `done(compte)` une fois la fenêtre fermée : à l'appelant de redessiner et de rendre le focus.
+  H.changeMyName = function (done) {
+    var me = H.session.user || {};
+    H.form({ title: H.t('Changer mon nom'), ok: H.t('Changer'),
+      fields: [{ key: 'name', label: H.t('Nouveau nom'), value: me.name, auto: 'username' }, { key: 'current', label: H.t('Mot de passe actuel'), type: 'password', auto: 'current-password' }],
+      submit: function (v) {
+        if (!v.name) return H.t('Saisis un nom.');
+        if (!v.current) return H.t('Saisis ton mot de passe actuel.');
+        return H.api('/api/me/name', { current: v.current, name: v.name });
+      },
+      done: function (user) {
+        H.session.user = user;           // l'accueil (« Bonjour … ») et Mon compte lisent le nom ici
+        H.toast(H.t('Nom changé. Utilise-le à ta prochaine connexion.'), 5000);
+        if (done) done(user);
+      } });
+  };
   // Changer son propre mot de passe (le serveur exige l'actuel) ; `done` rend le focus à ce qui a ouvert la fenêtre.
   H.changeMyPassword = function (done) {
     H.form({ title: H.t('Changer mon mot de passe'), ok: H.t('Changer'),
@@ -1609,6 +1625,7 @@
         return panel;
       }
       panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, me.name), h('span', null, H.roles[me.role] || me.role)),
+        H.button(H.t('Changer mon nom'), 'edit', { 'data-key': 'myname', onclick: function () { H.changeMyName(function () { load().then(function () { H.focus.key(el, 'myname'); }); }); } }),
         H.button(H.t('Changer mon mot de passe'), 'edit', { 'data-key': 'mypw', onclick: function () { H.changeMyPassword(function () { H.focus.key(el, 'mypw'); }); } }),
         H.button(H.t('Déconnecter les autres appareils'), null, { 'data-key': 'signout-others', onclick: signOutOthers }),
         h('a', { class: 'btn f', href: '/api/logout', 'data-key': 'logout', onclick: function () { H.forgetAccount(); } }, H.t('Se déconnecter'))));
