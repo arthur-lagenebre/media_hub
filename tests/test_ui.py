@@ -119,6 +119,9 @@ class UiCase(unittest.TestCase):
     def setUp(self):
         self.context = self.browser.new_context(viewport={"width": 1920, "height": 1080})
         self.page = self.context.new_page()
+        slowdown = float(os.environ.get("HUB_UI_SLOWDOWN", "1"))
+        if slowdown > 1:                    # un poste chargé, à volonté : `HUB_UI_SLOWDOWN=8` ralentit le navigateur d'autant, pour débusquer les attentes qui comptent sur le temps
+            self.context.new_cdp_session(self.page).send("Emulation.setCPUThrottlingRate", {"rate": slowdown})
         self.errors = []
         self.page.on("pageerror", lambda e: self.errors.append(str(e)))
         self.page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and not any(code in m.text for code in ("404", "500", "503")) else None)
