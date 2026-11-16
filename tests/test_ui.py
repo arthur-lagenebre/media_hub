@@ -119,6 +119,9 @@ class UiCase(unittest.TestCase):
     def setUp(self):
         self.context = self.browser.new_context(viewport={"width": 1920, "height": 1080})
         self.page = self.context.new_page()
+        slowdown = float(os.environ.get("HUB_UI_SLOWDOWN", "1"))
+        if slowdown > 1:                    # un poste chargé, à volonté : `HUB_UI_SLOWDOWN=8` ralentit le navigateur d'autant, pour débusquer les attentes qui comptent sur le temps
+            self.context.new_cdp_session(self.page).send("Emulation.setCPUThrottlingRate", {"rate": slowdown})
         self.errors = []
         self.page.on("pageerror", lambda e: self.errors.append(str(e)))
         self.page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and not any(code in m.text for code in ("404", "500", "503")) else None)
@@ -157,6 +160,10 @@ class UiCase(unittest.TestCase):
     def shown(self, hash):
         """Attend que la page d'adresse `hash` soit affichée. L'adresse change un instant avant que la page suive (`hashchange`) : jusque-là, `view()` désigne encore l'ancienne page, cartes et titre compris."""
         self.page.wait_for_function("h => { var c = window.Hub.current(); return !!c && c.hash === h && c.el.style.display !== 'none'; }", arg=hash)
+
+    def saves(self, position):
+        """À employer avec `with` autour de ce qui fait tourner les pages : attend la réponse du serveur à l'enregistrement de cette position de lecture. La liseuse l'enregistre 1,5 s après le dernier geste ; attendre la réponse plutôt qu'un délai tient aussi sur un navigateur lent."""
+        return self.page.expect_response(lambda r: r.url.endswith("/api/progress") and r.request.method == "POST" and json.loads(r.request.post_data)["position"] == position)
 
     def until(self, condition, tries=40):
         """Attend (au plus quelques secondes) que `condition()` devienne vraie : l'écran ou le serveur ne suivent pas à l'instant du clic."""
@@ -989,18 +996,18 @@ class TestReader(UiCase):
         self.open("#/read/" + entry)
         self.page.wait_for_function("document.querySelector('.reader .page') && document.querySelector('.reader .page').complete && document.querySelector('.reader .page').naturalWidth > 0")
         self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 1 / 3")
-        self.press("ArrowLeft", wait=300)
-        self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 2 / 3")
-        self.press("ArrowRight", wait=300)
-        self.press("ArrowRight", wait=300)
-        self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 1 / 3")
-        self.press("ArrowLeft", wait=300)
-        self.page.wait_for_timeout(2000)
+        with self.saves(1):
+            self.press("ArrowLeft", wait=300)
+            self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 2 / 3")
+            self.press("ArrowRight", wait=300)
+            self.press("ArrowRight", wait=300)
+            self.assertEqual(self.page.evaluate("document.querySelector('.reader .pg').textContent"), "Page 1 / 3")
+            self.press("ArrowLeft", wait=300)
         self.assertEqual(self.api("/api/book/" + entry)["position"], 1)
         self.open("#/read/" + entry)
         self.page.wait_for_function("document.querySelector('.reader .pg').textContent === 'Page 2 / 3'")      # reprend où l'on s'était arrêté
-        self.press("ArrowLeft", wait=300)
-        self.page.wait_for_timeout(2000)
+        with self.saves(2):
+            self.press("ArrowLeft", wait=300)
         self.assertTrue(self.api("/api/item/" + self.item("livres", "Naruto")["id"])["entries"][0]["progress"]["done"])   # dernière page : tome lu
 
     def test_epub_scrolls_and_changes_chapter(self):
@@ -1311,22 +1318,22 @@ class TestReaderSpreads(UiCase):
 
     def test_the_saved_position_is_the_first_page_of_the_spread(self):
         entry = self.read("Droite")
-        self.turn("ArrowLeft")
-        self.turn("ArrowLeft")
-        self.wait_pages([4, 3])
-        self.page.wait_for_timeout(2000)
+        with self.saves(3):
+            self.turn("ArrowLeft")
+            self.turn("ArrowLeft")
+            self.wait_pages([4, 3])
         self.assertEqual(self.api("/api/book/" + entry)["position"], 3)
 
     def test_a_volume_started_in_single_mode_is_resumed_where_it_stood_in_double_mode(self):
         entry = self.read("Gauche", double=False)
-        self.turn("ArrowRight")
-        self.turn("ArrowRight")
-        self.wait_pages([2])
-        self.assertEqual(self.label(), "Page 3 / 5")
-        self.tool("Double page")
-        self.wait_pages([2, 3])
-        self.assertEqual(self.label(), "Pages 3–4 / 5")
-        self.page.wait_for_timeout(2000)
+        with self.saves(2):
+            self.turn("ArrowRight")
+            self.turn("ArrowRight")
+            self.wait_pages([2])
+            self.assertEqual(self.label(), "Page 3 / 5")
+            self.tool("Double page")
+            self.wait_pages([2, 3])
+            self.assertEqual(self.label(), "Pages 3–4 / 5")
         self.assertEqual(self.api("/api/book/" + entry)["position"], 2)
         self.tool("Double page")                        # et inversement : on revient à la page seule
         self.wait_pages([2])
@@ -1334,25 +1341,25 @@ class TestReaderSpreads(UiCase):
 
     def test_a_volume_closed_in_one_mode_is_resumed_at_the_same_place_in_the_other(self):
         self.read("Droite", double=False)
-        self.turn("ArrowLeft")                          # de droite à gauche : la flèche gauche avance
-        self.wait_pages([1])
-        self.page.wait_for_timeout(2000)
+        with self.saves(1):
+            self.turn("ArrowLeft")                      # de droite à gauche : la flèche gauche avance
+            self.wait_pages([1])
         self.read("Droite", double=True, page=None)
         self.wait_pages([2, 1])                         # la page 2 (rang 1) est la première de la vue : à droite
         self.assertEqual(self.label(), "Pages 2–3 / 6")
-        self.turn("ArrowLeft")
-        self.wait_pages([4, 3])
-        self.page.wait_for_timeout(2000)
+        with self.saves(3):
+            self.turn("ArrowLeft")
+            self.wait_pages([4, 3])
         self.read("Droite", double=False, page=None)
         self.wait_pages([3])
         self.assertEqual(self.label(), "Page 4 / 6")
 
     def test_the_last_spread_marks_the_volume_as_read(self):
         self.read("Gauche")
-        for _ in range(2):
-            self.turn("ArrowRight")
-        self.wait_pages([3, 4])                         # la dernière page est à l'écran
-        self.page.wait_for_timeout(2000)
+        with self.saves(4):
+            for _ in range(2):
+                self.turn("ArrowRight")
+            self.wait_pages([3, 4])                     # la dernière page est à l'écran
         progress = self.api("/api/item/" + self.item("livres", "Gauche")["id"])["entries"][0]["progress"]
         self.assertEqual((progress["done"], progress["position"]), (True, 4))        # la page 5 (rang 4) : sans cela, un tome fini en double page ne serait jamais lu
 
@@ -1936,6 +1943,7 @@ class TestMusicQueueAndPlaylists(UiCase):
         self.assertIn("#/l/musique", self.page.url)                  # on reste dans la liste
 
     def test_play_next_and_queue_panel(self):
+        self.page.add_init_script("HTMLMediaElement.prototype.play = function () { return Promise.resolve(); }")     # les pistes factices durent une seconde : sans lecture, la file n'avance pas toute seule pendant le test
         self.open_music()
         card = self.view(".grid .card", has_text="Discovery")
         card.hover()
@@ -1944,17 +1952,14 @@ class TestMusicQueueAndPlaylists(UiCase):
         card.hover()
         card.locator(".qbtn").nth(1).click()                          # ⋯
         self.page.locator(".veil .opt", has_text="Jouer ensuite").click()
-        self.page.wait_for_timeout(500)
-        self.page.locator("#abar .qn").wait_for()
-        self.assertEqual(self.page.inner_text("#abar .qn"), "1/6")
+        expect(self.page.locator("#abar .qn")).to_have_text("1/6")
         self.page.locator("#abar [aria-label=\"File d’attente\"]").click()
-        self.page.wait_for_selector(".menu.queue .qrow")
-        self.assertEqual(self.page.locator(".menu.queue .qrow").count(), 6)
-        self.assertEqual(self.page.locator(".menu.queue .qrow.now").count(), 1)
+        expect(self.page.locator(".menu.queue .qrow")).to_have_count(6)
+        expect(self.page.locator(".menu.queue .qrow.now")).to_have_count(1)
         self.page.locator(".menu.queue .qrow").nth(2).locator(".qt").click()          # saute à la piste 3
-        self.page.wait_for_function("document.querySelector('#abar .qn').textContent === '3/6'")
+        expect(self.page.locator("#abar .qn")).to_have_text("3/6")
         self.page.locator(".menu.queue [aria-label=\"Retirer de la file\"]").last.click()
-        self.assertEqual(self.page.locator(".menu.queue .qrow").count(), 5)
+        expect(self.page.locator(".menu.queue .qrow")).to_have_count(5)
 
     def test_queue_survives_a_reload(self):
         self.open_music()
@@ -3702,12 +3707,10 @@ class TestLibraryToolbar(UiCase):
         before = self.widths()
         self.filters().nth(0).click()
         self.page.locator(".veil .opt", has_text="Science-Fiction").click()
-        self.page.wait_for_timeout(600)
-        self.assertEqual(self.filters().nth(0).inner_text(), "Genre : Science-Fiction")
+        expect(self.filters().nth(0)).to_have_text("Genre : Science-Fiction")         # le bouton se repeint à la réponse du serveur : on attend l'état, pas un délai
         self.filters().nth(1).click()
         self.page.locator(".veil .opt").nth(1).click()
-        self.page.wait_for_timeout(600)
-        self.assertNotEqual(self.filters().nth(1).inner_text(), "Tri : Titre")
+        expect(self.filters().nth(1)).to_have_text("Tri : Ajouts récents")
         self.assertEqual(self.widths(), before)
 
     def test_a_value_too_long_for_its_button_is_cut_and_the_button_does_not_grow(self):

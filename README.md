@@ -233,7 +233,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 python -m unittest discover -s tests          # la suite complète (une trentaine de minutes)
 ```
 
-Les tests d'interface (les classes dérivées de `UiCase`, définie dans `tests/test_ui.py`, quel que soit leur fichier) pilotent l'interface dans Chromium avec Playwright ; ils sont ignorés si Playwright ou ffmpeg manquent. Le nombre exact de tests, réussis et sautés, figure dans la description de chaque PR.
+Les tests d'interface (les classes dérivées de `UiCase`, définie dans `tests/test_ui.py`, quel que soit leur fichier) pilotent l'interface dans Chromium avec Playwright ; ils sont ignorés si Playwright ou ffmpeg manquent. Le nombre exact de tests, réussis et sautés, figure dans la description de chaque PR. `HUB_UI_SLOWDOWN=8` ralentit le processeur du navigateur d'un facteur 8 (poste chargé simulé) : un test d'interface qui compte sur un délai fixe plutôt que sur un état y échoue de façon déterministe.
 
 ### Intégration continue (GitHub Actions)
 
