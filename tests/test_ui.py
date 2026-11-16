@@ -1939,6 +1939,7 @@ class TestMusicQueueAndPlaylists(UiCase):
         self.assertIn("#/l/musique", self.page.url)                  # on reste dans la liste
 
     def test_play_next_and_queue_panel(self):
+        self.page.add_init_script("HTMLMediaElement.prototype.play = function () { return Promise.resolve(); }")     # les pistes factices durent une seconde : sans lecture, la file n'avance pas toute seule pendant le test
         self.open_music()
         card = self.view(".grid .card", has_text="Discovery")
         card.hover()
@@ -1947,17 +1948,14 @@ class TestMusicQueueAndPlaylists(UiCase):
         card.hover()
         card.locator(".qbtn").nth(1).click()                          # ⋯
         self.page.locator(".veil .opt", has_text="Jouer ensuite").click()
-        self.page.wait_for_timeout(500)
-        self.page.locator("#abar .qn").wait_for()
-        self.assertEqual(self.page.inner_text("#abar .qn"), "1/6")
+        expect(self.page.locator("#abar .qn")).to_have_text("1/6")
         self.page.locator("#abar [aria-label=\"File d’attente\"]").click()
-        self.page.wait_for_selector(".menu.queue .qrow")
-        self.assertEqual(self.page.locator(".menu.queue .qrow").count(), 6)
-        self.assertEqual(self.page.locator(".menu.queue .qrow.now").count(), 1)
+        expect(self.page.locator(".menu.queue .qrow")).to_have_count(6)
+        expect(self.page.locator(".menu.queue .qrow.now")).to_have_count(1)
         self.page.locator(".menu.queue .qrow").nth(2).locator(".qt").click()          # saute à la piste 3
-        self.page.wait_for_function("document.querySelector('#abar .qn').textContent === '3/6'")
+        expect(self.page.locator("#abar .qn")).to_have_text("3/6")
         self.page.locator(".menu.queue [aria-label=\"Retirer de la file\"]").last.click()
-        self.assertEqual(self.page.locator(".menu.queue .qrow").count(), 5)
+        expect(self.page.locator(".menu.queue .qrow")).to_have_count(5)
 
     def test_queue_survives_a_reload(self):
         self.open_music()
