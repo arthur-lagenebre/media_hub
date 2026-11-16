@@ -508,6 +508,29 @@
         [H.t('Conversions'), H.t('{n} en cours sur {max}', { n: state.streams, max: state.max_streams })], [H.t('Accès'), state.auth ? H.t('protégé par mot de passe') : H.t('sans mot de passe')]];
       server.appendChild(h('dl', null, facts.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })));
       body.appendChild(server);
+      body.appendChild(backupPanel());
+    }
+
+    // Sauvegarde : l'archive de GET /api/backup, téléchargée sans quitter la page (H.download). La restauration reste en ligne de commande, serveur arrêté (deploy/README.md).
+    // Pendant la préparation, le bouton n'est pas désactivé (la télécommande y perdrait le focus) : il ignore les clics en plus et dit qu'il prépare.
+    function backupPanel() {
+      var working = false;
+      var button = H.button(H.t('Télécharger une sauvegarde'), 'download', { class: 'primary', 'data-key': 'backup', onclick: function () {
+        if (working) return;
+        working = true;
+        button.setAttribute('aria-busy', 'true');
+        button.querySelector('.lbl').textContent = H.t('Préparation…');
+        H.download('/api/backup').then(function (name) { H.toast(H.t('Sauvegarde téléchargée : {name}', { name: name })); }, function (e) { H.toast(e.message, 6000); }).then(function () {
+          working = false;
+          button.removeAttribute('aria-busy');
+          button.querySelector('.lbl').textContent = H.t('Télécharger une sauvegarde');
+        });
+      } });
+      return h('section', { class: 'panel' }, h('h2', null, H.t('Sauvegarde')),
+        h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Données du hub')),
+          h('span', null, H.t('Comptes, droits, progression, avis, playlists, demandes, sagas composées à la main, affiches choisies et photos d’artistes. Ni les médias, ni les caches, ni la boîte de réception.'))), button),
+        h('p', { class: 'muted' }, H.t('L’archive contient les mots de passe (chiffrés de façon irréversible) et la clé qui garde les appareils connectés, sans autre protection : garde-la comme un mot de passe.')),
+        h('p', { class: 'muted' }, H.t('Pour restaurer : serveur arrêté, python -m hub restore <archive> (voir deploy/README.md, « Sauvegarder et restaurer »).')));
     }
 
     // L'état du serveur, les tâches (avec leurs journaux) et les comptes ; relus toutes les 1,5 s tant qu'une tâche tourne.

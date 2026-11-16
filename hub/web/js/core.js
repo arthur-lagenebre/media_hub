@@ -127,15 +127,47 @@
     return fetch(path, init).then(function (r) {
       if (r.status === 401) { location.href = '/login'; throw new Error('connexion requise'); }
       return r.text().then(function (t) {
-        var data = null;
-        try { data = t ? JSON.parse(t) : null; } catch (e) { data = null; }
-        if (!r.ok) {
-          var err = new Error(data && data.error ? H.tr(data.error) : H.t('Erreur {status}', { status: r.status }));
-          err.status = r.status;
-          err.data = data;           // le reste de la réponse : `item` d'un film déjà dans la médiathèque (409 de POST /api/requests)
-          throw err;
-        }
+        var data = parsed(t);
+        if (!r.ok) throw failure(r, data);
         return data;
+      });
+    });
+  };
+
+  function parsed(text) {          // le JSON d'une réponse ; null pour un corps vide ou illisible
+    try { return text ? JSON.parse(text) : null; } catch (e) { return null; }
+  }
+
+  // L'erreur d'une réponse refusée : le message du serveur (traduit), sinon « Erreur 500 ». `data` : le reste de la réponse, `item` d'un film déjà dans la médiathèque (409 de POST /api/requests).
+  function failure(r, data) {
+    var err = new Error(data && data.error ? H.tr(data.error) : H.t('Erreur {status}', { status: r.status }));
+    err.status = r.status;
+    err.data = data;
+    return err;
+  }
+
+  // Le nom de fichier d'un en-tête Content-Disposition (`filename*=UTF-8''…` d'abord, comme l'écrit le serveur) ; '' sans nom.
+  function attachmentName(header) {
+    var m = /filename\*=UTF-8''([^;]+)/i.exec(header || '');
+    if (m) { try { return decodeURIComponent(m[1]); } catch (e) { /* nom mal codé : on essaie la forme simple */ } }
+    m = /filename="?([^";]+)"?/i.exec(header || '');
+    return m ? m[1] : '';
+  }
+
+  // Télécharge `path` (une pièce jointe du serveur) sans quitter la page : le fichier arrive sous le nom que donne le serveur. Rend une promesse de ce nom ;
+  // une réponse refusée est rejetée comme par H.api (message du serveur), au lieu qu'un simple lien remplace la page par le JSON de l'erreur.
+  H.download = function (path) {
+    return fetch(path, { credentials: 'same-origin' }).then(function (r) {
+      if (r.status === 401) { location.href = '/login'; throw new Error('connexion requise'); }
+      if (!r.ok) return r.text().then(function (t) { throw failure(r, parsed(t)); });
+      var name = attachmentName(r.headers.get('Content-Disposition')) || 'media_hub';
+      return r.blob().then(function (blob) {
+        var url = URL.createObjectURL(blob), a = document.createElement('a');
+        a.href = url; a.download = name; a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); a.parentNode.removeChild(a); }, 1000);          // le navigateur a pris le fichier : on libère la mémoire
+        return name;
       });
     });
   };

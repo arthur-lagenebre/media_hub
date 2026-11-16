@@ -179,7 +179,7 @@ Ni médias, ni caches (`img/`, `subs/`, `tmdb/`, `tmdb-cache/`, `musicbrainz-cac
 
 Serveur allumé, au choix :
 
-- Depuis le navigateur, en administrateur : `GET /api/backup` (le bouton de *Paramètres* > *Gestion* arrive avec la partie interface) : l'archive arrive dans le navigateur, rien ne reste sur le NAS.
+- Depuis le navigateur, en administrateur : *Administration* > *Serveur* > « Télécharger une sauvegarde » (ou `GET /api/backup`) : l'archive arrive dans le navigateur, rien ne reste sur le NAS.
 - Dans le shell du NAS : `docker exec media-hub python -m hub backup`. L'archive va dans `media_hub-data/sauvegardes/media_hub-<version>-<date>.zip` (ou à l'endroit donné : `python -m hub backup /data/ma-sauvegarde.zip`). Pour une sauvegarde régulière : TrueNAS > System > Advanced > *Cron Jobs* > *Add*, commande `docker exec media-hub python -m hub backup`, utilisateur `root`, par exemple chaque nuit ; supprime de temps en temps les plus anciennes.
 
 La base est copiée par l'API de sauvegarde de SQLite : la copie est cohérente même si le serveur écrit pendant ce temps. Un instantané ZFS de `media_hub-data` reste une bonne sauvegarde de plus.
