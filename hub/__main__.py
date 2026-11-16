@@ -155,14 +155,32 @@ def settings_line(rec):
             f" · malus ×{rec.DOWN_WEIGHT:g} ({rec.DOWN_CAP:g} au plus)")
 
 
+def playable_video_libraries(db, row, libraries):
+    """Les bibliothèques vidéo que ce compte peut lire : celles où l'accueil cherche ses recommandations."""
+    from .server.app import UNSEEN_KINDS
+    granted = accounts.grants(db, row["id"])
+    return {lib.id for lib in libraries if lib.kind in UNSEEN_KINDS and accounts.allows(row["role"], granted, lib.id, "play")}
+
+
+def print_shelf(rec, anchor, found, scope, opinions, name, limit):
+    """Un rayon gardé : son ancre, puis ses cartes (`limit` au plus), chacune avec le détail de son score."""
+    print(f"Parce que tu as aimé {described(anchor)}, {'noté J’aime' if anchor.row['id'] in opinions else 'terminé sans avis'}  [{anchor.row['id']}]")
+    shown = found[:limit] if limit else found
+    for n, (cand, _) in enumerate(shown, 1):
+        card, detail = card_detail(rec, anchor, cand, scope, name)
+        print(f"  {n:>2}. {card}")
+        print(f"        {detail}")
+    if len(found) > len(shown):
+        print(f"      … et {len(found) - len(shown)} autres")
+
+
 def recommend_report(db, libraries, argv):
     """Écrit les rayons du compte : chaque ancre essayée, dans l'ordre du jour, et pour un rayon gardé ses cartes, de la plus proche à la moins proche."""
     args = recommend_parser().parse_args(argv)
     from . import missing, recommend as rec
-    from .server.app import UNSEEN_KINDS, shown_rating
+    from .server.app import shown_rating
     row = known_account(db, args.name)
-    name, uid, granted = row["name"], row["id"], accounts.grants(db, row["id"])
-    readable = {lib.id for lib in libraries if lib.kind in UNSEEN_KINDS and accounts.allows(row["role"], granted, lib.id, "play")}
+    name, uid, readable = row["name"], row["id"], playable_video_libraries(db, row, libraries)
     opinions, progress = db.dated_ratings_for(uid), rec.progress_of(db, uid)
     idx = rec.index(db, lambda meta: (shown_rating(meta.get("tmdb_rating")) or {}).get("vote"))          # comme GET /api/recommendations
     day, possible = args.day or missing.today(), rec.anchors(idx, opinions, progress, readable)
@@ -174,17 +192,10 @@ def recommend_report(db, libraries, argv):
         return
     for anchor, found, keep, scope in rec.attempts(idx, opinions, progress, readable, uid, day):
         print()
-        if not keep:
+        if keep:
+            print_shelf(rec, anchor, found, scope, opinions, name, args.limit)
+        else:
             print(f"Ancre {described(anchor)} [{anchor.row['id']}] : {len(found)} candidat(s), rayon abandonné (il en faut {rec.SHELF_MIN}).")
-            continue
-        print(f"Parce que tu as aimé {described(anchor)} , {'noté J’aime' if anchor.row['id'] in opinions else 'terminé sans avis'}  [{anchor.row['id']}]")
-        shown = found[:args.limit] if args.limit else found
-        for n, (cand, _) in enumerate(shown, 1):
-            card, detail = card_detail(rec, anchor, cand, scope, name)
-            print(f"  {n:>2}. {card}")
-            print(f"        {detail}")
-        if len(found) > len(shown):
-            print(f"      … et {len(found) - len(shown)} autres")
 
 
 def recommend_command(argv):

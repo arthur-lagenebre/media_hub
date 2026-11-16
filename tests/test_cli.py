@@ -329,8 +329,10 @@ class TestRecommendCommand(RecommendCase):
 
     def test_the_cards_are_those_of_the_home_page_in_the_same_order(self):
         self.rate(self.alice, "a1", "a2")
-        shown = {anchor: [c[0] for c in cards] for anchor, cards in self.parsed(self.report("alice")).items()}
+        said = self.report("alice")
+        shown = {anchor: [c[0] for c in cards] for anchor, cards in self.parsed(said).items()}
         self.assertEqual(shown, self.by_anchor(self.alice))
+        self.assertIn("Parce que tu as aimé « Alien » (1979), noté J’aime  [a1]", said.splitlines())
         self.assertEqual(len(shown), 2)
 
     def test_each_card_gives_every_shared_feature_and_its_score_is_their_sum(self):
