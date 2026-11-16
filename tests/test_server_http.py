@@ -701,6 +701,61 @@ class TestToken(RootCase):
         self.assertEqual((reply.json(), rig.rfile.tell()), ({"token": "", "media_token": ""}, len(json.dumps({"password": "x"}))))
 
 
+class TestRenameRoutes(RootCase):
+    """`/api/me/name` (chacun, avec son mot de passe) et `/api/user/<id>/rename` (l'administrateur)."""
+
+    def setUp(self):
+        super().setUp()
+        self.boss = accounts.create(self.hub.db, "boss", PASSWORD)
+        self.alice = accounts.create(self.hub.db, "alice", PASSWORD)
+        patcher = mock.patch.object(app.time, "sleep")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def name_of(self, row):
+        return accounts.by_id(self.hub.db, row["id"])["name"]
+
+    def test_anyone_renames_themselves_with_their_password_and_keeps_their_session(self):
+        cookie = self.hub.cookie(self.alice)
+        _, reply = call(self.hub, "POST", "/api/me/name", {"current": PASSWORD, "name": "Zoé"}, cookie)
+        self.assertEqual((reply.status, reply.json()), (200, {**accounts.public(self.alice), "name": "Zoé"}))
+        self.assertNotIn("set-cookie", reply.headers)                           # pas de nouveau jeton : l'ancien vaut toujours
+        rig, reply = call(self.hub, "GET", "/api/state", headers=cookie)
+        self.assertEqual((reply.status, rig.user["name"]), (200, "Zoé"))
+        self.assertEqual(call(self.hub, "POST", "/api/token", {"user": "zoé", "password": PASSWORD})[1].status, 200)
+        self.assertEqual(call(self.hub, "POST", "/api/token", {"user": "alice", "password": PASSWORD})[1].status, 401)
+
+    def test_a_wrong_current_password_changes_nothing(self):
+        for current in ("faux", None, 1234):
+            _, reply = call(self.hub, "POST", "/api/me/name", {"current": current, "name": "Zoé"}, self.hub.cookie(self.alice))
+            self.assertEqual((reply.status, reply.json()), (400, {"error": "mot de passe actuel incorrect"}), current)
+        self.assertEqual(self.name_of(self.alice), "alice")
+
+    def test_a_taken_name_is_a_409_and_its_own_name_in_another_case_is_fine(self):
+        _, reply = call(self.hub, "POST", "/api/me/name", {"current": PASSWORD, "name": " BOSS "}, self.hub.cookie(self.alice))
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "ce nom est déjà pris"}))
+        _, reply = call(self.hub, "POST", "/api/me/name", {"current": PASSWORD, "name": "Alice"}, self.hub.cookie(self.alice))
+        self.assertEqual((reply.status, reply.json()["name"]), (200, "Alice"))
+
+    def test_the_administrator_renames_an_account_and_gets_its_listing(self):
+        _, reply = call(self.hub, "POST", f"/api/user/{self.alice['id']}/rename", {"name": "Zoé"}, self.hub.cookie(self.boss))
+        row = accounts.by_id(self.hub.db, self.alice["id"])
+        self.assertEqual((reply.status, reply.json()), (200, app.user_listing(self.hub, row)))
+        self.assertEqual((row["name"], row["token_version"]), ("Zoé", self.alice["token_version"]))
+
+    def test_the_administrator_route_refuses_a_taken_name_and_an_unknown_account(self):
+        boss = self.hub.cookie(self.boss)
+        _, reply = call(self.hub, "POST", f"/api/user/{self.alice['id']}/rename", {"name": "boss"}, boss)
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "ce nom est déjà pris"}))
+        _, reply = call(self.hub, "POST", "/api/user/inconnu/rename", {"name": "Zoé"}, boss)
+        self.assertEqual((reply.status, reply.json()), (404, {"error": "compte inconnu"}))
+
+    def test_an_account_that_is_not_the_administrator_gets_a_403(self):
+        _, reply = call(self.hub, "POST", f"/api/user/{self.boss['id']}/rename", {"name": "pirate"}, self.hub.cookie(self.alice))
+        self.assertEqual((reply.status, reply.json()), (403, {"error": "réservé à l'administrateur"}))
+        self.assertEqual(self.name_of(self.boss), "boss")
+
+
 class TestCheckCurrent(RootCase):
     def setUp(self):
         super().setUp()

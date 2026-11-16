@@ -896,6 +896,15 @@ def api_user_flag(h, m, q):
     h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
 
 
+@route("POST", r"/api/user/(\w+)/rename")
+def api_user_rename(h, m, q):
+    """L'administrateur renomme un compte : `{"name": "..."}`. Seul le nom change (sessions, progression, playlists, droits, dossier de la boîte de réception restent). 409 si le nom est pris. Rend le compte."""
+    require_admin(h)
+    need_accounts(h)
+    row = account_call(accounts.rename, h.hub.db, m.group(1), body_dict(h).get("name"))
+    h.send_json(user_listing(h.hub, row))
+
+
 @route("POST", r"/api/user/(\w+)/password")
 def api_user_password(h, m, q):
     """L'administrateur donne un nouveau mot de passe à un autre compte sans connaître l'ancien. Pour le sien, il doit redonner l'actuel (`current`, comme `/api/me/password`) :
@@ -935,6 +944,15 @@ def change_own_session(h, change):
 def api_me_password(h, m, q):
     """Chacun change son mot de passe, en donnant l'actuel."""
     change_own_session(h, lambda row, body: account_call(accounts.set_password, h.hub.db, row["id"], body.get("new")))
+
+
+@route("POST", r"/api/me/name")
+def api_me_name(h, m, q):
+    """Chacun change son nom, en donnant son mot de passe actuel : `{"current": "...", "name": "..."}`. La session reste valable (pas de nouveau jeton). 409 si le nom est pris. Rend le compte."""
+    need_accounts(h)
+    body = body_dict(h)
+    row = check_current(h, body.get("current"))
+    h.send_json(accounts.public(account_call(accounts.rename, h.hub.db, row["id"], body.get("name"))))
 
 
 @route("POST", r"/api/me/signout-others")

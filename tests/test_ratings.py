@@ -480,13 +480,15 @@ class TestConcurrentRatings(OverHttp):
 
 
 class TestAccountLifecycle(RatingCase):
-    def test_an_account_cannot_be_renamed_so_the_ratings_never_change_hands(self):
-        """Il n'existe aucun renommage de compte (ni route, ni fonction de `accounts`) : un autre nom, c'est supprimer puis créer."""
+    def test_a_renamed_account_keeps_its_ratings_and_its_old_name_starts_blank(self):
+        """Un renommage ne change que le nom : les avis suivent l'identifiant, donc le compte, jamais le nom. Un compte créé ensuite sous l'ancien nom ne reçoit rien."""
         self.rate(self.alice, "m1", "up")
-        for target in (f"/api/user/{self.alice['id']}/rename", f"/api/user/{self.alice['id']}/name", f"/api/user/{self.alice['id']}", "/api/me/name"):
-            self.assertEqual(self.post(self.boss, target, {"name": "carol"}).status, 404, target)
-        self.assertEqual(accounts.by_id(self.db, self.alice["id"])["name"], "alice")
+        self.assertEqual(self.post(self.boss, f"/api/user/{self.alice['id']}/rename", {"name": "carol"}).status, 200)
+        newcomer = accounts.create(self.db, "alice", PASSWORD)
         self.assertEqual(self.stored(), [(self.alice["id"], "m1", "up")])
+        self.assertEqual(self.get(self.alice, "/api/item/m1").json()["rating"], "up")
+        self.assertEqual(self.db.ratings_for(newcomer["id"]), {})
+        self.assertNotIn("rating", self.get(newcomer, "/api/item/m1").json())
 
     def test_a_deleted_account_recreated_under_the_same_name_starts_blank(self):
         self.rate(self.alice, "m1", "up")
