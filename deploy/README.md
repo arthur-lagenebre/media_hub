@@ -30,7 +30,38 @@ Le code n'est plus copié sur le NAS : `media_hub` et `media_library` sont dans 
 
 Facultatif : un dataset à part, `/mnt/tank/HubReception`, pour la boîte de réception (voir [Boîte de réception](#boîte-de-réception)) ; il n'est utilisé que si tu actives son montage dans le compose.
 
-Les bibliothèques gardent leur place (`/mnt/tank/media/Films`, `Series`, `Musique`, `Livres`). Si le conteneur tourne avec un utilisateur non root, `media_hub-data` (et `HubReception`, s'il est monté) doit lui être accessible en écriture.
+Les bibliothèques gardent leur place (`/mnt/tank/media/Films`, `Series`, `Musique`, `Livres`).
+
+### Compte du conteneur
+
+Le conteneur `media_hub` ne tourne **pas en root** : il prend le compte du NAS qui possède la médiathèque, `PUID:PGID` dans le `.env` (`1000:1000` par défaut ; `id <compte>` dans le shell du NAS les donne). Il n'a aucune capacité Linux (`cap_drop: ALL`) ni moyen d'en regagner (`no-new-privileges`) : une faille du serveur ne donnerait que les droits de ce compte.
+
+Ce compte doit pouvoir :
+
+- **écrire** dans `media_hub-data` (base, caches) et dans `HubReception` s'il est monté ;
+- **écrire et supprimer** dans chaque bibliothèque montée sans `:ro` : « Supprimer » les fichiers parasites, et les photos d'artistes (`artist.webp`) dans la Musique ;
+- **lire et exécuter** `ffmpeg/`.
+
+Avec les datasets TrueNAS en ACL NFSv4 dont l'entrée `everyone@` (ou une entrée pour ce compte) donne *Modify* avec héritage, c'est déjà le cas, quel que soit le propriétaire des fichiers. Vérifie dans le shell du NAS :
+
+```bash
+id <compte>
+nfs4xdr_getfacl /mnt/tank/media/Musique | head -12
+nfs4xdr_getfacl /mnt/tank/apps/media/media_hub-data | head -12
+```
+
+**En passant d'un conteneur root à celui-ci** (une fois, application arrêtée) : ce que l'ancien conteneur a créé appartient à root. Donne-le au compte, puis vérifie que les trois comptes affichent `0` :
+
+```bash
+chown -R 1000:1000 /mnt/tank/apps/media/media_hub-data /mnt/tank/HubReception
+find /mnt/tank/media/Musique -mindepth 1 -user root -exec chown 1000:1000 {} +     # les artist.webp écrits par le conteneur root
+
+find /mnt/tank/apps/media/media_hub-data ! -user 1000 | wc -l
+find /mnt/tank/HubReception ! -user 1000 | wc -l
+find /mnt/tank/media/Musique -mindepth 1 -user root | wc -l
+```
+
+Après le redéploiement : `docker exec media-hub id` affiche `uid=1000 gid=1000`, `docker logs media-hub 2>&1 | grep ATTENTION` n'affiche rien, puis essaie un scan, « Supprimer » les fichiers parasites, une photo d'artiste, un envoi et une vidéo transcodée. Une erreur de droits (« Permission denied » dans `docker logs media-hub`) désigne le dossier que le compte ne peut pas écrire : corrige son ACL ou son propriétaire, ne remets pas le conteneur en root.
 
 ## 2. ffmpeg
 
@@ -159,7 +190,7 @@ Lance un scan (*Paramètres* > *Gestion* > Tout mettre à jour) quand une versio
 - `HUB_BIND=0.0.0.0` expose le serveur sur le réseau local : `HUB_PASSWORD` est obligatoire dans le compose (sans compte, le serveur est ouvert à tous).
 - **Tailscale Funnel est activé** (`AllowFunnel` dans `serve.json`) : le hub est **visible de tout Internet**, à l'adresse `https://nas.tail59c227.ts.net`. Rien d'autre n'est publié : Funnel n'ouvre que le port 443 du `media_hub`, et le port 8080 de la télé reste sur le réseau local. Il n'y a **pas de double authentification** : la défense se limite au compte et à son mot de passe, avec `scrypt` pour le hachage, un ralentissement croissant à chaque échec, un blocage (429) après 10 échecs en 5 minutes, compté par adresse réelle du client, et des mots de passe de 12 caractères au moins (à la création et au changement). Un mot de passe faible ou réutilisé est donc la seule chose qui sépare un inconnu de la médiathèque : voir la procédure ci-dessous.
 - Le débit d'un Funnel est limité par Tailscale (limites non configurables, sans chiffre publié) : un film lu depuis l'extérieur peut saccader ; à la maison, utilise l'adresse locale.
-- Le conteneur `media_hub` n'a pas de nouveaux privilèges (`no-new-privileges`) et ne garde que deux capacités Linux : `DAC_OVERRIDE` et `FOWNER`, que « Supprimer » les fichiers parasites et les scripts de `media_library` demandent quand les fichiers appartiennent à un autre compte que root. Après un redéploiement, essaie *Gestion* > *Entretien* > *Supprimer*, puis *Compter* dans la fenêtre, puis *Supprimer définitivement* (avec un volume sans `:ro`) : si une erreur de droits apparaît, retire `cap_drop` du compose.
+- Le conteneur `media_hub` tourne sous un compte ordinaire du NAS (`PUID:PGID`), sans aucune capacité Linux ni moyen d'en regagner (`no-new-privileges`) : voir [Compte du conteneur](#compte-du-conteneur). Une erreur de droits se corrige sur le dataset (ACL, propriétaire), jamais en remettant le conteneur en root.
 - Les bibliothèques sont montées en lecture seule par défaut ; le serveur n'écrit que dans `media_hub-data` (et dans la boîte `HUB_INBOX`, si tu la montes à part). Un compte qui a le droit « Envoyer » peut y écrire depuis Internet (boîte de réception, plafonnée par l'espace libre à garder et par une limite de dataset) : ne donne ce droit qu'à des personnes de confiance.
 - `.env` contient des secrets : ne le publie pas.
 
@@ -238,18 +269,18 @@ Le dataset « HubReception » a son quota, ses instantanés et son partage SMB, 
 
 ### Droits d'écriture du conteneur
 
-Le conteneur tourne en **root**, avec `cap_drop: ALL` et deux capacités gardées : **`DAC_OVERRIDE`** et **`FOWNER`** (voir le compose). Pour la boîte :
+Le conteneur tourne sous le compte `PUID:PGID`, sans aucune capacité (voir [Compte du conteneur](#compte-du-conteneur)). Pour la boîte :
 
-- **Écrire, créer un dossier, renommer** : `DAC_OVERRIDE` suffit. Il permet à root de passer outre les droits de lecture, d'écriture et de parcours (propriétaire, mode, ACL POSIX) quel que soit le propriétaire du dataset. C'est exactement le cas où un root *sans* cette capacité échouerait (dataset d'un autre utilisateur, sans droit d'écriture pour « autres »). Le hub n'a besoin de rien d'autre : il ne fait ni `chown` ni `chmod` ni `utime` dans la boîte, donc `FOWNER` ne sert pas ici, et **aucune capacité n'est à ajouter** (`CHOWN` non plus : les dossiers et fichiers créés appartiennent à root, ou héritent de l'ACL du dataset).
-- **Ce que je n'ai pas pu vérifier** : que `DAC_OVERRIDE` passe aussi outre l'ACL NFSv4 d'un dataset ZFS créé avec le préréglage `SMB` (attendu : oui, ZFS le prévoit pour root avec cette capacité). Un dataset en lecture seule, plein (quota atteint) ou ayant un attribut « immuable » refuse l'écriture quelles que soient les capacités.
-- **Le point à régler côté dataset est l'autre côté** : les dossiers créés par le hub appartiennent à **root**. Pour que ton compte SMB puisse les lire, les renommer et les supprimer, ouvre l'ACL du dataset : TrueNAS > Datasets > `HubReception` > *Permissions* > *Edit* : ajoute une entrée pour ton compte SMB (par exemple `arthur`, *Full Control*, avec les drapeaux *Inherit*), coche *Apply permissions recursively* si le dataset contient déjà des fichiers, puis *Save*. Sur ZFS, les dossiers et fichiers que root crée ensuite héritent de cette entrée. Sans elle, le hub écrit bien, mais le partage SMB ne pourra ni modifier ni supprimer ce que le hub a déposé.
+- **Écrire, créer un dossier, renommer** : le compte doit avoir ces droits sur le dataset, par son propriétaire ou par son ACL. Le hub n'a besoin de rien d'autre : il ne fait ni `chown` ni `chmod` ni `utime` dans la boîte. Les dossiers et fichiers créés appartiennent au compte, ou héritent de l'ACL du dataset.
+- Un dataset en lecture seule, plein (quota atteint) ou ayant un attribut « immuable » refuse l'écriture quels que soient les droits.
+- **Côté partage SMB** : pour que ton compte SMB puisse lire, renommer et supprimer ce que le hub dépose, le plus simple est que ce soit le même compte que `PUID`. Sinon, ouvre l'ACL du dataset : TrueNAS > Datasets > `HubReception` > *Permissions* > *Edit* : ajoute une entrée pour ton compte SMB (*Full Control*, avec les drapeaux *Inherit*), coche *Apply permissions recursively* si le dataset contient déjà des fichiers, puis *Save*.
 - **Essai** (seul le NAS tranche) :
 
   ```bash
   docker exec media-hub sh -c 'touch /inbox/.essai && mv /inbox/.essai /inbox/.essai2 && rm /inbox/.essai2' && echo OK
   ```
 
-  `OK` : le conteneur écrit et renomme. `Permission denied` : propriétaire, ACL ou mode du dataset (ouvre l'accès à l'uid 0 par l'ACL, ou change le propriétaire du dataset) ; `Read-only file system` : le dataset ou le montage est en lecture seule. N'élargis pas les capacités du conteneur pour contourner cela.
+  `OK` : le conteneur écrit et renomme. `Permission denied` : propriétaire, ACL ou mode du dataset (ouvre l'accès au compte `PUID` par l'ACL, ou donne-lui le dataset : `chown -R`) ; `Read-only file system` : le dataset ou le montage est en lecture seule. N'élargis pas les capacités du conteneur pour contourner cela.
 
 ### Reprendre les anciens dossiers (`media_hub-data/inbox/` vers le dataset)
 
@@ -376,7 +407,7 @@ L'ancienne façon, pour le développement ou un dépannage (essayer un correctif
 ```yaml
     image: python:3.13-slim
     working_dir: /app/media_hub
-    command: ["sh", "-c", "python -c 'import PIL' 2>/dev/null || pip install -q --disable-pip-version-check --target /data/pylib pillow || echo 'media_hub : Pillow non installé (facultatif)'; exec python -m hub"]
+    command: ["sh", "-c", "python -c 'import PIL' 2>/dev/null || pip install -q --no-cache-dir --disable-pip-version-check --target /data/pylib pillow || echo 'media_hub : Pillow non installé (facultatif)'; exec python -m hub"]
     environment:            # à ajouter aux variables existantes
       PYTHONPATH: /data/pylib
       PYTHONUNBUFFERED: "1"

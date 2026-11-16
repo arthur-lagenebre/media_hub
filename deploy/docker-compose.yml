@@ -39,17 +39,15 @@ services:
     network_mode: service:tailscale    # même réseau que tailscale : 127.0.0.1:8080 est joignable par `tailscale serve`
     depends_on:
       - tailscale
-    # Le conteneur tourne en root : on lui ôte ce qu'il n'utilise pas. `no-new-privileges` empêche tout processus (ffmpeg, pip) de gagner des privilèges.
-    # Deux capacités sont gardées : DAC_OVERRIDE (écrire ou effacer un fichier que root ne possède pas, ou dont les droits l'interdisent) et FOWNER (chmod / utime
-    # sur un fichier d'un autre utilisateur du NAS : ce que fait « Supprimer » les fichiers parasites, et les scripts de media_library). Sans elles, avec un
-    # `cap_drop: ALL` seul, ces opérations échoueraient dès que les fichiers appartiennent à un autre compte que root.
+    # Le conteneur tourne sous le compte du NAS propriétaire de la médiathèque (PUID:PGID du .env, 1000:1000 par défaut), jamais en root : une faille
+    # du serveur ne donnerait que les droits de ce compte. Ce compte doit pouvoir écrire dans media_hub-data, dans la boîte (HubReception) et dans les
+    # bibliothèques montées sans « :ro » : voir « Compte du conteneur » dans README.md (un chown une fois, en passant d'un conteneur root à celui-ci).
+    # Aucune capacité Linux n'est gardée, et `no-new-privileges` empêche tout processus (ffmpeg) d'en regagner.
+    user: "${PUID:-1000}:${PGID:-1000}"
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - DAC_OVERRIDE
-      - FOWNER
     # Pas de `command` : celui de l'image lance `python -m hub` et refuse de démarrer sans HUB_PASSWORD tant que la base n'a pas de compte.
     environment:
       HUB_SRV: /srv
@@ -78,6 +76,7 @@ services:
       # Bibliothèques. « :ro » = lecture seule. Retire-le si tu veux que le bouton « Supprimer » (Gestion > Entretien) supprime les Thumbs.db,
       # ou que les scripts de media_library (étiquetage, renommage) tournent depuis ce conteneur.
       # Musique sans « :ro » aussi pour les photos d'artistes : « Valider » écrit artist.webp dans le dossier de l'artiste (sinon : erreur 500, la photo n'est pas enregistrée).
+      # Sans « :ro », le compte PUID doit pouvoir écrire et supprimer dans la bibliothèque (propriétaire, ou ACL du dataset) : voir « Compte du conteneur » dans README.md.
       - ${MEDIA}/Films:/srv/Films:ro
       - ${MEDIA}/Series:/srv/Series:ro
       - ${MEDIA}/Musique:/srv/Musique:ro
