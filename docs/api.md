@@ -94,6 +94,16 @@ Trois façons de se présenter :
 - `token` (**seulement** quand la requête s'est présentée par `Authorization: Bearer` avec un jeton de session émis il y a plus de 90 jours, ou de l'ancienne forme sans date) : un **nouveau jeton de session**, à garder à la place de l'ancien, qui vaut encore jusqu'à son terme. Un navigateur (cookie) reçoit le nouveau jeton par `Set-Cookie`, jamais dans le corps.
 - **Ambigu** : la route demande l'authentification ; `api` n'est donc lisible qu'après avoir obtenu le jeton.
 
+### `GET /api/changelog`
+
+```json
+{"versions": [{"version": "0.31.0", "date": "2026-11-17", "items": ["Les nouveautés de chaque version se lisent dans Réglages › À propos."]}]}
+```
+
+- Les nouveautés de chaque version, la plus récente en premier, telles qu'écrites à la main dans `hub/CHANGELOG.md` pour les utilisateurs (en français, quelle que soit la langue de la page). `date` : `AAAA-MM-JJ`. Tout compte ; 401 sans authentification dès qu'un compte existe.
+- Format du fichier : `## X.Y.Z — AAAA-MM-JJ`, puis des lignes `- texte`. Une ligne hors format est ignorée ; un titre hors format (ou une date qui n’existe pas) ferme la version en cours, dont les points ne sont pas rendus ; une version sans point n’est pas rendue. Le séparateur peut être `—`, `–` ou `-` ; une marque d’ordre d’octets en tête est acceptée. Fichier absent ou illisible : `{"versions": []}`, jamais une erreur.
+- La première version rendue est celle du serveur (`version` de `GET /api/state`) : un test y veille.
+
 ### `GET /api/home`
 
 ```json
