@@ -4878,9 +4878,10 @@ class TestSettings(UiCase):
     def test_each_tab_has_its_own_panels(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        for name, titles in (("Préférences", ["Interface", "Lecture", "Langues", "Affichage"]), ("Mon compte", ["Mon compte"]), ("À propos", ["À propos"])):
+        for name, titles in (("Préférences", ["Interface", "Lecture", "Langues", "Affichage"]), ("Mon compte", ["Mon compte"]), ("À propos", ["À propos", "Nouveautés du hub"])):
             self.tab(name)
             self.until(lambda: self.selected() == name)
+            self.until(lambda: self.titles() == titles)                                      # « Nouveautés du hub » arrive après le fetch du journal : on attend l'état, pas un instant
             self.assertEqual(self.titles(), titles, name)
         self.open("#/admin")
         self.view(".tabs").wait_for()
@@ -5219,6 +5220,8 @@ class InboxUiCase(unittest.TestCase):
 
     def tearDown(self):
         for context in self.pages:
+            for page in context.pages:
+                page.unroute_all(behavior="ignoreErrors")           # une route en vol (`route.fetch`) échoue à la fermeture du contexte, et l'erreur tomberait sur le test suivant
             context.close()
         self.hub.inbox.keep_free = 0
         shutil.rmtree(self.box, ignore_errors=True)
@@ -5651,6 +5654,7 @@ class InboxUiCase(unittest.TestCase):
         self.throttle(page, 150_000)
         self.send(page, ("Long.mkv", b"x" * 600_000), ("Après.mkv", b"y" * 1000))
         self.sending(page)
+        self.wait_for(lambda: self.stored() == ["Long.mkv.part"])                              # le serveur a ouvert l'envoi : sans cela, « boîte vide » plus bas serait vrai avant qu'il ne commence, pas après son nettoyage
         page.locator("#nav .brand").click()                                                    # une autre page du routeur
         dialog = page.locator(".menu[role=dialog]")
         dialog.wait_for()
@@ -6896,6 +6900,17 @@ class RequestsUiCase(unittest.TestCase):
     def dialog(self, page):
         return page.locator(".veil .menu")
 
+    def escape_the_dialog(self, page):
+        """Échap quitte d'abord le champ (déjà fait par l'appelant), puis ferme la fenêtre. Si la page, dessous, finit un chargement entre les deux, `H.focus.first()` rend le focus au champ : le deuxième Échap ne fait alors que le quitter encore. On appuie donc jusqu'à la fermeture, au lieu de compter les Échap."""
+        for _ in range(3):
+            page.keyboard.press("Escape")
+            try:
+                expect(self.dialog(page)).to_be_hidden(timeout=3000)
+                return
+            except AssertionError:
+                continue
+        expect(self.dialog(page)).to_be_hidden()
+
     def key(self, page):
         return page.evaluate("document.activeElement && document.activeElement.getAttribute('data-key')")
 
@@ -6952,8 +6967,8 @@ class TestRequestsInTheUi(RequestsUiCase):
         page.wait_for_function("document.activeElement && document.activeElement.tagName === 'INPUT'")          # le message, prêt à être tapé
         page.keyboard.press("Escape")                                                                        # Échap quitte d'abord le champ (comme partout), puis ferme la fenêtre
         page.wait_for_function("document.activeElement && document.activeElement.tagName !== 'INPUT'")
-        page.keyboard.press("Escape")
-        self.dialog(page).wait_for(state="detached")                                                         # rien n'est demandé
+        expect(self.dialog(page)).to_be_visible()                                                            # le premier Échap n'a fait que quitter le champ
+        self.escape_the_dialog(page)                                                         # rien n'est demandé
         page.wait_for_function("document.activeElement && document.activeElement.getAttribute('data-key') === 'req-1000'")
         self.assertEqual(self.mine("alice"), [])
 
@@ -7944,8 +7959,8 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         page.wait_for_function("document.activeElement && document.activeElement.tagName === 'INPUT' && !!document.activeElement.closest('.veil')")
         page.keyboard.press("Escape")
         page.wait_for_function("document.activeElement && document.activeElement.tagName !== 'INPUT'")
-        page.keyboard.press("Escape")
-        self.dialog(page).wait_for(state="detached")
+        expect(self.dialog(page)).to_be_visible()                                                            # le premier Échap n'a fait que quitter le champ
+        self.escape_the_dialog(page)
         self.focused_key(page, "rq-movie-4001")
         page.keyboard.press("ArrowUp")
         page.wait_for_function("document.activeElement && !!document.activeElement.closest('.tools')")
@@ -8310,7 +8325,8 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         page.evaluate("new Promise(r => setTimeout(r))")                                                  # la réponse est traitée par la page
         self.assertEqual(self.shelves(page).count(), 0)                                                   # rien sur la bibliothèque
         self.assertEqual(self.active(page), before)                                                      # et le focus n'a pas bougé
-        page.go_back()
+        with page.expect_request(lambda r: r.url.endswith(self.ROUTE)):                                   # l'accueil mis en cache se redessine au retour : les anciens rayons partent, la route est redemandée
+            page.go_back()
         self.shown(page, "#/")
         self.shelves(page).nth(1).wait_for()                                                             # de retour à l'accueil : les rayons, une seule fois
         self.assertEqual(self.shelves(page).count(), 2)

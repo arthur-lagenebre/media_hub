@@ -13,7 +13,15 @@ Le dépôt avance par **branches thématiques** (`accueil`, `titre-invisible`, `
 
 ## Étapes
 
-1. **Vérifier** : `python -m unittest discover -s tests` (serveur et interface). Rapporte le résultat exact (nombre de tests, échecs, erreurs, sautés) et ne continue pas si un point bloque. Une fonctionnalité ou une route nouvelle doit aussi se retrouver dans `docs/api.md` et dans le tableau « Interface HTTP » du README. Ses limites connues vont dans la description de la PR (`/merged` les reporte dans Notion après la fusion) : `docs/TODO.md` n'est plus qu'un renvoi vers Notion, n'y ajoute rien.
+1. **Vérifier** : la CI (`tests.yml`) relance toute la suite du serveur sur chaque PR, en Python 3.13 et 3.14, mais pas l'interface (Chromium). En local, `/ship` ne lance donc que ce que la CI ne lance pas, en parallèle, d'après les fichiers que la PR touche (`git diff --name-only main...HEAD` plus `git status --short`) :
+
+   | La PR touche… | En local |
+   |---|---|
+   | `hub/**` (serveur ou interface) | `python -m tests.parallel tests.test_ui tests.test_labels_ui tests.test_popups tests.test_i18n`, plus les autres modules de `tests/` que la PR modifie |
+   | `tests/**`, sans `hub/` | `python -m tests.parallel <les modules modifiés>` |
+   | seulement la doc, `.claude/`, `deploy/` ou `.github/` | rien : la CI suffit |
+
+   L'interface se lance même quand seul le serveur change : ses tests voient les régressions du serveur qui se répercutent à l'écran. Rapporte le résultat exact (nombre de tests, échecs, erreurs, **sautés**) et ne continue pas si un point bloque. Des tests d'interface sautés (Playwright ou ffmpeg absent) bloquent aussi : la CI ne les rattrapera pas. Une fonctionnalité ou une route nouvelle doit aussi se retrouver dans `docs/api.md` et dans le tableau « Interface HTTP » du README. Ses limites connues vont dans la description de la PR (`/merged` les reporte dans Notion après la fusion) : `docs/TODO.md` n'est plus qu'un renvoi vers Notion, n'y ajoute rien.
 2. **Version** : lis le diff contre `main` et règle `__version__` (`hub/__init__.py`) selon ce que la PR change pour l'utilisateur, en une seule fois par PR, même avec plusieurs commits :
 
    | La PR… | `__version__` |
@@ -32,9 +40,11 @@ Le dépôt avance par **branches thématiques** (`accueil`, `titre-invisible`, `
    Termine par la ligne d'attribution demandée par l'environnement.
 6. **Ne commite jamais** un secret, une base de données, un cache, un fichier de la médiathèque ni de la configuration locale. Relis `git status` avant `git add` et ajoute les fichiers un par un, pas `git add -A`.
 7. **Push** de la branche (`git push -u origin <branche>`), puis **PR** vers `main` avec `gh pr create` : titre court dans la même forme que les commits, description qui dit le *pourquoi*, ce qui change pour l'utilisateur, la preuve (tests) et les limites connues. Si le travail vient d'une ou plusieurs cartes du backlog Notion, ajoute pour chacune une ligne `Carte Notion : <lien>` : `/merged` s'en sert pour les mettre à jour après la fusion. Termine la description avec la ligne d'attribution demandée par l'environnement.
-8. Donne le lien de la PR. Ne fusionne pas : c'est à l'utilisateur de le faire (ensuite, `/merged`).
+8. **Attends la CI** : `gh pr checks <numéro> --watch --interval 30` (environ 6 min ; délai de la commande à 10 min). C'est elle qui passe les tests du serveur : ne dis pas la PR prête avant. Rapporte l'état de chaque vérification ; en cas d'échec, voir les garde-fous.
+9. Donne le lien de la PR avec le résultat de la CI. Ne fusionne pas : c'est à l'utilisateur de le faire (ensuite, `/merged`).
 
 ## Garde-fous
 
 - Pas de `--force`, pas de `--no-verify`, pas de réécriture d'un historique déjà poussé.
+- Ne lance pas les tests d'interface pendant qu'une autre session les lance (un autre `/ship` ou `/check`) : deux lots de Chromium sur le même poste se ralentissent et font échouer les tests qui comptent sur le temps.
 - Si une vérification échoue après le push (CI éventuelle), rapporte l'échec et sa cause (`gh run view --log-failed`) au lieu de pousser un correctif à l'aveugle.
