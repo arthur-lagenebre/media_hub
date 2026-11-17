@@ -71,7 +71,9 @@ jobs:
           fi
 
       # Les survivants et les mutants tués d'un run servent au suivant (passe différentielle).
-      - uses: actions/cache@v6
+      # Restauration et sauvegarde sont séparées : actions/cache ne sauvegarde qu'un job réussi, or mutator sort en 3
+      # dès qu'un mutant survit ; chaque passe repartait alors de zéro. Voir « Garder les résultats ».
+      - uses: actions/cache/restore@v6
         with:
           path: media_hub/.metrics/mutate
           key: mutate-${{ github.run_id }}
@@ -100,6 +102,15 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/media_library
         shell: bash   # pipefail : le code de sortie de mutator (3 = un mutant survit) passe malgré tee
         run: ../mutator/mutator $PATHS 2>&1 | tee mutator.log
+
+      # Même quand mutator échoue (un mutant survit), ses résultats sont justes : on les garde pour le run suivant.
+      # Rien à garder si aucun fichier n'était à muter, ou si .metrics/mutate n'existe pas (mutator n'a pas tourné).
+      - name: Garder les résultats
+        if: always() && steps.paths.outputs.list != '' && hashFiles('media_hub/.metrics/mutate/**') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: media_hub/.metrics/mutate
+          key: mutate-${{ github.run_id }}
 
       - name: Résumé
         if: always()

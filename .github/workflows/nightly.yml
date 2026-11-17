@@ -117,7 +117,9 @@ jobs:
           path: mutator
 
       # Les survivants et les mutants tués d'une nuit servent à la suivante (passe différentielle), partie par partie.
-      - uses: actions/cache@v6
+      # Restauration et sauvegarde sont séparées : actions/cache ne sauvegarde qu'un job réussi, or mutator sort en 3
+      # dès qu'un mutant survit ; chaque passe repartait alors de zéro (plusieurs heures). Voir « Garder les résultats ».
+      - uses: actions/cache/restore@v6
         with:
           path: media_hub/.metrics/mutate
           key: mutate-nuit-${{ matrix.part }}-${{ github.run_id }}
@@ -144,6 +146,15 @@ jobs:
         run: |
           # shellcheck disable=SC2086
           ../mutator/mutator $PATHS 2>&1 | tee mutator.log
+
+      # Même quand mutator échoue (un mutant survit), ses résultats sont justes : on les garde pour la nuit suivante.
+      # Sans .metrics/mutate (mutator n'a pas tourné), il n'y a rien à garder.
+      - name: Garder les résultats
+        if: always() && hashFiles('media_hub/.metrics/mutate/**') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: media_hub/.metrics/mutate
+          key: mutate-nuit-${{ matrix.part }}-${{ github.run_id }}
 
       - name: Résumé
         if: always()
