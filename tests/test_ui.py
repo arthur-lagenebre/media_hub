@@ -4868,15 +4868,17 @@ class TestSettings(UiCase):
             self.open("#/settings?tab=" + old)
             self.until(lambda: self.selected() == "Préférences")
 
-    def test_the_preferences_are_one_tab_in_three_panels(self):
-        """Interface : l'appareil, la taille du texte et la langue. Lecture : la vidéo et le son. Affichage : les rayons de l'accueil et l'ouverture des bibliothèques."""
+    def test_the_preferences_are_one_tab_in_four_panels(self):
+        """Interface : l'appareil, la taille du texte et la langue. Lecture : la vidéo et le son. Langues : celles du compte pour le son et les sous-titres (vides par défaut).
+        Affichage : les rayons de l'accueil et l'ouverture des bibliothèques."""
         self.open("#/settings?tab=preferences")
         self.view(".panel").first.wait_for()
         panels = self.view(".panel")
-        self.assertEqual(panels.count(), 3)
+        self.assertEqual(panels.count(), 4)
         self.assertEqual(panels.nth(0).locator(".line .what b").all_inner_texts(), ["Appareil", "Taille du texte", "Langue"])
         self.assertEqual(panels.nth(1).locator(".line .what b").all_inner_texts(), ["Qualité", "Son surround 5.1"])
-        self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Nouveautés", "Pas encore vu", "Pas encore vu : cartes par rayon", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…"])
+        self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Langues du son", "Langues des sous-titres", "Sous-titres d’office"])
+        self.assertEqual(panels.nth(3).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Nouveautés", "Pas encore vu", "Pas encore vu : cartes par rayon", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…"])
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
