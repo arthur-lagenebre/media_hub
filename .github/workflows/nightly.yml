@@ -1,0 +1,166 @@
+name: Nuit
+
+# Les passes longues de « faire bien » (skill ub-mode), sur tout hub/, une fois par nuit plutôt qu'à chaque PR :
+#   crapper : aucune fonction de hub/ au-dessus de CRAP 10, avec l'interface dans Chromium (Playwright) pour la couverture ;
+#   mutator : la passe de mutation, en quatre parties parallèles, sans Playwright, chacune avec son cache différentiel.
+# La nuit, rien ne se lance si main n'a pas bougé depuis la dernière passe réussie ; à la main (onglet Actions), toujours.
+on:
+  schedule:
+    - cron: "17 2 * * *"          # 2 h 17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: nuit-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read                   # lire les passes précédentes (job « changes »)
+
+env:
+  CRAP_MAX: "10"
+  # Les deux outils ne sont pas versionnés : on les épingle, pour qu'une passe se rejoue à l'identique.
+  # crapper l'est dans .github/actions/setup, au même commit que dans mutator.yml.
+  MUTATOR_REF: a5a0cb803b66e0cdb8bf471b3b08af701d424a41
+
+jobs:
+  changes:
+    name: main a-t-il bougé ?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      # Une passe sautée finit « réussie » au même commit : elle ne fausse pas la comparaison.
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --status success \
+                   --limit 1 --json headSha --jq '.[0].headSha // ""')
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "::notice title=Nuit::aucun commit sur main depuis la dernière passe réussie ($last) : rien à faire"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  crapper:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: media_hub
+      - uses: ./media_hub/.github/actions/setup
+        with:
+          playwright: "true"      # le serveur est aussi exercé par l'interface : sans elle, la couverture serait plus basse qu'en local
+          crapper: "true"
+      - name: CRAP
+        working-directory: media_hub
+        env:
+          # crapper lance `unittest discover` à la racine, qui importe aussi hub/scan : il lui faut `libraries` (media_library).
+          PYTHONPATH: ${{ github.workspace }}/media_library
+        shell: bash               # pipefail : le code de sortie de crapper passe malgré tee
+        run: |
+          # shellcheck disable=SC2046
+          ../crapper/crapper --threshold "$CRAP_MAX" $(git ls-files 'hub/*.py') 2>&1 | tee crapper.log
+      - name: Résumé
+        if: always()
+        working-directory: media_hub
+        run: |
+          [ -f crapper.log ] || exit 0
+          {
+            echo '```'
+            tail -n 60 crapper.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  mutator:
+    name: mutator (${{ matrix.part }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: serveur
+            paths: hub/server
+          - part: scan-media
+            paths: hub/scan hub/media
+          - part: donnees
+            paths: hub/db.py hub/accounts.py hub/requests.py hub/inbox.py
+          # Le reste des modules de hub/ : calculé à l'exécution, en retirant ceux de « donnees » (garder les deux listes d'accord).
+          - part: reste
+            paths: ""
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: media_hub
+      # Sans Playwright : les tests d'interface sont ignorés, la passe reste dans le temps d'un runner.
+      - uses: ./media_hub/.github/actions/setup
+        with:
+          crapper: "true"         # mutator lit les noms des fonctions avec crapper, posé à côté de lui
+      - uses: actions/checkout@v7
+        with:
+          repository: unclebob/mutator
+          ref: ${{ env.MUTATOR_REF }}
+          path: mutator
+
+      # Les survivants et les mutants tués d'une nuit servent à la suivante (passe différentielle), partie par partie.
+      - uses: actions/cache@v6
+        with:
+          path: media_hub/.metrics/mutate
+          key: mutate-nuit-${{ matrix.part }}-${{ github.run_id }}
+          restore-keys: mutate-nuit-${{ matrix.part }}-
+
+      - name: Fichiers à muter
+        id: paths
+        working-directory: media_hub
+        env:
+          PATHS: ${{ matrix.paths }}
+        run: |
+          if [ -z "$PATHS" ]; then
+            PATHS=$(ls hub/*.py | grep -vxE 'hub/(db|accounts|requests|inbox)\.py' | tr '\n' ' ')
+          fi
+          echo "list=$PATHS" >> "$GITHUB_OUTPUT"
+
+      - name: Mutator
+        working-directory: media_hub
+        env:
+          PATHS: ${{ steps.paths.outputs.list }}
+          # `unittest discover` importe aussi hub/scan, qui a besoin de `libraries` avant que les tests ne le rendent importable.
+          PYTHONPATH: ${{ github.workspace }}/media_library
+        shell: bash               # pipefail : le code de sortie de mutator (3 = un mutant survit) passe malgré tee
+        run: |
+          # shellcheck disable=SC2086
+          ../mutator/mutator $PATHS 2>&1 | tee mutator.log
+
+      - name: Résumé
+        if: always()
+        working-directory: media_hub
+        run: |
+          [ -f mutator.log ] || exit 0
+          {
+            echo '```'
+            tail -n 60 mutator.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutate-${{ matrix.part }}
+          path: |
+            media_hub/.metrics/mutate
+            media_hub/.metrics/crap.edn
+            media_hub/mutator.log
