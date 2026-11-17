@@ -1,2 +1,129 @@
 ## 0.31.0 — 2026-11-17
 - Les nouveautés de chaque version se lisent dans Réglages › À propos.
+
+## 0.30.0 — 2026-11-17
+- Dans Paramètres › Préférences › Langues, tu ranges tes langues préférées pour le son et les sous-titres, et tu choisis quand afficher les sous-titres d'office.
+- À l'ouverture d'une vidéo, la piste audio et les sous-titres suivent ces préférences.
+- Douze langues de plus sont nommées dans les menus des pistes et des sous-titres.
+
+## 0.29.0 — 2026-11-16
+- Tu peux changer ton nom dans Paramètres › Mon compte sans perdre ta progression ni tes avis ; l'administrateur peut renommer n'importe quel compte.
+- Sur la fiche d'un artiste, la ligne des genres ne montre plus que des genres.
+- Un dossier de bibliothèque vide (un partage débranché, par exemple) ne fait plus disparaître toute la bibliothèque.
+- Dans la liseuse de BD, une image qui n'arrive pas propose « Réessayer » au lieu de tout bloquer, et la double page associe toujours les bonnes pages.
+
+## 0.28.0 — 2026-11-16
+- Corrections internes.
+
+## 0.27.0 — 2026-11-16
+- Dans Administration › Serveur, un bouton télécharge une sauvegarde des comptes, de la progression, des avis, des demandes, des sagas et des images choisies.
+
+## 0.26.0 — 2026-11-16
+- Corrections internes.
+
+## 0.25.0 — 2026-11-16
+- Tu peux accélérer ou ralentir une vidéo ou un morceau, de 0,75× à 2×.
+- Sur téléphone, les boutons du lecteur vidéo tiennent dans l'écran.
+
+## 0.24.0 — 2026-11-15
+- Sur la fiche d'une série, l'administrateur peut revenir à la fiche TMDB automatique après en avoir choisi une à la main.
+- Sur la télé, on ne rédige plus de suggestion : la page t'invite à passer par un ordinateur, une tablette ou un téléphone.
+- Sur un téléphone étroit, l'en-tête d'une fiche tient dans l'écran.
+
+## 0.23.0 — 2026-11-15
+- Dans Paramètres › Mon compte › Mes suggestions, tu proposes une amélioration ou signales un bug, et tu lis la réponse de l'administrateur.
+- L'administrateur les retrouve dans Administration › Suggestions.
+
+## 0.22.0 — 2026-11-15
+- Une saga composée à la main contient toutes les versions d'un film (cinéma, longue…) au même rang.
+- Deux films de même titre et de même année ne changent plus de place après un scan.
+- Les menus Audio, Sous-titres et Qualité du lecteur ne s'empilent plus, et Retour ferme le menu sans quitter le film.
+- La page « Envoyer » reste fluide pendant l'envoi d'un gros dossier.
+
+## 0.21.0 — 2026-11-15
+- Corrections internes.
+
+## 0.20.0 — 2026-11-15
+- Tu n'as plus à te reconnecter tous les 90 jours sur un appareil dont tu te sers ; un appareil oublié pendant 180 jours est déconnecté.
+
+## 0.19.0 — 2026-11-15
+- L'administrateur a sa propre page, Administration (la clé à molette dans la barre du haut) ; Paramètres ne garde que tes préférences, ton compte et un onglet À propos.
+
+## 0.18.0 — 2026-11-15
+- Tu peux chercher n'importe quel film ou série dans TMDB pour le demander, depuis « Mes demandes » ou quand la recherche de la médiathèque ne trouve rien.
+- En plein écran, les menus du lecteur et les messages passent devant le film.
+- L'accueil s'ouvre en haut de la page, et les rayons « Parce que tu as aimé » prennent la place des tuiles des bibliothèques.
+
+## 0.17.0 — 2026-11-14
+- Sur l'accueil, des rayons « Parce que tu as aimé… » proposent des films et des séries proches de ce que tu as aimé ou terminé.
+- Dans le menu « … » d'une suggestion, « Pourquoi cette suggestion ? » donne les raisons, et « Pas intéressé » la retire.
+
+## 0.16.0 — 2026-11-14
+- Les films grisés, absents d'une saga ou de la filmographie d'une personne, peuvent se demander, avec un petit message si tu veux.
+- Tu suis tes demandes dans « Mes demandes », et l'accueil te prévient quand un film demandé est arrivé.
+- L'administrateur marque les demandes ajoutées ou refusées dans un onglet à part, et peut retirer à un compte le droit de demander.
+
+## 0.15.0 — 2026-11-14
+- Tu donnes ton avis sur un film ou une série (J'aime, Bof ou Je n'aime pas) : il reste privé et s'affiche sur l'affiche.
+- Une bibliothèque peut se trier par « Mon avis ».
+
+## 0.14.0 — 2026-11-13
+- Dans les listes, l'affiche d'un film porte sa qualité d'image : 4K HDR, Full HD, HD ou SD.
+
+## 0.13.0 — 2026-11-13
+- Un album réédité affiche l'année de sa première sortie, et non celle de la réédition.
+
+## 0.12.0 — 2026-11-13
+- La fiche d'un film ou d'une saison indique la qualité d'image et les langues du son et des sous-titres (« 4K HDR · Audio FR EN · Sous-titres EN FR »).
+
+## 0.11.0 — 2026-11-11
+- La bibliothèque « Animations » disparaît : les films d'animation sont dans Films, avec le genre « Animation ».
+
+## 0.10.0 — 2026-11-11
+- L'administrateur peut renommer une bibliothèque dans Paramètres › Gestion, et lui rendre son nom d'origine.
+- Les tâches de nettoyage s'appellent « Fichiers parasites · Compter » et « Fichiers parasites · Nettoyage », et la fenêtre ne rappelle plus un ancien comptage.
+
+## 0.9.0 — 2026-11-10
+- Sur la page « Envoyer », tu peux envoyer un dossier entier (une saison, un album) : il est recréé tel quel sur le serveur, et les fichiers refusés te sont signalés avant le départ.
+
+## 0.8.0 — 2026-11-10
+- Quand l'accueil n'a aucun rayon à montrer, tes bibliothèques s'y affichent en tuiles.
+- Le droit d'envoyer des fichiers se règle avec les autres droits d'un compte.
+- Dans Paramètres › Gestion, « Films manquants » se lance bibliothèque par bibliothèque.
+
+## 0.7.0 — 2026-11-10
+- Le filtre d'avancement devient une liste « Statut », comme « Genre » et « Tri », accordée à ce que contient la bibliothèque (« Toutes » pour les séries, « Tous » pour les films).
+- Sur le NAS, les envois sont rangés dans un dossier au nom de chaque compte.
+
+## 0.6.0 — 2026-11-09
+- Dans une bibliothèque, tu peux n'afficher que ce qui est à voir, en cours ou terminé.
+- Dans Paramètres › Préférences, tu choisis comment trier le rayon « Pas encore vu » : au hasard, par note ou par date d'ajout.
+
+## 0.5.0 — 2026-11-09
+- Une page « Envoyer » te permet de déposer des films, des séries, de la musique ou des livres sur le serveur, si ton compte en a le droit ; tu y retrouves tes envois.
+- L'administrateur donne ce droit compte par compte et retrouve tous les envois dans Paramètres › Boîte de réception.
+- Les acteurs dont le rôle contient des parenthèses (« Woody (voix) ») retrouvent leur nom et leur page.
+- Dans la liseuse, Retour quitte le livre en un appui, et les liens d'un livre (les livres dont tu es le héros) mènent au bon chapitre, à la souris comme au clavier.
+- Le journal d'une tâche en cours ne remonte plus tout seul en haut et garde le texte que tu sélectionnes.
+
+## 0.4.0 — 2026-11-09
+- Corrections internes.
+
+## 0.3.0 — 2026-11-08
+- Dans Paramètres › Gestion, un bouton cherche sur TMDB les films manquants de toutes les personnes d'une bibliothèque d'un coup ; ils s'affichent sur la page de chaque personne.
+- Quand l'éditeur de sagas ne peut pas enregistrer, il le dit clairement.
+
+## 0.2.0 — 2026-11-08
+- Des comptes : chacun a sa progression, ses playlists et ses réglages, et l'administrateur choisit qui peut consulter, lire en ligne ou télécharger chaque bibliothèque.
+- Musique : des fiches pour les artistes et les groupes (photo, membres, albums manquants en grisé), des playlists et un réglage du volume.
+- Sagas : les films d'une saga se rangent par date de sortie, ceux qui manquent apparaissent en grisé, et un éditeur permet de composer les sagas.
+- L'accueil montre Reprendre, les nouveautés de toutes les bibliothèques et des rayons « Pas encore vu ».
+- Les noms des acteurs mènent à leur page, avec leurs films qui manquent à la médiathèque ; les notes TMDB s'affichent et permettent le tri « Mieux notés ».
+- L'interface existe en français et en anglais, la taille du texte se choisit, et la liseuse sait afficher deux pages côte à côte.
+
+## 0.1.0 — 2026-10-28
+- Première version : les films, séries, animations, musiques et livres du NAS, dans un navigateur ou sur la télé.
+- Depuis l'accueil, tu reprends un film, un épisode, un livre ou un album là où tu l'avais laissé.
+- Une vidéo se lit telle quelle quand ton appareil le peut ; sinon le serveur la convertit.
+- Sous-titres, liseuse de BD et d'EPUB, et une musique qui continue pendant que tu navigues.
+- Toute l'interface se pilote à la télécommande.
