@@ -232,7 +232,10 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 
 ```bash
 python -m unittest discover -s tests          # la suite complète (une trentaine de minutes)
+python -m tests.parallel -j 6 tests.test_ui tests.test_popups   # des modules sur 6 processus, les classes les plus longues d'abord
 ```
+
+`tests/parallel.py` répartit les classes de tests des modules donnés sur `-j` processus (6 par défaut), d'après les durées de l'exécution précédente gardées dans `.metrics/test-durations.json` (ignoré par git), puis affiche le total des tests, échecs, erreurs et sautés ; il sort avec un code non nul au moindre échec. Un nombre de sautés non nul y est signalé : ce ne sont pas des réussites.
 
 Les tests d'interface (les classes dérivées de `UiCase`, définie dans `tests/test_ui.py`, quel que soit leur fichier) pilotent l'interface dans Chromium avec Playwright ; ils sont ignorés si Playwright ou ffmpeg manquent. Le nombre exact de tests, réussis et sautés, figure dans la description de chaque PR. `HUB_UI_SLOWDOWN=8` ralentit le processeur du navigateur d'un facteur 8 (poste chargé simulé) : un test d'interface qui compte sur un délai fixe plutôt que sur un état y échoue de façon déterministe.
 
