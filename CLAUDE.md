@@ -6,7 +6,8 @@ Serveur de médiathèque (films, séries, musique, livres) : un seul processus P
 
 ```bash
 python -m unittest tests.test_database tests.test_scan   # les modules touchés : /check
-python -m unittest discover -s tests                     # la suite complète (~30 min) : /ship seulement
+python -m tests.parallel tests.test_ui tests.test_labels_ui tests.test_popups tests.test_i18n   # l'interface sur 6 processus (~4 min) : /ship ; le serveur, c'est la CI
+python -m unittest discover -s tests                     # la suite complète en série (~30 min) : pour reproduire un problème, pas pour livrer
 HUB_SRV=<dossier> HUB_DATA=<dossier-données> python -m hub   # http://127.0.0.1:8080
 ```
 

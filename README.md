@@ -231,7 +231,7 @@ Six agents spécialisés (architecture, serveur, interface, tests, relecture, d�
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # la suite complète (une trentaine de minutes)
+python -m unittest discover -s tests          # la suite complète, en série (une trentaine de minutes)
 python -m tests.parallel -j 6 tests.test_ui tests.test_popups   # des modules sur 6 processus, les classes les plus longues d'abord
 ```
 
