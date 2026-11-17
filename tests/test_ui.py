@@ -1288,8 +1288,38 @@ class TestReaderSpreads(UiCase):
             self.wait_pages(expected)
 
     def test_a_page_before_a_landscape_one_goes_alone(self):
-        self.read("Diptyque", page=2)
-        self.wait_pages([2])                           # la page 3 est en paysage : la 2 reste seule
+        self.read("Diptyque")
+        self.tool("Décaler d’une page")
+        self.wait_pages([0, 1])                         # décalé : la couverture avec la page 2, puis la page 3...
+        for expected in ([2], [3], [4, 5], [6]):        # ...seule, la page 4 est en paysage
+            self.turn("ArrowRight")
+            self.wait_pages(expected)
+
+    def test_a_landscape_page_stays_alone_and_the_pairs_after_it_stay_right_after_a_jump(self):
+        self.read("Diptyque", page=3)
+        self.wait_pages([3])
+        box = self.page.locator(".reader .seekbar").bounding_box()
+        self.page.mouse.click(box["x"] + box["width"] * 5.5 / 7, box["y"] + box["height"] / 2)    # la page 6 (rang 5)
+        self.wait_pages([4, 5])                         # le couple qui la contient, pas celui qui commence par elle
+        self.assertEqual(self.label(), "Pages 5–6 / 7")
+        self.turn("ArrowRight")
+        self.wait_pages([6])
+
+    def test_turning_the_double_page_on_from_an_even_page_keeps_the_pairs_of_the_volume(self):
+        self.read("Diptyque", double=False, page=2)
+        self.wait_pages([2])
+        self.tool("Double page")
+        self.wait_pages([1, 2])                         # le couple du volume qui contient la page, pas [2, 3]
+        for expected in ([3], [4, 5], [6]):
+            self.turn("ArrowRight")
+            self.wait_pages(expected)
+
+    def test_the_shift_button_pairs_an_even_page_with_the_next_one(self):
+        self.read("Gauche", double=False, page=2)
+        self.tool("Double page")
+        self.wait_pages([1, 2])
+        self.tool("Décaler d’une page")
+        self.wait_pages([2, 3])                         # la page lue reste à l'écran, avec sa voisine de l'autre côté
 
     def test_the_lowest_page_is_on_the_right_when_reading_right_to_left(self):
         self.read("Droite")
@@ -1324,17 +1354,17 @@ class TestReaderSpreads(UiCase):
             self.wait_pages([4, 3])
         self.assertEqual(self.api("/api/book/" + entry)["position"], 3)
 
-    def test_a_volume_started_in_single_mode_is_resumed_where_it_stood_in_double_mode(self):
+    def test_a_volume_started_in_single_mode_shows_the_spread_holding_its_page_in_double_mode(self):
         entry = self.read("Gauche", double=False)
-        with self.saves(2):
+        with self.saves(1):
             self.turn("ArrowRight")
             self.turn("ArrowRight")
             self.wait_pages([2])
             self.assertEqual(self.label(), "Page 3 / 5")
             self.tool("Double page")
-            self.wait_pages([2, 3])
-            self.assertEqual(self.label(), "Pages 3–4 / 5")
-        self.assertEqual(self.api("/api/book/" + entry)["position"], 2)
+            self.wait_pages([1, 2])
+            self.assertEqual(self.label(), "Pages 2–3 / 5")
+        self.assertEqual(self.api("/api/book/" + entry)["position"], 1)              # la première page du couple
         self.tool("Double page")                        # et inversement : on revient à la page seule
         self.wait_pages([2])
         self.assertEqual(self.page.evaluate("localStorage.getItem('hub.spread')"), "false")
@@ -1363,12 +1393,12 @@ class TestReaderSpreads(UiCase):
         progress = self.api("/api/item/" + self.item("livres", "Gauche")["id"])["entries"][0]["progress"]
         self.assertEqual((progress["done"], progress["position"]), (True, 4))        # la page 5 (rang 4) : sans cela, un tome fini en double page ne serait jamais lu
 
-    def test_the_slider_jumps_to_a_page_and_shows_the_spread_from_there(self):
+    def test_the_slider_jumps_to_the_spread_that_holds_the_page(self):
         self.read("Gauche")
         box = self.page.locator(".reader .seekbar").bounding_box()
         self.page.mouse.click(box["x"] + box["width"] * 0.45, box["y"] + box["height"] / 2)    # 45 % de 5 pages : la page 2
-        self.wait_pages([2, 3])
-        self.assertEqual(self.page.evaluate("document.querySelector('.reader .seekbar i').style.width"), "80%")     # la dernière page vue est la 4e sur 5
+        self.wait_pages([1, 2])
+        self.assertEqual(self.page.evaluate("document.querySelector('.reader .seekbar i').style.width"), "60%")     # la dernière page vue est la 3e sur 5
 
     def test_a_window_in_portrait_turns_the_double_page_off_and_wide_again_brings_it_back(self):
         self.read("Gauche")
@@ -1442,8 +1472,10 @@ class TestReaderSpreads(UiCase):
         self.wait_pages([3, 4])                         # on reste sur la dernière vue
 
     def test_going_back_after_a_jump_finds_the_pairs_that_end_just_before(self):
-        self.read("Diptyque", page=5)                   # pas d'historique : le couplage est cherché d'après les dimensions des pages
+        self.hold(3)                                    # la page paysage n'est pas encore connue à l'ouverture...
+        self.read("Diptyque", page=5)
         self.wait_pages([5, 6])
+        self.release()                                  # ...elle l'est en reculant : le couplage se refait d'après elle
         for expected in ([4], [3], [1, 2], [0]):
             self.turn("ArrowLeft")
             self.wait_pages(expected)
@@ -1542,6 +1574,24 @@ class TestReaderSpreads(UiCase):
         self.page.wait_for_timeout(2500)
         progress = self.api("/api/item/" + self.item("livres", "Gauche")["id"])["entries"][0]["progress"]
         self.assertFalse(progress["done"])              # la page 5 n'a jamais été vue
+
+    def test_an_image_that_never_comes_gives_way_to_a_retry_and_the_keys_turn_the_pages_again(self):
+        """Une requête d'image sans réponse ne bloque plus la liseuse : passé le délai de garde (abaissé ici), la page « Image indisponible » s'affiche et les flèches tournent de nouveau les pages."""
+        self.context.add_init_script("window.Hub = { pageTimeout: 800 }")        # le délai de garde (15 s d'ordinaire), lu par la liseuse
+        self.hold(1)                                    # la page 2 ne répondra jamais
+        self.read("Gauche", double=False)
+        self.turn("ArrowRight")
+        self.page.locator(".reader .missing", has_text="Image indisponible").wait_for()
+        self.assertEqual(self.label(), "Page 2 / 5")
+        self.assertTrue(self.page.locator(".reader .missing .btn", has_text="Réessayer").is_visible())
+        self.turn("ArrowRight")
+        self.wait_pages([2])
+        self.turn("ArrowLeft")
+        self.page.locator(".reader .missing").wait_for()       # la requête court toujours, sans réponse : de nouveau le délai, puis la page de secours
+        self.release()
+        self.assertEqual(self.focused(), "Réessayer")           # à la télécommande : le bouton a le focus...
+        self.press("Enter")                                     # ...et Entrée redemande la page, qui arrive
+        self.wait_pages([1])
 
     # --- Le sens de lecture, série par série ---------------------------------
     def test_the_server_gives_the_starting_direction(self):

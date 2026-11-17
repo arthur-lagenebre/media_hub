@@ -428,6 +428,8 @@ body.has-audio #toast { bottom: 6rem; }
 .spread .page.height { max-height: 100%; }
 .spread.two .page.height { max-width: 50%; }
 .spread.two .page.width { width: 50%; }
+.spread .missing { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.2em; box-sizing: border-box; min-width: 18em; min-height: 60%; padding: 2em; color: #d9d5cc; border: 2px dashed #3a4048; border-radius: 8px; font-size: 1.2em; text-align: center; }
+.spread.two .missing { width: 50%; min-width: 0; }
 .rbar .btn[hidden] { display: none; }
 .stage.epub iframe { width: 100%; height: 100%; border: 0; display: block; }
 .rbar { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), transparent 22%, transparent 70%, rgba(0, 0, 0, 0.88)); }

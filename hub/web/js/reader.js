@@ -17,8 +17,9 @@
     var info = null, pos = 0, saveTimer = null, hideTimer = null, closing = false, lastSaved = -1, endArmed = false;
     var fit = H.pref('fit') || 'height', rtl = false, spread = !!H.pref('spread'), shifted = false, theme = H.pref('theme') || 'night', size = H.pref('fontSize') || 100;
     var view = null, frame = null;
-    var count = 1, trail = [], cache = {}, token = 0, bSpread = null, bShift = null;      // BD : pages de la vue, débuts des vues déjà passées, pages préchargées, demande en cours
-    var want = 0, wantDouble = false, busy = false, queued = 0;                       // BD : la vue demandée (début, mode), si elle se charge encore, les tours demandés pendant ce temps
+    var count = 1, cache = {}, token = 0, bSpread = null, bShift = null;      // BD : pages de la vue, pages préchargées, demande en cours
+    var wide = {}, grid = null;                                               // BD : les pages qu'on sait en paysage, les couples du volume (à refaire quand l'une d'elles se révèle)
+    var want = 0, wantDouble = false, busy = false, queued = 0;                       // BD : la page demandée et le mode de sa vue, si elle se charge encore, les tours demandés pendant ce temps
 
     function showBar(on) {
       bar.hidden = !on;
@@ -52,28 +53,51 @@
 
     // --- BD / manga -----------------------------------------------------------------
     // Une « vue » est une page, ou deux pages côte à côte (double page). Elle est repérée par le numéro de sa première page : c'est celui qu'on enregistre.
+    // En double page, les vues sont les couples du volume entier (`couples`), et non un couple compté à partir de la page demandée : on retombe sur les mêmes couples d'où qu'on vienne.
     function pageUrl(n) { return '/book/' + id + '/page/' + n; }
     function portrait() { return window.innerWidth < 1.2 * window.innerHeight; }
     function double() { return spread && !portrait(); }
     function preload(n) {
       if (n < 0 || n >= info.pages || cache[n]) return;
       var im = new Image();
+      im.addEventListener('error', function () { if (cache[n] === im) delete cache[n]; });          // en erreur : le prochain passage la redemande
+      im.addEventListener('load', function () { if (im.naturalWidth > im.naturalHeight && !wide[n]) { wide[n] = true; grid = null; } });          // inscrit avant celui de `loaded` : les couples sont à jour quand la vue se décide
       im.src = pageUrl(n);
       cache[n] = im;
     }
-    function loaded(list, fn) {          // appelle fn quand ces pages sont chargées (ou en erreur : on ne reste pas bloqué)
+    function drop(n) {                   // retire la page du cache ; vider `src` coupe son téléchargement s'il court encore
+      var im = cache[n];
+      delete cache[n];
+      if (im && !im.complete) im.removeAttribute('src');
+    }
+    function ready(n) { var im = cache[n]; return !!im && im.complete && im.naturalWidth > 0; }
+    function loaded(list, fn) {          // appelle fn quand ces pages sont chargées, en erreur, ou au plus tard après le délai de garde : une image qui ne vient pas ne bloque pas la liseuse
       var left = list.filter(function (n) { return n >= 0 && n < info.pages; }).map(function (n) { preload(n); return cache[n]; }).filter(function (im) { return !im.complete; });
-      var wait = left.length;
+      var wait = left.length, timer = null;
       if (!wait) { fn(); return; }
+      var finish = function () { if (wait < 0) return; wait = -1; clearTimeout(timer); fn(); };
+      timer = setTimeout(finish, H.pageTimeout || 15000);          // `H.pageTimeout` : abaissé par les tests
       left.forEach(function (im) {
-        var done = function () { wait -= 1; if (wait === 0) fn(); };
+        var done = function () { if (wait > 0 && --wait === 0) finish(); };
         im.addEventListener('load', done); im.addEventListener('error', done);
       });
     }
-    function landscape(n) { var im = cache[n]; return !!im && im.complete && im.naturalWidth > im.naturalHeight; }
-    function spreadAt(n) {               // les pages de la vue qui commence en n : la couverture seule (sauf couplage décalé), une page paysage seule, sinon deux pages
-      if (n >= info.pages - 1 || landscape(n) || landscape(n + 1) || (n === 0 && !shifted)) return [n];
-      return [n, n + 1];
+    function missing(k) {                // ce qui remplace une page qui n'est pas venue : « Réessayer » la redemande
+      var retry = H.button(H.t('Réessayer'), null, { onclick: function (e) { e.stopPropagation(); drop(k); queued = 0; page(want); } });
+      return h('div', { class: 'page missing ' + fit, 'data-page': k }, h('p', null, H.t('Image indisponible')), retry);
+    }
+    function couples() {                 // les vues du volume : la couverture seule (sauf couplage décalé), puis deux par deux ; une page paysage connue reste seule et les couples reprennent après elle
+      var out = [], k = shifted ? 0 : 1;
+      if (!shifted) out.push([0]);
+      while (k < info.pages) {
+        if (wide[k] || k + 1 >= info.pages || wide[k + 1]) { out.push([k]); k += 1; } else { out.push([k, k + 1]); k += 2; }
+      }
+      return out;
+    }
+    function spreadAt(n) {               // le couple du volume qui contient la page n
+      if (!grid) grid = couples();
+      for (var i = 0; i < grid.length; i++) if (grid[i][grid[i].length - 1] >= n) return grid[i];
+      return [n];
     }
     function cbz() {
       var saved = H.pref('rtl.' + info.item);               // le sens choisi pour cette série l'emporte sur celui du serveur
@@ -93,7 +117,7 @@
       tool(fitText(), null, function (b) {
         fit = fit === 'height' ? 'width' : 'height'; H.pref('fit', fit);
         stage.classList.toggle('wide', fit === 'width'); stage.scrollTop = 0; setLabel(b, fitText());
-        Array.prototype.forEach.call(stage.querySelectorAll('.page'), function (im) { im.className = 'page ' + fit; });
+        Array.prototype.forEach.call(stage.querySelectorAll('.page'), function (im) { im.classList.remove('height', 'width'); im.classList.add(fit); });
       });
       tool(directionText(), null, function (b) {
         rtl = !rtl; H.pref('rtl.' + info.item, rtl); setLabel(b, directionText());
@@ -107,36 +131,42 @@
       syncTools();
     }
     function syncTools() { bSpread.hidden = portrait(); bShift.hidden = !double(); }
-    function relayout() { trail = []; queued = 0; page(want); }          // la vue demandée, sous un autre mode
+    function relayout() { queued = 0; page(want); }          // la vue demandée, sous un autre mode
     function onResize() {
       if (!info || info.format !== 'cbz' || !bSpread) return;
       syncTools();
       if (double() !== wantDouble) relayout();
     }
     function shift() {                  // le couplage des pages bouge d'une page (jusqu'à la fermeture de la liseuse), sans perdre la page lue
-      shifted = !shifted; trail = []; queued = 0;
-      page(want > 0 ? (shifted ? want - 1 : Math.min(want + 1, info.pages - 1)) : 0);
+      shifted = !shifted; grid = null; queued = 0;
+      page(want);
     }
-    function page(n, before, from) {    // montre la vue qui commence en n ; `before` : sans aller jusqu'à cette page (retour en arrière) ; `from` : le début de la vue qu'on quitte en avançant
+    function page(n, before, since) {   // montre la vue qui contient la page n ; sans les pages à partir de `before` ni celles d'avant `since` : la vue qu'on quitte, si les couples ont bougé depuis
       var mine = ++token, dbl = double();
       want = n; wantDouble = dbl; busy = true;
       for (var k = n - 3; k <= n + (dbl ? 5 : 2); k++) preload(k);
-      Object.keys(cache).forEach(function (key) { if (key < n - 6 || key > n + 7) delete cache[key]; });
-      loaded(dbl ? [n, n + 1] : [n], function () {          // une vue ne s'affiche qu'une fois ses images chargées : on connaît alors leurs dimensions
-        if (closing || mine !== token) return;
-        if (dbl !== double()) { page(n, before, from); return; }           // la fenêtre a changé de forme pendant le chargement
-        var pages = dbl ? spreadAt(n).filter(function (k) { return before === undefined || k < before; }) : [n];
-        if (!pages.length) pages = [n];
-        if (from !== undefined && from < n) trail.push(from);
-        show(n, pages);
-      });
+      Object.keys(cache).forEach(function (key) { if (key < n - 6 || key > n + 7) drop(key); });
+      (function settle() {
+        var pages = dbl ? spreadAt(n) : [n];
+        loaded(pages, function () {          // une vue ne s'affiche qu'une fois ses images chargées : on connaît alors leurs dimensions
+          if (closing || mine !== token) return;
+          if (dbl !== double()) { page(n, before, since); return; }           // la fenêtre a changé de forme pendant le chargement
+          if (dbl && spreadAt(n) !== pages) { settle(); return; }            // une page s'est révélée en paysage : les couples ont bougé
+          var shown = pages.filter(function (k) { return (before === undefined || k < before) && (since === undefined || k >= since); });
+          if (!shown.length) shown = [n];
+          if (before !== undefined || since !== undefined) want = shown[0];      // après un tour de page, la page lue est la première de la vue
+          show(shown);
+        });
+      })();
     }
-    function show(n, pages) {
-      pos = n; count = pages.length; busy = false;
+    function show(pages) {
+      pos = pages[0]; count = pages.length; busy = false;
       var holder = h('div', { class: 'spread' + (count > 1 ? ' two' : '') + (rtl ? ' rtl' : '') });
-      pages.forEach(function (k) { holder.appendChild(h('img', { class: 'page ' + fit, alt: '', src: pageUrl(k) })); });
+      pages.forEach(function (k) { holder.appendChild(ready(k) ? h('img', { class: 'page ' + fit, alt: '', src: pageUrl(k) }) : missing(k)); });
       if (view) stage.replaceChild(holder, view); else stage.appendChild(holder);
       view = holder;
+      var retry = holder.querySelector('.missing .btn');
+      if (retry && !(bar.contains(document.activeElement) && !bar.hidden)) H.focus.set(retry, true);          // Entrée réessaie ; les flèches tournent toujours les pages
       stage.scrollTop = 0;
       paint(); later();
       endArmed = false;
@@ -157,22 +187,9 @@
     function turn(delta) {              // delta : en vues (une touche) ; une touche maintenue saute plusieurs pages
       if (busy) { queued = Math.max(-4, Math.min(4, queued + delta)); return; }          // une vue se charge : ce tour viendra juste après
       if (!wantDouble) { go(pos + delta); return; }
-      if (Math.abs(delta) > 1) { trail = []; go(pos + 2 * delta); return; }
-      if (delta < 0) { back(); return; }
-      if (pos + count >= info.pages) go(pos + count); else page(pos + count, undefined, pos);
-    }
-    function back() {
-      var from = pos;
-      if (from <= 0) return;
-      while (trail.length && trail[trail.length - 1] >= from) trail.pop();
-      if (trail.length) { page(trail.pop(), from); return; }
-      var mine = ++token;
-      busy = true;
-      loaded([from - 2, from - 1], function () {          // pas d'historique (reprise, saut) : on cherche le couplage qui finit juste avant
-        if (closing || mine !== token) return;            // une demande plus récente (saut, décalage...) a pris la main
-        var before = from - 2;
-        page(before >= 0 && spreadAt(before).length === 2 ? before : from - 1, from);
-      });
+      if (Math.abs(delta) > 1) { go(pos + 2 * delta); return; }
+      if (delta < 0) { if (pos > 0) page(pos - 1, pos); return; }
+      if (pos + count >= info.pages) go(pos + count); else page(pos + count, undefined, pos + count);
     }
 
     // --- Roman ---------------------------------------------------------------------
@@ -295,7 +312,7 @@
     });
     slider.addEventListener('click', function (e) {
       var r = slider.getBoundingClientRect(), x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      if (info.format === 'cbz') { trail = []; queued = 0; page(Math.min(info.pages - 1, Math.floor(x * info.pages))); } else chapter(Math.min(info.chapters.length - 1, Math.floor(x * info.chapters.length)), 0);
+      if (info.format === 'cbz') { queued = 0; page(Math.min(info.pages - 1, Math.floor(x * info.pages))); } else chapter(Math.min(info.chapters.length - 1, Math.floor(x * info.chapters.length)), 0);
     });
     function onKey(e) {
       if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen() || e.ctrlKey || e.metaKey || e.altKey || !info || !msg.hidden) return;
@@ -309,7 +326,7 @@
         else if (k === 'PageUp') { turn(-1); eat(); }
         else if (k === 'ArrowDown') { if (fit === 'width') stage.scrollBy(0, 120); else { showBar(true); H.focus.set(slider, true); } eat(); }
         else if (k === 'ArrowUp') { if (fit === 'width' && stage.scrollTop > 0) stage.scrollBy(0, -120); else { showBar(true); H.focus.set(slider, true); } eat(); }
-        else if (k === 'Enter') { showBar(true); H.focus.set(slider, true); eat(); }
+        else if (k === 'Enter') { if (stage.contains(document.activeElement)) return; showBar(true); H.focus.set(slider, true); eat(); }          // sur « Réessayer », Entrée l'active
       } else {
         if (k === 'ArrowRight' || k === ' ' || k === 'PageDown') { scroll(1); eat(); }
         else if (k === 'ArrowLeft' || k === 'PageUp') { scroll(-1); eat(); }
