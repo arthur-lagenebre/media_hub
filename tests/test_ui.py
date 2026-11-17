@@ -1543,6 +1543,24 @@ class TestReaderSpreads(UiCase):
         progress = self.api("/api/item/" + self.item("livres", "Gauche")["id"])["entries"][0]["progress"]
         self.assertFalse(progress["done"])              # la page 5 n'a jamais été vue
 
+    def test_an_image_that_never_comes_gives_way_to_a_retry_and_the_keys_turn_the_pages_again(self):
+        """Une requête d'image sans réponse ne bloque plus la liseuse : passé le délai de garde (abaissé ici), la page « Image indisponible » s'affiche et les flèches tournent de nouveau les pages."""
+        self.context.add_init_script("window.Hub = { pageTimeout: 800 }")        # le délai de garde (15 s d'ordinaire), lu par la liseuse
+        self.hold(1)                                    # la page 2 ne répondra jamais
+        self.read("Gauche", double=False)
+        self.turn("ArrowRight")
+        self.page.locator(".reader .missing", has_text="Image indisponible").wait_for()
+        self.assertEqual(self.label(), "Page 2 / 5")
+        self.assertTrue(self.page.locator(".reader .missing .btn", has_text="Réessayer").is_visible())
+        self.turn("ArrowRight")
+        self.wait_pages([2])
+        self.turn("ArrowLeft")
+        self.page.locator(".reader .missing").wait_for()       # la requête court toujours, sans réponse : de nouveau le délai, puis la page de secours
+        self.release()
+        self.assertEqual(self.focused(), "Réessayer")           # à la télécommande : le bouton a le focus...
+        self.press("Enter")                                     # ...et Entrée redemande la page, qui arrive
+        self.wait_pages([1])
+
     # --- Le sens de lecture, série par série ---------------------------------
     def test_the_server_gives_the_starting_direction(self):
         self.read("Droite")

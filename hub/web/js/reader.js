@@ -58,17 +58,30 @@
     function preload(n) {
       if (n < 0 || n >= info.pages || cache[n]) return;
       var im = new Image();
+      im.addEventListener('error', function () { if (cache[n] === im) delete cache[n]; });          // en erreur : le prochain passage la redemande
       im.src = pageUrl(n);
       cache[n] = im;
     }
-    function loaded(list, fn) {          // appelle fn quand ces pages sont chargées (ou en erreur : on ne reste pas bloqué)
+    function drop(n) {                   // retire la page du cache ; vider `src` coupe son téléchargement s'il court encore
+      var im = cache[n];
+      delete cache[n];
+      if (im && !im.complete) im.removeAttribute('src');
+    }
+    function ready(n) { var im = cache[n]; return !!im && im.complete && im.naturalWidth > 0; }
+    function loaded(list, fn) {          // appelle fn quand ces pages sont chargées, en erreur, ou au plus tard après le délai de garde : une image qui ne vient pas ne bloque pas la liseuse
       var left = list.filter(function (n) { return n >= 0 && n < info.pages; }).map(function (n) { preload(n); return cache[n]; }).filter(function (im) { return !im.complete; });
-      var wait = left.length;
+      var wait = left.length, timer = null;
       if (!wait) { fn(); return; }
+      var finish = function () { if (wait < 0) return; wait = -1; clearTimeout(timer); fn(); };
+      timer = setTimeout(finish, H.pageTimeout || 15000);          // `H.pageTimeout` : abaissé par les tests
       left.forEach(function (im) {
-        var done = function () { wait -= 1; if (wait === 0) fn(); };
+        var done = function () { if (wait > 0 && --wait === 0) finish(); };
         im.addEventListener('load', done); im.addEventListener('error', done);
       });
+    }
+    function missing(k) {                // ce qui remplace une page qui n'est pas venue : « Réessayer » la redemande
+      var retry = H.button(H.t('Réessayer'), null, { onclick: function (e) { e.stopPropagation(); drop(k); trail = []; queued = 0; page(want); } });
+      return h('div', { class: 'page missing ' + fit, 'data-page': k }, h('p', null, H.t('Image indisponible')), retry);
     }
     function landscape(n) { var im = cache[n]; return !!im && im.complete && im.naturalWidth > im.naturalHeight; }
     function spreadAt(n) {               // les pages de la vue qui commence en n : la couverture seule (sauf couplage décalé), une page paysage seule, sinon deux pages
@@ -93,7 +106,7 @@
       tool(fitText(), null, function (b) {
         fit = fit === 'height' ? 'width' : 'height'; H.pref('fit', fit);
         stage.classList.toggle('wide', fit === 'width'); stage.scrollTop = 0; setLabel(b, fitText());
-        Array.prototype.forEach.call(stage.querySelectorAll('.page'), function (im) { im.className = 'page ' + fit; });
+        Array.prototype.forEach.call(stage.querySelectorAll('.page'), function (im) { im.classList.remove('height', 'width'); im.classList.add(fit); });
       });
       tool(directionText(), null, function (b) {
         rtl = !rtl; H.pref('rtl.' + info.item, rtl); setLabel(b, directionText());
@@ -121,7 +134,7 @@
       var mine = ++token, dbl = double();
       want = n; wantDouble = dbl; busy = true;
       for (var k = n - 3; k <= n + (dbl ? 5 : 2); k++) preload(k);
-      Object.keys(cache).forEach(function (key) { if (key < n - 6 || key > n + 7) delete cache[key]; });
+      Object.keys(cache).forEach(function (key) { if (key < n - 6 || key > n + 7) drop(key); });
       loaded(dbl ? [n, n + 1] : [n], function () {          // une vue ne s'affiche qu'une fois ses images chargées : on connaît alors leurs dimensions
         if (closing || mine !== token) return;
         if (dbl !== double()) { page(n, before, from); return; }           // la fenêtre a changé de forme pendant le chargement
@@ -134,9 +147,11 @@
     function show(n, pages) {
       pos = n; count = pages.length; busy = false;
       var holder = h('div', { class: 'spread' + (count > 1 ? ' two' : '') + (rtl ? ' rtl' : '') });
-      pages.forEach(function (k) { holder.appendChild(h('img', { class: 'page ' + fit, alt: '', src: pageUrl(k) })); });
+      pages.forEach(function (k) { holder.appendChild(ready(k) ? h('img', { class: 'page ' + fit, alt: '', src: pageUrl(k) }) : missing(k)); });
       if (view) stage.replaceChild(holder, view); else stage.appendChild(holder);
       view = holder;
+      var retry = holder.querySelector('.missing .btn');
+      if (retry && !(bar.contains(document.activeElement) && !bar.hidden)) H.focus.set(retry, true);          // Entrée réessaie ; les flèches tournent toujours les pages
       stage.scrollTop = 0;
       paint(); later();
       endArmed = false;
@@ -309,7 +324,7 @@
         else if (k === 'PageUp') { turn(-1); eat(); }
         else if (k === 'ArrowDown') { if (fit === 'width') stage.scrollBy(0, 120); else { showBar(true); H.focus.set(slider, true); } eat(); }
         else if (k === 'ArrowUp') { if (fit === 'width' && stage.scrollTop > 0) stage.scrollBy(0, -120); else { showBar(true); H.focus.set(slider, true); } eat(); }
-        else if (k === 'Enter') { showBar(true); H.focus.set(slider, true); eat(); }
+        else if (k === 'Enter') { if (stage.contains(document.activeElement)) return; showBar(true); H.focus.set(slider, true); eat(); }          // sur « Réessayer », Entrée l'active
       } else {
         if (k === 'ArrowRight' || k === ' ' || k === 'PageDown') { scroll(1); eat(); }
         else if (k === 'ArrowLeft' || k === 'PageUp') { scroll(-1); eat(); }
