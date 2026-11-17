@@ -451,6 +451,8 @@
     'Qualité d’origine quand c’est possible': 'Original quality when possible',
     'Administration': 'Administration',
     'À propos': 'About',
+    'Nouveautés du hub': 'What’s new in the hub',
+    'Tout voir': 'See all',
     'Préférences': 'Preferences',
     'Comptes': 'Accounts',
     'Tâches': 'Tasks',

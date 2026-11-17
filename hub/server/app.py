@@ -39,6 +39,7 @@ from libraries.video import tmdb
 from .. import __version__
 from .. import accounts
 from .. import backup
+from .. import changelog
 from .. import countries
 from .. import enrich
 from .. import labels
@@ -1036,6 +1037,12 @@ def api_state(h, m, q):
     h.send_json({"version": __version__, "libraries": libs, "ffmpeg": bool(hub.cfg.ffmpeg), "ffprobe": bool(hub.cfg.ffprobe), "tmdb": bool(hub.cfg.tmdb_key),
                  "auth": hub.auth(), "user": h.user, "settings": prefs.load(hub.db, h.user["id"]), "api": API_VERSION, "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams,
                  "can_request": h.user["can_request"], "request_search": bool(h.user["can_request"] and hub.finder.configured()), **requests_state(h), **suggestions_state(h), **renewed}, 200, headers)
+
+
+@route("GET", r"/api/changelog")
+def api_changelog(h, m, q):
+    """Les nouveautés de chaque version (`hub/CHANGELOG.md`), pour Réglages › À propos ; sans fichier, aucune."""
+    h.send_json({"versions": changelog.load()})
 
 
 def next_entry(hub, entry):

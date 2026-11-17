@@ -274,6 +274,12 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .panel dl { display: grid; grid-template-columns: max-content 1fr; grid-gap: 0.4rem 1.4rem; margin: 0.5rem 0 0.8rem; }
 .panel dt { color: var(--mute); }
 .panel dd { margin: 0; }
+.news { border-top: 1px solid var(--line); border-radius: 0.4rem; padding: 0.6rem 0.3rem; }
+.news h3 { font-size: 1rem; margin: 0 0 0.3rem; }
+.news h3 span { color: var(--mute); font-weight: normal; margin-left: 0.4rem; }
+.news ul { margin: 0; padding-left: 1.2rem; }
+.news li { margin: 0.15rem 0; word-wrap: break-word; overflow-wrap: anywhere; }
+.newsmore { padding: 0.5rem 0 0.2rem; }
 .job { border-top: 1px solid var(--line); padding: 0.3rem 0; }
 .jhead { display: block; width: 100%; background: transparent; border: 0; border-radius: 0.5rem; padding: 0.4rem 0.5rem; color: inherit; text-align: left; cursor: pointer; font: inherit; }
 .jhead::before { content: "▸"; display: inline-block; width: 1.1rem; color: var(--mute); }
