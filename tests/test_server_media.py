@@ -14,7 +14,7 @@ from urllib.parse import quote
 from tests import fixtures
 from tests.rig import MiniHub, call
 from tests.test_server_views import entry, item
-from hub import accounts, config
+from hub import accounts, config, prefs
 from hub.server import app
 from hub.server.app import HttpError
 
@@ -58,7 +58,8 @@ class TestPlay(MediaCase):
                    entry("k1", "mv", kind="audio")])
         self.probe = json.loads(json.dumps(PROBE))
         self.decision = {"mode": "direct", "why": "lisible tel quel", "audio": 2, "copy_audio": True}
-        for patcher in (mock.patch.object(app, "probe_of", lambda hub, e: self.probe), mock.patch.object(app.prober, "plan", lambda *a: self.decision),
+        self.asked = []                                                                     # la piste audio passée au plan, à chaque appel
+        for patcher in (mock.patch.object(app, "probe_of", lambda hub, e: self.probe), mock.patch.object(app.prober, "plan", lambda *a: self.asked.append(a[2]) or self.decision),
                         mock.patch.object(app.subtitles, "side_files", lambda path: self.sides)):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -92,6 +93,43 @@ class TestPlay(MediaCase):
         self.assertEqual([(s["id"], s["where"], s["default"], s["forced"], s["text"], s["url"]) for s in subs],
                          [("e3", "mkv", True, True, True, "/api/subs/e1/e3.vtt"), ("e4", "mkv", False, False, False, ""), ("s0", "fichier", False, False, True, "/api/subs/e1/s0.vtt")])
         self.assertEqual(subs[0]["label"], "Français · Forcé")
+
+    def test_without_a_preference_the_file_decides_the_audio_and_the_forced_subtitles_of_the_page_language_are_chosen(self):
+        out = self.play().json()
+        self.assertEqual(self.asked, [None])
+        self.assertEqual([(s["id"], s["selected"]) for s in out["subs"]], [("e3", True), ("e4", False)])
+        self.probe["subs"][0]["lang"] = "eng"                                               # des forcés dans une autre langue que celle de la page : rien
+        self.assertEqual([s["selected"] for s in self.play().json()["subs"]], [False, False])
+
+    def test_an_english_page_without_a_subtitle_language_takes_the_english_forced_ones(self):
+        self.probe["subs"].append({"index": 5, "lang": "eng", "title": "", "forced": True, "default": False, "text": True})
+        out = call(self.hub, "POST", "/api/play/e1", {}, headers={"Cookie": "hub_lang=en"})[1].json()
+        self.assertEqual([s["id"] for s in out["subs"] if s["selected"]], ["e5"])
+
+    def test_two_accounts_get_the_tracks_of_their_own_preferences(self):
+        self.probe["audio"].append({"index": 3, "lang": "eng", "title": "", "commentary": False, "codec": "aac", "channels": 2, "default": False})
+        self.probe["subs"].append({"index": 5, "lang": "fre", "title": "", "forced": False, "default": False, "text": True})
+        root, bob = accounts.create(self.db, "root", PASSWORD), accounts.create(self.db, "bob", PASSWORD)
+        prefs.save(self.db, root["id"], {"audio_langs": ["en"], "sub_langs": ["fr"], "sub_mode": "always"})
+        prefs.save(self.db, bob["id"], {"audio_langs": ["fr"], "sub_langs": ["fr"], "sub_mode": "never"})
+        mine = self.post("/api/play/e1", {}, headers=self.hub.cookie(root)).json()
+        theirs = self.post("/api/play/e1", {}, headers=self.hub.cookie(bob)).json()
+        self.assertEqual(self.asked, [3, 1])
+        self.assertEqual(([s["id"] for s in mine["subs"] if s["selected"]], [s["id"] for s in theirs["subs"] if s["selected"]]), (["e5"], []))
+
+    def test_a_track_asked_for_by_the_player_beats_the_preference(self):
+        prefs.save(self.db, ME, {"audio_langs": ["fr"]})
+        self.play(audio=2)
+        self.play(audio=0)
+        self.assertEqual(self.asked, [2, 0])
+
+    def test_the_subtitles_follow_the_language_of_the_track_actually_played(self):
+        self.probe["subs"].append({"index": 5, "lang": "fre", "title": "", "forced": False, "default": False, "text": True})
+        prefs.save(self.db, ME, {"sub_langs": ["fr"], "sub_mode": "foreign"})
+        self.decision["audio"] = 2                                                          # le plan joue la piste anglaise : étrangère, donc les complets
+        self.assertEqual([s["id"] for s in self.play().json()["subs"] if s["selected"]], ["e5"])
+        self.decision["audio"] = 1                                                          # la piste française : les forcés seulement
+        self.assertEqual([s["id"] for s in self.play().json()["subs"] if s["selected"]], ["e3"])
 
     def test_a_converted_file_cannot_be_sought_and_a_4k_is_flagged(self):
         self.decision = {"mode": "transcode", "why": "codec", "audio": 1, "copy_audio": False}

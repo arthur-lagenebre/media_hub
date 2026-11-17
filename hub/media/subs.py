@@ -9,14 +9,30 @@ import re
 import subprocess
 from pathlib import Path
 
+from .badges import lang_code
+
 SIDE_EXTS = {".srt", ".vtt", ".ass", ".ssa"}
 TIMESTAMP = re.compile(r"(\d{1,2}:\d{2}:\d{2}),(\d{3})")
-LANG_NAMES = {"fr": "Français", "fre": "Français", "fra": "Français", "en": "English", "eng": "English", "es": "Español", "spa": "Español", "de": "Deutsch", "ger": "Deutsch", "deu": "Deutsch",
-              "it": "Italiano", "ita": "Italiano", "ja": "日本語", "jpn": "日本語", "pt": "Português", "por": "Português", "und": ""}
+# Les langues que le hub nomme, par leur code canonique (ISO 639-1) ; les codes à trois lettres s'y ramènent par badges.lang_code (formes B et T d'ISO 639-2).
+LANG_NAMES = {"fr": "Français", "en": "English", "es": "Español", "de": "Deutsch", "it": "Italiano", "ja": "日本語", "pt": "Português", "nl": "Nederlands", "sv": "Svenska",
+              "da": "Dansk", "no": "Norsk", "fi": "Suomi", "pl": "Polski", "ru": "Русский", "ko": "한국어", "zh": "中文", "ar": "العربية", "he": "עברית", "tr": "Türkçe"}
+
+
+def canonical(code):
+    """Le code à deux lettres d'une langue que le hub connaît (« fre », « FRA », « fr-FR » -> « fr ») ; vide sans langue (« », « und ») ou pour une langue qu'il ne connaît pas."""
+    two = lang_code(code)
+    return two if two in LANG_NAMES else ""
 
 
 def language(code):
-    return LANG_NAMES.get((code or "").lower(), code or "")
+    """Le nom d'une langue d'après son code ; un code inconnu à deux ou trois lettres en majuscules (« CAT ») ; vide sans langue ; autre chose tel quel."""
+    two = canonical(code)
+    if two:
+        return LANG_NAMES[two]
+    raw = (code or "").strip()
+    if raw.lower() == "und":
+        return ""
+    return raw.upper() if len(raw) in (2, 3) and raw.isalpha() else raw
 
 
 def siblings(folder):
@@ -44,7 +60,7 @@ def describe_side(tail):
     words = [w.lower() for w in re.split(r"[ ._-]+", tail) if w]
     forced = any(w in ("forced", "force", "forcé") for w in words)
     sdh = any(w in ("sdh", "cc", "hi") for w in words)
-    lang = next((w for w in words if w in LANG_NAMES), "")
+    lang = next((w for w in words if w == "und" or canonical(w)), "")          # « und » dit qu'il n'y a pas de langue : c'est un mot du nom, pas son libellé
     label = " · ".join(x for x in (language(lang) or (tail if not lang else ""), "Forcé" if forced else "", "SDH" if sdh else "") if x) or "Sous-titres"
     return label, lang, forced
 

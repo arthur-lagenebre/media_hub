@@ -189,6 +189,29 @@
     change[name] = value;
     return H.api('/api/me/settings', change).then(function (res) { H.session.settings = res.settings; return res.settings; });
   };
+  // Les langues qu'un compte peut préférer pour le son et les sous-titres (celles que le serveur connaît : subs.LANG_NAMES), chacune nommée dans sa langue : un nom propre, il ne se traduit pas.
+  H.spoken = [['fr', 'Français'], ['en', 'English'], ['es', 'Español'], ['de', 'Deutsch'], ['it', 'Italiano'], ['ja', '日本語'], ['pt', 'Português'], ['nl', 'Nederlands'], ['sv', 'Svenska'],
+    ['da', 'Dansk'], ['no', 'Norsk'], ['fi', 'Suomi'], ['pl', 'Polski'], ['ru', 'Русский'], ['ko', '한국어'], ['zh', '中文'], ['ar', 'العربية'], ['he', 'עברית'], ['tr', 'Türkçe']];
+  var THREE_LETTERS = { fre: 'fr', fra: 'fr', eng: 'en', spa: 'es', ger: 'de', deu: 'de', ita: 'it', jpn: 'ja', por: 'pt', dut: 'nl', nld: 'nl', swe: 'sv', dan: 'da', nor: 'no', fin: 'fi',
+    pol: 'pl', rus: 'ru', kor: 'ko', chi: 'zh', zho: 'zh', ara: 'ar', heb: 'he', tur: 'tr' };
+  // Le code à deux lettres d'une de ces langues (« fre », « FR » -> « fr ») ; vide pour une autre.
+  H.langCode = function (code) {
+    var c = String(code || '').toLowerCase();
+    c = THREE_LETTERS[c] || c;
+    return H.spoken.some(function (l) { return l[0] === c; }) ? c : '';
+  };
+  // Le choix de sous-titres que ce navigateur retenait avant que le compte ne le garde (`subLang` : « off », « any » ou la langue d'une piste) passe une fois dans le compte,
+  // si celui-ci n'a encore rien choisi ; puis il est oublié, que le serveur l'ait pris ou non. À appeler au démarrage, une fois la session connue.
+  H.adoptSubLang = function () {
+    var old = H.pref('subLang'), s = H.session.settings || {}, change = null;
+    if (old === null) return;
+    var untouched = !(s.sub_langs && s.sub_langs.length) && (s.sub_mode || 'forced') === 'forced';
+    if (untouched && old === 'off') change = { sub_mode: 'never' };
+    else if (untouched && H.langCode(old)) change = { sub_langs: [H.langCode(old)], sub_mode: 'always' };         // une langue choisie : le lecteur prenait ses sous-titres complets
+    function forget() { try { localStorage.removeItem('hub.subLang'); } catch (e) { /* stockage fermé : rien à oublier */ } }
+    if (!change) { forget(); return; }
+    H.api('/api/me/settings', change).then(function (res) { H.session.settings = res.settings; forget(); }, forget);
+  };
   // Ce navigateur peut servir à plusieurs comptes : ce qui est propre à un compte (la file audio) ne doit pas passer de l'un à l'autre.
   // On retient l'id du dernier compte vu ; s'il change, on purge. Serveur ouvert : pas de compte, rien à purger. À appeler au démarrage, avant de relire la file.
   H.syncAccount = function () {
