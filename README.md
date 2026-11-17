@@ -62,7 +62,7 @@ Voir [deploy/README.md](deploy/README.md) : compose TrueNAS (Tailscale + l'image
 | `HUB_INBOX_KEEP_FREE` | espace libre à garder **sur le volume de la boîte** (`HUB_INBOX`), en Mo : un envoi qui le ferait passer en dessous est refusé (507) | `10240` |
 | `HUB_INBOX_MAX_UPLOADS` | envois simultanés (un envoi occupe un fil du serveur) ; au-delà : HTTP 429 | `2` |
 | `HUB_REQUEST_MAX` | demandes en attente par compte (films et séries, voir [Demandes](#demandes)) ; au-delà : HTTP 409. L'administrateur n'a pas de plafond | `20` |
-| `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne fait perdre aucune progression de lecture, et un `.mkv` illisible n'arrête pas le scan | `0` |
+| `HUB_AUTOSCAN_HOURS` | rescan périodique (0 = jamais) ; un volume démonté (donc vide) ne retire rien de la bibliothèque (le scan s'arrête et le dit au journal), et un `.mkv` illisible n'arrête pas le scan | `0` |
 | `TMDB_KEY` | enrichit les séries (affiche, synopsis, casting), décrit les films qui manquent aux sagas et ceux qui manquent à une personne ; lue aussi dans le `.env` de `media_library` | aucune |
 
 ## Invités d'une piste
