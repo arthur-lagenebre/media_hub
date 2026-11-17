@@ -1621,7 +1621,8 @@ class TestScanResilience(ServerCase):
             shutil.move(str(child), str(stash / child.name))
         try:
             job = self.scan()
-            self.assertEqual((job.status, self.items("films")["total"]), ("done", 0))
+            self.assertEqual((job.status, job.result["error"]), ("done", "dossier vide : volume démonté ? rien n'a été retiré"))
+            self.assertTrue(self.items("films")["total"] > 0)                # rien n'a été retiré
             self.assertTrue(any("ATTENTION" in line for line in job.log), list(job.log))
             self.assertEqual(len(self.progress_rows(entry)), 1)             # la progression n'a pas bougé
         finally:
