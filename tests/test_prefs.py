@@ -10,6 +10,8 @@ from pathlib import Path
 from hub import prefs
 from hub.db import Database
 
+ALL = {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}      # les réglages d'un compte qui n'a rien choisi
+
 
 class TestPrefs(unittest.TestCase):
     def setUp(self):
@@ -18,17 +20,17 @@ class TestPrefs(unittest.TestCase):
         self.db = Database(root / "hub.db")
 
     def test_an_account_without_a_choice_gets_the_defaults(self):
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
+        self.assertEqual(prefs.load(self.db, "u1"), ALL)
 
     def test_a_choice_is_kept_for_that_account_only(self):
-        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "artists"}), {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
-        self.assertEqual(prefs.load(self.db, "u2"), {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
+        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "artists"}), {**ALL, "music_view": "artists"})
+        self.assertEqual(prefs.load(self.db, "u1"), {**ALL, "music_view": "artists"})
+        self.assertEqual(prefs.load(self.db, "u2"), ALL)
 
     def test_each_setting_is_kept_on_its_own(self):
         prefs.save(self.db, "u1", {"music_view": "artists"})
-        self.assertEqual(prefs.save(self.db, "u1", {"movie_view": "films"}), {"music_view": "artists", "movie_view": "films", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
-        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"}), {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
+        self.assertEqual(prefs.save(self.db, "u1", {"movie_view": "films"}), {**ALL, "music_view": "artists", "movie_view": "films"})
+        self.assertEqual(prefs.save(self.db, "u1", ALL), ALL)
 
     def test_the_two_shelves_of_the_home_are_shown_unless_the_account_hides_them_one_by_one(self):
         self.assertEqual({k: v for k, v in prefs.load(self.db, "u1").items() if k.startswith("home_")}, {"home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
@@ -41,7 +43,7 @@ class TestPrefs(unittest.TestCase):
 
     def test_a_new_choice_replaces_the_old_one(self):
         prefs.save(self.db, "u1", {"music_view": "artists"})
-        self.assertEqual(prefs.save(self.db, "u1", {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"}), {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
+        self.assertEqual(prefs.save(self.db, "u1", ALL), ALL)
 
     def test_an_unknown_setting_or_value_is_refused_and_changes_nothing(self):
         prefs.save(self.db, "u1", {"music_view": "artists"})
@@ -50,11 +52,11 @@ class TestPrefs(unittest.TestCase):
                                  ({"music_view": "artists", "couleur": "rouge"}, "réglage inconnu : couleur")):
             with self.assertRaisesRegex(ValueError, message):
                 prefs.save(self.db, "u1", changes)
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
+        self.assertEqual(prefs.load(self.db, "u1"), {**ALL, "music_view": "artists"})
 
     def test_a_stored_value_that_is_no_longer_allowed_falls_back_to_the_default(self):
         self.db.kv_set(prefs.KEY + "u1", {"music_view": "ancienne", "autre": 1})
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
+        self.assertEqual(prefs.load(self.db, "u1"), ALL)
 
     def test_the_order_of_the_unseen_shelf_is_random_unless_the_account_picks_rating_or_added(self):
         self.assertEqual(prefs.load(self.db, "u1")["home_unseen_sort"], "random")
@@ -68,7 +70,7 @@ class TestPrefs(unittest.TestCase):
 
     def test_a_damaged_value_is_ignored(self):
         self.db.kv_set(prefs.KEY + "u1", "pas un dictionnaire")
-        self.assertEqual(prefs.load(self.db, "u1"), {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
+        self.assertEqual(prefs.load(self.db, "u1"), ALL)
 
     def test_the_recommendations_are_shown_unless_the_account_hides_them(self):
         self.assertEqual(prefs.load(self.db, "u1")["home_recommend"], "show")
@@ -77,6 +79,57 @@ class TestPrefs(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "valeur inconnue pour home_recommend : peut-être"):
             prefs.save(self.db, "u1", {"home_recommend": "peut-être"})
         self.assertEqual(prefs.load(self.db, "u1")["home_recommend"], "hide")
+
+
+class TestLanguagePrefs(unittest.TestCase):
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        self.db = Database(root / "hub.db")
+
+    def test_without_a_choice_the_file_decides_the_audio_and_only_forced_subtitles_are_shown(self):
+        loaded = prefs.load(self.db, "u1")
+        self.assertEqual((loaded["audio_langs"], loaded["sub_langs"], loaded["sub_mode"]), ([], [], "forced"))
+
+    def test_ordered_lists_of_languages_are_kept_for_that_account_only(self):
+        saved = prefs.save(self.db, "u1", {"audio_langs": ["ja", "fr"], "sub_langs": ["fr", "en"], "sub_mode": "foreign"})
+        self.assertEqual((saved["audio_langs"], saved["sub_langs"], saved["sub_mode"]), (["ja", "fr"], ["fr", "en"], "foreign"))
+        self.assertEqual(prefs.load(self.db, "u1"), saved)
+        self.assertEqual(prefs.load(self.db, "u2"), ALL)
+        self.assertEqual(prefs.save(self.db, "u1", {"audio_langs": []})["audio_langs"], [])             # vidée : le fichier redécide
+        self.assertEqual(prefs.load(self.db, "u1")["sub_langs"], ["fr", "en"])
+
+    def test_every_subtitle_mode_is_accepted(self):
+        for mode in ("never", "forced", "foreign", "always"):
+            self.assertEqual(prefs.save(self.db, "u1", {"sub_mode": mode})["sub_mode"], mode)
+
+    def test_a_bad_list_is_refused_and_changes_nothing(self):
+        prefs.save(self.db, "u1", {"audio_langs": ["en"], "sub_langs": ["fr"]})
+        bad = ("fr", None, ["fre"], ["FR"], ["xx"], ["und"], [""], ["fr", "fr"], [1], [["fr"]], ["fr", "en", "es", "de", "it", "ja", "pt", "nl", "sv"])
+        for value in bad:
+            for name in ("audio_langs", "sub_langs"):
+                with self.assertRaisesRegex(ValueError, f"valeur inconnue pour {name}"):
+                    prefs.save(self.db, "u1", {"sub_mode": "always", name: value})
+        with self.assertRaisesRegex(ValueError, "valeur inconnue pour sub_mode : parfois"):
+            prefs.save(self.db, "u1", {"audio_langs": ["fr"], "sub_mode": "parfois"})
+        self.assertEqual(prefs.load(self.db, "u1"), {**ALL, "audio_langs": ["en"], "sub_langs": ["fr"]})
+
+    def test_eight_languages_are_allowed(self):
+        eight = ["fr", "en", "es", "de", "it", "ja", "pt", "nl"]
+        self.assertEqual(prefs.save(self.db, "u1", {"sub_langs": eight})["sub_langs"], eight)
+
+    def test_the_settings_kept_before_the_languages_still_load(self):
+        self.db.kv_set(prefs.KEY + "u1", {"music_view": "artists", "home_unseen": "hide"})
+        self.assertEqual(prefs.load(self.db, "u1"), {**ALL, "music_view": "artists", "home_unseen": "hide"})
+
+    def test_a_damaged_stored_list_falls_back_to_the_default(self):
+        self.db.kv_set(prefs.KEY + "u1", {"audio_langs": "fr", "sub_langs": ["fr", "zz"], "sub_mode": "toujours"})
+        loaded = prefs.load(self.db, "u1")
+        self.assertEqual((loaded["audio_langs"], loaded["sub_langs"], loaded["sub_mode"]), ([], [], "forced"))
+
+    def test_the_default_lists_are_not_shared_between_calls(self):
+        prefs.load(self.db, "u1")["audio_langs"].append("fr")
+        self.assertEqual(prefs.load(self.db, "u1")["audio_langs"], [])
 
 
 if __name__ == "__main__":

@@ -59,6 +59,7 @@ from ..media import badges
 from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
+from ..media import tracks
 from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, to_jpeg, write_atomic
 from ..scan.common import STACK_MAX
 from .jobs import Jobs
@@ -2366,7 +2367,10 @@ def next_summary(following):
 
 @route("POST", r"/api/play/(\w+)")
 def api_play(h, m, q):
-    """Le plan de lecture d'un fichier vidéo pour CE lecteur. Le client l'appelle à l'ouverture, puis à chaque changement de piste audio."""
+    """Le plan de lecture d'un fichier vidéo pour CE lecteur. Le client l'appelle à l'ouverture, puis à chaque changement de piste audio.
+
+    Sans piste demandée, la piste audio suit les langues audio du compte (`audio_langs`, voir tracks.pick_audio) ; `selected` marque la piste audio jouée et
+    au plus un sous-titre choisi d'office d'après `sub_mode` et `sub_langs` (à défaut, la langue de la page)."""
     hub = h.hub
     entry = entry_of(h, m.group(1), "play")
     if entry["kind"] != "video":
@@ -2375,16 +2379,24 @@ def api_play(h, m, q):
     lib, path = hub.path_of(entry)
     probe = probe_of(hub, entry)
     caps, audio, kbps, height = play_settings(body)
+    settings = prefs.load(hub.db, h.user["id"])
+    if audio is None:                                                                       # une piste demandée par le lecteur (choix pendant la lecture) l'emporte toujours
+        audio = tracks.pick_audio(probe["audio"], settings["audio_langs"])
     decision = prober.plan(probe, caps, audio, kbps, height)
     chosen = decision["audio"]
     video = probe.get("video") or {}
     height = default_height(decision, video, height)
+    subs = subtitle_list(hub, entry, probe, path, h.lang)
+    heard = next((t["lang"] for t in probe["audio"] if t["index"] == chosen), "")
+    picked = tracks.pick_sub(subs, settings["sub_mode"], settings["sub_langs"] or [h.lang], heard, settings["audio_langs"])
+    for sub in subs:
+        sub["selected"] = sub["id"] == picked
     h.send_json({
         "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": show_title(hub, entry), "season": entry["season"], "number": entry["number"],
         "mode": decision["mode"], "why": decision["why"], "url": play_url(entry, decision, caps, kbps, height), "seekable": decision["mode"] == "direct",
         "duration": probe["duration"] or entry["duration"], "resume": resume_position(hub, h.user["id"], entry), "warning": play_warning(decision, video),
         "audio": [{"index": t["index"], "label": track_label(t, h.lang), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
-        "subs": subtitle_list(hub, entry, probe, path, h.lang),
+        "subs": subs,
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
         "next": next_summary(next_entry(hub, entry)),
     })
