@@ -29,7 +29,7 @@ def scan_library(db, lib, log=print):
     known = db.known_entries(lib.id)
     items, entries, counts = SCANNERS[lib.kind](lib, known, enriched_for(db, lib.id))
     if not items and known:             # un partage démonté se présente souvent en dossier vide : on garde la bibliothèque telle quelle
-        log(f"[{labels.shown(db, lib)}] ATTENTION : plus aucun élément alors que la bibliothèque en avait {len(known)} : volume démonté ? La progression de lecture est gardée.")        # texte traduit tel quel dans lang-en.js
+        log(f"[{labels.shown(db, lib)}] dossier vide alors que la bibliothèque avait {len(known)} élément(s) : volume démonté ? Rien n'a été retiré.")
         return {"lib": lib.id, "error": "dossier vide : volume démonté ? rien n'a été retiré", "items": 0, "entries": 0}
     db.replace_library(lib.id, items, entries)
     for key, value in getattr(counts, "kv", {}).items():

@@ -487,7 +487,7 @@ class TestScanLibrary(TempCase):
         self.empty_the_shelf_after_a_scan()
         done = self.scan()
         self.assertEqual(done, {"lib": "livres", "error": "dossier vide : volume démonté ? rien n'a été retiré", "items": 0, "entries": 0})
-        self.assertTrue(any("ATTENTION" in line and "en avait 1" in line for line in self.said))
+        self.assertTrue(any("dossier vide" in line and "avait 1 élément(s)" in line and "Rien n'a été retiré" in line for line in self.said))
         self.assertEqual(list(self.db.known_entries("livres")), ["Manga/Naruto/Tome 01.cbz"])
         self.assertEqual(self.db.query("SELECT COUNT(*) AS n FROM items WHERE lib = ?", ("livres",))[0]["n"], 1)
 
@@ -505,7 +505,7 @@ class TestScanLibrary(TempCase):
         done = self.scan()
         self.assertNotIn("error", done)
         self.assertEqual((done["items"], done["entries"]), (0, 0))
-        self.assertFalse(any("ATTENTION" in line for line in self.said))
+        self.assertFalse(any("dossier vide" in line for line in self.said))
 
     def test_enriched_data_is_found_by_item_id(self):
         self.db.kv_set("enrich:livres:abc", {"tmdb": 1})
