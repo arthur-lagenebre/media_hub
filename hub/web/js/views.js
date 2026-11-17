@@ -1682,10 +1682,38 @@
         },
         done: function () { H.toast(H.t('Les autres appareils sont déconnectés.'), 5000); H.focus.key(el, 'signout-others'); } });
     }
-    // À propos : la version, et la mention et le logo de TMDB (tmdb.svg, le logo court officiel) que demandent les conditions de son API, pour tous les comptes.
+    // Les nouveautés (GET /api/changelog), chargées une fois par ouverture de la page : `news` vaut null tant qu'elles ne sont pas là, [] si la route échoue (rien ne s'affiche).
+    var NEWS_SHOWN = 5, news = null, newsAsked = false, newsAll = false;
+    function loadNews() {
+      if (newsAsked) return;
+      newsAsked = true;
+      H.api('/api/changelog').then(function (d) { news = (d && d.versions) || []; }).catch(function () { news = []; }).then(function () {
+        if (!closed && news.length && activeTab() === 'apropos') render();
+      });
+    }
+    function newsDate(text) {          // « 2026-11-17 » dans la langue de l'interface ; illisible : tel quel
+      var p = String(text).split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]);
+      return p.length === 3 && !isNaN(d.getTime()) ? H.date(d.getTime() / 1000) : text;
+    }
+    // Chaque version est un arrêt de la télécommande (sans action) : sans lui, un texte plus haut que l'écran ne défilerait pas aux flèches.
+    function newsSection(panel) {
+      loadNews();
+      if (!news || !news.length) return;
+      panel.appendChild(h('h2', null, H.t('Nouveautés du hub')));
+      (newsAll ? news : news.slice(0, NEWS_SHOWN)).forEach(function (v) {
+        panel.appendChild(h('article', { class: 'news f', tabindex: '0', 'data-key': 'news-' + v.version },
+          h('h3', null, h('b', null, v.version), ' ', h('span', null, newsDate(v.date))),
+          h('ul', null, (v.items || []).map(function (text) { return h('li', null, text); }))));
+      });
+      if (!newsAll && news.length > NEWS_SHOWN) panel.appendChild(h('div', { class: 'newsmore' }, H.button(H.t('Tout voir'), null, { 'data-key': 'news-all', onclick: function () {
+        newsAll = true; render(); H.focus.key(el, 'news-' + news[NEWS_SHOWN].version);          // le bouton disparaît : le focus va à la première version dépliée
+      } })));
+    }
+    // À propos : la version, les nouveautés, et la mention et le logo de TMDB (tmdb.svg, le logo court officiel) que demandent les conditions de son API, pour tous les comptes.
     function aboutPanel() {
       var panel = h('section', { class: 'panel about' }, h('h2', null, H.t('À propos')));
       panel.appendChild(h('dl', null, h('dt', null, 'Version'), h('dd', null, state.version)));
+      newsSection(panel);
       panel.appendChild(h('p', { class: 'credit-tmdb' }, h('img', { src: '/tmdb.svg', alt: 'TMDB', width: '92', height: '12' }),
         h('span', null, H.t('Ce produit utilise l’API TMDB mais n’est ni approuvé ni certifié par TMDB.'))));
       return panel;

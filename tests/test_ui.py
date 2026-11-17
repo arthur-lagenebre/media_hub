@@ -4823,6 +4823,47 @@ class TestSettings(UiCase):
         self.view(".panel dl").wait_for()
         self.assertEqual(self.view(".credit-tmdb").count(), 0)
 
+    def test_the_about_tab_shows_the_news_of_the_current_version(self):
+        """Réglages › À propos montre « Nouveautés du hub », lues dans hub/CHANGELOG.md : la version la plus récente est celle du serveur."""
+        from hub import __version__
+        self.open("#/settings?tab=apropos")
+        news = self.view(".news")
+        news.first.wait_for()
+        self.assertEqual(self.view(".about h2").all_inner_texts(), ["À propos", "Nouveautés du hub"])
+        self.assertIn(__version__, news.first.inner_text())
+        self.assertTrue(news.first.locator("li").count() > 0)
+
+    def changelog(self, count):
+        versions = [{"version": f"0.{40 - i}.0", "date": f"2026-10-{i + 1:02d}", "items": [f"Point {i}"]} for i in range(count)]
+        self.page.route("**/api/changelog", lambda route: route.fulfill(content_type="application/json", body=json.dumps({"versions": versions})))
+
+    def test_the_news_show_five_versions_and_the_remote_unfolds_the_rest(self):
+        """Cinq versions d'abord, puis « Tout voir » déplie les autres ; à la télécommande, chaque version est un arrêt (le texte se lit en descendant) et le focus va sur la première version dépliée."""
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.changelog(7)
+        self.open("#/settings?tab=apropos")
+        more = self.view(".about .btn", has_text="Tout voir")
+        more.wait_for()
+        self.assertEqual(self.view(".news").count(), 5)
+        self.assertIn("01/10/2026", self.view(".news").first.inner_text())          # la date à la façon du reste de l’interface (H.date)
+        self.page.keyboard.press("ArrowDown")                                          # depuis l'onglet : la première version
+        self.until(lambda: self.page.evaluate("document.activeElement.classList.contains('news')"))
+        self.press(*["ArrowDown"] * 5)
+        self.assertEqual(self.focused(), "Tout voir")
+        self.press("Enter")
+        self.until(lambda: self.view(".news").count() == 7)
+        self.assertEqual(more.count(), 0)
+        self.assertIn("0.35.0", self.focused())
+
+    def test_the_news_are_hidden_when_the_route_fails(self):
+        self.page.route("**/api/changelog", lambda route: route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "erreur interne"})))
+        self.open("#/settings?tab=apropos")
+        self.view(".credit-tmdb").wait_for()
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.view(".about h2").all_inner_texts(), ["À propos"])
+        self.assertEqual(self.view(".news").count(), 0)
+        self.assertEqual(self.page.locator("#toast.on").count(), 0)
+
     def test_the_old_management_addresses_lead_to_the_administration(self):
         for old, new in (("gestion", "Médiathèque"), ("taches", "Médiathèque"), ("serveur", "Serveur"), ("inbox", "Boîte de réception"), ("demandes", "Demandes"), ("comptes", "Comptes")):
             self.open("#/settings?tab=" + old)
