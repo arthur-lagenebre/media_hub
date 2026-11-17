@@ -66,11 +66,35 @@ class TestLanguage(unittest.TestCase):
         self.assertEqual(subs.language("fr"), "Français")
         self.assertEqual(subs.language("ENG"), "English")
 
-    def test_an_unknown_code_is_kept_and_no_code_is_empty(self):
-        self.assertEqual(subs.language("xx"), "xx")
+    def test_an_unknown_code_is_shown_in_capitals_and_no_code_is_empty(self):
+        self.assertEqual([subs.language(c) for c in ("xx", "cat", "Zxx")], ["XX", "CAT", "ZXX"])
+        self.assertEqual(subs.language("français"), "français")                         # pas un code : gardé tel quel
         self.assertEqual(subs.language(""), "")
         self.assertEqual(subs.language(None), "")
         self.assertEqual(subs.language("und"), "")
+
+    def test_twelve_more_languages_by_their_two_and_three_letter_codes(self):
+        codes = {"nl": ("dut", "nld"), "sv": ("swe",), "da": ("dan",), "no": ("nor",), "fi": ("fin",), "pl": ("pol",), "ru": ("rus",), "ko": ("kor",), "zh": ("chi", "zho"),
+                 "ar": ("ara",), "he": ("heb",), "tr": ("tur",)}
+        for two, threes in codes.items():
+            name = subs.language(two)
+            self.assertNotIn(name, ("", two, two.upper()), two)
+            self.assertEqual([subs.language(c) for c in threes], [name] * len(threes), two)
+        self.assertEqual((subs.language("nld"), subs.language("ZHO"), subs.language("ru")), ("Nederlands", "中文", "Русский"))
+
+
+class TestCanonical(unittest.TestCase):
+    def test_a_code_comes_back_to_its_two_letters(self):
+        codes = ("fr", "fre", "FRA", "eng", "ger", "deu", "jpn", "dut", "nld", "chi", "zho", "heb", "tur", " Es ", "pt-BR", "kor")
+        self.assertEqual([subs.canonical(c) for c in codes], ["fr", "fr", "fr", "en", "de", "de", "ja", "nl", "nl", "zh", "zh", "he", "tr", "es", "pt", "ko"])
+
+    def test_no_language_or_an_unknown_one_is_empty(self):
+        self.assertEqual([subs.canonical(c) for c in ("", None, "und", "UND", "xx", "zxx", "mul", "cat", "français", "forced")], [""] * 10)
+
+    def test_a_side_file_names_one_of_the_new_languages(self):
+        self.assertEqual(subs.describe_side("ru.forced"), ("Русский · Forcé", "ru", True))
+        self.assertEqual(subs.describe_side("swe SDH")[:2], ("Svenska · SDH", "swe"))
+        self.assertEqual(subs.describe_side("hd")[:2], ("hd", ""))                         # deux lettres qui ne sont pas une langue connue
 
 
 class TestConversion(unittest.TestCase):
