@@ -1533,7 +1533,45 @@
     function preferences(body) {
       interfaceTab(body);
       reading(body);
+      body.appendChild(languagesPanel());
       body.appendChild(displayPanel());
+    }
+    // Les langues du compte (gardées sur le serveur) : le son et les sous-titres que le lecteur prend d'office à l'ouverture d'une vidéo, par ordre de préférence.
+    var SUB_MODES = [{ label: H.t('Forcés seulement'), detail: H.t('Les passages dans une autre langue que celle du film'), value: 'forced' },
+      { label: H.t('Si le son est étranger'), detail: H.t('Complets quand le son n’est dans aucune de tes langues, sinon forcés'), value: 'foreign' },
+      { label: H.t('Toujours'), detail: H.t('Complets, sinon forcés'), value: 'always' },
+      { label: H.t('Jamais'), detail: H.t('Aucun sous-titre d’office'), value: 'never' }];
+    var MAX_LANGS = 8;          // comme prefs.MAX_LANGS
+    function langName(code) { return (H.spoken.filter(function (l) { return l[0] === code; })[0] || [code, code.toUpperCase()])[1]; }
+    function saveLangs(name, list, focusKey) {
+      H.saveSetting(name, list).then(function () { render(); H.focus.key(el, focusKey); }).catch(function (e) { H.toast(e.message, 5000); });
+    }
+    // Une liste ordonnée de langues : une ligne pour l'ajout, puis une par langue, avec « Monter » (sauf la première) et « Retirer ». Le focus suit la langue touchée.
+    function langList(panel, name, title, empty) {
+      var list = H.setting(name) || [], left = H.spoken.filter(function (l) { return list.indexOf(l[0]) < 0; });
+      panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, title), h('span', null, list.length ? H.t('Dans cet ordre de préférence') : empty)),
+        H.button(H.t('Ajouter une langue'), 'plus', { 'data-key': 'add-' + name, disabled: list.length >= MAX_LANGS || !left.length, onclick: function () {
+          H.menu(title, left.map(function (l) { return { label: l[1], value: l[0] }; }), null, function (v) { saveLangs(name, list.concat([v]), 'rm-' + name + '-' + v); });
+        } })));
+      list.forEach(function (code, i) {
+        var raised = list.slice(0, i - 1).concat([code, list[i - 1]], list.slice(i + 1));
+        panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, (i + 1) + '. ' + langName(code))),
+          i > 0 ? H.button(H.t('Monter'), null, { 'data-key': 'up-' + name + '-' + code, onclick: function () { saveLangs(name, raised, (i > 1 ? 'up-' : 'rm-') + name + '-' + code); } }) : null,
+          H.button(H.t('Retirer'), 'trash', { 'data-key': 'rm-' + name + '-' + code, onclick: function () { saveLangs(name, list.filter(function (c) { return c !== code; }), 'add-' + name); } })));
+      });
+    }
+    function languagesPanel() {
+      var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Langues')));
+      langList(panel, 'audio_langs', H.t('Langues du son'), H.t('Piste par défaut du fichier'));
+      langList(panel, 'sub_langs', H.t('Langues des sous-titres'), H.t('Celle de l’interface'));
+      var shown = SUB_MODES.filter(function (c) { return c.value === H.setting('sub_mode'); })[0] || SUB_MODES[0];
+      panel.appendChild(h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Sous-titres d’office')), h('span', null, shown.label + ' — ' + shown.detail)),
+        H.button(H.t('Changer'), 'edit', { 'data-key': 'sub_mode', onclick: function () {
+          H.menu(H.t('Sous-titres d’office'), SUB_MODES, shown.value, function (v) {
+            H.saveSetting('sub_mode', v).then(function () { render(); H.focus.key(el, 'sub_mode'); }).catch(function (e) { H.toast(e.message, 5000); });
+          });
+        } })));
+      return panel;
     }
     function reading(body) {
       var play = h('section', { class: 'panel' }, h('h2', null, H.t('Lecture')));

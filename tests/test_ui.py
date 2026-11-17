@@ -648,7 +648,7 @@ class TestVideoPlayer(UiCase):
         self.page.locator(".veil .opt").nth(1).click()
         self.page.wait_for_function("document.querySelector('.player .cue').textContent.indexOf('Premier') >= 0", timeout=15000)
         self.assertEqual(self.page.locator(".cue i").count(), 1)      # l'italique est gardé
-        self.assertIsNotNone(self.page.evaluate("localStorage.getItem('hub.subLang')"))     # le choix est mémorisé
+        self.assertIsNone(self.page.evaluate("localStorage.getItem('hub.subLang')"))        # le choix vaut pour cette lecture : les préférences durables sont celles du compte
 
     def test_on_a_phone_every_control_stays_on_screen(self):
         """Sur un téléphone, en hauteur comme en largeur, la rangée de boutons du lecteur ne passe plus sous le bord droit."""
@@ -954,6 +954,129 @@ class TestPgsDecoder(UiCase):
         self.assertEqual(out, [0, 0, 0])
 
 
+class TestLanguages(UiCase):
+    """Les langues du compte : le serveur choisit le sous-titre (`subs[].selected`), le lecteur l'applique à l'ouverture et garde ensuite le choix de l'utilisateur ;
+    l'ancien choix retenu par le navigateur (`subLang`) passe une fois dans le compte ; Paramètres › Préférences › Langues règle tout cela."""
+
+    @classmethod
+    def add_media(cls, root):
+        film = fixtures.write_video(root / "srv" / "Films" / "Langues (2024)" / "Langues (2024).mkv", seconds=30, size="160x90", acodec="aac", channels=2)
+        film.with_name("Langues (2024).fr.srt").write_text("1\n00:00:00,000 --> 00:00:29,000\nBonjour\n", encoding="utf-8")
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.api, "/api/me/settings", {"audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
+
+    def settings(self):
+        return self.api("/api/me/settings")["settings"]
+
+    def play(self):
+        self.open("#/play/" + self.entries("films", "Langues")[0]["id"])
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+
+    def cue(self):
+        return self.page.evaluate("(() => { var c = document.querySelector('.player .cue'); return c ? c.textContent : ''; })()")
+
+    def wait_cue(self, text):
+        self.page.wait_for_function("t => (document.querySelector('.player .cue') || {}).textContent === t", arg=text, timeout=15000)
+
+    def test_the_subtitles_the_server_chose_are_shown_from_the_start(self):
+        self.api("/api/me/settings", {"sub_langs": ["fr"], "sub_mode": "always"})
+        self.play()
+        self.wait_cue("Bonjour")
+
+    def test_without_a_choice_full_subtitles_are_not_shown(self):
+        self.play()
+        self.page.wait_for_timeout(1500)
+        self.assertEqual(self.cue(), "")                                                    # « forcés » par défaut : un fichier .fr.srt complet ne s'affiche pas
+
+    def test_a_choice_made_in_the_player_stays_when_the_plan_is_asked_again(self):
+        self.api("/api/me/settings", {"sub_langs": ["fr"], "sub_mode": "always"})
+        self.play()
+        self.wait_cue("Bonjour")
+        self.page.locator(".player .btn", has_text="Sous-titres").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt").nth(0).click()                                      # « Désactivés »
+        self.wait_cue("")
+        self.page.locator(".player .btn", has_text="Qualité").click()                       # un autre plan : le serveur y marque encore le français
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt", has_text="480p").click()
+        self.wait_playing()
+        self.page.wait_for_timeout(1500)
+        self.assertEqual(self.cue(), "")
+        self.assertEqual(self.settings()["sub_mode"], "always")                             # le menu du lecteur ne change pas les préférences du compte
+
+    def reload_with(self, value):
+        self.open()
+        self.page.evaluate("v => localStorage.setItem('hub.subLang', JSON.stringify(v))", value)
+        self.open()
+        self.page.wait_for_function("localStorage.getItem('hub.subLang') === null", timeout=10000)
+
+    def test_the_old_choice_off_of_the_browser_becomes_never(self):
+        self.reload_with("off")
+        self.assertEqual(self.settings()["sub_mode"], "never")
+
+    def test_the_old_language_of_the_browser_becomes_the_full_subtitles_of_the_account(self):
+        self.reload_with("fre")
+        settings = self.settings()
+        self.assertEqual((settings["sub_langs"], settings["sub_mode"]), (["fr"], "always"))
+
+    def test_the_old_choice_is_dropped_when_it_means_nothing_or_the_account_already_chose(self):
+        for value in ("any", "xyz"):
+            self.reload_with(value)
+            settings = self.settings()
+            self.assertEqual((settings["sub_langs"], settings["sub_mode"]), ([], "forced"), value)
+        self.api("/api/me/settings", {"sub_langs": ["en"]})
+        self.reload_with("off")
+        settings = self.settings()
+        self.assertEqual((settings["sub_langs"], settings["sub_mode"]), (["en"], "forced"))
+
+    def panel(self):
+        self.open("#/settings?tab=preferences")
+        panel = self.view(".panel", has_text="Langues")
+        panel.wait_for()
+        return panel
+
+    def wait_key(self, key, present=True):
+        self.page.wait_for_function("k => !!document.querySelector(\"[data-key='\" + k + \"']\") === " + ("true" if present else "false"), arg=key, timeout=5000)
+
+    def add(self, which, name, code):
+        self.view(f"[data-key='add-{which}']").click()
+        self.page.locator(".veil .opt", has_text=name).click()
+        self.wait_key(f"rm-{which}-{code}")
+
+    def test_the_languages_are_chosen_in_order_in_the_settings(self):
+        panel = self.panel()
+        self.assertIn("Piste par défaut du fichier", panel.inner_text())
+        self.add("audio_langs", "日本語", "ja")
+        self.add("audio_langs", "Français", "fr")
+        self.assertEqual(self.settings()["audio_langs"], ["ja", "fr"])
+        self.assertEqual(self.view("[data-key='up-audio_langs-ja']").count(), 0)              # la première ne monte plus
+        self.view("[data-key='up-audio_langs-fr']").click()                                   # « Monter »
+        self.wait_key("up-audio_langs-ja")
+        self.assertEqual(self.settings()["audio_langs"], ["fr", "ja"])
+        self.view("[data-key='rm-audio_langs-ja']").click()                                   # « Retirer »
+        self.wait_key("rm-audio_langs-ja", present=False)
+        self.assertEqual(self.settings()["audio_langs"], ["fr"])
+        self.add("sub_langs", "English", "en")
+        self.view("[data-key='sub_mode']").click()
+        self.page.locator(".veil .opt", has_text="Si le son est étranger").click()
+        self.page.wait_for_function("document.querySelector(\"[data-key='sub_mode']\").parentNode.textContent.indexOf('Si le son est étranger') >= 0", timeout=5000)
+        settings = self.settings()
+        self.assertEqual((settings["sub_langs"], settings["sub_mode"]), (["en"], "foreign"))
+
+    def test_the_language_lines_are_reached_and_used_with_the_keys(self):
+        self.api("/api/me/settings", {"sub_langs": ["fr", "en"]})
+        self.panel()
+        self.wait_key("up-sub_langs-en")
+        self.view("[data-key='up-sub_langs-en']").focus()
+        self.press("Enter", wait=200)
+        self.wait_key("up-sub_langs-fr")
+        self.assertEqual(self.settings()["sub_langs"], ["en", "fr"])
+        self.assertEqual(self.page.evaluate("document.activeElement.getAttribute('data-key')"), "rm-sub_langs-en")    # le focus suit la langue déplacée (passée première : plus de « Monter »)
+
+
 class TestPgsInThePlayer(UiCase):
     @classmethod
     def add_media(cls, root):
@@ -982,7 +1105,7 @@ class TestPgsInThePlayer(UiCase):
         self.assertLess(red[1], 60)
         self.assertGreater(green[1], 150)                                           # le vert de la répétition, au bon endroit de l'écran du Blu-ray
         self.assertEqual(self.pixel(100, 950)[3], 0)
-        self.assertEqual(self.page.evaluate("localStorage.getItem('hub.subLang')"), '"any"')     # le choix est mémorisé (la piste n'a pas de langue)
+        self.assertIsNone(self.page.evaluate("localStorage.getItem('hub.subLang')"))        # rien n'est retenu dans le navigateur
         self.page.locator(".player .btn", has_text="Sous-titres").click()
         self.page.wait_for_selector(".veil .opt")
         self.page.locator(".veil .opt").nth(0).click()                              # « Désactivés »
@@ -4714,7 +4837,7 @@ class TestSettings(UiCase):
     def test_each_tab_has_its_own_panels(self):
         self.open("#/settings")
         self.view(".tabs").wait_for()
-        for name, titles in (("Préférences", ["Interface", "Lecture", "Affichage"]), ("Mon compte", ["Mon compte"]), ("À propos", ["À propos"])):
+        for name, titles in (("Préférences", ["Interface", "Lecture", "Langues", "Affichage"]), ("Mon compte", ["Mon compte"]), ("À propos", ["À propos"])):
             self.tab(name)
             self.until(lambda: self.selected() == name)
             self.assertEqual(self.titles(), titles, name)

@@ -275,11 +275,7 @@
       var opts = [{ label: H.t('Désactivés'), value: '' }].concat(plan.subs.map(function (s) {
         return { label: H.tr(s.label), detail: s.text ? H.tr(s.where) : s.image ? H.t('image · {where}', { where: H.tr(s.where) }) : H.t('image, non prise en charge'), value: s.id, disabled: !s.text && !s.image };
       }));
-      trackMenu(H.t('Sous-titres'), opts, subs.sel, function (v) {
-        setSub(v);
-        var track = plan.subs.filter(function (s) { return s.id === v; })[0];
-        H.pref('subLang', v ? (track && track.lang) || 'any' : 'off');
-      });
+      trackMenu(H.t('Sous-titres'), opts, subs.sel, setSub);          // pour cette lecture seulement : les préférences durables sont celles du compte (Paramètres)
     }
     function pickQuality() {
       var now = H.pref('quality') || 'auto';
@@ -292,11 +288,10 @@
       H.speedMenu(speed, function (v) { if (v === speed) return; setSpeed(v); flash(H.speedLabel(speed)); }, trackMenu);
     }
     function carry() { if (plan && plan.next && speed !== 1) carried = { id: plan.next.id, rate: speed }; }
+    // Le sous-titre du premier plan : celui que le serveur a choisi d'après les langues du compte (au plus un `selected` ; jamais une piste image, dont l'extraction peut durer).
+    // Les plans suivants (autre piste audio, autre qualité) gardent le sous-titre en cours : c'est peut-être celui que l'utilisateur vient de choisir.
     function chooseDefaultSub() {
-      var want = H.pref('subLang'), text = plan.subs.filter(function (s) { return s.text; }), list = text.concat(plan.subs.filter(function (s) { return s.image; })), pick = null;
-      if (want === 'off') pick = null;
-      else if (want && want !== 'any') pick = list.filter(function (s) { return s.lang === want && !s.forced; })[0] || list.filter(function (s) { return s.lang === want; })[0];
-      else if (!want) pick = text.filter(function (s) { return s.forced && /^(fr|fre|fra)$/.test(s.lang); })[0] || text.filter(function (s) { return s.default; })[0];       // une piste image n'est jamais prise sans que l'utilisateur l'ait choisie : l'extraire peut durer
+      var pick = plan.subs.filter(function (s) { return s.selected; })[0];
       setSub(pick ? pick.id : '');
     }
     function setSub(sid) {

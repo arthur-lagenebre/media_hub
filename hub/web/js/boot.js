@@ -6,6 +6,7 @@
     H.libs = state.libraries;
     H.setSession(state);
     H.syncAccount();      // avant que la barre audio ne relise la file enregistrée : elle appartient peut-être à un autre compte
+    H.adoptSubLang();     // l'ancien choix de sous-titres de ce navigateur passe dans le compte
     H.audio.init();
     H.nav.build();
     H.start();
