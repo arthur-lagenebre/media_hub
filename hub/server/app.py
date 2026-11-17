@@ -486,6 +486,8 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_HEAD = do_POST = do_DELETE = dispatch
 
     def _fail(self, status, message):
+        if status == 500 or status > 501:           # avant l'envoi : un client qui lit le journal dès la réponse reçue y trouve la ligne, et un envoi qui échoue ne la perd pas
+            self.log_failure(status, message)
         sent = True
         try:
             self.send_json({"error": self.hub.scrub(message)}, status)
@@ -493,8 +495,6 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection, sent = True, False
         if self.command in ("POST", "DELETE") and not self.body_taken:      # refus avant toute lecture (401, 404, route qui lève trop tôt) : le corps ne doit pas coller à la requête suivante
             self.drop_body()
-        if status == 500 or status > 501:
-            self.log_failure(status, message)
         if sent and self.close_connection:
             self.let_the_reply_arrive()
 

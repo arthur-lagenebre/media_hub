@@ -1119,15 +1119,42 @@ class TestNativeToken(unittest.TestCase):
         with mock.patch("hub.server.app.print") as printed, mock.patch.object(run.hub, "item", side_effect=RuntimeError("boum")):
             api.get(f"/api/item/x?token={token}", headers={"Authorization": f"Bearer {token}"})
             api.get(f"/api/item/x?%74oken={media}&a=1", headers={"Authorization": f"Bearer {token}"})       # la clé encodée ne contourne pas le masquage
-            # Le serveur répond avant d'écrire son journal : sans cette attente, le patch de print peut tomber avant la seconde ligne (échec vu sur la CI).
-            deadline = time.monotonic() + 5
-            while sum(" 500 GET " in f" {c.args[0]}" for c in printed.call_args_list) < 2 and time.monotonic() < deadline:
-                time.sleep(0.02)
         logged = " ".join(str(c.args[0]) for c in printed.call_args_list)
         self.assertIn("boum", logged)
         self.assertIn("token=***&a=1", logged)
         self.assertNotIn(token, logged)
         self.assertNotIn(media, logged)
+
+    def test_a_server_error_is_in_the_log_when_the_reply_arrives(self):
+        run, api = self.start("secret")
+        token, _ = self.tokens(api)
+        real = Handler.send_json
+
+        def slow_after_sending(handler, *args, **kwargs):
+            real(handler, *args, **kwargs)
+            time.sleep(0.5)                                      # ce qui suit l'envoi traîne : le client a déjà sa réponse
+        with mock.patch("hub.server.app.print") as printed, mock.patch.object(run.hub, "item", side_effect=RuntimeError("boum")),                 mock.patch.object(Handler, "send_json", slow_after_sending):
+            status, _, _ = api.get("/api/item/x", headers={"Authorization": f"Bearer {token}"})
+            logged = [str(c.args[0]) for c in printed.call_args_list]
+        self.assertEqual(status, 500)
+        self.assertTrue(any(line.startswith("500 GET /api/item/x") and "boum" in line for line in logged), logged)
+
+    def test_a_server_error_is_in_the_log_even_when_the_reply_cannot_be_sent(self):
+        run, api = self.start("secret")
+        token, _ = self.tokens(api)
+
+        def broken(handler, *args, **kwargs):
+            raise ConnectionResetError("le client est parti")
+        with mock.patch("hub.server.app.print") as printed, mock.patch.object(run.hub, "item", side_effect=RuntimeError("boum")),                 mock.patch.object(Handler, "send_json", broken):
+            try:
+                api.get("/api/item/x", headers={"Authorization": f"Bearer {token}"})
+            except OSError:
+                pass                                             # pas de réponse : la connexion est coupée
+            deadline = time.monotonic() + 5                      # rien n'arrive au client : on attend la ligne du journal
+            while not any("boum" in str(c.args[0]) for c in printed.call_args_list) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            logged = [str(c.args[0]) for c in printed.call_args_list]
+        self.assertTrue(any(line.startswith("500 GET /api/item/x") and "boum" in line for line in logged), logged)
 
 
 class TestSagas(ServerCase):
@@ -1621,8 +1648,9 @@ class TestScanResilience(ServerCase):
             shutil.move(str(child), str(stash / child.name))
         try:
             job = self.scan()
-            self.assertEqual((job.status, self.items("films")["total"]), ("done", 0))
-            self.assertTrue(any("ATTENTION" in line for line in job.log), list(job.log))
+            self.assertEqual((job.status, job.result["error"]), ("done", "dossier vide : volume démonté ? rien n'a été retiré"))
+            self.assertTrue(self.items("films")["total"] > 0)                # rien n'a été retiré
+            self.assertTrue(any("dossier vide" in line for line in job.log), list(job.log))
             self.assertEqual(len(self.progress_rows(entry)), 1)             # la progression n'a pas bougé
         finally:
             for child in list(stash.iterdir()):

@@ -884,7 +884,7 @@
     'Interrompue : {probed} vidéo(s) analysée(s), il en reste {left} ; la suite après la tâche qui attend.': 'Paused: {probed} video(s) analysed, {left} left; the rest after the waiting task.',
     'ffprobe est introuvable : les vidéos ne sont pas analysées (installe ffmpeg sur le serveur, voir deploy/README.md).': 'ffprobe not found: videos are not analysed (install ffmpeg on the server, see deploy/README.md).',
     '[{lib}] dossier introuvable : {path}': '[{lib}] folder not found: {path}',
-    '[{lib}] ATTENTION : plus aucun élément alors que la bibliothèque en avait {n} : volume démonté ? La progression de lecture est gardée.': '[{lib}] WARNING: no items left although the library had {n}: unmounted volume? Watch progress is kept.',
+    "[{lib}] dossier vide alors que la bibliothèque avait {n} élément(s) : volume démonté ? Rien n'a été retiré.": '[{lib}] empty folder although the library had {n} item(s): unmounted volume? Nothing was removed.',
     '[{lib}] {n} élément(s), {files} fichier(s) ({read} lu(s), {reused} repris) en {seconds} s': '[{lib}] {n} item(s), {files} file(s) ({read} read, {reused} reused) in {seconds} s',
     "  {title} : série introuvable sur TMDB": '  {title}: series not found on TMDB',
     "    /!\\ {doubt} : à vérifier sur la fiche (Changer la fiche TMDB)": '    /!\\ {doubt}: to check on the page (Change TMDB entry)',
