@@ -2082,6 +2082,24 @@ class TestArtistPhotoCrop(UiCase):
         self.page.wait_for_selector(".menu.crop", state="detached")
 
 
+class TestArtistSheetGenres(UiCase):
+    """La ligne des genres de la fiche d'un artiste ne porte que des genres : la description courte de MusicBrainz va avec les faits."""
+
+    def setUp(self):
+        super().setUp()
+        db = self.run_.hub.db
+        self.artist, undo = give_artist_a_sheet(db)
+        self.addCleanup(undo)
+        sheet = db.kv_get(f"artist:{ARTIST_MBID}")
+        db.kv_set(f"artist:{ARTIST_MBID}", {**sheet, "info": {**sheet["info"], "disambiguation": "duo électro français"}})
+
+    def test_the_genre_line_holds_only_genres_and_the_disambiguation_joins_the_facts(self):
+        self.open(f"#/artist/musique/{self.artist}")
+        self.view(".info .genres").wait_for()
+        self.assertEqual(self.view(".info .genres").inner_text(), "Electronic")
+        self.assertIn("duo électro français", self.view(".info p.meta").first.inner_text())
+
+
 class TestArtistLinks(UiCase):
     """La section « Liens » de la fiche d'un artiste : l'administrateur retire et ajoute des liens ; une télé et un compte ordinaire ne font que les lire."""
 
