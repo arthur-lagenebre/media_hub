@@ -19,8 +19,8 @@ class Stop(Exception):
     """Fait sortir la boucle infinie du fil."""
 
 
-def hub(hours, busy=False):
-    return types.SimpleNamespace(cfg=types.SimpleNamespace(autoscan_hours=hours), jobs=mock.Mock(busy=mock.Mock(return_value=busy)))
+def hub(hours, blocking=False):
+    return types.SimpleNamespace(cfg=types.SimpleNamespace(autoscan_hours=hours), jobs=mock.Mock(blocking=mock.Mock(return_value=blocking), busy=mock.Mock(return_value=True)))
 
 
 class TestAutoscan(unittest.TestCase):
@@ -48,7 +48,7 @@ class TestAutoscan(unittest.TestCase):
         fake.jobs.scan_all.assert_called_once_with()
 
     def test_a_scan_already_running_is_not_doubled(self):
-        fake = hub(1, busy=True)
+        fake = hub(1, blocking=True)
         loop = self.start(fake)
         with mock.patch.object(app.time, "sleep", side_effect=[None, Stop]), self.assertRaises(Stop):
             loop()

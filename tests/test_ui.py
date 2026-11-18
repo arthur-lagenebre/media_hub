@@ -1427,6 +1427,29 @@ class TestChapters(UiCase):
             self.assertGreaterEqual(skip["height"], 40, size)
             self.assertEqual(self.button.get_attribute("aria-label"), "Chapitres")
 
+    def test_a_long_title_without_spaces_stays_inside_the_list(self):
+        self.playing("Direct", [chapter(0, 30, "x" * 120), chapter(30, 60, "Suite")])
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.open_list()
+        out = self.page.evaluate("""() => { var l = document.querySelector('.veil .menu-list'), m = document.querySelector('.veil .menu').getBoundingClientRect(), d = document.querySelector('.veil .opt .det').getBoundingClientRect();
+            return { overflow: l.scrollWidth - l.clientWidth, inside: d.left >= m.left && d.right <= m.right }; }""")
+        self.assertEqual(out, {"overflow": 0, "inside": True})
+
+    def test_the_button_never_covers_a_long_subtitle(self):
+        """La zone des sous-titres est remplie à la main : le film d'essai n'a pas de réplique aussi longue."""
+        self.playing("Direct", [chapter(0, 60, "Intro", "intro")])
+        expect(self.skip).to_be_visible()
+        line = "Une longue réplique de sous-titre qui occupe presque toute la largeur de l'image pendant le générique"
+        self.page.evaluate("t => { document.querySelector('.player .cue').style.transition = 'none'; document.querySelector('.player .skip').style.transition = 'none'; document.querySelector('.player .cue').textContent = t; }", line)
+        apart = """() => { var r = document.createRange(); r.selectNodeContents(document.querySelector('.player .cue')); var a = r.getBoundingClientRect(), b = document.querySelector('.player .skip').getBoundingClientRect();
+            return !(a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom); }"""
+        self.controls_gone()
+        self.page.wait_for_function(apart, timeout=5000)
+        for size in ({"width": 1920, "height": 1080}, {"width": 390, "height": 844}, {"width": 844, "height": 390}):
+            self.page.set_viewport_size(size)
+            self.controls()
+            self.page.wait_for_function(apart, timeout=5000)
+
 
 class TestVideoResume(UiCase):
     """Reprendre un film dont le son est converti : l'image est recopiée, le flux ne peut partir que d'une image clé, et le lecteur compte sa position depuis celle-là (sinon l'horloge et les sous-titres glissent)."""
@@ -2755,7 +2778,7 @@ class TestAdminStatusTab(UiCase):
 
     def setUp(self):
         super().setUp()
-        self.activity = {"version": "9.9.9", "uptime": 5400, "busy": False, "streams": 0, "max_streams": 2,
+        self.activity = {"version": "9.9.9", "uptime": 5400, "busy": False, "blocking": False, "streams": 0, "max_streams": 2,
                          "counts": {"playing": 0, "downloads": 0, "uploads": 0, "remux": 0, "transcodes": 0, "backups": 0}, "transfers": [], "decisions": []}
         self.calls, self.held, self.hold, self.failing = [], [], False, False
         self.page.route("**/api/activity", self.answer)
@@ -2802,9 +2825,16 @@ class TestAdminStatusTab(UiCase):
         expect(self.fact("Flux ffmpeg")).to_have_text("0 sur 2")
 
     def test_a_running_task_changes_the_message(self):
-        self.activity["busy"] = True
+        self.activity["busy"] = self.activity["blocking"] = True
         self.open_status()
         expect(self.message()).to_have_text("Personne ne lit ni ne télécharge, mais une tâche est en cours.", timeout=20000)
+        expect(self.fact("Tâches")).to_have_text("en cours")
+
+    def test_the_video_analysis_alone_does_not_prevent_a_restart(self):
+        """Elle reprend d'elle-même au démarrage, sans rien perdre : la ligne « Tâches » la montre, le message ne la compte pas."""
+        self.activity["busy"] = True
+        self.open_status()
+        expect(self.message()).to_have_text("Personne ne lit ni ne télécharge : le serveur peut être relancé.", timeout=20000)
         expect(self.fact("Tâches")).to_have_text("en cours")
 
     def test_a_transfer_appears_and_goes_without_reloading(self):
@@ -3099,7 +3129,7 @@ class TestAdminStatusTab(UiCase):
         self.page.evaluate("window.before = document.querySelector('[data-etat=decisions] [data-detail]')")
         bump["n"] = 7
         with self.page.expect_request(lambda r: r.url.endswith("/api/state"), timeout=20000):
-            self.activity["busy"] = True                                                                  # le changement de `busy` relit l'état et les tâches
+            self.activity["busy"] = self.activity["blocking"] = True                                      # le changement de `busy` relit l'état et les tâches
         expect(self.message()).to_have_text("Personne ne lit ni ne télécharge, mais une tâche est en cours.", timeout=20000)
         self.page.wait_for_timeout(500)
         self.assertFalse(self.page.evaluate("window.before.isConnected"))                                  # la page a bien été redessinée

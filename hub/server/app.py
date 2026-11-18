@@ -202,7 +202,7 @@ class Hub:
         def loop():
             while True:
                 time.sleep(hours * 3600)
-                if not self.jobs.busy():
+                if not self.jobs.blocking():
                     self.jobs.scan_all()
         threading.Thread(target=loop, name="autoscan", daemon=True).start()
 
@@ -3030,7 +3030,7 @@ def api_activity(h, m, q):
     """Ce qui se passe en ce moment, pour savoir si le serveur peut être relancé sans couper quelqu'un : administrateur seulement. Ni chemin, ni adresse de client, ni secret (voir activity.py)."""
     require_admin(h)
     hub = h.hub
-    h.send_json({"version": __version__, "uptime": int(max(0, time.time() - hub.started)), "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams, **hub.activity.report()})
+    h.send_json({"version": __version__, "uptime": int(max(0, time.time() - hub.started)), "busy": hub.jobs.busy(), "blocking": hub.jobs.blocking(), "streams": hub.active, "max_streams": hub.cfg.max_streams, **hub.activity.report()})
 
 
 @route("POST", r"/api/scan")

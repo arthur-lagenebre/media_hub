@@ -687,7 +687,7 @@ Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, te
 `GET /api/activity` : **administrateur seulement** (403 `réservé à l'administrateur` sinon, 401 sans session). Ce que fait le hub en ce moment, pour savoir si on peut relancer le serveur sans couper quelqu'un, et la trace des dernières décisions de lecture pour comprendre « ça ne marche pas sur la télé du salon » sans l'appareil. Tout est **en mémoire** : rien n'est écrit dans la base, rien ne survit à un redémarrage.
 
 ```json
-{"version": "1.2.3", "uptime": 5400, "busy": false, "streams": 1, "max_streams": 2,
+{"version": "1.2.3", "uptime": 5400, "busy": false, "blocking": false, "streams": 1, "max_streams": 2,
  "counts": {"playing": 2, "downloads": 0, "uploads": 0, "remux": 0, "transcodes": 1, "backups": 0},
  "transfers": [{"user": "alice", "title": "Dark · Épisode 1", "library": "series", "kind": "transcode", "origin": "remote", "agent": "Chrome 120 · Android",
                 "started": 1731900000, "last": 1731900123, "bytes": 52428800, "connections": 1, "device": "phone"}],
@@ -699,6 +699,7 @@ Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, te
 | --- | --- |
 | `version`, `uptime` | version du hub ; secondes depuis son démarrage |
 | `busy` | une tâche de fond tourne ou attend (comme `busy` de `GET /api/state`) |
+| `blocking` | une tâche **autre que l'analyse des vidéos** tourne ou attend : l'analyse reprend d'elle-même au démarrage, elle n'empêche pas de relancer le serveur |
 | `streams`, `max_streams` | les flux ffmpeg en cours et leur plafond (`HUB_MAX_STREAMS`) : le même sens que dans `GET /api/state` |
 | `counts` | le nombre de lignes de `transfers` par genre : `playing` (lectures : `direct`, `audio`, `remux` et `transcode`), `downloads`, `uploads`, `remux`, `transcodes`, `backups` |
 | `transfers` | une ligne par (compte, fichier transféré, genre, client) : voir ci-dessous. Les tâches de fond et les bibliothèques ne sont pas recopiées ici : `GET /api/jobs` et `libraries` de `GET /api/state` |

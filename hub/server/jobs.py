@@ -23,6 +23,7 @@ from ..scan.common import is_album_cover
 
 LOG_LINES = 400
 PROBE_LABEL = "Analyse des vidéos"
+PROBE_KEY = ("probe",)
 
 
 class Job:
@@ -114,7 +115,7 @@ class Jobs:
             if result["interrupted"]:
                 self.probe(again=True)
             return result
-        return self._submit(PROBE_LABEL, run, ("probe",), again)
+        return self._submit(PROBE_LABEL, run, PROBE_KEY, again)
 
     def enrich(self, lib, force=False):
         return self._submit(f"Enrichissement TMDB · {labels.shown(self.db, lib)}", self._then_ratings(enrich.enrich_shows, lib, force), ("enrich", lib.id))
@@ -158,6 +159,10 @@ class Jobs:
     def busy(self):
         return any(j.status in ("waiting", "running") for j in self.history)
 
+    def blocking(self):
+        """Une tâche autre que l'analyse des vidéos tourne ou attend. L'analyse peut durer des heures, mais elle cède la place à toute tâche mise en file et reprend d'elle-même après un redémarrage : elle n'empêche ni le scan automatique ni de relancer le serveur."""
+        return any(j.status in ("waiting", "running") and j.key != PROBE_KEY for j in list(self.history))
+
 
 def probe_key(row):
     """Ce qui reconnaît un fichier tel qu'il était quand ffprobe a échoué : changé (taille, date), il sera réessayé."""
@@ -189,7 +194,7 @@ def probe_one(ffprobe, db, row, path, log):
 def probe_videos(cfg, db, log, unreadable, stop=lambda: False):
     """Sonde (ffprobe) les vidéos qui ne l'ont pas encore été, ou par une version plus ancienne, une par une : la fiche en tire qualité d'image et langues sans attendre la première lecture. Rend {probed, failed, left, interrupted}.
 
-    Un fichier illisible est dit au journal, noté dans `unreadable` et n'arrête rien ; sans ffprobe, rien n'est sondé et rien n'échoue. `stop()` est demandé avant chaque fichier : vrai, on s'arrête là (`interrupted`)."""
+    Un fichier illisible est dit au journal, noté dans `unreadable` s'il existe (absent, il peut être sur un volume pas encore monté : la prochaine analyse le reprend) et n'arrête rien ; sans ffprobe, rien n'est sondé et rien n'échoue. `stop()` est demandé avant chaque fichier : vrai, on s'arrête là (`interrupted`)."""
     todo = unprobed(cfg, db, unreadable)
     if not todo:
         log("Aucune vidéo à analyser.")
@@ -207,7 +212,8 @@ def probe_videos(cfg, db, log, unreadable, stop=lambda: False):
         if probe_one(cfg.ffprobe, db, row, path, log):
             probed += 1
         else:
-            unreadable.add(probe_key(row))
+            if path.exists():
+                unreadable.add(probe_key(row))
             failed += 1
     log(f"{probed} vidéo(s) analysée(s)" + (f", {failed} illisible(s)." if failed else "."))
     return {"probed": probed, "failed": failed, "left": 0, "interrupted": False}

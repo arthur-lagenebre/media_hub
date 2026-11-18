@@ -266,8 +266,23 @@ class TestProbeVideos(unittest.TestCase):
             result, calls = self.run_probe()
             self.assertEqual((result["probed"], len(calls), probe_column(self.db)["a-v"]), (1, 1, json.dumps(SUMMARY)), text)
 
+    def put_file(self, name):
+        path = self.root / "lib" / name / f"{name}-v"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"film")
+
+    def test_a_file_that_is_missing_is_tried_again_when_it_comes_back(self):
+        videos(self.db, "a")
+        self.store(json.dumps(OLD_SUMMARY))
+        result, _ = self.run_probe(mock.Mock(side_effect=ProbeError("introuvable")))
+        self.assertEqual((result["failed"], self.unreadable), (1, set()))                 # un volume pas encore monté ne dit rien du fichier
+        self.put_file("a")
+        result, calls = self.run_probe()
+        self.assertEqual((result["probed"], len(calls), probe_column(self.db)["a-v"]), (1, 1, json.dumps(SUMMARY)))
+
     def test_a_failure_keeps_the_old_summary_and_is_not_tried_again(self):
         videos(self.db, "a")
+        self.put_file("a")
         old = json.dumps(OLD_SUMMARY)
         self.store(old)
         result, calls = self.run_probe(mock.Mock(side_effect=ProbeError("abîmé")))
@@ -303,6 +318,7 @@ class TestProbeVideos(unittest.TestCase):
 
     def test_an_unreadable_file_is_not_tried_again_until_it_changes(self):
         videos(self.db, "a")
+        self.put_file("a")
         self.run_probe(mock.Mock(side_effect=ProbeError("abîmé")))
         result, calls = self.run_probe()
         self.assertEqual((result["probed"], calls), (0, []))
@@ -417,6 +433,26 @@ class TestProbeJob(unittest.TestCase):
             self.idle()
         self.assertEqual(self.labels()[0], "Mise à jour · Films")
         self.assertEqual(set(probe_column(self.db).values()), {json.dumps(SUMMARY)})
+
+    def test_the_analysis_alone_blocks_nothing_but_any_other_task_does(self):
+        videos(self.db, "a")
+        started, go = threading.Event(), threading.Event()
+
+        def answer(ffprobe, path):
+            started.set()
+            go.wait(10)
+            return SUMMARY
+
+        self.assertFalse(self.jobs.blocking())
+        with mock.patch.object(jobs.prober, "run_ffprobe", side_effect=answer):
+            self.jobs.probe()
+            started.wait(10)
+            self.assertEqual((self.jobs.busy(), self.jobs.blocking()), (True, False))
+            self.jobs._submit("autre", lambda log: None)
+            self.assertTrue(self.jobs.blocking())
+            go.set()
+            self.idle()
+        self.assertFalse(self.jobs.blocking())
 
     def test_the_probe_asked_by_hand_does_not_fail_without_ffprobe(self):
         videos(self.db, "a")

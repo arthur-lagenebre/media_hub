@@ -318,7 +318,7 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .opt:last-child { margin-bottom: 0; }
 .opt:focus, .opt:hover:not(:disabled) { background: #2a343e; border-color: var(--accent); }
 .opt .mark { width: 1.7rem; color: var(--accent); }
-.opt .lbl { flex: 1; }
+.opt .lbl { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .opt .det { color: var(--mute); font-size: 0.85rem; margin-left: 1rem; }
 .opt.on { font-weight: 700; }
 .opt:disabled { opacity: 0.45; }
@@ -423,6 +423,9 @@ body.has-audio #toast { bottom: 6rem; }
 .player .skip { position: absolute; right: var(--gut); bottom: 9%; padding: 0.75rem 1.3rem; background: var(--text); color: var(--on-accent); box-shadow: 0 0.15rem 0.8rem rgba(0, 0, 0, 0.55); transition: bottom 0.15s; }
 .player:not(.idle) .skip { bottom: 9rem; bottom: max(24%, 9rem); }
 .player .skip:focus { outline-width: 0.3rem; }
+/* Tant qu'il est là, les sous-titres passent au-dessus de lui : sur un téléphone, il n'y a pas la place de les mettre à côté. */
+.player.skipping .cue { bottom: calc(9% + 3.6rem); }
+.player.skipping:not(.idle) .cue { bottom: 12.6rem; bottom: max(calc(24% + 3.6rem), 12.6rem); }
 .spin { position: absolute; top: 50%; left: 50%; width: 3.6rem; height: 3.6rem; margin: -1.8rem 0 0 -1.8rem; pointer-events: none; }
 .spin i { display: block; width: 100%; height: 100%; border-radius: 50%; border: 0.3rem solid rgba(255, 255, 255, 0.25); border-top-color: var(--accent); animation: turn 0.9s linear infinite; }
 @keyframes turn { to { transform: rotate(360deg); } }

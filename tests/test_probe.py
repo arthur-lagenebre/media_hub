@@ -169,16 +169,18 @@ class TestChapters(unittest.TestCase):
 class TestChapterSkip(unittest.TestCase):
     def test_the_titles_of_an_introduction(self):
         for title in ("Intro", "INTRO", "intro", "Introduction", "L'introduction", "L’intro", "Opening", "Opening Credits", "opening_credits", "OP", "op", "OP 1", "OP1", "OP-2",
-                      "Générique de début", "GÉNÉRIQUE DE DÉBUT", "generique de debut", "Générique du début", "Générique-de-début", "Intro - Partie 1", "01. Intro"):
+                      "Générique de début", "GÉNÉRIQUE DE DÉBUT", "generique de debut", "Générique du début", "Générique-de-début", "Intro - Partie 1", "01. Intro",
+                      "OPENING", "Opening 2", "Opening-1", "Générique d'ouverture", "Générique d’ouverture", "Générique de l’ouverture"):
             self.assertEqual(prober.chapter_skip(title), "intro", title)
 
     def test_the_titles_of_the_credits(self):
-        for title in ("Credits", "CREDITS", "End Credits", "End-Credits", "Ending", "ED", "ed", "ED 2", "ED2", "Outro", "Générique", "GÉNÉRIQUE", "generique", "Générique de fin", "Générique-de-fin", "12 - Credits"):
+        for title in ("Credits", "CREDITS", "End Credits", "End-Credits", "Ending", "ED", "ed", "ED 2", "ED2", "Outro", "Générique", "GÉNÉRIQUE", "generique", "Générique de fin", "Générique-de-fin", "12 - Credits", "ENDING", "Ending 2", "Ending Credits"):
             self.assertEqual(prober.chapter_skip(title), "credits", title)
 
     def test_the_false_friends(self):
         for title in ("", "Chapitre 1", "Reintroduction", "Réintroduction", "Re-introduction", "Introductions", "Introducing", "Sending", "Pending", "Bending the rules", "Credit Suisse", "Credit", "Accredits",
-                      "Discredits", "Reopening", "Pré-générique", "Génériques", "Outros", "Scoop", "Top", "Stop", "OP Art", "Le OP", "OP 1 bis", "Ed Wood", "Red", "Ted", "Mr. Ed", "ED 2 fin", "Edition", "Opera"):
+                      "Discredits", "Reopening", "Pré-générique", "Génériques", "Outros", "Scoop", "Top", "Stop", "OP Art", "Le OP", "OP 1 bis", "Ed Wood", "Red", "Ted", "Mr. Ed", "ED 2 fin", "Edition", "Opera",
+                      "The Opening", "Opening Scene", "Opening Night", "Opening 2 bis", "The Ending", "Happy Ending", "Ending Scene", "Never Ending"):
             self.assertIsNone(prober.chapter_skip(title), title)
 
 

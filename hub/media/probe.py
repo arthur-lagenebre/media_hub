@@ -27,10 +27,11 @@ MAX_CHAPTER_TITLE = 120
 # Sur un titre sans casse ni accents (voir chapter_skip). Un mot entier, et un trait d'union le prolonge : « Pré-générique » et « Re-introduction » ne sont pas des génériques.
 # L'introduction d'abord : « Opening Credits » et « Générique de début » contiennent un mot du générique de fin.
 WHOLE_WORDS = r"(?<![\w-])(?:{})(?![\w-])"
-SKIP_TITLES = (("intro", re.compile(WHOLE_WORDS.format(r"intro|introduction|opening(?:[ -]credits)?|generique[ -]d[eu][ -]debut"))),
-               ("credits", re.compile(WHOLE_WORDS.format(r"(?:end[ -])?credits|ending|outro|generique(?:[ -]de[ -]fin)?"))))
-SHORT_SKIP_TITLE = re.compile(r"(op|ed)(?:[ -]?\d+)?")          # trop courts pour être cherchés dans une phrase : seulement quand ils sont tout le titre
-SHORT_SKIPS = {"op": "intro", "ed": "credits"}
+SKIP_TITLES = (("intro", re.compile(WHOLE_WORDS.format(r"intro|introduction|opening[ -]credits|generique[ -](?:d[eu][ -]debut|(?:d|de[ -]l)[ -]ouverture)"))),
+               ("credits", re.compile(WHOLE_WORDS.format(r"(?:end[ -])?credits|outro|generique(?:[ -]de[ -]fin)?"))))
+# Seulement quand ils sont tout le titre, éventuellement suivis d'un numéro : OP et ED sont trop courts, et « Opening Scene » ou « The Ending » sont de vraies scènes du film.
+ALONE_SKIP_TITLE = re.compile(r"(op|opening|ed|ending)(?:[ -]?\d+)?")
+ALONE_SKIPS = {"op": "intro", "opening": "intro", "ed": "credits", "ending": "credits"}
 
 
 class ProbeError(Exception):
@@ -143,9 +144,9 @@ def chapter_skip(title):
     """Ce qu'un chapitre de ce titre permet de passer : "intro", "credits" ou None. Des mots entiers, sans tenir compte de la casse ni des accents."""
     bare = "".join(c for c in unicodedata.normalize("NFKD", title) if not unicodedata.combining(c)).casefold()
     words = re.sub(r"(?:[^\w-]|_)+", " ", bare).strip()
-    short = SHORT_SKIP_TITLE.fullmatch(words)
-    if short:
-        return SHORT_SKIPS[short.group(1)]
+    alone = ALONE_SKIP_TITLE.fullmatch(words)
+    if alone:
+        return ALONE_SKIPS[alone.group(1)]
     return next((skip for skip, pattern in SKIP_TITLES if pattern.search(words)), None)
 
 

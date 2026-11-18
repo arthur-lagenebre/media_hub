@@ -343,6 +343,7 @@
       var key = c ? c.skip + '@' + c.start : '';
       if (key === skipShown) return;
       skipShown = key;
+      el.classList.toggle('skipping', !!c);          // les sous-titres montent au-dessus du bouton (style.css)
       if (c) { bSkip.querySelector('.lbl').textContent = SKIPS[c.skip]; bSkip.hidden = false; return; }
       var focused = document.activeElement === bSkip;
       if (focused) bSkip.blur();
