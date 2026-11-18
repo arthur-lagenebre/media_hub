@@ -2308,7 +2308,7 @@ def api_entry_seen(h, m, q):
 # Lecture vidéo
 # ---------------------------------------------------------------------------
 def probe_of(hub, entry):
-    """Le résumé ffprobe d'un fichier, lu une fois et gardé dans la base."""
+    """Le résumé ffprobe d'un fichier, lu une fois et gardé dans la base. Un résumé d'une version plus ancienne sert tel quel (sans chapitres) : c'est l'analyse en fond qui le refait, jamais la lecture."""
     cached = safe_json(entry["probe"], None)
     if cached:
         return cached
@@ -2495,6 +2495,7 @@ def api_play(h, m, q):
         "subs": subs,
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
         "next": play_next(hub, entry),
+        "chapters": probe.get("chapters", []),
     })
 
 

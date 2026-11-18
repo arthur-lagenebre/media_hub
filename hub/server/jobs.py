@@ -97,13 +97,17 @@ class Jobs:
         """La tâche qui fait `first` (un scan) puis met en file l'analyse des vidéos, s'il en reste à sonder et que ffprobe est là : une tâche à part, pour que le scan rende la main tout de suite."""
         def run(log):
             result = first(log)
-            if self.cfg.ffprobe and unprobed(self.cfg, self.db, self.unreadable):
-                self.probe()
+            self.probe_pending()
             return result
         return run
 
+    def probe_pending(self):
+        """Met l'analyse des vidéos en file s'il reste à sonder et que ffprobe est là : après un scan, et au démarrage (sondes d'une version plus ancienne, analyse interrompue par un arrêt)."""
+        if self.cfg.ffprobe and unprobed(self.cfg, self.db, self.unreadable):
+            self.probe()
+
     def probe(self, again=False):
-        """L'analyse des vidéos pas encore sondées (voir probe_videos). Elle peut durer (une médiathèque entière la première fois) : dès qu'une autre tâche attend, elle s'arrête entre deux fichiers
+        """L'analyse des vidéos pas encore sondées ou sondées par une version plus ancienne (voir probe_videos). Elle peut durer (une médiathèque entière la première fois) : dès qu'une autre tâche attend, elle s'arrête entre deux fichiers
         et se remet en file derrière elle. Ce qui est sondé est déjà dans la base : la reprise ne refait rien."""
         def run(log):
             result = probe_videos(self.cfg, self.db, log, self.unreadable, stop=lambda: not self.queue.empty())
@@ -160,15 +164,20 @@ def probe_key(row):
     return row["id"], row["size"], row["mtime"]
 
 
+# À sonder : pas de résumé, un résumé illisible, ou d'une version plus ancienne. CASE : json_type et json_extract lèvent une erreur sur un texte qui n'est pas du JSON, et seul CASE garantit qu'ils ne le voient pas.
+UNPROBED_SQL = ("SELECT id, lib, rel, size, mtime FROM entries WHERE kind='video' AND CASE WHEN json_valid(probe) "
+                "THEN json_type(probe, '$.probe_version') IS NOT 'integer' OR json_extract(probe, '$.probe_version') < ? ELSE 1 END ORDER BY lib, rel")
+
+
 def unprobed(cfg, db, unreadable=()):
-    """[(ligne, chemin)] des vidéos des bibliothèques configurées que personne n'a encore sondées (ni à la lecture, ni ici), sans celles que ffprobe n'a pas su lire."""
+    """[(ligne, chemin)] des vidéos des bibliothèques configurées à sonder (voir UNPROBED_SQL), sans celles que ffprobe n'a pas su lire."""
     libs = {lib.id: lib for lib in cfg.libraries}
-    rows = db.query("SELECT id, lib, rel, size, mtime FROM entries WHERE kind='video' AND probe IS NULL ORDER BY lib, rel")
+    rows = db.query(UNPROBED_SQL, (prober.PROBE_VERSION,))
     return [(row, Path(libs[row["lib"]].path) / row["rel"]) for row in rows if row["lib"] in libs and probe_key(row) not in unreadable]
 
 
 def probe_one(ffprobe, db, row, path, log):
-    """Sonde un fichier et garde son résumé dans la base ; faux (et une ligne au journal) si ffprobe ne sait pas le lire."""
+    """Sonde un fichier et garde son résumé dans la base ; faux (et une ligne au journal) si ffprobe ne sait pas le lire : le résumé déjà gardé reste alors tel quel."""
     try:
         db.set_probe(row["id"], prober.run_ffprobe(ffprobe, path))
         return True
@@ -178,7 +187,7 @@ def probe_one(ffprobe, db, row, path, log):
 
 
 def probe_videos(cfg, db, log, unreadable, stop=lambda: False):
-    """Sonde (ffprobe) les vidéos qui ne l'ont pas encore été, une par une : la fiche en tire qualité d'image et langues sans attendre la première lecture. Rend {probed, failed, left, interrupted}.
+    """Sonde (ffprobe) les vidéos qui ne l'ont pas encore été, ou par une version plus ancienne, une par une : la fiche en tire qualité d'image et langues sans attendre la première lecture. Rend {probed, failed, left, interrupted}.
 
     Un fichier illisible est dit au journal, noté dans `unreadable` et n'arrête rien ; sans ffprobe, rien n'est sondé et rien n'échoue. `stop()` est demandé avant chaque fichier : vrai, on s'arrête là (`interrupted`)."""
     todo = unprobed(cfg, db, unreadable)

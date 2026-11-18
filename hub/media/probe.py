@@ -11,13 +11,26 @@ Le client annonce ce qu'il sait lire (`caps`), le serveur décide. Un i3-13100F 
 from __future__ import annotations
 
 import json
+import math
+import re
 import subprocess
+import unicodedata
 
 # Codec ffprobe -> nom que le client utilise dans ses capacités
 VIDEO_NAMES = {"h264": "h264", "hevc": "hevc", "vp9": "vp9", "av1": "av1", "vp8": "vp8", "mpeg4": "mpeg4"}
 AUDIO_NAMES = {"aac": "aac", "mp3": "mp3", "opus": "opus", "vorbis": "vorbis", "flac": "flac", "ac3": "ac3", "eac3": "eac3", "dts": "dts", "truehd": "truehd", "alac": "alac"}
 TEXT_SUBS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text", "microdvd", "subviewer"}
 CONTAINER_FAMILY = (("matroska", "mkv"), ("webm", "webm"), ("mov", "mp4"), ("mp4", "mp4"), ("avi", "avi"))
+PROBE_VERSION = 1           # à monter quand le résumé gagne ce qu'une sonde plus ancienne n'a pas : l'analyse en fond refait alors les anciennes (voir jobs.unprobed). Sans ce champ : avant les chapitres
+MAX_CHAPTERS = 200          # le résumé est gardé en base et relu avec chaque fichier : un fichier ne doit pas pouvoir le gonfler
+MAX_CHAPTER_TITLE = 120
+# Sur un titre sans casse ni accents (voir chapter_skip). Un mot entier, et un trait d'union le prolonge : « Pré-générique » et « Re-introduction » ne sont pas des génériques.
+# L'introduction d'abord : « Opening Credits » et « Générique de début » contiennent un mot du générique de fin.
+WHOLE_WORDS = r"(?<![\w-])(?:{})(?![\w-])"
+SKIP_TITLES = (("intro", re.compile(WHOLE_WORDS.format(r"intro|introduction|opening(?:[ -]credits)?|generique[ -]d[eu][ -]debut"))),
+               ("credits", re.compile(WHOLE_WORDS.format(r"(?:end[ -])?credits|ending|outro|generique(?:[ -]de[ -]fin)?"))))
+SHORT_SKIP_TITLE = re.compile(r"(op|ed)(?:[ -]?\d+)?")          # trop courts pour être cherchés dans une phrase : seulement quand ils sont tout le titre
+SHORT_SKIPS = {"op": "intro", "ed": "credits"}
 
 
 class ProbeError(Exception):
@@ -28,7 +41,7 @@ def run_ffprobe(ffprobe, path):
     if not ffprobe:
         raise ProbeError("ffprobe est introuvable : installe ffmpeg sur le serveur (voir deploy/README.md).")
     try:
-        done = subprocess.run([ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)], capture_output=True, timeout=60)
+        done = subprocess.run([ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", str(path)], capture_output=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as e:
         raise ProbeError(f"ffprobe a échoué : {e}")
     if done.returncode != 0:
@@ -64,7 +77,8 @@ def _fps(text):
 
 
 def _tags(stream):
-    return {k.lower(): v for k, v in (stream.get("tags") or {}).items()}
+    tags = stream.get("tags")
+    return {k.lower(): v for k, v in tags.items()} if isinstance(tags, dict) else {}
 
 
 def _container(names):
@@ -114,13 +128,64 @@ def _main_video(streams):
     return next((s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
 
 
+def _seconds(value):
+    """Une position en secondes, à la milliseconde ; None pour ce qui n'en est pas une (absent, texte, booléen, nan, infini, négatif)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return round(seconds, 3) + 0.0 if math.isfinite(seconds) and seconds >= 0 else None          # + 0.0 : « -0 » devient 0
+
+
+def chapter_skip(title):
+    """Ce qu'un chapitre de ce titre permet de passer : "intro", "credits" ou None. Des mots entiers, sans tenir compte de la casse ni des accents."""
+    bare = "".join(c for c in unicodedata.normalize("NFKD", title) if not unicodedata.combining(c)).casefold()
+    words = re.sub(r"(?:[^\w-]|_)+", " ", bare).strip()
+    short = SHORT_SKIP_TITLE.fullmatch(words)
+    if short:
+        return SHORT_SKIPS[short.group(1)]
+    return next((skip for skip, pattern in SKIP_TITLES if pattern.search(words)), None)
+
+
+def _chapter_end(chapter, start, following, duration):
+    """La fin d'un chapitre : la sienne si elle vient après son début, sinon le début du suivant, sinon la fin du fichier ; jamais au-delà du fichier. None si rien ne la donne."""
+    end = _seconds(chapter.get("end_time"))
+    if end is None or end <= start:
+        end = duration if following is None else following
+    end = min(end, duration) if duration else end
+    return end if end > start else None
+
+
+def _chapter(chapter, start, end):
+    title = _tags(chapter).get("title")
+    title = " ".join(title.split())[:MAX_CHAPTER_TITLE] if isinstance(title, str) else ""
+    return {"title": title, "start": start, "end": end, "skip": chapter_skip(title)}
+
+
+def _chapters(raw, duration):
+    """Les chapitres utilisables, par début croissant, deux n'ayant jamais le même début. Ce qui ne donne pas un début valable dans le fichier est écarté, sans erreur.
+    `duration` : 0 si le fichier ne la dit pas ; rien n'est alors ramené, et un dernier chapitre sans fin est écarté."""
+    by_start = {}
+    for chapter in raw if isinstance(raw, list) else ():
+        start = _seconds(chapter.get("start_time")) if isinstance(chapter, dict) else None
+        if start is not None and (not duration or start < duration):
+            by_start.setdefault(start, chapter)
+    starts = sorted(by_start)[:MAX_CHAPTERS + 1]                 # un de plus : le dernier gardé peut finir au début du suivant
+    ends = [_chapter_end(by_start[start], start, following, duration) for start, following in zip(starts, starts[1:] + [None])]
+    return [_chapter(by_start[start], start, end) for start, end in zip(starts[:MAX_CHAPTERS], ends) if end is not None]
+
+
 def summarize(data):
-    """La sortie de ffprobe réduite à ce qui décide de la lecture. Ce résumé est ce qu'on garde dans la base."""
+    """La sortie de ffprobe réduite à ce qui décide de la lecture, avec les chapitres. Ce résumé est ce qu'on garde dans la base, sous le numéro PROBE_VERSION."""
     streams = data.get("streams") or []
     video = _main_video(streams)
-    return {**_format(data.get("format") or {}), "video": _video(video) if video else None,
+    fmt = _format(data.get("format") or {})
+    return {**fmt, "video": _video(video) if video else None,
             "audio": [_audio(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "audio")],
-            "subs": [_sub(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "subtitle")]}
+            "subs": [_sub(i, s) for i, s in enumerate(x for x in streams if x.get("codec_type") == "subtitle")],
+            "chapters": _chapters(data.get("chapters"), _seconds(fmt["duration"]) or 0.0), "probe_version": PROBE_VERSION}
 
 
 def default_audio(probe):

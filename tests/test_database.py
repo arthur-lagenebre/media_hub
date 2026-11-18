@@ -388,6 +388,28 @@ class TestDerived(TempCase):
         self.db.update_item_meta("a", title="Autre")
         self.assertEqual(self.db.derived("probes", self.build, probes=True), 4)  # un scan ou un enrichissement le renouvelle aussi
 
+    def test_a_probe_that_only_adds_chapters_renews_nothing(self):
+        old = {"duration": 5.0, "video": {"width": 1920}}
+        self.db.set_probe("e1", old)
+        self.assertEqual(self.db.derived("probes", self.build, probes=True), 1)
+        new = {**old, "chapters": [{"title": "Intro", "start": 0.0, "end": 1.0, "skip": "intro"}], "probe_version": 1}
+        self.db.set_probe("e1", new)
+        self.assertEqual(self.db.derived("probes", self.build, probes=True), 1)
+        self.assertEqual(json.loads(self.db.one("SELECT probe FROM entries WHERE id='e1'")["probe"]), new)         # la sonde est écrite quand même
+
+    def test_a_probe_that_changes_anything_else_renews_what_reads_the_probes(self):
+        self.db.set_probe("e1", {"duration": 5.0, "video": {"width": 1920}})
+        self.assertEqual(self.db.derived("probes", self.build, probes=True), 1)
+        self.db.set_probe("e1", {"duration": 5.0, "video": {"width": 3840}, "probe_version": 1})
+        self.assertEqual(self.db.derived("probes", self.build, probes=True), 2)
+
+    def test_a_probe_replacing_an_unreadable_one_renews_what_reads_the_probes(self):
+        for text in ("{pas du json", "[1]"):
+            self.db.execute("UPDATE entries SET probe=? WHERE id='e1'", (text,))
+            before = self.db.derived("probes", self.build, probes=True)
+            self.db.set_probe("e1", {"duration": 5.0})
+            self.assertEqual(self.db.derived("probes", self.build, probes=True), before + 1, text)
+
 
 if __name__ == "__main__":
     unittest.main()

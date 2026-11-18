@@ -198,7 +198,9 @@ class TestTasks(JobsCase):
         self.assertEqual((job.result, scanned.call_count), (["A", "B"], 2))
 
 
-SUMMARY = {"container": "mkv", "duration": 10.0, "bitrate": 1, "size": 1, "video": {"codec": "h264", "width": 1920, "height": 1080, "hdr": False}, "audio": [], "subs": []}
+SUMMARY = {"container": "mkv", "duration": 10.0, "bitrate": 1, "size": 1, "video": {"codec": "h264", "width": 1920, "height": 1080, "hdr": False}, "audio": [], "subs": [],
+           "chapters": [], "probe_version": jobs.prober.PROBE_VERSION}
+OLD_SUMMARY = {k: v for k, v in SUMMARY.items() if k not in ("chapters", "probe_version")}          # ce que gardaient les sondes d'avant les chapitres
 
 
 def probe_cfg(root, ffprobe="ffprobe"):
@@ -231,15 +233,47 @@ class TestProbeVideos(unittest.TestCase):
             result = jobs.probe_videos(self.cfg, self.db, self.log.append, self.unreadable, stop)
         return result, [call.args for call in called.call_args_list]
 
+    def store(self, text, ident="a-v"):
+        self.db.execute("UPDATE entries SET probe=? WHERE id=?", (text, ident))          # replace_library ne garde que les sondes d'avant
+
     def test_only_the_videos_without_a_summary_are_probed(self):
-        self.db.replace_library("lib", [item("a"), item("b"), item("c", "album")],
-                                [entry("a-v", "a"), entry("b-v", "b", probe=json.dumps({"vu": 1})), entry("c-t", "c", kind="audio")])
-        self.db.execute("UPDATE entries SET probe=? WHERE id='b-v'", (json.dumps({"vu": 1}),))          # replace_library ne garde que les sondes d'avant
+        self.db.replace_library("lib", [item("a"), item("b"), item("c", "album")], [entry("a-v", "a"), entry("b-v", "b"), entry("c-t", "c", kind="audio")])
+        kept = json.dumps({"vu": 1, "probe_version": jobs.prober.PROBE_VERSION})
+        self.store(kept, "b-v")
         result, calls = self.run_probe()
         self.assertEqual(result, {"probed": 1, "failed": 0, "left": 0, "interrupted": False})
         self.assertEqual(calls, [("ffprobe", self.root / "lib" / "a" / "a-v")])
-        self.assertEqual(probe_column(self.db), {"a-v": json.dumps(SUMMARY), "b-v": json.dumps({"vu": 1}), "c-t": None})
+        self.assertEqual(probe_column(self.db), {"a-v": json.dumps(SUMMARY), "b-v": kept, "c-t": None})
         self.assertEqual(self.log, ["1 vidéo(s) à analyser.", "1 vidéo(s) analysée(s)."])
+
+    def test_a_summary_of_an_older_version_is_probed_again(self):
+        videos(self.db, "a")
+        for old in (OLD_SUMMARY, {**SUMMARY, "probe_version": jobs.prober.PROBE_VERSION - 1}):
+            self.store(json.dumps(old))
+            result, calls = self.run_probe()
+            self.assertEqual((result["probed"], len(calls), probe_column(self.db)["a-v"]), (1, 1, json.dumps(SUMMARY)), old)
+
+    def test_a_summary_up_to_date_or_from_a_newer_hub_is_left_alone(self):
+        videos(self.db, "a")
+        for version in (jobs.prober.PROBE_VERSION, jobs.prober.PROBE_VERSION + 1):
+            self.store(json.dumps({**SUMMARY, "probe_version": version}))
+            self.assertEqual(self.run_probe()[1], [], version)
+
+    def test_a_stored_summary_that_makes_no_sense_counts_as_old(self):
+        videos(self.db, "a")
+        for text in ("{pas du json", "", "[1]", "null", '"texte"', '{"probe_version": "x"}', '{"probe_version": null}', '{"probe_version": 99.5}'):
+            self.store(text)
+            result, calls = self.run_probe()
+            self.assertEqual((result["probed"], len(calls), probe_column(self.db)["a-v"]), (1, 1, json.dumps(SUMMARY)), text)
+
+    def test_a_failure_keeps_the_old_summary_and_is_not_tried_again(self):
+        videos(self.db, "a")
+        old = json.dumps(OLD_SUMMARY)
+        self.store(old)
+        result, calls = self.run_probe(mock.Mock(side_effect=ProbeError("abîmé")))
+        self.assertEqual((result["failed"], len(calls), probe_column(self.db)["a-v"]), (1, 1, old))
+        self.assertEqual(self.run_probe()[1], [])
+        self.assertEqual(jobs.unprobed(self.cfg, self.db, self.unreadable), [])
 
     def test_nothing_to_probe_says_so(self):
         result, calls = self.run_probe()
@@ -350,6 +384,39 @@ class TestProbeJob(unittest.TestCase):
         self.cfg.ffprobe = ""
         self.scan()
         self.assertEqual(self.labels(), ["Mise à jour · Films"])
+
+    def old_probe(self):
+        videos(self.db, "a")
+        self.db.execute("UPDATE entries SET probe=?", (json.dumps(OLD_SUMMARY),))
+
+    def test_at_startup_old_summaries_are_analysed_again(self):
+        self.old_probe()
+        with mock.patch.object(jobs.prober, "run_ffprobe", return_value=SUMMARY) as run:
+            self.jobs.probe_pending()
+            self.idle()
+        self.assertEqual((self.labels(), run.call_count), (["Analyse des vidéos"], 1))
+        self.assertEqual(set(probe_column(self.db).values()), {json.dumps(SUMMARY)})
+
+    def test_at_startup_nothing_is_queued_when_every_summary_is_up_to_date(self):
+        videos(self.db, "a")
+        self.db.execute("UPDATE entries SET probe=?", (json.dumps(SUMMARY),))
+        self.jobs.probe_pending()
+        self.assertEqual(self.labels(), [])
+
+    def test_at_startup_nothing_is_queued_without_ffprobe(self):
+        self.old_probe()
+        self.cfg.ffprobe = ""
+        self.jobs.probe_pending()
+        self.assertEqual(self.labels(), [])
+
+    def test_the_analysis_of_startup_runs_after_a_first_scan_already_queued(self):
+        self.old_probe()
+        with mock.patch.object(jobs.scan, "scan_library", return_value={}), mock.patch.object(jobs.prober, "run_ffprobe", return_value=SUMMARY):
+            self.jobs.scan(self.cfg.libraries[0])
+            self.jobs.probe_pending()
+            self.idle()
+        self.assertEqual(self.labels()[0], "Mise à jour · Films")
+        self.assertEqual(set(probe_column(self.db).values()), {json.dumps(SUMMARY)})
 
     def test_the_probe_asked_by_hand_does_not_fail_without_ffprobe(self):
         videos(self.db, "a")

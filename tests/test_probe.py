@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -25,7 +28,7 @@ def info(container="mp4", bitrate=4_000_000, tracks=None, **video):
 
 class TestSummarize(unittest.TestCase):
     def test_an_empty_answer_is_an_empty_file(self):
-        self.assertEqual(prober.summarize({}), {"container": "", "duration": 0.0, "bitrate": 0, "size": 0, "video": None, "audio": [], "subs": []})
+        self.assertEqual(prober.summarize({}), {"container": "", "duration": 0.0, "bitrate": 0, "size": 0, "video": None, "audio": [], "subs": [], "chapters": [], "probe_version": prober.PROBE_VERSION})
 
     def test_a_film_with_two_audio_tracks_and_subtitles(self):
         data = {"format": {"format_name": "matroska,webm", "duration": "95.5", "bit_rate": "5000000", "size": "123"},
@@ -76,6 +79,125 @@ class TestSummarize(unittest.TestCase):
         self.assertEqual([prober._fps(t) for t in ("24000/1001", "25", "0/0", "x/y", "", None)], [23.976, 25.0, 0, 0, 0.0, 0.0])
 
 
+def chapter(start="0", end="10", title=None):
+    tags = {} if title is None else {"title": title}
+    return {"start_time": start, "end_time": end, "tags": tags}
+
+
+def chapters(*raw, duration="100"):
+    return prober.summarize({"format": {"duration": duration}, "chapters": list(raw)})["chapters"]
+
+
+def spans(*raw, **kw):
+    return [(c["start"], c["end"]) for c in chapters(*raw, **kw)]
+
+
+class TestChapters(unittest.TestCase):
+    def test_a_chapter_has_a_title_a_start_an_end_and_what_it_lets_skip(self):
+        raw = {"id": 1, "time_base": "1/1000", "start": 0, "start_time": "0.000000", "end": 90500, "end_time": "90.500000", "tags": {"TITLE": "Générique de début"}}
+        self.assertEqual(chapters(raw), [{"title": "Générique de début", "start": 0.0, "end": 90.5, "skip": "intro"}])
+
+    def test_a_file_without_chapters_has_an_empty_list(self):
+        self.assertEqual(prober.summarize({"format": {"duration": "100"}})["chapters"], [])
+        for nothing in (None, [], {}, "chapitres", 3):
+            self.assertEqual(prober.summarize({"format": {"duration": "100"}, "chapters": nothing})["chapters"], [], nothing)
+
+    def test_the_chapters_are_ordered_by_start(self):
+        self.assertEqual(spans(chapter("20", "30"), chapter("0", "10"), chapter("10", "20")), [(0.0, 10.0), (10.0, 20.0), (20.0, 30.0)])
+
+    def test_two_chapters_with_the_same_start_are_one_the_first_of_the_file(self):
+        out = chapters(chapter("5", "6", "Premier"), chapter("5.0001", "9", "Second"), chapter("5", "7", "Troisième"))
+        self.assertEqual([(c["title"], c["start"], c["end"]) for c in out], [("Premier", 5.0, 6.0)])
+
+    def test_a_chapter_without_a_usable_start_is_dropped(self):
+        for start in (None, "", "x", "nan", "inf", "-inf", "-1", -0.5, [], {}, True, 10 ** 400):
+            self.assertEqual(spans(chapter(start), chapter("20", "30")), [(20.0, 30.0)], start)
+        self.assertEqual(spans({"end_time": "5"}), [])
+
+    def test_something_that_is_not_a_chapter_is_dropped(self):
+        self.assertEqual(spans("x", None, 3, [], chapter("1", "2")), [(1.0, 2.0)])
+
+    def test_an_end_that_cannot_be_used_becomes_the_next_start(self):
+        for end in (None, "", "x", "nan", "inf", "-1", "10", "4", [], True):
+            self.assertEqual(spans(chapter("10", end), chapter("50", "60"))[0], (10.0, 50.0), end)
+
+    def test_the_last_chapter_without_a_usable_end_stops_with_the_file(self):
+        self.assertEqual(spans(chapter("10", "x")), [(10.0, 100.0)])
+        self.assertEqual(spans({"start_time": "10"}), [(10.0, 100.0)])
+
+    def test_an_end_after_the_file_is_brought_back_to_its_duration(self):
+        self.assertEqual(spans(chapter("10", "500")), [(10.0, 100.0)])
+
+    def test_a_chapter_that_starts_at_or_after_the_end_of_the_file_is_dropped(self):
+        self.assertEqual(spans(chapter("10", "20"), chapter("100", "110"), chapter("150", "160")), [(10.0, 20.0)])
+
+    def test_the_dropped_chapters_do_not_give_their_start_as_an_end(self):
+        self.assertEqual(spans(chapter("10", "x"), chapter("150", "160")), [(10.0, 100.0)])
+
+    def test_without_a_known_duration_the_ends_of_the_file_are_kept_and_a_last_chapter_without_end_is_dropped(self):
+        for duration in ("0", "nan", "inf", "-5"):
+            self.assertEqual(spans(chapter("10", "500"), chapter("600", "x"), duration=duration), [(10.0, 500.0)], duration)
+
+    def test_a_chapter_at_zero_without_any_end_is_dropped(self):
+        self.assertEqual(spans(chapter("0", "x"), duration="0"), [])
+
+    def test_minus_zero_is_written_as_zero(self):
+        self.assertEqual(json.dumps(chapters(chapter("-0", "1"))[0]["start"]), "0.0")
+
+    def test_a_bad_title_is_an_empty_title(self):
+        for tags in (None, "x", [], {"title": 3}, {"title": None}, {}):
+            self.assertEqual(chapters({"start_time": "0", "end_time": "1", "tags": tags})[0]["title"], "", tags)
+
+    def test_a_title_is_on_one_line(self):
+        self.assertEqual(chapters(chapter(title="  Une\n  scène\t"))[0]["title"], "Une scène")
+
+    def test_what_is_kept_in_the_database_is_bounded(self):
+        many = [chapter(str(i), str(i + 1), "x" * 5000) for i in range(prober.MAX_CHAPTERS + 50)]
+        out = chapters(*many, duration="100000")
+        self.assertEqual(len(out), prober.MAX_CHAPTERS)
+        self.assertEqual({len(c["title"]) for c in out}, {prober.MAX_CHAPTER_TITLE})
+
+    def test_the_last_kept_chapter_still_ends_at_the_next_one(self):
+        many = [chapter(str(i), "x") for i in range(prober.MAX_CHAPTERS + 1)]
+        self.assertEqual(spans(*many, duration="100000")[-1], (prober.MAX_CHAPTERS - 1.0, float(prober.MAX_CHAPTERS)))
+
+    def test_the_result_is_strict_json(self):
+        raw = [chapter("nan", "1"), chapter("1", "inf"), chapter("2", "nan"), chapter("3", "-0")]
+        json.dumps(prober.summarize({"format": {"duration": "10"}, "chapters": raw})["chapters"], allow_nan=False)
+
+
+class TestChapterSkip(unittest.TestCase):
+    def test_the_titles_of_an_introduction(self):
+        for title in ("Intro", "INTRO", "intro", "Introduction", "L'introduction", "L’intro", "Opening", "Opening Credits", "opening_credits", "OP", "op", "OP 1", "OP1", "OP-2",
+                      "Générique de début", "GÉNÉRIQUE DE DÉBUT", "generique de debut", "Générique du début", "Générique-de-début", "Intro - Partie 1", "01. Intro"):
+            self.assertEqual(prober.chapter_skip(title), "intro", title)
+
+    def test_the_titles_of_the_credits(self):
+        for title in ("Credits", "CREDITS", "End Credits", "End-Credits", "Ending", "ED", "ed", "ED 2", "ED2", "Outro", "Générique", "GÉNÉRIQUE", "generique", "Générique de fin", "Générique-de-fin", "12 - Credits"):
+            self.assertEqual(prober.chapter_skip(title), "credits", title)
+
+    def test_the_false_friends(self):
+        for title in ("", "Chapitre 1", "Reintroduction", "Réintroduction", "Re-introduction", "Introductions", "Introducing", "Sending", "Pending", "Bending the rules", "Credit Suisse", "Credit", "Accredits",
+                      "Discredits", "Reopening", "Pré-générique", "Génériques", "Outros", "Scoop", "Top", "Stop", "OP Art", "Le OP", "OP 1 bis", "Ed Wood", "Red", "Ted", "Mr. Ed", "ED 2 fin", "Edition", "Opera"):
+            self.assertIsNone(prober.chapter_skip(title), title)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg absent")
+class TestRealChapters(unittest.TestCase):
+    def test_the_chapters_of_a_real_file(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        section = "[CHAPTER]\nTIMEBASE=1/1000\nSTART={}\nEND={}\ntitle={}\n"
+        (root / "chapters.txt").write_text(";FFMETADATA1\n" + section.format(0, 1000, "Intro") + section.format(1000, 2000, "La scène") + section.format(2000, 3000, "Générique de fin"), encoding="utf-8")
+        film = root / "film.mkv"
+        subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=10:d=3", "-f", "ffmetadata", "-i", str(root / "chapters.txt"),
+                        "-map", "0", "-map_chapters", "1", "-c:v", "mpeg4", str(film)], check=True, capture_output=True, timeout=60)
+        out = prober.run_ffprobe(shutil.which("ffprobe"), film)
+        self.assertEqual([(c["title"], c["start"], c["end"], c["skip"]) for c in out["chapters"]],
+                         [("Intro", 0.0, 1.0, "intro"), ("La scène", 1.0, 2.0, None), ("Générique de fin", 2.0, 3.0, "credits")])
+        self.assertEqual(out["probe_version"], prober.PROBE_VERSION)
+
+
 class TestRunFfprobe(unittest.TestCase):
     def run_with(self, returncode=0, stdout=b"", stderr=b"", ffprobe="ffprobe", **failure):
         done = SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
@@ -85,7 +207,7 @@ class TestRunFfprobe(unittest.TestCase):
     def test_the_answer_of_ffprobe_is_summarized(self):
         out, run = self.run_with(stdout=json.dumps({"format": {"format_name": "matroska,webm", "duration": "5"}}).encode("utf-8"))
         self.assertEqual((out["container"], out["duration"]), ("mkv", 5.0))
-        self.assertEqual(run.call_args.args[0], ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "/films/a.mkv"])
+        self.assertEqual(run.call_args.args[0], ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", "/films/a.mkv"])
         self.assertEqual(run.call_args.kwargs, {"capture_output": True, "timeout": 60})
 
     def test_an_empty_answer_is_an_empty_file(self):

@@ -280,6 +280,7 @@ def serve(cfg, lock):
     if lock is None:
         print(f"  ATTENTION : un autre serveur (ou une restauration) utilise déjà {cfg.data} : deux serveurs sur les mêmes données s'y contredisent ; arrête l'un des deux.", file=sys.stderr)
     hub.first_scan()
+    hub.jobs.probe_pending()
     hub.autoscan()
     hub.inbox.migrate()
     hub.inbox.keep_clean()
