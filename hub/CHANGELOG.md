@@ -1,3 +1,6 @@
+## 0.35.0 — 2026-11-18
+- Une cloche apparaît dans la barre du haut : elle ouvre tes notifications, avec pour l'instant les dernières nouveautés du hub et un lien vers toute la liste.
+
 ## 0.34.0 — 2026-11-18
 - Dans « Mes demandes », dans la recherche d'un film ou d'une série à demander et dans la liste de l'administrateur, le titre ouvre sa fiche TMDB dans un nouvel onglet, pour vérifier que c'est le bon.
 

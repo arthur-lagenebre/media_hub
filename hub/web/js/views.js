@@ -56,6 +56,7 @@
       nav.appendChild(h('a', { class: 'tool f', href: '#/search', 'data-nav': '#/search', 'aria-label': H.t('Recherche') }, H.icon('search')));
       if (H.canUpload()) nav.appendChild(h('a', { class: 'tool f', href: '#/upload', 'data-nav': '#/upload', 'aria-label': H.t('Envoyer'), title: H.t('Envoyer') }, H.icon('upload')));
       if (H.isAdmin()) nav.appendChild(h('a', { class: 'tool f', href: '#/admin', 'data-nav': '#/admin', 'aria-label': H.t('Administration'), title: H.t('Administration') }, H.icon('admin')));
+      nav.appendChild(h('button', { class: 'tool f bell', 'aria-label': H.t('Notifications'), title: H.t('Notifications'), onclick: H.openNotifications }, H.icon('bell')));
       nav.appendChild(h('a', { class: 'tool f', href: '#/settings', 'data-nav': '#/settings', 'aria-label': H.t('Paramètres'), title: H.t('Paramètres') }, H.icon('gear')));
       H.nav.pending();
     },
@@ -88,6 +89,41 @@
         if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
       });
     }
+  };
+
+  // --- Nouveautés du hub et centre de notifications -----------------------------------
+  function newsDate(text) {          // « 2026-11-17 » dans la langue de l'interface ; illisible : tel quel
+    var p = String(text).split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]);
+    return p.length === 3 && !isNaN(d.getTime()) ? H.date(d.getTime() / 1000) : text;
+  }
+  // Une version du journal. C'est un arrêt de la télécommande (sans action) : sans lui, un texte plus haut que l'écran ne défilerait pas aux flèches.
+  H.newsEntry = function (v) {
+    return h('article', { class: 'news f', tabindex: '0', 'data-key': 'news-' + v.version },
+      h('h3', null, h('b', null, v.version), ' ', h('span', null, newsDate(v.date))),
+      h('ul', null, (v.items || []).map(function (text) { return h('li', null, text); })));
+  };
+  // `versions` : le journal, la plus récente d'abord ; null si la route a échoué.
+  function showNotifications(versions) {
+    var latest = versions && versions[0], btns = h('div', { class: 'btns' });
+    if (latest) btns.appendChild(H.button(H.t('Voir toutes les nouveautés'), null, { class: 'primary', onclick: function () {
+      H.overlay.close(function () { H.go('#/settings?tab=apropos'); });          // après la fermeture : l'entrée d'historique de la fenêtre est retirée, Retour ramène à la page d'où l'on vient
+    } }));
+    btns.appendChild(H.button(H.t('Fermer'), null, { onclick: function () { H.overlay.close(); } }));
+    var body = latest ? [h('h4', null, H.t('Nouveautés du hub')), H.newsEntry(latest)]
+      : [h('p', { class: 'lead' }, versions ? H.t('Aucune notification pour le moment.') : H.t('Impossible de charger les notifications.'))];
+    var box = H.box('wide notifs', H.t('Notifications'), body, btns);
+    H.overlay.open(box);
+  }
+  // La cloche : une seule demande à la fois, et une réponse arrivée après un changement de page n'ouvre rien (elle tomberait sur un film en cours).
+  var notifsAsked = false;
+  H.openNotifications = function () {
+    if (notifsAsked) return;
+    notifsAsked = true;
+    var from = location.hash;
+    H.api('/api/changelog').then(function (d) { return (d && d.versions) || []; }).catch(function () { return null; }).then(function (versions) {
+      notifsAsked = false;
+      if (location.hash === from && !H.overlay.isOpen()) showNotifications(versions);
+    });
   };
 
   // --- Vignettes -------------------------------------------------------------
@@ -1781,20 +1817,11 @@
         if (!closed && news.length && activeTab() === 'apropos') render();
       });
     }
-    function newsDate(text) {          // « 2026-11-17 » dans la langue de l'interface ; illisible : tel quel
-      var p = String(text).split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]);
-      return p.length === 3 && !isNaN(d.getTime()) ? H.date(d.getTime() / 1000) : text;
-    }
-    // Chaque version est un arrêt de la télécommande (sans action) : sans lui, un texte plus haut que l'écran ne défilerait pas aux flèches.
     function newsSection(panel) {
       loadNews();
       if (!news || !news.length) return;
       panel.appendChild(h('h2', null, H.t('Nouveautés du hub')));
-      (newsAll ? news : news.slice(0, NEWS_SHOWN)).forEach(function (v) {
-        panel.appendChild(h('article', { class: 'news f', tabindex: '0', 'data-key': 'news-' + v.version },
-          h('h3', null, h('b', null, v.version), ' ', h('span', null, newsDate(v.date))),
-          h('ul', null, (v.items || []).map(function (text) { return h('li', null, text); }))));
-      });
+      (newsAll ? news : news.slice(0, NEWS_SHOWN)).forEach(function (v) { panel.appendChild(H.newsEntry(v)); });
       if (!newsAll && news.length > NEWS_SHOWN) panel.appendChild(h('div', { class: 'newsmore' }, H.button(H.t('Tout voir'), null, { 'data-key': 'news-all', onclick: function () {
         newsAll = true; render(); H.focus.key(el, 'news-' + news[NEWS_SHOWN].version);          // le bouton disparaît : le focus va à la première version dépliée
       } })));
