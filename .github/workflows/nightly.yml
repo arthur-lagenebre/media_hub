@@ -2,9 +2,12 @@ name: Nuit
 
 # Les passes longues de « faire bien » (skill ub-mode), sur tout hub/, une fois par nuit plutôt qu'à chaque PR :
 #   crapper : aucune fonction de hub/ au-dessus de CRAP 10, avec l'interface dans Chromium (Playwright) pour la couverture ;
-#   mutator : la passe de mutation, en quatre parties parallèles, sans Playwright, chacune avec son cache différentiel
+#   mutator : la passe de mutation, en cinq parties parallèles, sans Playwright, chacune avec son cache différentiel
 #             et ses seuls modules de tests (toute la suite par mutant ne tenait pas dans un job : voir « tests »).
-# La nuit, rien ne se lance si main n'a pas bougé depuis la dernière passe réussie ; à la main (onglet Actions), toujours.
+#             .github/scripts/mutate_part.py la lance fichier par fichier, et par tranches pour un long fichier :
+#             une partie arrêtée à la limite du job reprend à la passe suivante.
+# La nuit, rien ne se lance si ce commit de main a déjà été entièrement traité : crapper réussi et mutator allé au bout
+# dans chaque partie, survivants ou non. À la main (onglet Actions), toujours.
 on:
   schedule:
     - cron: "17 2 * * *"          # 2 h 17 UTC
@@ -32,24 +35,14 @@ jobs:
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
-      # Une passe sautée finit « réussie » au même commit : elle ne fausse pas la comparaison.
+      - uses: actions/checkout@v7
+        with:
+          path: media_hub
+      # La règle (qu'est-ce qu'un commit « traité » ?) et ses tests : .github/scripts/nightly_gate.py.
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          if [ "$EVENT" != "schedule" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --status success \
-                   --limit 1 --json headSha --jq '.[0].headSha // ""')
-          if [ "$last" = "$GITHUB_SHA" ]; then
-            echo "::notice title=Nuit::aucun commit sur main depuis la dernière passe réussie ($last) : rien à faire"
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 media_hub/.github/scripts/nightly_gate.py
 
   crapper:
     needs: changes
@@ -100,16 +93,25 @@ jobs:
           - part: serveur
             paths: hub/server
             tests: tests/test_server*.py tests/test_range.py tests/test_autoscan.py tests/test_jobs.py
-          - part: scan-media
-            paths: hub/scan hub/media
+          # scan et media ont fait perdre leur machine deux fois quand ils étaient ensemble (cause non établie : mémoire ?).
+          # Séparés pour savoir lequel, moins de mutants à la fois, et une limite de mémoire par lancement de tests.
+          - part: scan
+            paths: hub/scan
+            tests: tests/test_scan.py tests/test_video_scan.py
+            workers: 2
+            memory_mb: 4096
+          - part: media
+            paths: hub/media
             tests: >-
-              tests/test_scan.py tests/test_video_scan.py tests/test_books.py tests/test_probe.py
-              tests/test_images.py tests/test_tracks.py tests/test_subs.py tests/test_badges.py
+              tests/test_books.py tests/test_probe.py tests/test_images.py
+              tests/test_tracks.py tests/test_subs.py tests/test_badges.py
+            workers: 2
+            memory_mb: 4096
           - part: donnees
             paths: hub/db.py hub/accounts.py hub/requests.py hub/inbox.py
             tests: tests/test_database.py tests/test_accounts.py tests/test_requests.py tests/test_inbox*.py
           # Le reste des modules de hub/ : calculé à l'exécution, en retirant ceux de « donnees » (garder les deux listes d'accord).
-          # Un passage de mutator par fichier, avec ses tests à lui : tests/test_<nom>*.py.
+          # Sans « tests », chaque fichier a les siens (voir mutate_part.py).
           - part: reste
             paths: ""
             tests: ""
@@ -148,42 +150,22 @@ jobs:
           echo "list=$PATHS" >> "$GITHUB_OUTPUT"
 
       - name: Mutator
+        id: mutator
         working-directory: media_hub
         env:
           PATHS: ${{ steps.paths.outputs.list }}
           TESTS: ${{ matrix.tests }}
+          WORKERS: ${{ matrix.workers }}
+          MEMORY_MB: ${{ matrix.memory_mb }}
           # Les tests importent aussi hub/scan, qui a besoin de `libraries` avant que les tests ne le rendent importable.
           PYTHONPATH: ${{ github.workspace }}/media_library
-        shell: bash               # pipefail : le code de sortie de mutator (3 = un mutant survit) passe malgré tee
+        shell: bash               # pipefail : le code de sortie du lanceur passe malgré tee
         run: |
-          # Chemin absolu : mutator lance les mutants dans des copies (target/mutation-workers) sans le .venv.
-          PY="$PWD/.venv/bin/python"
-          # mutate <fichiers> <motifs de tests> : sans module de tests trouvé, toute la suite.
-          mutate() {
-            # shellcheck disable=SC2086
-            mods=$(ls $2 2>/dev/null | sed 's#^tests/#tests.#; s#\.py$##' | tr '\n' ' ')
-            if [ -n "$mods" ]; then cmd="$PY -m unittest $mods"; else cmd="$PY -m unittest discover"; fi
-            echo "::group::mutator $1 : $cmd"
-            rc=0
-            # shellcheck disable=SC2086
-            ../mutator/mutator --test-command "$cmd" $1 || rc=$?
-            echo "::endgroup::"
-            return $rc
-          }
-          {
-            if [ -n "$TESTS" ]; then
-              mutate "$PATHS" "$TESTS"
-            else
-              status=0
-              for f in $PATHS; do
-                mutate "$f" "tests/test_$(basename "$f" .py)*.py" || status=$?
-              done
-              exit $status
-            fi
-          } 2>&1 | tee mutator.log
+          # shellcheck disable=SC2086
+          python -u .github/scripts/mutate_part.py --tests "$TESTS" --workers "$WORKERS" --memory-mb "$MEMORY_MB" $PATHS 2>&1 | tee mutator.log
 
-      # Même quand mutator échoue (un mutant survit), ses résultats sont justes : on les garde pour la nuit suivante.
-      # Sans .metrics/mutate (mutator n'a pas tourné), il n'y a rien à garder.
+      # Même quand la partie échoue ou s'arrête à la limite du job, ses résultats sont justes : on les garde pour la suivante.
+      # Sans .metrics/mutate (aucun fichier ni tranche terminés), il n'y a rien à garder.
       - name: Garder les résultats
         if: always() && hashFiles('media_hub/.metrics/mutate/**') != ''
         uses: actions/cache/save@v6
@@ -210,3 +192,10 @@ jobs:
             media_hub/.metrics/mutate
             media_hub/.metrics/crap.edn
             media_hub/mutator.log
+
+      # En dernier, pour que résultats et résumé soient gardés : le job reste rouge tant qu'un mutant survit.
+      - name: Survivants
+        if: steps.mutator.outputs.survived == 'true'
+        run: |
+          echo "::error title=mutator (${{ matrix.part }})::des mutants survivent : voir le résumé de ce job"
+          exit 3

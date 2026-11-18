@@ -111,7 +111,7 @@ Every time you are asked to make a change follow:
 * Reduce each function under  CRAP 10 by splitting it, by testing it, or both.
 * Consider whether case statements are worth reducing.
 * Run it locally on the files you touch: CI no longer runs it on pull requests (21 min each).
-* `nightly.yml` runs it on all of `hub/` (threshold 10, with Playwright) every night `main` has changed; a red night is fixed in the next PR.
+* `nightly.yml` runs it on all of `hub/` (threshold 10, with Playwright) every night until the current `main` commit has been fully processed; a red night is fixed in the next PR.
 
 ## Dryer
 
@@ -123,7 +123,7 @@ Every time you are asked to make a change follow:
 * Cover the uncovered.
 * Kill the survivors.
 * Delete dead code.
-* `nightly.yml` mutates all of `hub/` every night `main` has changed, in four parallel parts (`hub/server`; `hub/scan hub/media`; `hub/db.py hub/accounts.py hub/requests.py hub/inbox.py`; the rest of `hub/*.py`, file by file), without Playwright, each with its own `.metrics/mutate` cache and only its own test modules (`tests` in the matrix).
+* `nightly.yml` mutates all of `hub/` every night until the current `main` commit has been fully processed, in five parallel parts (`hub/server`; `hub/scan`; `hub/media`; `hub/db.py hub/accounts.py hub/requests.py hub/inbox.py`; the rest of `hub/*.py`), without Playwright, each with its own `.metrics/mutate` cache and only its own test modules. `.github/scripts/mutate_part.py` runs it file by file, long files in line batches, so a part stopped at the job limit resumes on the next pass.
 * A nightly survivor may be killed by a test of another module: rerun mutator locally on that file, with the whole suite, before writing a test.
 * On a pull request, the `mutator` label still runs it on the changed files (`mutator.yml`).
 
