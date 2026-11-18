@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 import tempfile
 import time
 import unittest
@@ -1061,6 +1062,370 @@ class TestNextFilmOfASaga(UiCase):
             self.page.locator(".player .btn", has_text="Suivant").click()
         self.wait_on(episodes[1]["id"])
         self.assertTrue(self.progress("Vidéo Série", "series")["done"])
+
+
+def chapter(start, end, title="", skip=None):
+    return {"title": title, "start": float(start), "end": float(end), "skip": skip}
+
+
+FILM_TIME = "(() => { var v = document.querySelector('.player video'), m = /&start=([0-9.]+)/.exec(v.src); return (m ? +m[1] : 0) + v.currentTime; })()"
+INTRO = [chapter(0, 10, "Avant"), chapter(10, 40, "Intro", "intro"), chapter(40, 50, "Milieu"), chapter(50, 60, "Générique", "credits")]
+# Note chaque apparition du bouton de saut, dès l'ouverture de la page : un bouton revenu un instant se voit ici, même entre deux regards du test.
+WATCH_SKIP = """window.skipSeen = [];
+new MutationObserver(function (list) { list.forEach(function (m) { var t = m.target; if (t.classList && t.classList.contains('skip') && !t.hidden) window.skipSeen.push(t.textContent); }); })
+  .observe(document, { subtree: true, attributes: true, attributeFilter: ['hidden'] });"""
+
+
+class TestChapters(UiCase):
+    """Les chapitres du plan de lecture, ajoutés à la réponse du serveur sur de vraies vidéos : la liste, et le bouton qui propose de passer une introduction ou un générique."""
+
+    @classmethod
+    def add_media(cls, root):
+        films = root / "srv" / "Films"
+        one = root / "une-piste.mkv"
+        fixtures.write_video(one, seconds=60, size="160x90", acodec="aac", channels=2, subtitle=SUBS)
+        two = films / "Pistes (2020)" / "Pistes (2020).mkv"
+        two.parent.mkdir(parents=True)
+        subprocess.run([fixtures.FFMPEG, "-v", "error", "-y", "-i", str(one), "-map", "0:v", "-map", "0:a", "-map", "0:a", "-map", "0:s", "-c", "copy", "-metadata:s:a:0", "language=fre", "-metadata:s:a:1", "language=eng", str(two)], check=True)
+        one.unlink()
+        for name in ("Chap Un (2001)", "Chap Deux (2002)"):
+            fixtures.write_video(films / name / f"{name}.mkv", seconds=12, size="160x90", acodec="aac", channels=2)
+
+    @classmethod
+    def start(cls, root, password=""):
+        super().start(root, password)
+        cls.run_.hub.db.execute("UPDATE items SET grp='Duo' WHERE lib='films' AND title IN ('Chap Un', 'Chap Deux')")
+
+    def setUp(self):
+        super().setUp()
+        self.run_.hub.db.execute("DELETE FROM progress")
+        self.page.add_init_script(WATCH_SKIP)
+        self.skip = self.page.locator(".player .skip")
+        self.button = self.page.locator(".player .btn", has_text="Chapitres")
+
+    def serve(self, entry, chapters):
+        """Le plan de lecture de `entry` porte ces chapitres (`None` : le champ manque, comme sur un serveur plus ancien)."""
+        def answer(route):
+            reply = route.fetch()
+            plan = reply.json()
+            plan.pop("chapters", None)
+            if chapters is not None:
+                plan["chapters"] = chapters
+            route.fulfill(response=reply, json=plan)
+        self.page.route(lambda url: url.endswith("/api/play/" + entry), answer)
+
+    def keyframes(self, entry, before):
+        """Le flux recopié repart `before(t)` secondes avant l'instant demandé `t`, comme sur une image clé lointaine."""
+        def answer(route):
+            at = float(urllib.parse.parse_qs(urllib.parse.urlparse(route.request.url).query)["t"][0])
+            route.fulfill(json={"start": max(0, at - before(at))})
+        self.page.route(lambda url: f"/api/play/{entry}/start" in url, answer)
+
+    def play(self, title, chapters, lib="films", query=""):
+        entry = self.entries(lib, title)[0]["id"]
+        self.serve(entry, chapters)
+        self.open("#/play/" + entry + query)
+        self.page.wait_for_selector(".player video")
+        return entry
+
+    def playing(self, title, chapters, **kw):
+        entry = self.play(title, chapters, **kw)
+        self.wait_playing()
+        return entry
+
+    def seek(self, position):
+        self.page.evaluate("at => new Promise(done => { var v = document.querySelector('.player video'); v.addEventListener('seeked', done, { once: true }); v.currentTime = at; })", position)
+
+    def wait_time(self, condition, arg):
+        self.page.wait_for_function(f"t => {FILM_TIME} {condition} t", arg=arg, timeout=20000)
+
+    def controls(self):
+        self.page.mouse.move(300, 300)
+        self.page.mouse.move(320, 320)
+        expect(self.page.locator(".player .ctl")).to_be_visible()
+
+    def controls_gone(self):
+        expect(self.page.locator(".player .ctl")).to_be_hidden(timeout=15000)
+
+    def open_list(self):
+        self.controls()
+        self.button.click()
+        self.page.wait_for_selector(".veil .opt")
+
+    def pick(self, index):
+        self.page.locator(".veil .opt").nth(index).click()
+        self.page.wait_for_selector(".veil", state="detached")
+
+    def seen(self):
+        return self.page.evaluate("window.skipSeen")
+
+    def menus(self):
+        return self.page.evaluate("Array.prototype.map.call(document.querySelectorAll('.veil .menu'), function (m) { return m.getAttribute('aria-label'); })")
+
+    # --- La liste ------------------------------------------------------------------
+    def test_the_list_is_in_order_and_marks_the_current_chapter(self):
+        self.playing("Direct", [chapter(0, 20, "Début"), chapter(20, 40), chapter(40, 60, "<b>Fin</b>")])
+        self.seek(25)
+        self.open_list()
+        expect(self.page.locator(".veil .menu")).to_have_attribute("aria-label", "Chapitres")
+        self.assertEqual(self.page.locator(".veil .opt .lbl").all_inner_texts(), ["Début", "Chapitre 2", "<b>Fin</b>"])         # un titre vient du fichier : du texte, jamais du HTML
+        self.assertEqual(self.page.locator(".veil .opt .det").all_inner_texts(), ["0:00", "0:20", "0:40"])
+        expect(self.page.locator(".veil .opt.on .lbl")).to_have_text("Chapitre 2")
+        expect(self.page.locator(".veil .opt.on")).to_be_focused()
+
+    def test_choosing_a_chapter_moves_the_film_without_reloading_it(self):
+        self.playing("Direct", INTRO)
+        self.page.evaluate("(() => { window.loads = 0; document.querySelector('.player video').addEventListener('loadstart', function () { window.loads++; }); })()")
+        self.open_list()
+        self.pick(2)
+        self.wait_time(">=", 40)
+        self.assertLess(self.video_time(), 50)
+        self.assertEqual(self.page.evaluate("window.loads"), 0)
+
+    def test_choosing_a_chapter_with_converted_sound_restarts_the_stream_there(self):
+        self.playing("Long", [chapter(0, 45, "Début"), chapter(45, 90, "Suite")])
+        self.assertEqual(self.page.inner_text(".player .pill"), "Son converti")
+        self.open_list()
+        self.pick(1)
+        self.page.wait_for_function("/&start=(4[0-9]|5[0-9])/.test(document.querySelector('.player video').src)", timeout=15000)
+        self.wait_playing()
+        self.wait_time(">=", 45)
+
+    def test_a_chapter_keeps_the_audio_track_the_subtitles_and_the_speed(self):
+        self.playing("Pistes", [chapter(0, 31, "Début"), chapter(31, 60, "Suite")])
+        self.controls()
+        self.page.locator(".player .btn", has_text="Audio").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.pick(1)
+        self.page.wait_for_function("/[?&]a=1/.test(document.querySelector('.player video').src)", timeout=15000)
+        self.wait_playing()
+        self.controls()
+        self.page.locator(".player .btn", has_text="Sous-titres").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.pick(1)
+        self.controls()
+        self.page.locator(".player .btn.spd").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt", has_text="1,5×").click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.open_list()
+        self.pick(1)
+        self.page.wait_for_function("/&start=[1-9]/.test(document.querySelector('.player video').src)", timeout=15000)
+        self.wait_playing()
+        self.assertIn("a=1", self.page.evaluate("document.querySelector('.player video').src"))
+        self.assertEqual(self.page.evaluate("document.querySelector('.player video').playbackRate"), 1.5)
+        expect(self.page.locator(".player .cue")).to_contain_text("Second", timeout=15000)
+
+    def test_the_chapter_list_and_the_track_menus_never_pile_up(self):
+        self.playing("Pistes", [chapter(0, 31, "Début"), chapter(31, 60, "Suite")])
+        self.open_list()
+        click = "label => Array.prototype.filter.call(document.querySelectorAll('.player .btn'), function (b) { return b.textContent.indexOf(label) >= 0; })[0].click()"
+        for label in ("Audio", "Chapitres", "Chapitres", "Sous-titres", "Chapitres"):
+            self.page.evaluate(click, label)
+            self.page.wait_for_function("label => { var m = document.querySelectorAll('.veil .menu'); return m.length === 1 && m[0].getAttribute('aria-label') === label; }", arg=label, timeout=5000)
+        self.assertEqual(self.menus(), ["Chapitres"])
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_selector(".veil", state="detached")
+        self.assertIn("#/play/", self.page.url)
+
+    # --- Le bouton -----------------------------------------------------------------
+    def test_the_button_shows_only_during_a_named_chapter_with_the_right_label(self):
+        self.playing("Direct", INTRO)
+        expect(self.skip).to_be_hidden()
+        self.seek(12)
+        expect(self.skip).to_have_text("Passer l’introduction")
+        expect(self.skip).to_be_visible()
+        self.seek(45)
+        expect(self.skip).to_be_hidden()
+        self.seek(52)
+        expect(self.skip).to_have_text("Passer le générique")
+        expect(self.skip).to_be_visible()
+        self.assertEqual(self.seen(), ["Passer l’introduction", "Passer le générique"])
+
+    def test_the_film_never_jumps_by_itself_and_the_button_never_takes_the_focus(self):
+        self.playing("Direct", [chapter(10, 20, "Intro", "intro")])
+        self.controls_gone()
+        self.seek(18.8)
+        self.page.evaluate("(() => { window.seeks = 0; document.querySelector('.player video').addEventListener('seeking', function () { window.seeks++; }); })()")
+        expect(self.skip).to_be_visible()
+        expect(self.skip).not_to_be_focused()
+        self.wait_time(">", 20.4)
+        expect(self.skip).to_be_hidden()
+        self.assertEqual(self.page.evaluate("window.seeks"), 0)
+
+    def test_the_button_goes_to_the_end_of_the_chapter_and_stays_away(self):
+        self.playing("Direct", INTRO)
+        self.seek(12)
+        self.skip.click()
+        self.wait_time(">=", 40)
+        expect(self.skip).to_be_hidden()
+        self.assertEqual(self.seen(), ["Passer l’introduction"])
+
+    def test_going_back_inside_a_skipped_chapter_does_not_offer_it_again_but_going_before_it_does(self):
+        self.playing("Direct", INTRO)
+        self.seek(12)
+        self.skip.click()
+        self.wait_time(">=", 40)
+        width = self.page.viewport_size["width"]
+        bar = self.page.locator(".player .seekbar")
+        margin = bar.bounding_box()["x"]
+        self.controls()
+        bar.click(position={"x": (width - 2 * margin) * 15 / 60, "y": 5})
+        self.wait_time("<", 39)
+        self.wait_time(">", 15.5)
+        self.assertEqual(self.seen(), ["Passer l’introduction"])
+        self.controls()
+        bar.click(position={"x": (width - 2 * margin) * 9.2 / 60, "y": 5})
+        expect(self.skip).to_be_visible(timeout=15000)
+        self.assertEqual(self.seen(), ["Passer l’introduction", "Passer l’introduction"])
+
+    def test_choosing_a_skipped_chapter_in_the_list_offers_it_again(self):
+        self.playing("Direct", [chapter(0, 20, "Intro", "intro"), chapter(20, 60, "Suite")])
+        expect(self.skip).to_be_visible()
+        self.skip.click()
+        self.wait_time(">=", 20)
+        self.open_list()
+        self.pick(0)
+        expect(self.skip).to_be_visible()
+
+    def test_with_converted_sound_a_keyframe_inside_the_chapter_does_not_bring_the_button_back(self):
+        entry = self.entries("films", "Long")[0]["id"]
+        self.keyframes(entry, lambda at: 6 if at >= 30 else 0)
+        self.playing("Long", [chapter(10, 30, "Intro", "intro"), chapter(30, 90, "Suite")], query="?t=12")
+        expect(self.skip).to_be_visible()
+        self.skip.click()
+        self.page.wait_for_function("/&start=24/.test(document.querySelector('.player video').src)", timeout=15000)
+        self.wait_time(">", 24.8)
+        expect(self.skip).to_be_hidden()
+        self.assertEqual(self.seen(), ["Passer l’introduction"])
+
+    def test_with_converted_sound_a_keyframe_before_the_chapter_does_not_bring_the_button_back(self):
+        entry = self.entries("films", "Long")[0]["id"]
+        self.keyframes(entry, lambda at: 21 if at >= 20 else 0)
+        self.playing("Long", [chapter(1, 3, "Avant"), chapter(3, 20, "Intro", "intro"), chapter(20, 90, "Suite")], query="?t=5")
+        expect(self.skip).to_be_visible()
+        self.skip.click()
+        self.page.wait_for_function("(() => { var v = document.querySelector('.player video'); return /&start=0\\.000/.test(v.src) || v.src.indexOf('start=') < 0; })()", timeout=15000)
+        self.wait_time(">", 3.8)
+        self.assertEqual(self.seen(), ["Passer l’introduction"])
+
+    def test_skipping_final_credits_ends_the_episode_normally(self):
+        episodes = self.entries("series", "Vidéo Série")
+        self.playing("Vidéo Série", [chapter(0, 3, "Début"), chapter(3, 8, "Générique", "credits")], lib="series")
+        self.seek(4)
+        self.skip.click()
+        self.page.wait_for_function("id => location.hash.indexOf(id) >= 0", arg=episodes[1]["id"], timeout=15000)
+        self.assertTrue(self.entries("series", "Vidéo Série")[0]["progress"]["done"])
+
+    def test_the_button_leaves_when_the_next_film_of_a_saga_is_offered(self):
+        self.playing("Chap Un", [chapter(0, 5, "Début"), chapter(5, 12, "Générique", "credits")])
+        self.seek(6)
+        self.skip.click()
+        expect(self.page.locator(".player .err:not([hidden])")).to_contain_text("Film suivant de « Duo »", timeout=15000)
+        expect(self.skip).to_be_hidden()
+
+    def test_a_new_plan_keeps_the_button_and_a_resume_does_not_flash_the_first_chapter(self):
+        self.playing("Direct", [chapter(0, 40, "Intro", "intro"), chapter(40, 60, "Suite")], query="?t=12")
+        expect(self.skip).to_be_visible()
+        self.page.evaluate("(() => { window.loads = 0; document.querySelector('.player video').addEventListener('loadstart', function () { window.loads++; }); })()")
+        self.controls()
+        self.page.locator(".player .btn", has_text="Qualité").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.pick(2)
+        self.page.wait_for_function("window.loads > 0")
+        self.wait_time(">", 12)
+        expect(self.skip).to_be_visible()
+        self.assertEqual(self.seen(), ["Passer l’introduction"])
+
+    def test_opening_further_in_the_film_does_not_flash_the_first_chapter(self):
+        self.play("Direct", [chapter(0, 10, "Intro", "intro"), chapter(10, 60, "Suite")], query="?t=30")
+        self.wait_time(">", 30.6)
+        expect(self.skip).to_be_hidden()
+        self.assertEqual(self.seen(), [])
+
+    # --- Sans chapitre -------------------------------------------------------------
+    def test_without_chapters_nothing_shows_and_the_film_plays(self):
+        for chapters in ([], None):
+            self.page.unroute_all()
+            self.playing("Direct", chapters)
+            self.controls()
+            expect(self.button).to_be_hidden()
+            expect(self.skip).to_be_hidden()
+            self.assertEqual(self.seen(), [])
+
+    # --- Télécommande --------------------------------------------------------------
+    def test_up_or_down_reaches_the_button_and_the_side_arrows_keep_moving_the_film(self):
+        self.playing("Direct", [chapter(5, 45, "Intro", "intro"), chapter(45, 60, "Suite")])
+        self.seek(10)
+        self.controls_gone()
+        expect(self.skip).to_be_visible()
+        self.page.keyboard.press("ArrowDown")
+        expect(self.skip).to_be_focused()
+        expect(self.page.locator(".player .ctl")).to_be_hidden()
+        self.page.keyboard.press("ArrowRight")
+        self.wait_time(">=", 20)
+        expect(self.skip).to_be_focused()
+        self.page.keyboard.press("ArrowLeft")
+        self.wait_time("<", 18)
+        expect(self.skip).to_be_focused()
+        self.page.keyboard.press("Enter")
+        self.wait_time(">=", 45)
+        self.assertFalse(self.page.evaluate("document.querySelector('.player video').paused"))
+
+    def test_without_the_button_up_and_down_still_open_the_controls_and_enter_still_pauses(self):
+        self.playing("Direct", [chapter(30, 60, "Intro", "intro")])
+        self.controls_gone()
+        self.page.keyboard.press("ArrowUp")
+        expect(self.page.locator(".player .seekbar")).to_be_focused()
+        self.controls_gone()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_function("document.querySelector('.player video').paused")
+
+    def test_enter_still_pauses_while_the_button_shows_without_the_focus(self):
+        self.playing("Direct", [chapter(0, 60, "Intro", "intro")])
+        self.controls_gone()
+        expect(self.skip).to_be_visible()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_function("document.querySelector('.player video').paused")
+        expect(self.skip).not_to_be_focused()
+
+    def test_when_the_button_leaves_with_the_controls_shown_the_focus_goes_to_play(self):
+        self.playing("Direct", INTRO)
+        self.page.evaluate("document.querySelector('.player video').pause()")
+        self.seek(12)
+        expect(self.skip).to_be_visible()
+        self.skip.focus()
+        self.seek(45)
+        expect(self.skip).to_be_hidden()
+        expect(self.page.locator(".player .btns .btn").first).to_be_focused()
+
+    def test_when_the_button_leaves_with_the_controls_hidden_the_focus_is_released(self):
+        self.playing("Direct", [chapter(5, 45, "Intro", "intro"), chapter(45, 60, "Suite")])
+        self.seek(10)
+        self.controls_gone()
+        self.page.keyboard.press("ArrowDown")
+        expect(self.skip).to_be_focused()
+        self.seek(46)
+        expect(self.skip).to_be_hidden()
+        self.page.wait_for_function("document.activeElement === document.body")
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_function("document.querySelector('.player video').paused")
+
+    # --- Petit écran ---------------------------------------------------------------
+    def test_on_a_phone_the_button_stays_on_screen_above_the_controls(self):
+        self.playing("Direct", [chapter(0, 60, "Intro", "intro")])
+        expect(self.skip).to_be_visible()
+        for size in ({"width": 390, "height": 844}, {"width": 844, "height": 390}):
+            self.page.set_viewport_size(size)
+            self.page.mouse.move(size["width"] / 2, size["height"] / 2 - 40)
+            self.page.mouse.move(size["width"] / 2, size["height"] / 2)
+            expect(self.page.locator(".player .ctl")).to_be_visible()
+            skip, bottom = self.skip.bounding_box(), self.page.locator(".player .bottom").bounding_box()
+            self.assertGreaterEqual(skip["x"], 0, size)
+            self.assertLessEqual(skip["x"] + skip["width"], size["width"], size)
+            self.assertLessEqual(skip["y"] + skip["height"], bottom["y"], size)
+            self.assertGreaterEqual(skip["height"], 40, size)
+            self.assertEqual(self.button.get_attribute("aria-label"), "Chapitres")
 
 
 class TestVideoResume(UiCase):

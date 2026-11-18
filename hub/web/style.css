@@ -419,6 +419,10 @@ body.has-audio #toast { bottom: 6rem; }
   .player .btns .btn:not(.on) .lbl { display: none; }
   .player .btns .btn { margin-right: 0.45rem; }
 }
+/* « Passer l'introduction » : posé sur l'image, clair pour se lire de loin sur n'importe quel plan. Il monte au-dessus des commandes quand elles sont là, comme les sous-titres. `max()` manque aux vieilles télés : la première valeur leur suffit. */
+.player .skip { position: absolute; right: var(--gut); bottom: 9%; padding: 0.75rem 1.3rem; background: var(--text); color: var(--on-accent); box-shadow: 0 0.15rem 0.8rem rgba(0, 0, 0, 0.55); transition: bottom 0.15s; }
+.player:not(.idle) .skip { bottom: 9rem; bottom: max(24%, 9rem); }
+.player .skip:focus { outline-width: 0.3rem; }
 .spin { position: absolute; top: 50%; left: 50%; width: 3.6rem; height: 3.6rem; margin: -1.8rem 0 0 -1.8rem; pointer-events: none; }
 .spin i { display: block; width: 100%; height: 100%; border-radius: 50%; border: 0.3rem solid rgba(255, 255, 255, 0.25); border-top-color: var(--accent); animation: turn 0.9s linear infinite; }
 @keyframes turn { to { transform: rotate(360deg); } }
