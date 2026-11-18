@@ -35,6 +35,7 @@
     var d = new Date(seconds * 1000);
     return d.toLocaleDateString(H.locale) + ' ' + d.toLocaleTimeString(H.locale, { hour: '2-digit', minute: '2-digit' });
   }
+  U.size = sizeText; U.when = when;          // la page État d'Administration (admin.js) écrit les mêmes tailles et dates
   function fileUrl(f) { return '/api/inbox/' + encodeURIComponent(f.account) + '/' + encodeURIComponent(f.name) + (f.dir ? '?dir=' + encodeURIComponent(f.dir) : ''); }
   function pathOf(f) { return f.dir ? f.dir + '/' + f.name : f.name; }
   function meter(percent) {

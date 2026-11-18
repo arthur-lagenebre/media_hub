@@ -1,3 +1,7 @@
+## 0.36.0 — 2026-11-18
+- Dans Administration, un nouvel onglet État montre qui regarde, écoute, télécharge ou envoie en ce moment, et te dit quand tu peux relancer le serveur sans couper personne.
+- Le même onglet garde les dernières décisions de lecture : tu vois si un film a été lu tel quel ou converti, et pourquoi.
+
 ## 0.35.1 — 2026-11-18
 - Quand tu changes de page sans attendre la fin du chargement, la page précédente ne te reprend plus la main : les flèches de la liseuse continuent de tourner les pages et l'écran ne remonte plus tout seul.
 

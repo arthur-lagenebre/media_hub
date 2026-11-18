@@ -107,7 +107,7 @@
     // --- Ouverture -----------------------------------------------------------
     function open(at) {
       spin.hidden = false; err.hidden = true;
-      var body = { caps: capabilities(level), audio: audioIdx, max_kbps: q().k, max_height: q().h };
+      var body = { caps: capabilities(level), audio: audioIdx, max_kbps: q().k, max_height: q().h, device: H.device };
       return H.api('/api/play/' + id, body).then(function (p) {
         if (closing) return;
         plan = p;

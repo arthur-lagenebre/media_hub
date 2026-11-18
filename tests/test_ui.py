@@ -2372,6 +2372,418 @@ class TestBackupButton(UiCase):
             self.press("Enter")
 
 
+def activity_transfer(**over):
+    now = int(time.time())
+    return {"user": "alice", "title": "Dark · Épisode 1", "library": "series", "kind": "transcode", "origin": "remote", "agent": "Chrome 120 · Android",
+            "started": now - 120, "last": now, "bytes": 52428800, "connections": 1, **over}
+
+
+def activity_decision(**over):
+    return {"at": int(time.time()) - 30, "user": "alice", "device": "tv", "agent": "Chrome 120 · Android", "entry": "ab12", "title": "Dark · Épisode 1",
+            "caps": {"video": ["h264"], "audio": ["aac"], "containers": ["mp4"], "channels": 2}, "mode": "transcode", "why": ["image HEVC non lisible"], **over}
+
+
+class TestAdminStatusTab(UiCase):
+    """Administration > État : ce que le hub fait en ce moment (pour savoir si on peut relancer le serveur) et les dernières décisions de lecture.
+    `GET /api/activity` est simulée (`page.route`) pour maîtriser ce qu'elle répond d'un passage à l'autre ; l'intervalle est ramené à 0,3 s, sauf pour le test qui mesure le vrai."""
+    URL = "#/admin?tab=etat"
+
+    def setUp(self):
+        super().setUp()
+        self.activity = {"version": "9.9.9", "uptime": 5400, "busy": False, "streams": 0, "max_streams": 2,
+                         "counts": {"playing": 0, "downloads": 0, "uploads": 0, "remux": 0, "transcodes": 0, "backups": 0}, "transfers": [], "decisions": []}
+        self.calls, self.held, self.hold, self.failing = [], [], False, False
+        self.page.route("**/api/activity", self.answer)
+
+    def answer(self, route):
+        self.calls.append(time.monotonic())
+        if self.hold:
+            self.held.append(route)
+        elif self.failing:
+            route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "activité indisponible"}))
+        else:
+            route.fulfill(content_type="application/json", body=json.dumps(self.activity))
+
+    def open_status(self, every=300, url=URL):
+        self.open()
+        self.page.evaluate("e => { Hub.adminStatus.every = e }", every)
+        self.page.evaluate("h => { location.hash = h }", url)
+        self.shown(url)
+
+    def fact(self, label):
+        return self.view(f"[data-etat=live] dt:text-is('{label}') + dd")
+
+    def message(self):
+        return self.view("[data-etat=relaunch]")
+
+    def rows(self):
+        return self.view("[data-etat=live] .transfer")
+
+    def settle(self, ms=1000):
+        self.page.wait_for_timeout(ms)
+        return len(self.calls)
+
+    def test_the_tab_sits_before_the_server_and_the_first_tab_stays_the_default(self):
+        self.open("#/admin")
+        self.assertEqual(self.view(".tabs .tab").all_inner_texts()[-2:], ["État", "Serveur"])
+        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "Médiathèque")
+
+    def test_nobody_is_playing_so_the_server_can_be_restarted(self):
+        self.open_status()
+        expect(self.message()).to_have_text("Personne ne lit ni ne télécharge : le serveur peut être relancé.", timeout=20000)
+        expect(self.fact("Lectures")).to_have_text("0")
+        expect(self.fact("Version")).to_have_text("9.9.9")
+        expect(self.fact("Fonctionne depuis")).to_have_text("1 h 30")
+        expect(self.fact("Flux ffmpeg")).to_have_text("0 sur 2")
+
+    def test_a_running_task_changes_the_message(self):
+        self.activity["busy"] = True
+        self.open_status()
+        expect(self.message()).to_have_text("Personne ne lit ni ne télécharge, mais une tâche est en cours.", timeout=20000)
+        expect(self.fact("Tâches")).to_have_text("en cours")
+
+    def test_a_transfer_appears_and_goes_without_reloading(self):
+        self.open_status()
+        expect(self.message()).to_be_visible(timeout=20000)
+        self.activity["transfers"] = [activity_transfer(kind="download", title="Film.mkv")]
+        expect(self.rows()).to_have_count(1, timeout=20000)
+        expect(self.message()).to_have_count(0)                                                          # pas de phrase rassurante tant qu'on télécharge
+        expect(self.fact("Téléchargements")).to_have_text("1")
+        self.assertIn("alice", self.rows().inner_text())
+        self.assertIn("Film.mkv", self.rows().inner_text())
+        self.assertIn("à distance", self.rows().inner_text())
+        self.activity["transfers"] = []
+        expect(self.rows()).to_have_count(0, timeout=20000)
+        expect(self.message()).to_be_visible()
+        expect(self.fact("Téléchargements")).to_have_text("0")
+
+    def test_the_device_is_named_and_the_agent_is_the_fallback(self):
+        self.activity["transfers"] = [activity_transfer(device="tv", title="A"), activity_transfer(user="bob", title="B", agent="Firefox 120 · Linux", origin="local")]
+        self.open_status()
+        expect(self.rows()).to_have_count(2, timeout=20000)
+        self.assertIn("Télévision", self.rows().nth(0).inner_text())
+        self.assertNotIn("Chrome", self.rows().nth(0).inner_text())
+        self.assertIn("Firefox 120 · Linux", self.rows().nth(1).inner_text())
+        self.assertIn("réseau local", self.rows().nth(1).inner_text())
+
+    def test_a_direct_play_without_connection_is_not_finished(self):
+        """Entre deux requêtes Range, le navigateur lit sa mémoire tampon : `connections: 0` ne veut pas dire fini, et on ne relance pas pour autant."""
+        self.activity["transfers"] = [activity_transfer(kind="direct", connections=0, title="Mémoire tampon")]
+        self.open_status()
+        expect(self.rows()).to_have_count(1, timeout=20000)
+        self.assertNotIn("terminé", self.rows().inner_text())
+        self.assertEqual(self.rows().get_attribute("data-state"), "ongoing")
+        expect(self.message()).to_have_count(0)
+        expect(self.fact("Lectures")).to_have_text("1")
+
+    def test_a_finished_download_is_said_so_is_not_counted_and_still_blocks_the_message(self):
+        """Terminé, mais encore listé pendant 60 s : la phrase rassurante attend que la liste soit vide (prudent) ; le résumé « en cours » ne le compte pas."""
+        self.activity["transfers"] = [activity_transfer(kind="download", connections=0, title="Fini.mkv"), activity_transfer(kind="upload", connections=0, title="Envoi.zip"),
+                                      activity_transfer(kind="transcode", connections=0, title="Converti")]
+        self.open_status()
+        expect(self.rows()).to_have_count(3, timeout=20000)
+        for i in range(3):
+            self.assertIn("terminé", self.rows().nth(i).inner_text())
+            self.assertEqual(self.rows().nth(i).get_attribute("data-state"), "finished")
+        for label in ("Téléchargements", "Envois", "Conversions", "Lectures"):
+            expect(self.fact(label)).to_have_text("0")
+        expect(self.message()).to_have_count(0)
+
+    def test_coming_back_to_the_tab_does_not_repeat_an_old_restart_message(self):
+        """L'ancienne lecture ne dit plus rien de sûr : la phrase rassurante attend la réponse suivante."""
+        self.open_status()
+        expect(self.message()).to_be_visible(timeout=20000)
+        self.view(".tabs [data-key=tab-serveur]").click()
+        expect(self.message()).to_have_count(0)
+        self.hold = True
+        self.view(".tabs [data-key=tab-etat]").click()
+        self.until(lambda: self.held, tries=200)
+        expect(self.message()).to_have_count(0)
+        self.hold = False
+        for route in self.held:
+            route.fulfill(content_type="application/json", body=json.dumps(self.activity))
+        expect(self.message()).to_be_visible(timeout=20000)
+
+    def test_two_decisions_of_the_same_second_open_separately(self):
+        second = int(time.time()) - 30
+        self.activity["decisions"] = [activity_decision(at=second, caps={"video": ["hevc"]}), activity_decision(at=second, caps={"video": ["av1"]})]
+        self.open_status()
+        rows = self.view("[data-etat=decisions] .decision")
+        expect(rows).to_have_count(2, timeout=20000)
+        rows.nth(1).locator("[data-detail]").click()
+        expect(rows.nth(1)).to_contain_text("av1")
+        self.assertNotIn("hevc", rows.nth(0).inner_text())
+        expect(rows.nth(1).locator("[data-detail]")).to_be_focused()
+
+    def test_the_summary_counts_the_running_transfers_by_kind(self):
+        self.activity.update(streams=2, transfers=[activity_transfer(kind="direct"), activity_transfer(kind="audio", title="Piste"), activity_transfer(kind="remux", title="R"),
+                                                   activity_transfer(kind="transcode", title="T"), activity_transfer(kind="download", title="D"), activity_transfer(kind="upload", title="U"),
+                                                   activity_transfer(kind="backup", title="Sauvegarde.zip")])
+        self.open_status()
+        expect(self.rows()).to_have_count(7, timeout=20000)
+        for label, count in (("Lectures", "4"), ("Remux", "1"), ("Conversions", "1"), ("Téléchargements", "1"), ("Envois", "1"), ("Sauvegardes", "1"), ("Flux ffmpeg", "2 sur 2")):
+            expect(self.fact(label)).to_have_text(count)
+
+    def test_a_title_with_html_stays_text(self):
+        evil = '<b id="evil">gras</b><img src=x onerror="window.pwned=1">'
+        self.activity["transfers"] = [activity_transfer(title=evil, user="<i>u</i>", agent='<script>window.pwned=1</script>')]
+        self.activity["decisions"] = [activity_decision(title=evil, user="<i>u</i>", agent=evil, device="", caps={"video": ["<u>x</u>"]}, why=[evil])]
+        self.open_status()
+        expect(self.rows()).to_have_count(1, timeout=20000)
+        self.assertIn(evil, self.rows().inner_text())
+        decision = self.view("[data-etat=decisions] .decision")
+        decision.locator("[data-detail]").click()
+        self.assertIn(evil, decision.inner_text())
+        self.assertIn("<u>x</u>", decision.inner_text())
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.view("#evil, [data-etat] img, [data-etat] script, [data-etat] u, [data-etat] i").count(), 0)
+        self.assertIsNone(self.page.evaluate("window.pwned"))
+
+    def test_a_missing_library_is_told_apart_from_an_empty_one(self):
+        libs = self.api("/api/state")["libraries"]
+        name = libs[0].get("label") or libs[0]["id"]
+
+        def lose_the_first(route):
+            response = route.fetch()
+            data = response.json()
+            data["libraries"][0]["exists"] = False
+            route.fulfill(response=response, body=json.dumps(data))
+        self.page.route("**/api/state", lose_the_first)
+        self.open_status()
+        panel = self.view("[data-etat=libs]")
+        expect(panel).to_be_visible(timeout=20000)
+        self.assertIn(name, panel.inner_text())
+        self.assertIn("partage réseau", panel.inner_text())
+        expect(self.fact("Bibliothèques introuvables")).to_have_text("1")
+
+    def test_nothing_is_said_about_libraries_when_they_are_all_there(self):
+        self.open_status()
+        expect(self.message()).to_be_visible(timeout=20000)
+        self.assertEqual(self.view("[data-etat=libs]").count(), 0)
+        expect(self.fact("Bibliothèques introuvables")).to_have_text("0")
+
+    def test_the_last_decisions_show_the_device_the_modes_and_the_reasons(self):
+        self.activity["decisions"] = [activity_decision(), activity_decision(at=int(time.time()) - 900, user="bob", device="", agent="Firefox 120 · Linux", entry="cd34", title="Autre film",
+                                                      mode="direct", why=[], caps={})]
+        self.open_status()
+        rows = self.view("[data-etat=decisions] .decision")
+        expect(rows).to_have_count(2, timeout=20000)
+        first, second = rows.nth(0), rows.nth(1)
+        for text in ("alice", "Télévision", "Dark · Épisode 1", "Image convertie", "image HEVC non lisible"):
+            self.assertIn(text, first.inner_text())
+        for text in ("bob", "Firefox 120 · Linux", "Autre film", "Lecture directe"):
+            self.assertIn(text, second.inner_text())
+        self.assertNotIn("h264", first.inner_text())                                                      # le détail se demande
+        button = first.locator("[data-detail]")
+        self.assertEqual(button.get_attribute("aria-expanded"), "false")
+        button.click()
+        self.assertEqual(button.get_attribute("aria-expanded"), "true")
+        for text in ("h264", "aac", "mp4"):
+            self.assertIn(text, first.inner_text())
+
+    def test_the_reasons_may_be_a_text_as_well_as_a_list(self):
+        self.activity["decisions"] = [activity_decision(why="le conteneur ne passe pas")]
+        self.open_status()
+        expect(self.view("[data-etat=decisions] .decision")).to_contain_text("le conteneur ne passe pas", timeout=20000)
+
+    def test_a_real_play_leaves_its_decision_with_the_device(self):
+        self.page.unroute("**/api/activity")
+        entry = self.entries("films", "Direct")[0]["id"]
+        self.open()
+        self.page.evaluate("Hub.device = 'tv'")
+        self.page.evaluate("id => { location.hash = '#/play/' + id }", entry)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.page.evaluate("h => { location.hash = h }", self.URL)
+        self.shown(self.URL)
+        row = self.view("[data-etat=decisions] .decision")
+        expect(row.first).to_contain_text("Direct", timeout=20000)
+        self.assertIn("Télévision", row.first.inner_text())
+        self.assertIn("Lecture directe", row.first.inner_text())
+
+    def test_the_real_server_answers(self):
+        self.page.unroute("**/api/activity")
+        self.open()
+        self.page.evaluate("h => { location.hash = h }", self.URL)
+        self.shown(self.URL)
+        expect(self.fact("Version")).to_have_text(self.api("/api/state")["version"], timeout=20000)
+
+    def test_nothing_is_read_outside_the_tab_or_once_the_page_is_left(self):
+        self.open()
+        self.page.evaluate("Hub.adminStatus.every = 300")
+        self.page.evaluate("location.hash = '#/admin'")
+        self.shown("#/admin")
+        self.assertEqual(self.settle(1200), 0)                                                            # l'onglet par défaut ne lit rien
+        self.view("[data-key=tab-etat]").click()
+        self.until(lambda: len(self.calls) >= 2, tries=200)
+        self.view("[data-key=tab-serveur]").click()
+        before = self.settle(700)
+        self.assertEqual(self.settle(1200), before)
+        self.view("[data-key=tab-etat]").click()
+        self.until(lambda: len(self.calls) > before, tries=200)
+        self.page.evaluate("location.hash = '#/settings'")
+        self.shown("#/settings")
+        before = self.settle(700)
+        self.assertEqual(self.settle(1200), before)                                                       # la page quittée est masquée, pas détruite : elle ne lit plus
+        self.page.go_back()
+        self.shown("#/admin")
+        self.until(lambda: len(self.calls) > before, tries=200)                                           # le retour reprend
+
+    def test_a_hidden_document_pauses_the_reading_and_showing_it_again_resumes(self):
+        self.open_status()
+        self.until(lambda: len(self.calls) >= 2, tries=200)
+        self.page.evaluate("Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange'))")
+        before = self.settle(700)
+        self.assertEqual(self.settle(1200), before)
+        self.page.evaluate("Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange'))")
+        self.until(lambda: len(self.calls) > before, tries=200)
+
+    def test_it_reads_about_every_three_seconds(self):
+        self.open_status(every=3000)
+        self.until(lambda: len(self.calls) >= 3, tries=400)
+        gaps = [b - a for a, b in zip(self.calls, self.calls[1:])]
+        self.assertGreaterEqual(min(gaps), 2.7, gaps)
+
+    def test_an_answer_that_arrives_after_the_tab_changed_does_nothing(self):
+        self.hold = True
+        self.open_status()
+        self.until(lambda: self.held, tries=200)
+        self.view("[data-key=tab-serveur]").click()
+        self.hold = False
+        self.activity["transfers"] = [activity_transfer()]
+        self.held.pop().fulfill(content_type="application/json", body=json.dumps(self.activity))
+        before = self.settle(500)
+        self.assertEqual(self.settle(1200), before)
+        self.assertEqual(self.view("[data-etat]").count(), 0)
+
+    def test_an_answer_from_before_leaving_and_coming_back_to_the_tab_is_ignored(self):
+        self.hold = True
+        self.open_status()
+        self.until(lambda: self.held, tries=200)
+        self.view("[data-key=tab-serveur]").click()
+        self.view("[data-key=tab-etat]").click()
+        self.until(lambda: len(self.held) == 2, tries=200)                                                # la lecture d'avant le détour, puis celle d'après
+        stale, fresh = self.held
+        self.activity["transfers"] = [activity_transfer(title="Réponse périmée")]
+        stale.fulfill(content_type="application/json", body=json.dumps(self.activity))
+        self.page.wait_for_timeout(600)
+        self.assertEqual(self.rows().count(), 0)
+        self.hold = False
+        self.activity["transfers"] = []
+        fresh.fulfill(content_type="application/json", body=json.dumps(self.activity))
+        expect(self.message()).to_be_visible(timeout=20000)
+
+    def test_an_answer_that_arrives_after_the_page_was_left_does_nothing(self):
+        self.hold = True
+        self.open_status()
+        self.until(lambda: self.held, tries=200)
+        self.page.evaluate("location.hash = '#/settings'")
+        self.shown("#/settings")
+        self.hold = False
+        self.held.pop().fulfill(content_type="application/json", body=json.dumps(self.activity))
+        before = self.settle(500)
+        self.assertEqual(self.settle(1200), before)
+
+    def test_a_network_error_shows_once_in_the_section_without_toasts_and_recovers(self):
+        self.activity["transfers"] = [activity_transfer(title="Visible avant")]
+        self.open_status()
+        expect(self.rows()).to_have_count(1, timeout=20000)
+        self.failing = True
+        error = self.view("[data-etat=error]")
+        expect(error).to_have_count(1, timeout=20000)
+        expect(error).to_contain_text("activité indisponible")
+        self.assertEqual(self.view("[data-etat=relaunch]").count(), 0)                                    # une lecture qui échoue ne dit jamais « on peut relancer »
+        n = len(self.calls)
+        self.until(lambda: len(self.calls) >= n + 3, tries=200)
+        self.assertEqual(error.count(), 1)
+        expect(self.page.locator("#toast")).not_to_contain_text("activité indisponible")
+        self.failing = False
+        self.activity["transfers"] = []
+        expect(self.view("[data-etat=error]")).to_have_count(0, timeout=20000)
+        expect(self.message()).to_be_visible()
+
+    def test_a_refresh_keeps_the_focus_and_the_open_detail(self):
+        self.activity["decisions"] = [activity_decision()]
+        self.open_status()
+        button = self.view("[data-etat=decisions] [data-detail]")
+        button.wait_for(timeout=20000)
+        button.click()
+        key = button.get_attribute("data-key")
+        self.activity["transfers"] = [activity_transfer(title="Nouveau")]
+        self.activity["decisions"] = [activity_decision(at=int(time.time()), entry="zz99", title="Plus récente")] + self.activity["decisions"]
+        expect(self.rows()).to_have_count(1, timeout=20000)
+        expect(self.view("[data-etat=decisions] .decision")).to_have_count(2, timeout=20000)
+        self.assertEqual(self.page.evaluate("document.activeElement.getAttribute('data-key')"), key)
+        self.assertEqual(self.view(f"[data-key='{key}']").get_attribute("aria-expanded"), "true")
+
+    def test_a_page_redrawn_by_the_state_poll_keeps_the_tab_and_the_focus(self):
+        bump = {"n": 0}
+
+        def moved(route):
+            response = route.fetch()
+            data = response.json()
+            data["libraries"][0]["count"] += bump["n"]
+            route.fulfill(response=response, body=json.dumps(data))
+        self.page.route("**/api/state", moved)
+        self.activity["decisions"] = [activity_decision()]
+        self.open_status()
+        button = self.view("[data-etat=decisions] [data-detail]")
+        button.wait_for(timeout=20000)
+        button.click()
+        key = button.get_attribute("data-key")
+        self.page.evaluate("window.before = document.querySelector('[data-etat=decisions] [data-detail]')")
+        bump["n"] = 7
+        with self.page.expect_request(lambda r: r.url.endswith("/api/state"), timeout=20000):
+            self.activity["busy"] = True                                                                  # le changement de `busy` relit l'état et les tâches
+        expect(self.message()).to_have_text("Personne ne lit ni ne télécharge, mais une tâche est en cours.", timeout=20000)
+        self.page.wait_for_timeout(500)
+        self.assertFalse(self.page.evaluate("window.before.isConnected"))                                  # la page a bien été redessinée
+        self.assertEqual(self.view(".tabs .tab[aria-selected=true]").inner_text(), "État")
+        self.assertEqual(self.page.evaluate("document.activeElement.getAttribute('data-key')"), key)
+        self.assertEqual(self.view(f"[data-key='{key}']").get_attribute("aria-expanded"), "true")
+
+
+class TestPlayerSendsTheDevice(UiCase):
+    def test_the_play_request_carries_the_device(self):
+        entry = self.entries("films", "Direct")[0]["id"]
+        self.open()
+        self.page.evaluate("Hub.device = 'tv'")
+        with self.page.expect_request(lambda r: "/api/play/" in r.url and r.method == "POST") as info:
+            self.page.evaluate("id => { location.hash = '#/play/' + id }", entry)
+        self.assertEqual(json.loads(info.value.post_data)["device"], "tv")
+
+
+class TestStatusTabOfAnOrdinaryAccount(unittest.TestCase):
+    @unittest.skipUnless(sync_playwright, "Playwright absent")
+    def test_there_is_no_status_tab_and_nothing_is_read(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            run = Running(tmp, password="secret")
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch()
+                context = browser.new_context()
+                base = f"http://127.0.0.1:{run.port}"
+                form = {"Content-Type": "application/x-www-form-urlencoded"}
+                context.request.post(base + "/api/login", data="password=secret", headers=form)
+                context.request.post(base + "/api/users", data=json.dumps({"name": "lea", "password": "motdepasse12", "role": "user"}), headers={"Content-Type": "application/json"})
+                context.request.post(base + "/api/logout")
+                context.clear_cookies()
+                context.request.post(base + "/api/login", data="user=lea&password=motdepasse12", headers=form)
+                page = context.new_page()
+                seen = []
+                page.on("request", lambda r: seen.append(r.url) if "/api/activity" in r.url else None)
+                page.goto(base + "/#/admin?tab=etat")
+                page.wait_for_function("location.hash === '#/settings'")
+                page.wait_for_selector(".tabs .tab")
+                self.assertEqual(page.locator("[data-key=tab-etat]").count(), 0)
+                page.wait_for_timeout(500)
+                self.assertEqual(seen, [])
+                browser.close()
+            run.stop()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class TestMusicQueueAndPlaylists(UiCase):
     def open_music(self):
         self.open("#/l/musique")
@@ -5274,7 +5686,7 @@ class TestSettings(UiCase):
         self.shown("#/admin")
         self.view(".panel").first.wait_for()
         self.assertEqual(self.view("h1").inner_text(), "Administration")
-        self.assertEqual(self.tabs(), ["Médiathèque", "Demandes", "Suggestions", "Boîte de réception", "Comptes", "Serveur"])
+        self.assertEqual(self.tabs(), ["Médiathèque", "Demandes", "Suggestions", "Boîte de réception", "Comptes", "État", "Serveur"])
         self.assertEqual(self.selected(), "Médiathèque")
         self.assertEqual(self.titles(), ["Bibliothèques", "Sagas", "Entretien", "Tâches"])
         self.assertEqual(self.page.locator("#nav .tool[data-nav='#/admin']").get_attribute("aria-current"), "page")
@@ -6434,7 +6846,7 @@ class InboxUiCase(unittest.TestCase):
         page = self.session("admin", lang="en")
         page.goto(self.base + "/#/admin?tab=inbox")
         page.locator("#views > .view:visible .inbox-file").wait_for()
-        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Media library", "Requests", "Suggestions", "Inbox", "Accounts", "Server"])
+        self.assertEqual(page.locator("#views > .view:visible .tabs .tab").all_inner_texts(), ["Media library", "Requests", "Suggestions", "Inbox", "Accounts", "State", "Server"])
         self.assertEqual(page.locator("#views > .view:visible .inbox-file .btn").all_inner_texts(), ["Download", "Delete"])
         self.assertEqual(page.locator("#views > .view:visible .inbox .total").inner_text(), "1 file · 2 KB")
         page.goto(self.base + "/#/admin?tab=comptes")

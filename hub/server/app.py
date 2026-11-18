@@ -25,6 +25,7 @@ import threading
 import time
 import traceback
 from collections import Counter
+from contextlib import nullcontext
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,6 +53,7 @@ from .. import requests as hub_requests
 from .. import request_search
 from .. import suggestions
 from .. import urls
+from ..activity import Activity
 from .. import sagas as sagafile
 from ..sagas import Sagas
 from ..db import RATINGS, Database, make_id
@@ -118,10 +120,17 @@ class Hub:
         self.inbox = Inbox(cfg, self.db)                       # les envois des comptes (voir inbox.py)
         self.finder = request_search.Finder(cfg)                # la recherche dans TMDB des titres à demander (voir request_search.py)
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
-        self.active = 0
+        self.active = 0                                        # les flux ffmpeg en cours (voir count_stream)
+        self.active_lock = threading.Lock()
+        self.activity = Activity()                             # qui lit, télécharge ou envoie en ce moment, et les dernières décisions de lecture (voir activity.py)
         self.secret = self._secret()
         self.started = time.time()
         accounts.seed(self.db, cfg)
+
+    def count_stream(self, delta):
+        """Un flux ffmpeg de plus (+1) ou de moins (-1) : un fil par connexion, le compteur est sous verrou."""
+        with self.active_lock:
+            self.active += delta
 
     def _secret(self):
         value = self.db.kv_get("secret")
@@ -344,8 +353,13 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, obj, status=200, headers=None):
         self.send_body(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), "application/json; charset=utf-8", status, {"Cache-Control": "no-store", **(headers or {})}, self.command == "HEAD")
 
-    def send_file(self, path, mime=None, headers=None):
-        """Le fichier, avec les requêtes Range (reprise, avance rapide, lecteur vidéo)."""
+    def transfer(self, kind, ref, title, library="", leave_empty=True):
+        """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré."""
+        return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty)
+
+    def send_file(self, path, mime=None, headers=None, track=None):
+        """Le fichier, avec les requêtes Range (reprise, avance rapide, lecteur vidéo). `track` : de quoi inscrire l'envoi dans l'activité (une fonction sans argument qui rend `Handler.transfer(…)`), ouvert autour de l'envoi réel seulement :
+        ni un HEAD, ni un 404, ni un 416 n'y laissent de trace."""
         try:
             size = path.stat().st_size
             handle = open(path, "rb")
@@ -360,7 +374,8 @@ class Handler(BaseHTTPRequestHandler):
             start, end, status = bounds
             self.send_file_headers(mime, status, start, end, size, headers)
             if self.command != "HEAD":
-                self.copy_range(handle, start, end - start + 1)
+                with (track or nullcontext)() as sent:
+                    self.copy_range(handle, start, end - start + 1, sent)
 
     def send_file_headers(self, mime, status, start, end, size, headers):
         self.send_response(status)
@@ -373,8 +388,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
 
-    def copy_range(self, handle, start, length):
-        """Envoie `length` octets du fichier à partir de `start`, par morceaux."""
+    def copy_range(self, handle, start, length, sent=None):
+        """Envoie `length` octets du fichier à partir de `start`, par morceaux ; `sent(n)` compte ce qui est parti."""
         self.connection.settimeout(3600)       # un film mis en pause ne doit pas couper la connexion
         try:
             handle.seek(start)
@@ -385,6 +400,8 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 self.wfile.write(chunk)
                 remaining -= len(chunk)
+                if sent:
+                    sent(len(chunk))
         finally:
             self.connection.settimeout(self.timeout)       # la connexion persiste : un client inactif ne garde pas un fil une heure de plus
 
@@ -2237,6 +2254,7 @@ def api_progress(h, m, q):
     if entry["kind"] == "audio":                 # la musique n'a pas de reprise : seulement « écouté »
         done = done or (duration > 0 and position / duration > 0.8)
     h.hub.db.save_progress(h.user["id"], entry["id"], duration if done and entry["kind"] != "book" else position, duration, done)
+    h.hub.activity.touch(h.user["id"], entry["id"])          # un film lu depuis la mémoire tampon du navigateur ne demande plus rien : sa ligne d'activité ne doit pas s'éteindre pour autant
     h.send_json({"ok": True, "done": done})
 
 
@@ -2378,6 +2396,11 @@ def show_title(hub, entry):
     return item["title"] if item and item["type"] == "show" else ""
 
 
+def entry_label(show, entry):
+    """Le titre d'un fichier pour l'administrateur : « Série · Épisode », ou le titre seul."""
+    return f"{show} · {entry['title']}" if show else entry["title"]
+
+
 def play_warning(decision, video):
     if decision["mode"] == "transcode" and video.get("height", 0) >= 2000 and video.get("codec") in ("hevc", "av1"):
         return "Image 4K à convertir : le serveur n'a pas de carte vidéo pour cela, la lecture risque de saccader. Le débit demandé peut être baissé."
@@ -2454,6 +2477,8 @@ def api_play(h, m, q):
     if audio is None:                                                                       # une piste demandée par le lecteur (choix pendant la lecture) l'emporte toujours
         audio = tracks.pick_audio(probe["audio"], settings["audio_langs"])
     decision = prober.plan(probe, caps, audio, kbps, height)
+    show = show_title(hub, entry)
+    hub.activity.decide(h.user["id"], h.user["name"], client_ip(h), h.headers.get("User-Agent", ""), body.get("device"), entry["id"], entry_label(show, entry), caps, decision["mode"], decision["why"])
     chosen = decision["audio"]
     video = probe.get("video") or {}
     height = default_height(decision, video, height)
@@ -2463,7 +2488,7 @@ def api_play(h, m, q):
     for sub in subs:
         sub["selected"] = sub["id"] == picked
     h.send_json({
-        "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": show_title(hub, entry), "season": entry["season"], "number": entry["number"],
+        "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": show, "season": entry["season"], "number": entry["number"],
         "mode": decision["mode"], "why": decision["why"], "url": play_url(entry, decision, caps, kbps, height), "seekable": decision["mode"] == "direct",
         "duration": probe["duration"] or entry["duration"], "resume": resume_position(hub, h.user["id"], entry), "warning": play_warning(decision, video),
         "audio": [{"index": t["index"], "label": track_label(t, h.lang), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
@@ -2492,7 +2517,16 @@ def media_file(h, m, q):
     extra = {"Cache-Control": "private, max-age=3600"}
     if q.get("download"):
         extra["Content-Disposition"] = "attachment; filename*=UTF-8''" + quote(path.name)
-    h.send_file(path, headers=extra)
+    h.send_file(path, headers=extra, track=file_track(h, entry, bool(q.get("download"))))
+
+
+def file_track(h, entry, download):
+    """Ce que l'envoi de ce fichier inscrit dans l'activité (voir Handler.send_file), ou None : un téléchargement, une vidéo lue en direct (`direct`) ou une piste (`audio`).
+    Un livre qu'on lit n'est pas suivi : ses pages sont chargées d'un coup, un redémarrage ne coupe pas une page déjà là."""
+    kind = "download" if download else {"video": "direct", "audio": "audio"}.get(entry["kind"])
+    if kind is None:
+        return None
+    return lambda: h.transfer(kind, entry["id"], entry_label(show_title(h.hub, entry), entry), entry["lib"])
 
 
 def query_number(q, name, cast=int, default=0):
@@ -2521,7 +2555,8 @@ def first_chunk(proc, errors):
     return first
 
 
-def send_stream(h, proc, first):
+def send_stream(h, proc, first, sent):
+    """Les octets de ffmpeg vers le client, comptés par `sent` ; rien pour un HEAD."""
     h.send_response(200)
     h.send_header("Content-Type", "video/mp4")
     h.send_header("Cache-Control", "no-store")
@@ -2533,11 +2568,13 @@ def send_stream(h, proc, first):
         return
     h.connection.settimeout(3600)
     h.wfile.write(first)
+    sent(len(first))
     while True:
         chunk = proc.stdout.read1(CHUNK)
         if not chunk:
             break
         h.wfile.write(chunk)
+        sent(len(chunk))
 
 
 def stop_stream(proc):
@@ -2566,17 +2603,19 @@ def media_stream(h, m, q):
     cmd = stream_command(hub, path, probe_of(hub, entry), q)
     if not hub.streams.acquire(blocking=False):
         raise HttpError(503, f"{hub.cfg.max_streams} conversions en cours : attends la fin de l'une d'elles.")
-    hub.active += 1
+    hub.count_stream(1)
     proc = None
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
-        errors = []
-        threading.Thread(target=lambda: errors.append(proc.stderr.read().decode("utf-8", "replace")), daemon=True).start()
-        send_stream(h, proc, first_chunk(proc, errors))
+        kind = "transcode" if q.get("m") == "transcode" else "remux"
+        with h.transfer(kind, entry["id"], entry_label(show_title(hub, entry), entry), entry["lib"], leave_empty=False) as sent:          # dès le lancement : ffmpeg peut mettre des secondes à produire son premier bloc, et relancer le serveur couperait déjà cette lecture
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            errors = []
+            threading.Thread(target=lambda: errors.append(proc.stderr.read().decode("utf-8", "replace")), daemon=True).start()
+            send_stream(h, proc, first_chunk(proc, errors), sent)
     finally:
         if proc is not None:
             stop_stream(proc)
-        hub.active -= 1
+        hub.count_stream(-1)
         hub.streams.release()
 
 
@@ -2985,6 +3024,14 @@ def api_jobs(h, m, q):
     h.send_json({"jobs": h.hub.jobs.snapshot(with_log=q.get("log") == "1"), "busy": h.hub.jobs.busy()})
 
 
+@route("GET", r"/api/activity")
+def api_activity(h, m, q):
+    """Ce qui se passe en ce moment, pour savoir si le serveur peut être relancé sans couper quelqu'un : administrateur seulement. Ni chemin, ni adresse de client, ni secret (voir activity.py)."""
+    require_admin(h)
+    hub = h.hub
+    h.send_json({"version": __version__, "uptime": int(max(0, time.time() - hub.started)), "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams, **hub.activity.report()})
+
+
 @route("POST", r"/api/scan")
 def api_scan(h, m, q):
     require_admin(h)
@@ -3070,12 +3117,14 @@ def announced_length(h):
 class CountedBody:
     """Le corps de la requête tel qu'une route le lit : compte les octets lus, pour qu'un refus en cours de route sache ce qui reste à venir (voir Handler.let_the_reply_arrive)."""
 
-    def __init__(self, source):
-        self.source, self.count = source, 0
+    def __init__(self, source, sent=None):
+        self.source, self.count, self.sent = source, 0, sent
 
     def read(self, size):
         data = self.source.read(size)
         self.count += len(data)
+        if self.sent:
+            self.sent(len(data))                  # l'activité du hub compte ce qui arrive (voir api_inbox_send)
         return data
 
 
@@ -3086,14 +3135,16 @@ def api_inbox_send(h, m, q):
     Les refus (droit, nom, extension, chemin, espace, nombre d'envois, plafond de sous-dossiers) viennent avant la lecture du corps ; la connexion est alors coupée, puisque le corps n'est pas lu, mais après avoir laissé la réponse arriver au client qui envoie encore (voir Handler.let_the_reply_arrive).
     Rend 201 `{"name", "size", "account", "dir"}` (`account` : le nom du dossier du compte, celui des URL `/api/inbox/<dossier>/<nom>` ; `dir` : le sous-dossier retenu, `""` à la racine)."""
     h.body_taken = True                     # le corps se lit par morceaux, ou pas du tout : _fail ne doit pas le jeter
-    body = CountedBody(h.rfile)
-    try:
-        require_sender(h)
-        stored = module_call(InboxError, h.hub.inbox.receive, h.user["id"], q.get("name"), body, announced_length(h), q.get("dir"))
-    except Exception:                       # un refus (HttpError), mais aussi une erreur système avant la lecture : dans tous les cas le corps n'est pas lu, ou à moitié
-        h.close_connection = True
-        h.body_consumed = body.count
-        raise
+    name = q.get("name") or ""
+    with h.transfer("upload", f"upload:{q.get('dir') or ''}/{name}", name) as sent:         # un refus avant le premier octet n'y laisse rien (voir Activity.transfer)
+        body = CountedBody(h.rfile, sent)
+        try:
+            require_sender(h)
+            stored = module_call(InboxError, h.hub.inbox.receive, h.user["id"], q.get("name"), body, announced_length(h), q.get("dir"))
+        except Exception:                   # un refus (HttpError), mais aussi une erreur système avant la lecture : dans tous les cas le corps n'est pas lu, ou à moitié
+            h.close_connection = True
+            h.body_consumed = body.count
+            raise
     h.send_json(stored, 201)
 
 
@@ -3121,7 +3172,8 @@ def api_inbox_file(h, m, q):
     """Un fichier de la boîte, en pièce jointe (`Range` accepté pour reprendre) : administrateur seulement. `?dir=<chemin relatif>` pour un fichier d'un sous-dossier. Jamais analysé ni servi autrement : type `application/octet-stream`, `nosniff`."""
     require_admin(h)
     path = module_call(InboxError, h.hub.inbox.path_of, m.group(1), m.group(2), q.get("dir"))
-    h.send_file(path, "application/octet-stream", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(path.name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+    h.send_file(path, "application/octet-stream", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(path.name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
+                track=lambda: h.transfer("download", f"inbox:{m.group(1)}/{q.get('dir') or ''}/{path.name}", path.name))
 
 
 @route("GET", r"/api/backup")
@@ -3133,11 +3185,13 @@ def api_backup(h, m, q):
     work = Path(tempfile.mkdtemp(prefix=".sauvegarde-", dir=h.hub.cfg.data))
     try:
         name = backup.archive_name()
-        try:
-            backup.create(h.hub.db.path, h.hub.cfg.data, work / name)
-        except (backup.BackupError, OSError) as e:
-            raise HttpError(500, f"sauvegarde impossible : {getattr(e, 'message', e)}")
-        h.send_file(work / name, "application/zip", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+        with h.transfer("backup", "backup", name, leave_empty=False) as sent:          # dès la construction de l'archive : relancer le serveur l'interromprait
+            try:
+                backup.create(h.hub.db.path, h.hub.cfg.data, work / name)
+            except (backup.BackupError, OSError) as e:
+                raise HttpError(500, f"sauvegarde impossible : {getattr(e, 'message', e)}")
+            h.send_file(work / name, "application/zip", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
+                        track=lambda: nullcontext(sent))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
