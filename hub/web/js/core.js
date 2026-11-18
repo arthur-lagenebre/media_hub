@@ -485,6 +485,21 @@
       window.scrollTo(0, Math.max(0, target));
     }
   }
+  // Dans une ligne, le lien secondaire (`data-aside`) et le premier bouton sont voisins pour les flèches gauche et droite : sur un grand écran, ils sont trop loin l'un de l'autre pour que la distance les rapproche.
+  function besideAside(cur, dir) {
+    var line = (dir === 'left' || dir === 'right') && cur.closest ? cur.closest('.line') : null;
+    var aside = line && line.querySelector('.f[data-aside]');
+    if (!aside) return null;
+    var first = line.querySelector('.f:not([data-aside])');
+    if (cur === aside) return dir === 'right' ? first : null;
+    return cur === first && dir === 'left' ? aside : null;
+  }
+  // Haut et bas vont de bouton en bouton : le lien secondaire d'une ligne qui a un bouton ne s'atteint que de côté (voir besideAside), même quand il est le plus proche, sur un écran étroit. Seul dans sa ligne, il reste une étape.
+  function skippedUpDown(el, dir, all) {
+    if ((dir !== 'up' && dir !== 'down') || !el.hasAttribute('data-aside')) return false;
+    var line = el.closest('.line');
+    return !!line && all.some(function (x) { return x !== el && line.contains(x); });
+  }
   H.focus = {
     set: function (el, noScroll) {
       if (!el) return false;
@@ -498,7 +513,7 @@
       var pick = function (scope) {
         var el = scope.querySelector('[data-autofocus]:not([hidden])');
         if (el && visible(el)) return el;
-        return Array.prototype.filter.call(scope.querySelectorAll('.f'), function (x) { return x.tagName !== 'INPUT' && visible(x); })[0] || null;   // un champ de saisie ouvrirait le clavier à l'écran de la télé
+        return Array.prototype.filter.call(scope.querySelectorAll('.f:not([data-aside])'), function (x) { return x.tagName !== 'INPUT' && visible(x); })[0] || null;   // un champ de saisie ouvrirait le clavier à l'écran de la télé ; `data-aside` : un lien secondaire, atteint aux flèches seulement
       };
       var el = null;
       if (!scoped && !H.overlay.top()) {            // sans fenêtre ouverte : le contenu de la page, pas la barre du haut
@@ -519,9 +534,11 @@
         if (H.overlay.top() && H.overlay.top().contains(cur)) return false;
         return H.focus.first();
       }
+      var mate = besideAside(cur, dir);
+      if (mate && all.indexOf(mate) >= 0) return H.focus.set(mate);
       var c = box(cur), best = null, bestScore = Infinity;
       all.forEach(function (el) {
-        if (el === cur) return;
+        if (el === cur || skippedUpDown(el, dir, all)) return;
         var s = score(c, box(el), dir);
         if (s !== null && s < bestScore) { best = el; bestScore = s; }
       });

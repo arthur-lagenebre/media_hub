@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import math
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -167,6 +170,14 @@ class TestAsking(RequestCase):
         self.assertEqual((again.status, again.json()["id"]), (200, rid))
         self.assertEqual(self.stored(), sorted([("movie", 2, "pending", self.alice["id"]), ("movie", 2, "pending", self.bob["id"])]))
         self.assertEqual(self.mine(self.alice)[0]["note"], "Pour Noël")
+
+    def test_every_request_gives_the_tmdb_page_of_its_film_or_its_show(self):
+        pages = {"movie": "https://www.themoviedb.org/movie/2", "show": "https://www.themoviedb.org/tv/2"}
+        self.ask(self.alice, 2)
+        shown = self.ask(self.alice, 2, "show", title="Une série").json()
+        self.assertEqual({r["kind"]: r["url"] for r in self.mine(self.alice)}, pages)
+        self.assertEqual({r["kind"]: r["url"] for r in self.everything()}, pages)
+        self.assertEqual(self.set_status(shown["id"], "declined").json()["url"], pages["show"])
 
     def test_a_show_is_accepted_and_kept_apart_from_a_film_of_the_same_number(self):
         self.assertEqual(self.ask(self.alice, 2, "show", title="Une série", year="2019").status, 201)
@@ -834,6 +845,14 @@ class TestMigration(unittest.TestCase):
         self.assertEqual(db.query("SELECT * FROM requests"), [])
         self.assertTrue(accounts.public(accounts.by_id(db, alice["id"]))["can_request"])
         self.assertEqual(Database(path).kv_get("schema"), database.SCHEMA_VERSION)          # rouverte : rien n'est rejoué
+
+
+class TestStartup(unittest.TestCase):
+    def test_the_hub_starts_before_media_library_is_on_the_path(self):
+        """`python -m hub` charge les comptes, donc les demandes, avant de mettre media_library sur le chemin : dans un processus neuf, ces imports ne doivent pas en dépendre."""
+        env = {name: value for name, value in os.environ.items() if name != "PYTHONPATH"}
+        done = subprocess.run([sys.executable, "-c", "import hub.__main__"], cwd=Path(__file__).resolve().parent.parent, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
 
 
 if __name__ == "__main__":

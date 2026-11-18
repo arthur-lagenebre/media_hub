@@ -105,14 +105,14 @@ class TestSearching(SearchCase):
     def test_films_are_searched_ten_at_most_with_their_text_only(self):
         results = self.found(self.alice, "Le parrain", "movie")
         self.assertEqual(len(results), 10)
-        self.assertEqual(results[0], {"kind": "movie", "tmdb": 2, "title": "Film 2", "year": "2001", "date": "2001-01-01", "overview": "Résumé 2"})
+        self.assertEqual(results[0], {"kind": "movie", "tmdb": 2, "title": "Film 2", "year": "2001", "date": "2001-01-01", "overview": "Résumé 2", "url": "https://www.themoviedb.org/movie/2"})
         self.assertEqual({r["kind"] for r in results}, {"movie"})
         self.assertEqual(self.tmdb.calls, ["search/movie?query=Le%20parrain"])
 
     def test_shows_are_searched_with_their_first_air_date(self):
         results = self.found(self.alice, "série", "show")
         self.assertEqual(len(results), 10)
-        self.assertEqual(results[1], {"kind": "show", "tmdb": 77, "title": "Une série à venir", "year": "2030", "date": "2030-01-01", "overview": "Résumé 77"})
+        self.assertEqual(results[1], {"kind": "show", "tmdb": 77, "title": "Une série à venir", "year": "2030", "date": "2030-01-01", "overview": "Résumé 77", "url": "https://www.themoviedb.org/tv/77"})
         self.assertEqual(self.tmdb.calls, ["search/tv?query=" + quote("série", safe="")])
 
     def test_without_a_kind_both_are_searched_films_first(self):

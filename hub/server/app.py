@@ -3253,7 +3253,7 @@ def require_requester(h):
 @route("GET", r"/api/requests/search")
 def api_request_search(h, m, q):
     """Cherche dans TMDB un film (`kind=movie`), une série (`kind=show`) ou les deux (sans `kind`) à demander : `q`, 2 à 100 caractères. Au plus 10 résultats par sorte, de la première page de TMDB ;
-    chacun dit s'il est déjà demandé (`request`, comme les cases grisées) et, quand il est dans une bibliothèque que le compte voit, son élément (`item`). Garde-fous : voir request_search.py."""
+    chacun donne sa fiche sur le site de TMDB (`url`), dit s'il est déjà demandé (`request`, comme les cases grisées) et, quand il est dans une bibliothèque que le compte voit, son élément (`item`). Garde-fous : voir request_search.py."""
     require_requester(h)
     text = request_call(request_search.search_text, q.get("q"))
     kinds = request_call(request_search.search_kinds, q.get("kind"))
@@ -3266,6 +3266,7 @@ def api_request_search(h, m, q):
     visible = h.visible_ids()
     for result in results:
         key = (result["kind"], result["tmdb"])
+        result["url"] = hub_requests.tmdb_url(*key)
         if key in marks:
             result["request"] = marks[key]
         item = hub_requests.item_for(found, *key, visible)
