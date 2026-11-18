@@ -446,9 +446,11 @@
     return tracks && tracks !== 'none' ? tracks.trim().split(/\s+/).length : 1;
   }
   // La carte qui avait le focus vient d'être coupée : il passe à celle qui prend sa place, sinon à la dernière du rayon, sinon au rayon voisin.
-  function refocusShelf(grid, at) {
+  // Une fenêtre ouverte depuis cette carte (`under`) garde le focus : c'est à sa fermeture qu'il reviendra sur la remplaçante.
+  function refocusShelf(grid, at, under) {
     var next = grid.children[Math.min(at, grid.children.length - 1)] || nearShelf(grid.parentNode);
-    if (!H.focus.set(next)) H.focus.first();
+    if (under) under.opener = next;
+    else if (!H.focus.set(next)) H.focus.first();
   }
   // Coupe un rayon, sans les éléments de `skip` ; rend ce qu'il montre. Un rayon à qui il ne reste rien se cache, et revient si la coupe des autres lui rend des cartes.
   function fitShelf(grid, skip) {
@@ -458,12 +460,13 @@
     if (!cols) return [];
     var kept = grid.hubEntries.filter(function (e) { return !skip[e.item.id]; }).slice(0, cols * (parseInt(H.setting('home_shelf_rows'), 10) || SHELF_ROWS));
     var wanted = kept.map(function (e) { return e.card || (e.card = e.make()); });
-    var before = Array.prototype.slice.call(grid.children), at = -1;
-    before.forEach(function (card, i) { if (card.contains(document.activeElement)) at = i; });
+    var before = Array.prototype.slice.call(grid.children), at = -1, under = H.overlay.bottom();
+    var held = under ? under.opener : document.activeElement;
+    before.forEach(function (card, i) { if (card.contains(held)) at = i; });
     before.forEach(function (card) { if (wanted.indexOf(card) < 0) grid.removeChild(card); });
     wanted.forEach(function (card, i) { if (grid.children[i] !== card) grid.insertBefore(card, grid.children[i] || null); });
     shelf.hidden = !wanted.length;
-    if (at >= 0 && wanted.indexOf(before[at]) < 0) refocusShelf(grid, at);
+    if (at >= 0 && wanted.indexOf(before[at]) < 0) refocusShelf(grid, at, under);
     return kept;
   }
   function cutGrids(home) {

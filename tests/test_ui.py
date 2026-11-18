@@ -4516,6 +4516,33 @@ class TestHomeShelfRows(HomeShelvesCase):
         self.assert_full(self.LATEST)
         self.until(lambda: self.page.evaluate("document.activeElement.getAttribute('data-key')") == self.keys(self.LATEST)[-1])
 
+    def test_closing_a_menu_whose_card_was_cut_puts_the_focus_on_a_card_that_stays(self):
+        self.home()
+        before = self.keys(self.LATEST)
+        card = self.view(f"{self.LATEST} .card[data-type=movie]").last
+        key = card.get_attribute("data-key")
+        card.focus()
+        self.page.keyboard.press("ContextMenu")
+        self.page.locator(".veil .menu.choice").wait_for()
+        self.page.set_viewport_size({"width": 800, "height": 900})
+        self.assert_full(self.LATEST)
+        kept = self.keys(self.LATEST)
+        self.assertNotIn(key, kept)
+        self.assertTrue(self.page.evaluate("!!document.activeElement.closest('.veil')"))                    # la coupe ne prend pas le focus à la fenêtre ouverte
+        self.page.keyboard.press("Escape")
+        self.page.locator(".veil").wait_for(state="detached")
+        self.assertEqual(self.page.evaluate("document.activeElement.getAttribute('data-key')"), kept[min(before.index(key), len(kept) - 1)])
+
+    def test_without_resize_observer_the_window_size_still_cuts_again(self):
+        self.page.add_init_script("delete window.ResizeObserver")                                           # un vieux navigateur de télé
+        self.home()
+        before = self.keys(self.LATEST)
+        self.page.set_viewport_size({"width": 800, "height": 900})
+        self.assert_full(self.LATEST)
+        self.assert_full(self.FILMS)
+        self.assert_no_repeat()
+        self.assertLess(len(self.keys(self.LATEST)), len(before))
+
     def test_a_short_shelf_keeps_an_incomplete_last_row(self):
         def short(route):
             data = route.fetch().json()
