@@ -1,3 +1,6 @@
+## 0.35.1 — 2026-11-18
+- Quand tu changes de page sans attendre la fin du chargement, la page précédente ne te reprend plus la main : les flèches de la liseuse continuent de tourner les pages et l'écran ne remonte plus tout seul.
+
 ## 0.35.0 — 2026-11-18
 - Une cloche apparaît dans la barre du haut : elle ouvre tes notifications, avec pour l'instant les dernières nouveautés du hub et un lien vers toute la liste.
 

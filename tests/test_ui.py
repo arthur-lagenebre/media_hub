@@ -276,6 +276,26 @@ class TestNavigation(UiCase):
             self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 391, hash)
 
 
+    def test_a_late_save_of_the_settings_does_not_scroll_the_page_we_moved_to(self):
+        """Un réglage enregistré rend le focus à son bouton quand le serveur répond : la page des paramètres, quittée, est masquée, et la page affichée ne doit pas défiler pour « montrer » un bouton qui n'est plus là."""
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show"}))
+        self.page.set_viewport_size({"width": 1920, "height": 500})
+        late = []
+        self.page.route(lambda url: url.endswith("/api/me/settings"), lambda route: late.append(route) if route.request.method == "POST" else route.continue_())
+        self.open("#/settings?tab=preferences")
+        self.page.locator("#views > .settings [data-key='display-home_latest']").click()
+        self.page.locator(".menu .opt", has_text="Masqué").click()
+        self.until(lambda: len(late) == 1)
+        self.page.goto(self.base + "/#/admin")
+        self.shown("#/admin")
+        self.view(".tabs").wait_for()
+        self.page.evaluate("window.scrollTo(0, 300)")
+        self.until(lambda: self.page.evaluate("window.scrollY") == 300)
+        for route in late:
+            route.continue_()
+        self.page.wait_for_selector("#views > .settings span:text-is('Sur la page d’accueil : Masqué')", state="attached")       # la page masquée s'est redessinée
+        self.assertEqual(self.page.evaluate("window.scrollY"), 300)
+
 class TestDetailPages(UiCase):
     def test_show_seasons_and_episodes(self):
         item = self.item("series", "Dark")

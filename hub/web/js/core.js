@@ -503,7 +503,7 @@
   }
   H.focus = {
     set: function (el, noScroll) {
-      if (!el) return false;
+      if (!el || !H.focus.shown(el)) return false;          // un élément d'une page quittée (masquée) ou retirée : ni focus, ni défilement pour le « montrer » (ses mesures sont des zéros : `reveal` remonterait la page affichée)
       try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
       if (!noScroll) reveal(el);
       return true;
