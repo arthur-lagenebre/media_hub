@@ -12,6 +12,7 @@ from unittest import mock
 
 from tests import fixtures
 from hub import accounts, config, inbox
+from hub.activity import Activity
 
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
@@ -54,6 +55,8 @@ class MiniHub(app.Hub):
         self.finder = request_search.Finder(self.cfg)
         self.streams = threading.BoundedSemaphore(2)
         self.active = 0
+        self.active_lock = threading.Lock()
+        self.activity = Activity()
         self.secret = "ab" * 32
         self.started = 0.0
 

@@ -585,7 +585,7 @@ Corps :
 
 ```json
 {"caps": {"video": ["h264", "hevc"], "audio": ["aac", "mp3", "flac"], "containers": ["mp4"], "channels": 2, "hdr": false},
- "audio": null, "max_kbps": 0, "max_height": 0}
+ "audio": null, "max_kbps": 0, "max_height": 0, "device": "tv"}
 ```
 
 | Champ | Sens |
@@ -599,6 +599,7 @@ Corps :
 | `audio` | indice de piste audio voulu (`audio[].index` d'un plan précédent : un choix fait pendant la lecture, qui l'emporte toujours), ou `null` : la première langue de `audio_langs` du compte (voir `GET /api/me/settings`) qu'a une piste qui n'est pas un commentaire ; à défaut (aucune langue choisie, ou aucune présente), la piste par défaut qui n'est pas un commentaire, sinon la première. Une autre piste que celle par défaut coûte un `remux` |
 | `max_kbps` | débit maximal voulu (0 : aucun). Un fichier plus gros de plus de 5 % est converti. |
 | `max_height` | hauteur maximale voulue (0 : aucune). Prime sur `caps.height`. |
+| `device` | optionnel : le genre d'appareil, `pc`, `phone`, `tablet` ou `tv`. Il ne change **rien** à la décision (le client reste seul à dire ce qu'il sait lire) : il n'est gardé que dans la trace des décisions de `GET /api/activity`. Toute autre valeur, ou son absence, est valide et vaut « inconnu » |
 
 **Noms de codecs** (ce que le serveur compare ; ce sont des noms ffprobe normalisés, pas des chaînes MIME) :
 
@@ -679,6 +680,36 @@ Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, te
   - 400 si ce n'est pas un livre, 422 si l'archive est illisible.
 - `GET /book/<entry>/page/<n>` : l'image de la page `n` (404 `page inexistante`).
 - `GET /book/<entry>/epub/<chemin>` : un fichier de l'epub (XHTML, CSS, images), servi avec une politique `Content-Security-Policy` sans script. **Attention (jeton)** : les chapitres contiennent des liens relatifs (feuilles de style, images) ; une URL relative ne reprend pas le `?token=` de la page qui la contient, ces sous-ressources reçoivent donc un 302 vers `/login`. Un client natif qui affiche un chapitre doit ajouter lui-même `?token=<media_token>` à chaque requête (interception, ou réécriture des liens).
+
+## Activité du hub
+
+`GET /api/activity` : **administrateur seulement** (403 `réservé à l'administrateur` sinon, 401 sans session). Ce que fait le hub en ce moment, pour savoir si on peut relancer le serveur sans couper quelqu'un, et la trace des dernières décisions de lecture pour comprendre « ça ne marche pas sur la télé du salon » sans l'appareil. Tout est **en mémoire** : rien n'est écrit dans la base, rien ne survit à un redémarrage.
+
+```json
+{"version": "1.2.3", "uptime": 5400, "busy": false, "streams": 1, "max_streams": 2,
+ "counts": {"playing": 2, "downloads": 0, "uploads": 0, "remux": 0, "transcodes": 1, "backups": 0},
+ "transfers": [{"user": "alice", "title": "Dark · Épisode 1", "library": "series", "kind": "transcode", "origin": "remote", "agent": "Chrome 120 · Android",
+                "started": 1731900000, "last": 1731900123, "bytes": 52428800, "connections": 1, "device": "phone"}],
+ "decisions": [{"at": 1731900000, "user": "alice", "device": "phone", "agent": "Chrome 120 · Android", "entry": "ab12…", "title": "Dark · Épisode 1",
+                "caps": {"video": ["h264"], "audio": ["aac"], "containers": ["mp4"], "channels": 2}, "mode": "transcode", "why": ["image HEVC non lisible"]}]}
+```
+
+| Champ | Sens |
+| --- | --- |
+| `version`, `uptime` | version du hub ; secondes depuis son démarrage |
+| `busy` | une tâche de fond tourne ou attend (comme `busy` de `GET /api/state`) |
+| `streams`, `max_streams` | les flux ffmpeg en cours et leur plafond (`HUB_MAX_STREAMS`) : le même sens que dans `GET /api/state` |
+| `counts` | le nombre de lignes de `transfers` par genre : `playing` (lectures : `direct`, `audio`, `remux` et `transcode`), `downloads`, `uploads`, `remux`, `transcodes`, `backups` |
+| `transfers` | une ligne par (compte, fichier transféré, genre, client) : voir ci-dessous. Les tâches de fond et les bibliothèques ne sont pas recopiées ici : `GET /api/jobs` et `libraries` de `GET /api/state` |
+| `decisions` | les 100 dernières décisions de `POST /api/play/<entry>`, **la plus récente d'abord** |
+
+Une ligne de `transfers` : `user` (le nom du compte), `title` (« Série · Épisode » ou le titre du fichier, le nom du fichier pour la boîte de réception et la sauvegarde), `library` (l'identifiant de la bibliothèque, `""` hors médiathèque), `kind`, `origin`, `agent` (l'agent utilisateur abrégé, 60 caractères au plus), `started` et `last` (horodatages Unix : début et dernière activité), `bytes` (octets envoyés, ou reçus pour un envoi), `connections` (connexions ouvertes) et `device` (**absent** quand aucune décision de lecture du même compte, de la même entrée et du même client ne le donne).
+
+- `kind` : `direct` (une vidéo lue en `Range` tel quelle), `audio` (une piste), `remux` et `transcode` (`/media/<id>/stream`), `download` (`?download=1` et fichier de la boîte de réception), `upload` (un envoi dans la boîte de réception), `backup` (`GET /api/backup`). Les livres qu'on lit ne sont pas suivis : leurs pages se chargent d'un coup.
+- **Une ligne regroupe les requêtes d'un même appareil** : la lecture directe se fait en nombreuses requêtes `Range` courtes. Elle existe tant qu'une connexion est ouverte, puis **60 secondes** après la dernière activité (`connections` vaut alors `0` : récemment terminé), puis disparaît. `POST /api/progress` prolonge ainsi la ligne **existante** du même compte et du même fichier (un film lu depuis la mémoire tampon du navigateur ne demande plus rien), sans jamais en créer une. Un `HEAD`, un 404, un 416 ou un envoi refusé avant le premier octet ne laissent aucune ligne.
+- `origin` : `local` pour la boucle locale et les adresses privées, `remote` pour le reste (ou une adresse illisible). L'adresse du client est celle de la connexion, ou, derrière le proxy local, la dernière entrée de `X-Forwarded-For`. Une adresse Tailscale IPv4 (`100.64.0.0/10`) est `remote` ; en IPv6 (`fd7a:115c:a1e0::/48`) elle est `local`. **L'adresse elle-même n'est jamais rendue**, pas plus qu'un chemin de fichier ou un secret : elle ne sert qu'à séparer deux appareils d'un même compte.
+
+Une décision : `at` (horodatage Unix), `user`, `device` (`pc`, `phone`, `tablet`, `tv`, ou `""`), `agent`, `entry` et `title`, `caps` (ce que le client a annoncé), `mode` et `why` (ce que le serveur a décidé, et pourquoi : la réponse de `POST /api/play/<entry>`). Ce que le client a envoyé n'est pas gardé tel quel : `caps` se réduit aux clés que lit la décision (`video`, `audio`, `containers` : des listes de 12 noms courts au plus, de 24 caractères `[A-Za-z0-9_.+:-]` ; `channels`, `height` : des entiers bornés ; `hdr` : un booléen), le reste est écarté.
 
 ## Sauvegarde
 
