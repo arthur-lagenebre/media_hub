@@ -96,7 +96,7 @@
 
     var plan = null, base = 0, level = 0, firstPlan = true, closing = false, pending = null, pendingTimer = null, hideTimer = null, tickTimer = null, reportTimer = null, lastReport = 0;
     var steps = 0, stepsTimer = null, audioIdx = null, subs = { cues: [], sel: '', pgs: null, shown: null }, subText = '';
-    var speed = 1;
+    var speed = 1, offered = false;          // `offered` : le film est fini et le panneau propose le suivant de sa saga
     if (carried && carried.id === id) setSpeed(carried.rate);
     carried = null;
 
@@ -146,11 +146,25 @@
       if (p && p.catch) p.catch(function () { show(true); H.focus.set(playBtn, true); });
       paintTime();
     }
-    function showError(message) {
-      H.clear(err).appendChild(h('div', null, h('h2', null, H.t('Lecture impossible')), h('p', null, message),
-        h('div', { class: 'actions' }, H.button(H.t('Réessayer'), 'refresh', { 'data-autofocus': '1', onclick: function () { level = 0; open(cur()); } }), H.button(H.t('Retour'), 'back', { onclick: function () { H.back('#/'); } }))));
+    // Le panneau posé sur l'image : tant qu'il est là, les touches du lecteur ne répondent plus (voir onKey), le focus est sur `first`.
+    function panel(heading, text, first, second) {
+      first.setAttribute('data-autofocus', '1');
+      H.clear(err).appendChild(h('div', null, h('h2', null, heading), h('p', null, text), h('div', { class: 'actions' }, first, second)));
       err.hidden = false; show(true);
       H.focus.first(err);
+    }
+    function showError(message) {
+      panel(H.t('Lecture impossible'), message, H.button(H.t('Réessayer'), 'refresh', { onclick: function () { level = 0; open(cur()); } }), H.button(H.t('Retour'), 'back', { onclick: function () { H.back('#/'); } }));
+    }
+    // Un film ne s'enchaîne pas comme un épisode : on propose le suivant de sa saga. Les commandes disparaissent, sinon les flèches iraient sur des boutons cachés par le panneau.
+    function offerNext(next) {
+      offered = true;
+      panel(H.t('Film suivant de « {saga} »', { saga: next.saga }), next.title, H.button(H.t('Regarder'), 'play', { onclick: goNext }), H.button(H.t('Retour à la fiche'), 'back', { onclick: toSheet }));
+    }
+    // La fiche du film : celle d'où l'on vient si elle est juste derrière le lecteur (pas de seconde copie dans l'historique), sinon elle prend la place du lecteur.
+    function toSheet() {
+      var sheet = '#/i/' + plan.item, below = H.below();
+      if (below && below.hash === sheet) history.back(); else H.go(sheet, true);
     }
     // Si le lecteur refuse ce que le serveur lui donne, on descend d'un cran : conteneur converti, puis image convertie.
     video.addEventListener('error', function () {
@@ -174,7 +188,10 @@
     video.addEventListener('timeupdate', paintTime);
     video.addEventListener('ended', function () {
       report(true);
-      if (plan && plan.next) { carry(); H.go('#/play/' + plan.next.id, true); } else H.back(plan ? '#/i/' + plan.item : '#/');
+      var next = plan && plan.next;
+      if (next && next.saga) offerNext(next);
+      else if (next) { carry(); H.go('#/play/' + next.id, true); }
+      else H.back(plan ? '#/i/' + plan.item : '#/');
     });
 
     // --- Position ------------------------------------------------------------------
@@ -233,7 +250,7 @@
 
     // --- Commandes visibles -----------------------------------------------------------
     function show(keep) {
-      ctl.hidden = false; el.classList.remove('idle');
+      ctl.hidden = offered; el.classList.remove('idle');
       clearTimeout(hideTimer);
       if (!keep) schedule();
     }
@@ -323,7 +340,8 @@
       if (text !== subText) { subText = text; H.clear(subBox); if (text) subBox.appendChild(cueNodes(text)); }
     }, 200);
     reportTimer = setInterval(function () { if (!video.paused && Date.now() - lastReport > 9000) report(); }, 10000);
-    function goNext() { if (plan && plan.next) { report(true); carry(); H.go('#/play/' + plan.next.id, true); } }
+    // Passer à l'épisode suivant vaut « vu » ; quitter un film pour le suivant de sa saga ne dit pas qu'on l'a fini : il reste à reprendre.
+    function goNext() { if (plan && plan.next) { report(!plan.next.saga); carry(); H.go('#/play/' + plan.next.id, true); } }
 
     // --- Clavier et souris ----------------------------------------------------------------
     function eat(e) { e.preventDefault(); e.stopPropagation(); }
@@ -361,6 +379,7 @@
       lib: '',
       shown: function (fresh) { if (!fresh) setSpeed(1); show(); },          // un lecteur laissé en réserve puis rouvert (Lecture depuis la fiche) : c'est une nouvelle ouverture, elle repart à 1×
       onBack: function () {
+        if (offered) { toSheet(); return true; }
         if (H.routed <= 1 && plan) { location.hash = '#/i/' + plan.item; return true; }
         return false;
       },
