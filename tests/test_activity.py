@@ -50,6 +50,29 @@ class TestRegistry(unittest.TestCase):
         self.held.append(manager)
         return manager, manager.__enter__()
 
+    def test_work_begun_before_sending_is_listed_and_leaves_nothing_if_nothing_was_sent(self):
+        with self.registry.transfer("u1", "alice", "e1", "backup", "192.168.1.5", "Archive", leave_empty=False):
+            self.assertEqual([(t["kind"], t["connections"]) for t in self.lines()], [("backup", 1)])
+        self.assertEqual(self.lines(), [])
+        with self.registry.transfer("u1", "alice", "e1", "backup", "192.168.1.5", "Archive", leave_empty=False) as sent:
+            sent(3)
+        self.assertEqual([(t["bytes"], t["connections"]) for t in self.lines()], [(3, 0)])
+
+    def test_the_registry_drops_the_oldest_finished_lines_beyond_its_limit(self):
+        with mock.patch.object(activity, "MAX_LINES", 3):
+            self.open(title="ouvert")
+            for n in range(5):
+                self.clock.now += 1
+                with self.registry.transfer("u1", "alice", f"f{n}", "direct", "192.168.1.5", f"fini {n}"):
+                    pass
+            self.assertEqual([t["title"] for t in self.lines()], ["ouvert", "fini 3", "fini 4"])
+
+    def test_open_transfers_are_never_dropped_for_the_limit(self):
+        with mock.patch.object(activity, "MAX_LINES", 2):
+            for n in range(4):
+                self.open(ref=f"f{n}", title=f"ouvert {n}")
+            self.assertEqual(len(self.lines()), 4)
+
     def test_a_transfer_is_listed_while_it_is_open_and_for_a_minute_after(self):
         manager, _ = self.open()
         self.clock.now += 3600                                           # une pause d'une heure : la connexion reste ouverte, la ligne aussi
@@ -217,6 +240,9 @@ class TestDecisions(unittest.TestCase):
             self.assertIsInstance(activity.clean_caps(caps), dict, repr(caps))
         self.assertEqual(activity.clean_caps({"channels": 10 ** 9, "height": -3}), {})
         self.assertEqual(activity.clean_caps({"channels": 2.0, "height": 1080.5}), {"channels": 2})
+
+    def test_the_words_of_the_caps_are_ascii(self):
+        self.assertEqual(activity.clean_caps({"video": ["hévc", "٣", "h264"]}), {"video": ["h264"]})
 
     def test_the_text_of_a_decision_is_bounded(self):
         self.decide(agent="Mozilla " + "z" * 1000, title="T" * 1000, why=["w" * 1000] * 100)
@@ -430,6 +456,30 @@ class TestInboxAndBackup(ActivityCase):
         self.assertEqual([(t["kind"], t["user"], t["connections"]) for t in spy.seen[-1]], [("backup", "boss", 1)])
         self.assertNotIn(str(self.root), json.dumps(self.hub.activity.report()))
 
+    def test_a_backup_is_listed_while_its_archive_is_built(self):
+        seen = []
+
+        def make(db_path, data, out):
+            seen.extend((t["kind"], t["user"], t["connections"]) for t in self.hub.activity.report()["transfers"])
+            Path(out).write_bytes(b"zip")
+        with mock.patch.object(app.backup, "create", make):
+            self.assertEqual(call(self.hub, "GET", "/api/backup", headers=self.cookie(self.boss))[1].status, 200)
+        self.assertEqual(seen, [("backup", "boss", 1)])
+        self.assertEqual([(t["bytes"], t["connections"]) for t in self.transfers()], [(3, 0)])
+
+    def test_a_backup_that_sends_nothing_leaves_no_line(self):
+        def fails(db_path, data, out):
+            raise OSError("disque plein")
+
+        def make(db_path, data, out):
+            Path(out).write_bytes(b"zip")
+        with mock.patch.object(app.backup, "create", fails):
+            self.assertEqual(call(self.hub, "GET", "/api/backup", headers=self.cookie(self.boss))[1].status, 500)
+        self.assertEqual(self.transfers(), [])
+        with mock.patch.object(app.backup, "create", make):
+            self.assertEqual(call(self.hub, "GET", "/api/backup", headers={**self.cookie(self.boss), "Range": "bytes=99-"})[1].status, 416)
+        self.assertEqual(self.transfers(), [])
+
 
 class FakeProc:
     """Un ffmpeg : `chunks` puis la fin du flux (ou, avec `dies`, la fin avant l'heure, comme un processus tué)."""
@@ -480,6 +530,10 @@ class TestStreams(ActivityCase):
             self.assertIn((1, [kind]), seen, query)
             self.assertEqual([(t["kind"], t["title"], t["bytes"], t["connections"]) for t in self.transfers()], [(kind, "Le Film", 12, 0)], query)
             self.assertEqual((self.hub.active, self.free()), (0, True), query)
+
+    def test_a_stream_is_listed_while_ffmpeg_starts(self):
+        _, seen, _, _ = self.stream("m=transcode")
+        self.assertEqual(seen[0], (1, ["transcode"]))                    # avant son premier bloc : relancer le serveur couperait déjà cette lecture
 
     def test_the_counters_come_back_to_zero_when_the_client_leaves(self):
         proc, _, _, _ = self.stream("m=transcode", chunks=[b"a" * 4] * 10, break_after=6)

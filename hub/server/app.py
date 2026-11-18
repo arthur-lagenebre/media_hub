@@ -353,9 +353,9 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, obj, status=200, headers=None):
         self.send_body(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), "application/json; charset=utf-8", status, {"Cache-Control": "no-store", **(headers or {})}, self.command == "HEAD")
 
-    def transfer(self, kind, ref, title, library=""):
+    def transfer(self, kind, ref, title, library="", leave_empty=True):
         """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré."""
-        return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""))
+        return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty)
 
     def send_file(self, path, mime=None, headers=None, track=None):
         """Le fichier, avec les requêtes Range (reprise, avance rapide, lecteur vidéo). `track` : de quoi inscrire l'envoi dans l'activité (une fonction sans argument qui rend `Handler.transfer(…)`), ouvert autour de l'envoi réel seulement :
@@ -2555,8 +2555,8 @@ def first_chunk(proc, errors):
     return first
 
 
-def send_stream(h, proc, first, track):
-    """Les octets de ffmpeg vers le client ; `track` ouvre le transfert (voir Handler.send_file) une fois la réponse commencée, pas pour un HEAD."""
+def send_stream(h, proc, first, sent):
+    """Les octets de ffmpeg vers le client, comptés par `sent` ; rien pour un HEAD."""
     h.send_response(200)
     h.send_header("Content-Type", "video/mp4")
     h.send_header("Cache-Control", "no-store")
@@ -2567,15 +2567,14 @@ def send_stream(h, proc, first, track):
     if h.command == "HEAD":
         return
     h.connection.settimeout(3600)
-    with track() as sent:
-        h.wfile.write(first)
-        sent(len(first))
-        while True:
-            chunk = proc.stdout.read1(CHUNK)
-            if not chunk:
-                break
-            h.wfile.write(chunk)
-            sent(len(chunk))
+    h.wfile.write(first)
+    sent(len(first))
+    while True:
+        chunk = proc.stdout.read1(CHUNK)
+        if not chunk:
+            break
+        h.wfile.write(chunk)
+        sent(len(chunk))
 
 
 def stop_stream(proc):
@@ -2607,11 +2606,12 @@ def media_stream(h, m, q):
     hub.count_stream(1)
     proc = None
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
-        errors = []
-        threading.Thread(target=lambda: errors.append(proc.stderr.read().decode("utf-8", "replace")), daemon=True).start()
         kind = "transcode" if q.get("m") == "transcode" else "remux"
-        send_stream(h, proc, first_chunk(proc, errors), lambda: h.transfer(kind, entry["id"], entry_label(show_title(hub, entry), entry), entry["lib"]))
+        with h.transfer(kind, entry["id"], entry_label(show_title(hub, entry), entry), entry["lib"], leave_empty=False) as sent:          # dès le lancement : ffmpeg peut mettre des secondes à produire son premier bloc, et relancer le serveur couperait déjà cette lecture
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            errors = []
+            threading.Thread(target=lambda: errors.append(proc.stderr.read().decode("utf-8", "replace")), daemon=True).start()
+            send_stream(h, proc, first_chunk(proc, errors), sent)
     finally:
         if proc is not None:
             stop_stream(proc)
@@ -3185,12 +3185,13 @@ def api_backup(h, m, q):
     work = Path(tempfile.mkdtemp(prefix=".sauvegarde-", dir=h.hub.cfg.data))
     try:
         name = backup.archive_name()
-        try:
-            backup.create(h.hub.db.path, h.hub.cfg.data, work / name)
-        except (backup.BackupError, OSError) as e:
-            raise HttpError(500, f"sauvegarde impossible : {getattr(e, 'message', e)}")
-        h.send_file(work / name, "application/zip", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
-                    track=lambda: h.transfer("backup", "backup", name))
+        with h.transfer("backup", "backup", name, leave_empty=False) as sent:          # dès la construction de l'archive : relancer le serveur l'interromprait
+            try:
+                backup.create(h.hub.db.path, h.hub.cfg.data, work / name)
+            except (backup.BackupError, OSError) as e:
+                raise HttpError(500, f"sauvegarde impossible : {getattr(e, 'message', e)}")
+            h.send_file(work / name, "application/zip", {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(name), "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
+                        track=lambda: nullcontext(sent))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

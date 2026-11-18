@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import partial
 
 ACTIVE_SECONDS = 60             # une ligne reste tant qu'une connexion est ouverte, puis ce temps après sa dernière activité (le navigateur lit un moment depuis sa mémoire tampon sans rien demander)
+MAX_LINES = 500                 # au-delà, une nouvelle ligne remplace la ligne sans connexion la plus ancienne : demander un octet de milliers de fichiers ne gonfle pas le registre
 DECISIONS_KEPT = 100            # les décisions de lecture gardées, les plus récentes
 KINDS = ("direct", "audio", "remux", "transcode", "download", "upload", "backup")
 PLAYING = ("direct", "audio", "remux", "transcode")
@@ -31,7 +32,7 @@ CAPS_ITEMS = 12                 # des listes de `caps` : au plus ce nombre de mo
 CAPS_WORD = 24
 CAPS_LISTS = ("video", "audio", "containers")           # ce que lit `probe.plan`, et rien d'autre
 CAPS_NUMBERS = {"channels": 32, "height": 8640}
-WORD_RE = re.compile(r"[\w.+:-]{1,%d}" % CAPS_WORD)
+WORD_RE = re.compile(r"[\w.+:-]{1,%d}" % CAPS_WORD, re.ASCII)
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 BROWSERS = (("Edg", "Edge"), ("OPR", "Opera"), ("FxiOS", "Firefox"), ("Firefox", "Firefox"), ("CriOS", "Chrome"), ("Chrome", "Chrome"), ("Version", "Safari"))
 SYSTEMS = (("Android", "Android"), ("iPhone", "iPhone"), ("iPad", "iPad"), ("CrKey", "Chromecast"), ("Tizen", "Tizen"), ("Web0S", "webOS"), ("Windows", "Windows"), ("Macintosh", "macOS"), ("Linux", "Linux"))
@@ -142,15 +143,16 @@ class Activity:
 
     # --- Les transferts ---------------------------------------------------
     @contextmanager
-    def transfer(self, user, name, ref, kind, address, title="", library="", agent=""):
+    def transfer(self, user, name, ref, kind, address, title="", library="", agent="", leave_empty=True):
         """Un transfert ouvert le temps du bloc, qui rend la fonction où compter les octets envoyés ; il se referme sur toute sortie, une coupure du client comprise.
-        Un transfert qui échoue avant le moindre octet ne laisse pas de ligne (un envoi refusé n'a rien envoyé)."""
+        Un transfert qui échoue avant le moindre octet ne laisse pas de ligne (un envoi refusé n'a rien envoyé). `leave_empty=False` : un travail ouvert avant l'envoi (ffmpeg qui démarre, archive à construire) est listé pendant qu'il dure, mais ne laisse rien s'il n'a rien envoyé, même sans erreur (un HEAD, un 416)."""
         key = (user, ref, kind, address)
         with self.lock:
             now = self.clock()
             self._prune(now)
             line = self.lines.get(key)
             if line is None:
+                self._make_room()
                 line = self.lines[key] = Line(user, name, ref, address, kind, clean_text(title, TITLE_MAX), clean_text(library, TITLE_MAX), origin_of(address), short_agent(agent), now, now)
             line.name, line.connections, line.last = name, line.connections + 1, now
         failed = False
@@ -160,19 +162,19 @@ class Activity:
             failed = True
             raise
         finally:
-            self._close(key, line, failed)
+            self._close(key, line, failed or not leave_empty)
 
     def _count(self, line, size):
         with self.lock:
             line.bytes += size
             line.last = self.clock()
 
-    def _close(self, key, line, failed):
+    def _close(self, key, line, drop_if_empty):
         with self.lock:
             now = self.clock()
             line.connections -= 1
             line.last = now
-            if failed and not line.bytes and not line.connections and self.lines.get(key) is line:
+            if drop_if_empty and not line.bytes and not line.connections and self.lines.get(key) is line:
                 del self.lines[key]
             self._prune(now)
 
@@ -190,6 +192,12 @@ class Activity:
         for key in [key for key, line in self.lines.items() if not line.connections and now - line.last >= ACTIVE_SECONDS]:
             del self.lines[key]
 
+    def _make_room(self):
+        """Au plafond, retire la ligne sans connexion la plus ancienne (verrou pris). Une connexion ouverte n'est jamais retirée : la ligne dit un envoi réel."""
+        idle = [key for key, line in self.lines.items() if not line.connections] if len(self.lines) >= MAX_LINES else []
+        if idle:
+            del self.lines[min(idle, key=lambda key: self.lines[key].last)]
+
     # --- Les décisions ----------------------------------------------------
     def decide(self, user, name, address, agent, device, entry, title, caps, mode, why):
         """Garde une décision de lecture. Ce que le client a dit (`device`, `caps`, agent) est nettoyé ici, jamais gardé tel quel."""
@@ -203,12 +211,15 @@ class Activity:
         with self.lock:
             self._prune(self.clock())
             lines, decisions = list(self.lines.values()), list(reversed(self.decisions))
-            return {"counts": counts(lines), "transfers": [self._shown(line, decisions) for line in lines], "decisions": [d.public() for d in decisions]}
+            devices = {}
+            for d in decisions:
+                devices.setdefault((d.user, d.entry, d.address), d.device)      # la plus récente d'abord : c'est elle qui compte
+            return {"counts": counts(lines), "transfers": [self._shown(line, devices) for line in lines], "decisions": [d.public() for d in decisions]}
 
     @staticmethod
-    def _shown(line, decisions):
+    def _shown(line, devices):
         out = line.public()
-        device = next((d.device for d in decisions if (d.user, d.entry, d.address) == (line.user, line.ref, line.address)), "")
+        device = devices.get((line.user, line.ref, line.address))
         if device:
             out["device"] = device
         return out
