@@ -1110,7 +1110,7 @@ def continue_row(hub, profile, libs=None, ratings=None):
 
 
 today = missing.today                       # le jour (« 2026-11-04 ») : un nom à part pour que les tests puissent le fixer
-UNSEEN = prefs.SHELF_CARDS                  # ce que le serveur offre par bibliothèque : le navigateur en retire ce que « Nouveautés » montre déjà, puis coupe à la taille du rayon ; avec moins, les tris « date d'ajout » et « note » (les mieux notés sont souvent les plus récents) vidaient le rayon
+UNSEEN = 2 * prefs.SHELF_CARDS              # ce que le serveur offre par bibliothèque : le navigateur en retire ce que « Nouveautés » montre (SHELF_CARDS au plus) et doit encore pouvoir remplir un rayon de SHELF_CARDS ; avec moins, les tris « date d'ajout » et « note » (les mieux notés sont souvent les plus récents) videraient le rayon
 
 
 def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random", quality=None, ratings=None):

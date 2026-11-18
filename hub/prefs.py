@@ -6,7 +6,7 @@ from .media.subs import canonical
 from .media.tracks import SUB_MODES
 
 KEY = "prefs:"                                    # base de données : prefs:<id du compte> donne ses réglages
-SHELF_CARDS = 48                                  # les cartes que le serveur envoie au plus par rayon de l'accueil : 3 rangées de 16 colonnes, la plus grande grille prévue ; le navigateur coupe à `home_shelf_rows` rangées de ce que l'écran montre
+SHELF_CARDS = 48                                  # les cartes d'un rayon de l'accueil, au plus : 3 rangées de 16 colonnes, la plus grande grille prévue ; le navigateur coupe à `home_shelf_rows` rangées de ce que l'écran montre
 CHOICES = {"music_view": ("albums", "artists"), "movie_view": ("sagas", "films"), "home_latest": ("show", "hide"), "home_unseen": ("show", "hide"), "home_shelf_rows": ("1", "2", "3"), "home_unseen_count": ("6", "12", "18", "24"),
            "home_unseen_sort": ("random", "rating", "added"), "home_requests": ("show", "hide"), "home_recommend": ("show", "hide"), "sub_mode": SUB_MODES}    # chaque réglage et les valeurs qu'il accepte
 DEFAULTS = {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show",
