@@ -72,12 +72,12 @@ def width_rem(locator):
     return locator.evaluate("el => el.getBoundingClientRect().width / parseFloat(getComputedStyle(document.documentElement).fontSize)")
 
 
-@unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
 def columns_of(grid):
     """Le nombre de colonnes d'une grille, telle que le navigateur l'a mise en page."""
     return grid.evaluate("g => getComputedStyle(g).gridTemplateColumns.split(' ').length")
 
 
+@unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
 class UiCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
