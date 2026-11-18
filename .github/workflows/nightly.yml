@@ -35,28 +35,14 @@ jobs:
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
-      # « Traité » ne veut pas dire « vert » : un survivant fait échouer le job à sa dernière étape, mais l'étape Mutator
-      # a réussi. Une partie annulée à la limite, ou dont la machine a disparu, n'est pas traitée et reprend.
+      - uses: actions/checkout@v7
+        with:
+          path: media_hub
+      # La règle (qu'est-ce qu'un commit « traité » ?) et ses tests : .github/scripts/nightly_gate.py.
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          TREATED: >-
-            [.jobs[] | select(.name == "crapper")] as $crapper
-            | [.jobs[] | select(.name | startswith("mutator"))] as $parts
-            | ($crapper | length) == 1 and $crapper[0].conclusion == "success" and ($parts | length) > 0
-            and ($parts | all(.steps | any(.name == "Mutator" and .conclusion == "success")))
-        run: |
-          echo "run=true" >> "$GITHUB_OUTPUT"
-          [ "$EVENT" = "schedule" ] || exit 0
-          runs="repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs"
-          for id in $(gh api "$runs?branch=main&head_sha=$GITHUB_SHA&status=completed&per_page=30" --jq '.workflow_runs[].id'); do
-            if [ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100" --jq "$TREATED")" = "true" ]; then
-              echo "::notice title=Nuit::commit $GITHUB_SHA déjà entièrement traité (run $id) : rien à faire"
-              echo "run=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
+        run: python3 media_hub/.github/scripts/nightly_gate.py
 
   crapper:
     needs: changes
