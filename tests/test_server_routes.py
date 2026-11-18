@@ -975,18 +975,18 @@ class TestSettingsRoutes(RouteCase):
         return self.hub.cookie(who)
 
     def test_the_settings_of_an_account_start_at_the_defaults(self):
-        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}})
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}})
 
     def test_a_choice_is_kept_for_the_account_that_made_it(self):
         reply = self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}}))
+        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}}))
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "artists")
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.alice)).json()["settings"]["music_view"], "albums")
 
     def test_the_state_carries_the_settings_so_the_page_needs_no_second_call(self):
         self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
 
     def test_a_wrong_setting_is_a_400_with_the_reason(self):
         for body, reason in (({"couleur": "rouge"}, "réglage inconnu"), ({"music_view": "mosaique"}, "valeur inconnue"), ({}, "aucun réglage")):
@@ -1199,10 +1199,18 @@ class TestHomeUnseenBesideLatest(RouteCase):
             with self.subTest(sort=sort):
                 self.assertEqual(self.post("/api/me/settings", {"home_unseen_sort": sort}).status, 200)
                 shelf = self.get("/api/home").json()["libraries"][0]
-                latest = {r["id"] for r in shelf["recent"]}
+                latest = {r["id"] for r in shelf["recent"][:24]}                                                    # ce que « Nouveautés » montre : le serveur en envoie plus, le navigateur coupe
                 left = [r["id"] for r in shelf["unseen"] if r["id"] not in latest]
-                self.assertEqual(len(shelf["recent"]), 24)
                 self.assertGreaterEqual(len(left), 12)                                                              # le plus grand rayon par défaut, 12, reste plein
+
+
+class TestHomeShelfSize(RouteCase):
+    """Le serveur envoie de quoi remplir la plus grande grille : 48 cartes par rayon, jamais plus (la musique : voir TestHomeMusic)."""
+
+    def test_the_latest_of_a_video_library_are_the_48_most_recent(self):
+        self.fill([item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n) for n in range(60)], [entry(f"v{n:02d}", f"mv{n:02d}") for n in range(60)])
+        recent = self.get("/api/home").json()["libraries"][0]["recent"]
+        self.assertEqual([r["id"] for r in recent], [f"mv{n:02d}" for n in range(59, 11, -1)])
 
 
 class TestHomeUnseenPerLibrary(RouteCase):
@@ -1283,10 +1291,10 @@ class TestHomeMusic(RouteCase):
         self.fill([self.album("u1", "Un", "Artiste inconnu", "ar9", -1), self.album("u2", "Deux", "Artiste inconnu", "ar9", -2)], [])
         self.assertEqual([(r["type"], r["id"]) for r in self.recent()], [("album", "u1"), ("album", "u2")])
 
-    def test_a_single_album_artist_stays_an_album_and_the_list_stops_at_24(self):
-        self.fill([self.album(f"x{n:02d}", f"Titre {n:02d}", f"Artiste {n:02d}", f"id{n:02d}", -n) for n in range(30)], [])
+    def test_a_single_album_artist_stays_an_album_and_the_list_stops_at_48(self):
+        self.fill([self.album(f"x{n:02d}", f"Titre {n:02d}", f"Artiste {n:02d}", f"id{n:02d}", -n) for n in range(60)], [])
         out = self.recent()
-        self.assertEqual((len(out), {r["type"] for r in out}, out[0]["id"]), (24, {"album"}, "x00"))
+        self.assertEqual((len(out), {r["type"] for r in out}, out[0]["id"]), (48, {"album"}, "x00"))
 
 
 class TestPersonRoute(unittest.TestCase):

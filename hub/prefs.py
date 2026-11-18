@@ -6,10 +6,12 @@ from .media.subs import canonical
 from .media.tracks import SUB_MODES
 
 KEY = "prefs:"                                    # base de données : prefs:<id du compte> donne ses réglages
-CHOICES = {"music_view": ("albums", "artists"), "movie_view": ("sagas", "films"), "home_latest": ("show", "hide"), "home_unseen": ("show", "hide"), "home_unseen_count": ("6", "12", "18", "24"),
+SHELF_CARDS = 48                                  # les cartes que le serveur envoie au plus par rayon de l'accueil : 3 rangées de 16 colonnes, la plus grande grille prévue ; le navigateur coupe à `home_shelf_rows` rangées de ce que l'écran montre
+CHOICES = {"music_view": ("albums", "artists"), "movie_view": ("sagas", "films"), "home_latest": ("show", "hide"), "home_unseen": ("show", "hide"), "home_shelf_rows": ("1", "2", "3"), "home_unseen_count": ("6", "12", "18", "24"),
            "home_unseen_sort": ("random", "rating", "added"), "home_requests": ("show", "hide"), "home_recommend": ("show", "hide"), "sub_mode": SUB_MODES}    # chaque réglage et les valeurs qu'il accepte
-DEFAULTS = {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show",
-            "sub_mode": "forced"}      # la musique s'ouvre sur les albums, les films regroupés en sagas, l'accueil montre « Nouveautés », « Pas encore vu » (dans un ordre qui change chaque jour), les demandes arrivées et « Parce que tu as aimé » ; les sous-titres forcés seulement
+DEFAULTS = {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show",
+            "sub_mode": "forced"}      # la musique s'ouvre sur les albums, les films regroupés en sagas, l'accueil montre « Nouveautés », « Pas encore vu » (dans un ordre qui change chaque jour), les demandes arrivées et « Parce que tu as aimé », sur deux rangées ; les sous-titres forcés seulement
+ROWS_OF_CARDS = {"6": "1", "12": "2", "18": "3", "24": "3"}      # l'ancien `home_unseen_count` en rangées (son équivalent sur un écran de 6 colonnes, 3 au plus) : le choix d'un compte qui n'a pas encore de `home_shelf_rows`
 # Les réglages qui sont des listes ordonnées de langues (codes canoniques à deux lettres, voir subs.canonical), vides par défaut : sans langue audio, le fichier décide ;
 # sans langue de sous-titres, c'est celle de la page (voir api_play).
 LANG_LISTS = ("audio_langs", "sub_langs")
@@ -32,9 +34,11 @@ def _valid(name, value):
 
 
 def load(db, uid):
-    """Tous les réglages du compte : ce qu'il a choisi, sinon la valeur par défaut (une valeur qui n'est plus permise retombe sur la valeur par défaut)."""
+    """Tous les réglages du compte : ce qu'il a choisi, sinon la valeur par défaut (une valeur qui n'est plus permise retombe sur la valeur par défaut). Sans `home_shelf_rows` valide, les rangées se déduisent de son ancien `home_unseen_count`, sans rien écrire."""
     kept = _kept(db, uid)
     chosen = {name: kept[name] if _valid(name, kept.get(name)) else DEFAULTS[name] for name in CHOICES}
+    if not _valid("home_shelf_rows", kept.get("home_shelf_rows")) and _valid("home_unseen_count", kept.get("home_unseen_count")):
+        chosen["home_shelf_rows"] = ROWS_OF_CARDS[kept["home_unseen_count"]]
     return {**chosen, **{name: list(kept[name]) if _valid(name, kept.get(name)) else [] for name in LANG_LISTS}}
 
 

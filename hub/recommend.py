@@ -14,7 +14,7 @@ from collections import Counter, namedtuple
 
 from libraries.common.text import fold
 
-from . import people
+from . import people, prefs
 
 # ---------------------------------------------------------------------------
 # Réglages : tout ce qui se règle d'après ce qu'on voit sur sa médiathèque est ici, et nulle part ailleurs.
@@ -32,7 +32,8 @@ ANCHOR_POOL = 10        # les ancres se choisissent parmi les 10 plus récentes 
 MIN_ANCHORS = 2         # en dessous, pas assez de signal : aucun rayon
 MAX_SHELVES = 2         # au plus deux rayons « Parce que tu as aimé »
 SHELF_MIN = 4           # un rayon plus court est abandonné, et l'ancre suivante essayée
-SHELF_MAX = 12          # éléments par rayon, au plus
+SHELF_FIRST = 12        # les premiers éléments d'un rayon, retenus avant de passer à l'ancre suivante : le rayon suivant garde de quoi exister, même si les deux ancres se disputent les mêmes films
+SHELF_MAX = prefs.SHELF_CARDS         # éléments par rayon, au plus : au-delà de SHELF_FIRST, les rayons gardés se complètent chacun leur tour
 WHY_MAX = 2             # les particularités partagées données en explication : les plus lourdes
 QUALITY_PIVOT = 6.5     # note TMDB (sur 10, montrée seulement : assez de votes) qui ne change rien ; au-dessus un petit bonus, en dessous un petit malus
 QUALITY_SLOPE = 0.3     # points de proximité par point de note d'écart au pivot
@@ -180,13 +181,27 @@ def ranked(idx, anchor, allowed, scope):
 
 
 def shelf(idx, anchor, allowed, scope):
-    """[(Item, explication)] : les candidats les plus proches de l'ancre, un seul par saga (le mieux placé), SHELF_MAX au plus."""
+    """[(Item, explication)] : tous les candidats, du plus proche de l'ancre au moins proche, un seul par saga (le mieux placé)."""
     out, sagas = [], set()
     for cand, common in ranked(idx, anchor, allowed, scope):
         if cand.saga not in sagas:
             sagas.update({cand.saga} - {""})
             out.append((cand, [{"kind": kind, "value": text} for _, kind, text in common[:WHY_MAX]]))
-    return out[:SHELF_MAX]
+    return out
+
+
+def top_up(kept, used):
+    """Complète les rayons `kept` ([(cartes retenues, cartes en réserve)]) jusqu'à SHELF_MAX, une carte chacun à son tour, pour qu'aucun ne prenne tout. Une carte déjà dans `used` est passée ; celles ajoutées y entrent."""
+    waiting = [(shown, iter(spare)) for shown, spare in kept]
+    while waiting:
+        going_on = []
+        for shown, spare in waiting:
+            card = next((c for c in spare if c[0].row["id"] not in used), None)
+            if card and len(shown) < SHELF_MAX:
+                shown.append(card)
+                used.add(card[0].row["id"])
+                going_on.append((shown, spare))
+        waiting = going_on
 
 
 def candidates(items, anchor, opinions, progress, readable, used):
@@ -202,22 +217,24 @@ def attempts(idx, opinions, progress, readable, profile, day):
     if len(possible) < MIN_ANCHORS:
         return
     possible.sort(key=lambda ident: hashlib.sha1(f"{day}:{profile}:{ident}".encode()).hexdigest())
-    items, used, kept, scopes = idx["items"], set(), 0, {}
+    items, used, tried, kept, scopes = idx["items"], set(), [], [], {}
     for anchor in (items[ident] for ident in possible):
         if anchor.type not in scopes:
             scopes[anchor.type] = Scope(idx, anchor.type, opinions, readable)
         found = shelf(idx, anchor, candidates(items, anchor, opinions, progress, readable, used), scopes[anchor.type])
-        keep = len(found) >= SHELF_MIN
+        shown, keep = found[:SHELF_FIRST], len(found) >= SHELF_MIN
+        tried.append((anchor, shown, keep, scopes[anchor.type]))
         if keep:
-            used.update(cand.row["id"] for cand, _ in found)
-            kept += 1
-        yield anchor, found, keep, scopes[anchor.type]
-        if kept == MAX_SHELVES:
-            return
+            used.update(cand.row["id"] for cand, _ in shown)
+            kept.append((shown, found[SHELF_FIRST:]))
+        if len(kept) == MAX_SHELVES:
+            break
+    top_up(kept, used)
+    yield from tried
 
 
 def shelves(idx, opinions, progress, readable, profile, day):
     """[(ancre, [(Item, explication)])] : au plus MAX_SHELVES rayons, [] sans assez de signal.
 
-    `opinions` : {id: (avis, date)} du compte ; `progress` : voir progress_of ; `readable` : les bibliothèques vidéo qu'il peut lire. Les ancres se choisissent parmi les ANCHOR_POOL plus récentes dans un ordre qui ne dépend que du compte et du jour (le même toute la journée, un autre demain), comme « Pas encore vu ». Un rayon de moins de SHELF_MIN éléments est abandonné ; un élément n'est jamais dans deux rayons."""
+    `opinions` : {id: (avis, date)} du compte ; `progress` : voir progress_of ; `readable` : les bibliothèques vidéo qu'il peut lire. Les ancres se choisissent parmi les ANCHOR_POOL plus récentes dans un ordre qui ne dépend que du compte et du jour (le même toute la journée, un autre demain), comme « Pas encore vu ». Un rayon de moins de SHELF_MIN éléments est abandonné ; un élément n'est jamais dans deux rayons. Chaque rayon retient d'abord ses SHELF_FIRST premiers éléments, et ce n'est qu'une fois les rayons choisis qu'ils se complètent jusqu'à SHELF_MAX : un long rayon ne fait jamais disparaître le suivant."""
     return [(anchor, found) for anchor, found, keep, _ in attempts(idx, opinions, progress, readable, profile, day) if keep]
