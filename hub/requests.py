@@ -14,6 +14,8 @@ import re
 import time
 from functools import partial
 
+from libraries.video.tmdb import WEB_BASE
+
 from . import missing
 from . import sagas as sagafile
 from . import urls
@@ -22,6 +24,7 @@ KINDS = ("movie", "show")
 STATUSES = ("pending", "added", "declined")
 MAX_TEXT = 200                  # message, motif de refus, titre
 YEAR_RE = re.compile(r"[0-9]{4}")
+TMDB_PATHS = {"movie": "movie", "show": "tv"}     # où TMDB range chaque sorte, sur son site comme dans son API
 
 REQUESTS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS requests(
@@ -140,6 +143,16 @@ def refreshed(db, libs, rows):
 # ---------------------------------------------------------------------------
 # Lire
 # ---------------------------------------------------------------------------
+def tmdb_path(kind, tmdb):
+    """Le chemin d'un film ou d'une série chez TMDB : `movie/<id>` ou `tv/<id>`."""
+    return f"{TMDB_PATHS[kind]}/{tmdb}"
+
+
+def tmdb_url(kind, tmdb):
+    """L'adresse de la fiche d'un film ou d'une série sur le site de TMDB."""
+    return f"{WEB_BASE}/{tmdb_path(kind, tmdb)}"
+
+
 def poster_file(kind, tmdb):
     """Le nom de l'affiche TMDB d'un film ou d'une série dans HUB_DATA/tmdb : celui que l'enrichissement lui donne (`film-<id>.jpg`, voir missing.poster_name ; `<id>.jpg` pour une série, voir enrich.enrich_show)."""
     return missing.poster_name(tmdb) if kind == "movie" else f"{tmdb}.jpg"
@@ -159,7 +172,7 @@ def shown(cfg, row, found, visible):
     """Une demande telle que l'API la donne ; `item` (l'élément à ouvrir) quand elle est arrivée dans une bibliothèque que le compte voit."""
     item = item_for(found, row["kind"], row["tmdb"], visible) if row["status"] == "added" else None
     out = {"id": row["id"], "kind": row["kind"], "tmdb": row["tmdb"], "title": row["title"], "year": row["year"], "status": row["status"], "reason": row["reason"],
-           "created": row["created"], "updated": row["updated"], "cover": cover(cfg, row, item)}
+           "created": row["created"], "updated": row["updated"], "cover": cover(cfg, row, item), "url": tmdb_url(row["kind"], row["tmdb"])}
     if item:
         out["item"] = item
     return out

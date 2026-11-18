@@ -168,6 +168,14 @@ class TestAsking(RequestCase):
         self.assertEqual(self.stored(), sorted([("movie", 2, "pending", self.alice["id"]), ("movie", 2, "pending", self.bob["id"])]))
         self.assertEqual(self.mine(self.alice)[0]["note"], "Pour Noël")
 
+    def test_every_request_gives_the_tmdb_page_of_its_film_or_its_show(self):
+        pages = {"movie": "https://www.themoviedb.org/movie/2", "show": "https://www.themoviedb.org/tv/2"}
+        self.ask(self.alice, 2)
+        shown = self.ask(self.alice, 2, "show", title="Une série").json()
+        self.assertEqual({r["kind"]: r["url"] for r in self.mine(self.alice)}, pages)
+        self.assertEqual({r["kind"]: r["url"] for r in self.everything()}, pages)
+        self.assertEqual(self.set_status(shown["id"], "declined").json()["url"], pages["show"])
+
     def test_a_show_is_accepted_and_kept_apart_from_a_film_of_the_same_number(self):
         self.assertEqual(self.ask(self.alice, 2, "show", title="Une série", year="2019").status, 201)
         self.assertEqual(self.ask(self.alice, 2).status, 201)

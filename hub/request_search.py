@@ -35,7 +35,6 @@ MIN_TEXT, MAX_TEXT = 2, 100         # longueur du texte cherché, blancs de bord
 POSTER_SIZE = "w342"                # comme les affiches des films manquants (enrich.download_poster)
 POSTERS_PER_RUN = 50                # affiches demandées au plus par passage de la tâche
 SEARCHES = {"movie": ("search/movie", "title", "release_date"), "show": ("search/tv", "name", "first_air_date")}
-SHEETS = {"movie": "movie", "show": "tv"}
 DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 IMAGE_RE = re.compile(r"/[A-Za-z0-9_-]+\.(jpg|jpeg|png|webp)")      # un `poster_path` de TMDB ; tout autre texte n'est pas suivi
 
@@ -228,7 +227,7 @@ class Finder:
         hit = self.memo.get(key)
         if hit is None:
             with self._slot():
-                data = _asked(lambda: self.make(self.cfg).get(f"{SHEETS[kind]}/{tmdb_id}"))
+                data = _asked(lambda: self.make(self.cfg).get(hub_requests.tmdb_path(kind, tmdb_id)))
             hit = described(kind, data)
             self.memo.put(key, hit)
         return hit
@@ -239,7 +238,7 @@ class Finder:
 # ---------------------------------------------------------------------------
 def _poster(tmdb, folder, row, log):
     """Télécharge l'affiche de la demande `row` ; vrai si elle est arrivée, None si TMDB n'en a pas. Écrite d'un bloc : une écriture coupée ne laisse pas une affiche tronquée."""
-    data = tmdb.get(f"{SHEETS[row['kind']]}/{row['tmdb']}")
+    data = tmdb.get(hub_requests.tmdb_path(row["kind"], row["tmdb"]))
     path = data.get("poster_path") if isinstance(data, dict) else None
     if not isinstance(path, str) or not IMAGE_RE.fullmatch(path):
         log(f"  sans affiche sur TMDB : {row['title']}")
