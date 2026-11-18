@@ -494,6 +494,12 @@
     if (cur === aside) return dir === 'right' ? first : null;
     return cur === first && dir === 'left' ? aside : null;
   }
+  // Haut et bas vont de bouton en bouton : le lien secondaire d'une ligne qui a un bouton ne s'atteint que de côté (voir besideAside), même quand il est le plus proche, sur un écran étroit. Seul dans sa ligne, il reste une étape.
+  function skippedUpDown(el, dir, all) {
+    if ((dir !== 'up' && dir !== 'down') || !el.hasAttribute('data-aside')) return false;
+    var line = el.closest('.line');
+    return !!line && all.some(function (x) { return x !== el && line.contains(x); });
+  }
   H.focus = {
     set: function (el, noScroll) {
       if (!el) return false;
@@ -532,7 +538,7 @@
       if (mate && all.indexOf(mate) >= 0) return H.focus.set(mate);
       var c = box(cur), best = null, bestScore = Infinity;
       all.forEach(function (el) {
-        if (el === cur) return;
+        if (el === cur || skippedUpDown(el, dir, all)) return;
         var s = score(c, box(el), dir);
         if (s !== null && s < bestScore) { best = el; bestScore = s; }
       });

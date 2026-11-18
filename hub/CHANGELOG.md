@@ -1,3 +1,6 @@
+## 0.34.0 — 2026-11-18
+- Dans « Mes demandes », dans la recherche d'un film ou d'une série à demander et dans la liste de l'administrateur, le titre ouvre sa fiche TMDB dans un nouvel onglet, pour vérifier que c'est le bon.
+
 ## 0.33.0 — 2026-11-18
 - Dans Paramètres › Préférences › Affichage, « Rangées par rayon » règle tous les rayons de l'accueil : 1, 2 ou 3 rangées. Ton ancien choix de cartes est repris.
 - Les rayons de l'accueil remplissent leurs rangées quelle que soit la largeur de l'écran ou la taille du texte, et se rajustent si elles changent.

@@ -14,8 +14,6 @@ import re
 import time
 from functools import partial
 
-from libraries.video.tmdb import WEB_BASE
-
 from . import missing
 from . import sagas as sagafile
 from . import urls
@@ -150,6 +148,7 @@ def tmdb_path(kind, tmdb):
 
 def tmdb_url(kind, tmdb):
     """L'adresse de la fiche d'un film ou d'une série sur le site de TMDB."""
+    from libraries.video.tmdb import WEB_BASE       # ici et pas en tête : ce module est importé (par hub.accounts, hub.__main__) avant que media_library soit sur le chemin
     return f"{WEB_BASE}/{tmdb_path(kind, tmdb)}"
 
 

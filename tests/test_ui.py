@@ -7799,7 +7799,6 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.assertTrue(page.evaluate(wide))
         self.assertTrue(self.rows(page).locator("button").evaluate_all("els => els.every(e => e.getBoundingClientRect().height >= 32)"))       # une cible tactile assez grande
 
-    # --- En anglais ----------------------------------------------------------------
     # --- Le titre mène à la fiche TMDB --------------------------------------------------
     def ask_film_and_show(self, name):
         """`name` demande un film (1000) puis une série (5001) ; rend leurs identifiants de demande."""
@@ -7861,6 +7860,43 @@ class TestRequestsInTheUi(RequestsUiCase):
         row.locator(".rqstatus", has_text="Ajouté").wait_for()
         expect(self.title_link(row)).to_have_attribute("href", "https://www.themoviedb.org/movie/1000")
 
+    def test_on_a_narrow_screen_the_arrows_go_from_button_to_button(self):
+        self.ask_film_and_show("alice")
+        page = self.session("alice", width=390)
+        self.open(page, "#/requests")
+        self.count_rows(page, 2)
+        first, second = (self.rows(page).nth(i).get_attribute("data-request") for i in range(2))
+        self.focused_key(page, f"rm-{first}")
+        page.keyboard.press("ArrowDown")
+        self.focused_key(page, f"rm-{second}")                                                              # pas le lien du titre, pourtant plus proche
+        page.keyboard.press("ArrowUp")
+        self.focused_key(page, f"rm-{first}")
+
+    def test_the_arrows_reach_the_title_from_the_first_button_of_an_administrator_row(self):
+        rid = self.ask("alice", 1000)["id"]
+        page = self.session("admin")
+        self.open(page, "#/admin?tab=demandes")
+        self.count_rows(page, 1)
+        self.view(page, f"[data-key=rq-declined-{rid}]").focus()
+        page.keyboard.press("ArrowLeft")
+        self.focused_key(page, f"rq-added-{rid}")                                                           # entre deux boutons, rien ne change
+        page.keyboard.press("ArrowLeft")
+        self.focused_key(page, "tmdb-movie-1000")
+        page.keyboard.press("ArrowRight")
+        self.focused_key(page, f"rq-added-{rid}")
+        page.keyboard.press("ArrowRight")
+        self.focused_key(page, f"rq-declined-{rid}")
+
+    def test_the_title_looks_like_a_link_at_rest_on_touch_devices_only(self):
+        self.ask("alice", 1000)
+        for device, line in (("phone", "underline"), ("tablet", "underline"), ("pc", "none")):
+            page = self.session("alice", device=device)
+            self.open(page, "#/requests")
+            self.count_rows(page, 1)
+            link = self.title_link(self.rows(page))
+            self.assert_tmdb_link(link, "Film intermédiaire (2014)", "https://www.themoviedb.org/movie/1000")
+            expect(link).to_have_css("text-decoration-line", line)
+
     def test_on_the_tv_a_request_title_is_plain_text(self):
         self.ask_film_and_show("alice")
         for name, target in (("alice", "#/requests"), ("admin", "#/admin?tab=demandes")):
@@ -7885,6 +7921,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         expect(self.rows(page).locator("b", has_text="Film intermédiaire (2014)")).to_have_count(1)
         expect(self.rows(page).locator(".what a")).to_have_count(0)
 
+    # --- En anglais ----------------------------------------------------------------
     def test_requests_are_in_english(self):
         self.hub.cfg.request_max = 1
         self.ask("alice", 9500)
@@ -8286,6 +8323,7 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         retour = self.hit(page, "Le Grand Retour")
         self.assertIn("Refusé", retour.inner_text())
         self.assertEqual(retour.locator("button, a:not([data-aside]), .f:not([data-aside])").count(), 0)    # rien à faire : seul le titre mène à TMDB
+        expect(retour.locator("a")).to_have_count(1)
         self.assertNotIn("bob", page.locator("body").inner_text().lower())
         voyage.locator("button").click()
         with self.sent(page) as info:
@@ -8543,6 +8581,20 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         page.keyboard.press("Enter")
         self.focused_key(page, "rq-movie-9101")                                                              # « Ouvrir », pour un titre déjà là
         self.assertIn("Ouvrir", page.evaluate("document.activeElement.textContent"))
+
+    def test_a_declined_result_keeps_its_title_within_reach_of_the_arrows(self):
+        declined = self.ask_for("bob", "movie", 4002)["id"]
+        self.call("admin", f"/api/requests/{declined}/status", {"status": "declined"})
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.search(page, "grand")
+        expect(self.hits(page)).to_have_count(3)
+        page.keyboard.press("Enter")
+        self.focused_key(page, "rq-movie-4001")
+        page.keyboard.press("ArrowLeft")
+        self.focused_key(page, "tmdb-movie-4001")
+        page.keyboard.press("ArrowDown")
+        self.focused_key(page, "tmdb-movie-4002")                                                           # sa ligne n'a pas de bouton : le titre reste une étape
 
     def test_on_the_tv_a_result_title_is_plain_text(self):
         page = self.session("alice", device="tv")

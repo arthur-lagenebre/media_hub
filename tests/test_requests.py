@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import math
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -842,6 +845,14 @@ class TestMigration(unittest.TestCase):
         self.assertEqual(db.query("SELECT * FROM requests"), [])
         self.assertTrue(accounts.public(accounts.by_id(db, alice["id"]))["can_request"])
         self.assertEqual(Database(path).kv_get("schema"), database.SCHEMA_VERSION)          # rouverte : rien n'est rejoué
+
+
+class TestStartup(unittest.TestCase):
+    def test_the_hub_starts_before_media_library_is_on_the_path(self):
+        """`python -m hub` charge les comptes, donc les demandes, avant de mettre media_library sur le chemin : dans un processus neuf, ces imports ne doivent pas en dépendre."""
+        env = {name: value for name, value in os.environ.items() if name != "PYTHONPATH"}
+        done = subprocess.run([sys.executable, "-c", "import hub.__main__"], cwd=Path(__file__).resolve().parent.parent, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
 
 
 if __name__ == "__main__":
