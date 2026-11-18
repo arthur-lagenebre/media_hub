@@ -857,6 +857,189 @@ class TestVideoPlayer(UiCase):
         self.assertIn("Lecture impossible", self.page.inner_text(".player .err"))
 
 
+class TestNextFilmOfASaga(UiCase):
+    """À la fin d'un film de saga, le lecteur propose le film suivant sans le lancer ; « Suivant » y va, sans dire que le film quitté est vu."""
+
+    @classmethod
+    def add_media(cls, root):
+        for name in ("Saga Un (2001)", "Saga Deux (2002)"):
+            fixtures.write_video(root / "srv" / "Films" / name / f"{name}.mkv", seconds=40, size="160x90", acodec="aac", channels=2)
+
+    @classmethod
+    def start(cls, root, password=""):
+        super().start(root, password)
+        cls.run_.hub.db.execute("UPDATE items SET grp='Duo' WHERE lib='films' AND title IN ('Saga Un', 'Saga Deux')")
+
+    def setUp(self):
+        super().setUp()
+        self.run_.hub.db.execute("DELETE FROM progress")
+        self.first, self.second = self.entries("films", "Saga Un")[0]["id"], self.entries("films", "Saga Deux")[0]["id"]
+        self.sheet = "#/i/" + self.item("films", "Saga Un")["id"]
+        self.panel = self.page.locator(".player .err:not([hidden])")
+
+    def play(self, entry):
+        self.open("#/play/" + entry)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+
+    def seek(self, position):
+        """Met le film en pause à `position` : les commandes restent affichées."""
+        self.page.evaluate("""at => new Promise(done => {
+            var v = document.querySelector('.player video');
+            v.pause(); v.addEventListener('seeked', done, { once: true }); v.currentTime = at;
+        })""", position)
+
+    def finish(self, entry):
+        self.play(entry)
+        self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.currentTime = v.duration - 0.4; })()")
+
+    def offered(self):
+        self.finish(self.first)
+        expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
+
+    def button(self, label):
+        return self.panel.locator(".btn", has_text=label)
+
+    def progress(self, title, lib="films"):
+        return self.entries(lib, title)[0].get("progress")
+
+    def wait_on(self, entry):
+        self.page.wait_for_function("id => location.hash.indexOf(id) >= 0", arg=entry, timeout=15000)
+
+    def test_the_end_of_a_saga_film_offers_the_next_one_and_launches_nothing(self):
+        with self.page.expect_response(lambda r: r.url.endswith("/api/progress") and r.request.post_data_json["done"]):
+            self.offered()
+        expect(self.panel).to_contain_text("Saga Deux")
+        expect(self.button("Regarder")).to_be_focused()
+        expect(self.button("Retour à la fiche")).to_be_visible()
+        self.assertIn(self.first, self.page.url)
+        self.assertTrue(self.progress("Saga Un")["done"])
+        self.assertIsNone(self.progress("Saga Deux"))
+
+    def test_watch_opens_the_next_film_from_the_remote(self):
+        self.offered()
+        expect(self.button("Regarder")).to_be_focused()
+        self.page.keyboard.press("Enter")
+        self.wait_on(self.second)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        expect(self.panel).to_have_count(0)
+
+    def test_the_arrows_stay_in_the_panel_even_after_the_mouse_moved(self):
+        self.offered()
+        self.page.mouse.move(300, 300)
+        self.page.mouse.move(320, 320)
+        expect(self.page.locator(".player .ctl")).to_be_hidden()
+        self.page.keyboard.press("ArrowRight")
+        expect(self.button("Retour à la fiche")).to_be_focused()
+        self.page.keyboard.press("ArrowDown")
+        expect(self.button("Retour à la fiche")).to_be_focused()
+        self.page.keyboard.press("ArrowLeft")
+        expect(self.button("Regarder")).to_be_focused()
+
+    def test_back_to_the_page_opens_the_film_page(self):
+        self.offered()
+        self.button("Retour à la fiche").click()
+        self.shown(self.sheet)
+        self.assertNotIn("#/play/", self.page.url)
+
+    def test_the_back_key_does_the_same_as_back_to_the_page(self):
+        self.open("#/")
+        self.page.evaluate("h => { location.hash = h; }", "#/play/" + self.first)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.currentTime = v.duration - 0.4; })()")
+        expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
+        self.page.keyboard.press("Escape")
+        self.shown(self.sheet)
+
+    def test_coming_from_the_film_page_the_panel_goes_back_to_it_without_a_second_copy(self):
+        self.open(self.sheet)
+        self.shown(self.sheet)
+        self.page.evaluate("h => { location.hash = h; }", "#/play/" + self.first)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.currentTime = v.duration - 0.4; })()")
+        expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
+        self.button("Retour à la fiche").click()
+        self.shown(self.sheet)
+        self.assertEqual(self.page.evaluate("document.querySelectorAll('#views > .view').length"), 1)
+
+    def back_to_the_panel(self):
+        """Du panneau à la fiche, puis la touche Retour : on revient au lecteur, film fini, panneau toujours là."""
+        self.button("Retour à la fiche").click()
+        self.shown(self.sheet)
+        self.page.keyboard.press("Escape")
+        self.shown("#/play/" + self.first)
+        expect(self.panel).to_contain_text("Film suivant de « Duo »")
+        self.assertTrue(self.page.evaluate("document.querySelector('.player video').ended"))
+
+    def test_a_player_opened_directly_does_not_leave_the_app_after_its_film_page(self):
+        self.offered()
+        self.back_to_the_panel()
+
+    def test_a_player_reopened_from_its_film_page_does_not_restart_the_film(self):
+        self.play(self.first)
+        self.page.keyboard.press("Escape")
+        self.shown(self.sheet)
+        self.page.evaluate("h => { location.hash = h; }", "#/play/" + self.first)
+        self.shown("#/play/" + self.first)
+        self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.play(); v.currentTime = v.duration - 0.4; })()")
+        expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
+        self.back_to_the_panel()
+
+    def test_the_next_film_of_a_saga_starts_at_normal_speed(self):
+        self.play(self.first)
+        self.page.locator(".player .btn.spd").click()
+        self.page.locator(".veil .opt", has_text="1,5×").click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.currentTime = v.duration - 0.4; })()")
+        expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
+        self.button("Regarder").click()
+        self.wait_on(self.second)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.assertEqual(self.page.evaluate("document.querySelector('.player video').playbackRate"), 1)
+        self.assertEqual(self.page.inner_text(".player .btn.spd"), "Vitesse")
+
+    def test_the_last_film_of_the_saga_goes_back_to_its_page_as_before(self):
+        self.finish(self.second)
+        self.shown("#/i/" + self.item("films", "Saga Deux")["id"])
+        expect(self.panel).to_have_count(0)
+
+    def test_next_in_the_middle_of_a_saga_film_opens_the_next_one_and_leaves_this_one_to_resume(self):
+        self.play(self.first)
+        self.seek(25)
+        sent = []
+        self.page.on("request", lambda r: sent.append(r.post_data_json) if r.url.endswith("/api/progress") else None)
+        with self.page.expect_response(lambda r: r.url.endswith("/api/progress") and r.request.post_data_json["entry"] == self.first):
+            self.page.locator(".player .btn", has_text="Suivant").click()
+        self.wait_on(self.second)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.assertEqual([body["done"] for body in sent if body["entry"] == self.first and body["done"]], [])
+        saved = self.progress("Saga Un")
+        self.assertFalse(saved["done"])
+        self.assertGreaterEqual(saved["position"], 20)
+        self.assertIn(self.first, [card["id"] for card in self.api("/api/home")["continue"]])
+
+    def test_the_next_track_key_at_the_start_of_a_saga_film_does_not_mark_it_seen(self):
+        self.play(self.first)
+        self.page.keyboard.press("MediaTrackNext")
+        self.wait_on(self.second)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.assertIsNone(self.progress("Saga Un"))
+
+    def test_next_on_an_episode_still_marks_it_seen(self):
+        episodes = self.entries("series", "Vidéo Série")
+        self.play(episodes[0]["id"])
+        with self.page.expect_response(lambda r: r.url.endswith("/api/progress")):
+            self.page.locator(".player .btn", has_text="Suivant").click()
+        self.wait_on(episodes[1]["id"])
+        self.assertTrue(self.progress("Vidéo Série", "series")["done"])
+
+
 class TestVideoResume(UiCase):
     """Reprendre un film dont le son est converti : l'image est recopiée, le flux ne peut partir que d'une image clé, et le lecteur compte sa position depuis celle-là (sinon l'horloge et les sous-titres glissent)."""
 

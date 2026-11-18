@@ -1,3 +1,7 @@
+## 0.32.0 — 2026-11-18
+- À la fin d'un film d'une saga, le lecteur te propose le film suivant : tu choisis de le regarder ou de revenir à la fiche.
+- Pendant un film d'une saga, « Suivant » ouvre le film suivant, et celui que tu quittes reste à reprendre.
+
 ## 0.31.0 — 2026-11-17
 - Les nouveautés de chaque version se lisent dans Réglages › À propos.
 
