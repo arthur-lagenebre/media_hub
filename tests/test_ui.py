@@ -5249,6 +5249,86 @@ class TestSettings(UiCase):
         self.assertEqual(self.view(".news").count(), 0)
         self.assertEqual(self.page.locator("#toast.on").count(), 0)
 
+    def bell(self):
+        return self.page.locator("#nav .bell")
+
+    def notifications(self):
+        return self.page.locator(".veil .menu.notifs")
+
+    def test_the_bell_shows_the_latest_news_and_leads_to_the_whole_list(self):
+        """La cloche ouvre le centre de notifications : la dernière version seule, et un lien vers toute la liste ; Retour revient à la page d'où l'on venait."""
+        self.changelog(3)
+        self.open("#/")
+        self.bell().click()
+        box = self.notifications()
+        box.wait_for()
+        self.assertEqual(box.locator("h3").first.inner_text(), "Notifications")
+        self.assertIn("Nouveautés du hub", box.inner_text())
+        self.assertEqual(box.locator(".news").count(), 1)
+        self.assertIn("0.40.0", box.locator(".news").inner_text())
+        self.assertIn("Point 0", box.locator(".news").inner_text())
+        box.locator(".btn", has_text="Voir toutes les nouveautés").click()
+        self.shown("#/settings?tab=apropos")
+        self.until(lambda: self.view(".about .news").count() == 3)
+        self.assertEqual(self.page.locator(".veil").count(), 0)
+        self.page.go_back()
+        self.shown("#/")
+        self.assertEqual(self.page.locator(".veil").count(), 0)
+
+    def test_the_remote_reads_the_notification_closes_it_and_follows_the_link(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.changelog(2)
+        self.open("#/")
+        self.bell().focus()
+        self.press("Enter")
+        self.notifications().wait_for()
+        self.until(lambda: "0.40.0" in self.focused())                                 # le texte d'abord : il défile aux flèches s'il est long
+        self.press("ArrowDown")
+        self.assertEqual(self.focused(), "Voir toutes les nouveautés")
+        self.press("Escape")
+        self.until(lambda: self.notifications().count() == 0)
+        self.assertEqual(self.focused(), "Notifications")                              # le focus revient sur la cloche
+        self.press("Enter")
+        self.notifications().wait_for()
+        self.until(lambda: "0.40.0" in self.focused())
+        self.press("ArrowDown", "Enter")
+        self.shown("#/settings?tab=apropos")
+
+    def test_the_notification_centre_says_when_it_is_empty_or_unreachable(self):
+        def answering(status, body):
+            return lambda route: route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+        for status, body, text in ((200, {"versions": []}, "Aucune notification pour le moment."), (500, {"error": "erreur interne"}, "Impossible de charger les notifications.")):
+            self.page.unroute("**/api/changelog")
+            self.page.route("**/api/changelog", answering(status, body))
+            self.open("#/")
+            self.bell().click()
+            box = self.notifications()
+            box.wait_for()
+            self.assertIn(text, box.inner_text())
+            self.assertEqual(box.locator(".news").count(), 0)
+            self.assertEqual(box.locator(".btn", has_text="Voir toutes les nouveautés").count(), 0)
+            self.assertEqual(box.locator(".btn", has_text="Fermer").count(), 1)
+
+    def test_a_slow_answer_opens_one_window_and_none_after_leaving_the_page(self):
+        held = []
+        self.page.route("**/api/changelog", lambda route: held.append(route))
+        answer = json.dumps({"versions": [{"version": "0.40.0", "date": "2026-10-01", "items": ["Point"]}]})
+        self.open("#/")
+        self.bell().click()
+        self.bell().click()
+        self.until(lambda: len(held) >= 1)
+        self.page.wait_for_timeout(200)
+        self.assertEqual(len(held), 1)                                                 # le second appui ne relance rien
+        self.page.evaluate("location.hash = '#/search'")
+        self.shown("#/search")
+        held[0].fulfill(content_type="application/json", body=answer)
+        self.page.wait_for_timeout(300)
+        self.assertEqual(self.notifications().count(), 0)                              # on est parti : la réponse tardive n'ouvre rien
+        self.bell().click()                                                            # et la cloche marche encore
+        self.until(lambda: len(held) == 2)
+        held[1].fulfill(content_type="application/json", body=answer)
+        self.notifications().wait_for()
+
     def test_the_old_management_addresses_lead_to_the_administration(self):
         for old, new in (("gestion", "Médiathèque"), ("taches", "Médiathèque"), ("serveur", "Serveur"), ("inbox", "Boîte de réception"), ("demandes", "Demandes"), ("comptes", "Comptes")):
             self.open("#/settings?tab=" + old)
