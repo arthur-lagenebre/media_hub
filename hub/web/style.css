@@ -289,6 +289,9 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .jt b { min-width: 0; overflow-wrap: anywhere; }
 .job.running .jt span { color: var(--accent); }
 .job.failed .jt span { color: #ff8b8b; }
+.relaunch { margin: 0 0 0.7rem; font-weight: 650; }
+.transfer[data-state=finished] .what { opacity: 0.7; }
+.decision .what .caps { color: var(--text); overflow-wrap: anywhere; }
 .sample { margin: 0 0 0.8rem; padding: 0 0 0 1.2rem; max-height: 12rem; overflow: auto; color: var(--mute); font-size: 0.85rem; word-break: break-all; }
 .sample:empty { display: none; }
 .sample .more { list-style: none; margin-left: -1.2rem; padding-top: 0.2rem; }

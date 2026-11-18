@@ -2,17 +2,62 @@
    Paramètres (#/settings, views.js) ne garde que ce qui concerne le compte connecté. Les routes sont protégées côté serveur par le rôle : cette page ne fait que les rassembler. */
 (function () {
   'use strict';
-  var H = window.Hub, h = H.h, R = H.requests, S = H.suggestions;
+  var H = window.Hub, h = H.h, R = H.requests, S = H.suggestions, U = H.upload;
 
   var TABS = [{ id: 'mediatheque', label: H.t('Médiathèque') }, { id: 'demandes', label: H.t('Demandes') }, { id: 'suggestions', label: H.t('Suggestions') }, { id: 'inbox', label: H.t('Boîte de réception') },
-    { id: 'comptes', label: H.t('Comptes') }, { id: 'serveur', label: H.t('Serveur') }];
+    { id: 'comptes', label: H.t('Comptes') }, { id: 'etat', label: H.t('État') }, { id: 'serveur', label: H.t('Serveur') }];
   var OLD_TABS = { gestion: 'mediatheque', taches: 'mediatheque' };          // les anciens noms d'onglets : les adresses et le choix mémorisé y mènent encore
+  var RECENT_JOBS = 5;          // les dernières tâches de l'onglet État
+
+  // --- Onglet État : ce que `GET /api/activity` dit, mis en mots (ce qui n'a pas besoin de la page) ---
+  var KINDS = { direct: H.t('Lecture directe'), audio: H.t('Lecture audio'), remux: H.t('Son converti'), transcode: H.t('Image convertie'), download: H.t('Téléchargement'), upload: H.t('Envoi'), backup: H.t('Sauvegarde') };
+  var PLAYING = { direct: 1, audio: 1, remux: 1, transcode: 1 }, READS = { direct: 1, audio: 1 };
+  H.adminStatus = { every: 3000 };          // le délai (ms) entre deux lectures de l'onglet État ; un test le raccourcit
+  // Une ligne reste listée 60 s après sa dernière activité. `connections: 0` veut dire « fini » pour un téléchargement, un envoi, une sauvegarde, un remux ou une conversion ;
+  // pas pour une lecture directe ni une piste : entre deux requêtes Range, le navigateur lit sa mémoire tampon (et /api/progress garde la ligne).
+  function ongoing(t) { return !!READS[t.kind] || t.connections > 0; }
+  function deviceName(id) { var d = H.devices.filter(function (x) { return x[0] === id && id !== 'auto'; })[0]; return d ? d[1] : ''; }
+  function uptimeText(seconds) {
+    var s = Math.floor(seconds || 0);
+    if (s < 60) return H.t('{n} s', { n: s });
+    return s < 86400 ? H.dur(s) : H.t('{d} j {h} h', { d: Math.floor(s / 86400), h: Math.floor(s % 86400 / 3600) });
+  }
+  // Le message est vrai ou absent : « on peut relancer » seulement quand plus aucune ligne n'est listée (même terminée) et qu'aucune tâche ne tourne ; une tâche seule se dit ; sinon la liste suffit.
+  function relaunchMessage(a) {
+    if (a.transfers.length) return '';
+    return a.busy ? H.t('Personne ne lit ni ne télécharge, mais une tâche est en cours.') : H.t('Personne ne lit ni ne télécharge : le serveur peut être relancé.');
+  }
+  // Les chiffres du résumé, comptés sur `transfers` et seulement sur ce qui est en cours (`counts` du serveur compte aussi les lignes finies).
+  function activityFacts(a, missing) {
+    var n = { playing: 0, remux: 0, transcode: 0, download: 0, upload: 0, backup: 0 };
+    a.transfers.forEach(function (t) {
+      if (!ongoing(t)) return;
+      if (PLAYING[t.kind]) n.playing++;
+      if (Object.prototype.hasOwnProperty.call(n, t.kind)) n[t.kind]++;
+    });
+    var rows = [[H.t('Lectures'), n.playing], [H.t('Remux'), n.remux], [H.t('Conversions'), n.transcode], [H.t('Flux ffmpeg'), H.t('{n} sur {max}', { n: a.streams, max: a.max_streams })],
+      [H.t('Téléchargements'), n.download], [H.t('Envois'), n.upload]];
+    if (n.backup) rows.push([H.t('Sauvegardes'), n.backup]);
+    return rows.concat([[H.t('Tâches'), a.busy ? H.t('en cours') : H.t('aucune')], [H.t('Bibliothèques introuvables'), missing], ['Version', a.version], [H.t('Fonctionne depuis'), uptimeText(a.uptime)]]);
+  }
+  // Ce que l'appareil a annoncé : le client l'écrit, le serveur l'a déjà réduit à quelques clés, mais on ne se fie à aucun type.
+  function capsText(caps) {
+    var c = caps || {}, parts = [];
+    [['video', H.t('Images')], ['audio', H.t('Sons')], ['containers', H.t('Conteneurs')]].forEach(function (k) {
+      if (Array.isArray(c[k[0]]) && c[k[0]].length) parts.push(k[1] + ' : ' + c[k[0]].join(', '));
+    });
+    if (c.channels !== undefined) parts.push(H.t('Voies audio : {n}', { n: c.channels }));
+    if (c.height !== undefined) parts.push(H.t('Hauteur : {n} p', { n: c.height }));
+    if (c.hdr !== undefined) parts.push('HDR : ' + (c.hdr ? H.t('oui') : H.t('non')));
+    return parts.length ? parts.join(' · ') : H.t('Rien d’annoncé.');
+  }
 
   H.route(/^\/admin$/, function (m, query) {
     // Un autre compte n'a rien à faire ici : il retombe sur ses paramètres (l'ancienne adresse `#/admin` y menait, ses signets aussi).
     if (!H.isAdmin()) return { el: h('section', { class: 'blank' }, h('h1', null, H.t('Administration'))), nav: '#/settings', shown: function () { H.go('#/settings', true); } };
     var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '', closed = false;
     var tab = query.tab || H.pref('admin.tab') || '', openJobs = {};
+    var act = null, actError = '', actBusy = null, actTimer = null, actRunning = false, actToken = 0, openCaps = {}, zones = {};          // l'onglet État : la dernière lecture de /api/activity, son erreur, son minuteur
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
     }
@@ -40,6 +85,7 @@
       var kept = logStates(logPanel);
       H.clear(el);
       logPanel = null;
+      zones = {};
       el.appendChild(h('h1', null, H.t('Administration')));
       var bar = tabBar();
       el.appendChild(bar);
@@ -49,9 +95,11 @@
       else if (active === 'demandes') requestsTab(body);
       else if (active === 'suggestions') suggestionsTab(body);
       else if (active === 'comptes') body.appendChild(usersPanel());
+      else if (active === 'etat') etatTab(body);
       else serverFacts(body);
       el.appendChild(body);
       if (logPanel) logRestore(logPanel, kept);          // un journal lu à mi-chemin le reste quand la page est refaite (une tâche qui se termine)
+      if (active === 'etat') startAct(); else stopAct();
       var on = bar.querySelector('.on');
       if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir (après le contenu : lire offsetLeft sur une page à moitié reconstruite la ramenait en haut)
       if (H.overlay.isOpen() || !H.focus.shown(el)) return;             // une fenêtre de saisie est ouverte : on ne lui prend pas le focus ; ni quand la page a été quittée avant la réponse
@@ -152,20 +200,23 @@
 
     // --- Tâches : le journal des tâches de fond, relu toutes les 1,5 s tant qu'une tâche tourne ---------------------
     function jobsPanel() {
-      var all = jobs.length > 0 && jobs.every(function (j) { return openJobs[j.id]; });
-      var log = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, H.t('Tâches'), busy ? h('span', { class: 'busy' }, '…') : null),
-        jobs.length ? H.button(all ? H.t('Tout replier') : H.t('Tout déplier'), null, { 'data-key': 'jobs-all', onclick: function () { jobs.forEach(function (j) { openJobs[j.id] = !all; }); showJobs('jobs-all'); } }) : null));
-      if (!jobs.length) log.appendChild(h('p', { class: 'muted' }, H.t('Aucune tâche pour l’instant.')));
-      jobs.forEach(function (j) {
+      var recent = activeTab() === 'etat', shown = listed();          // l'onglet État ne montre que les dernières tâches, avec ce qu'il faut regarder quand l'une a échoué
+      var all = shown.length > 0 && shown.every(function (j) { return openJobs[j.id]; });
+      var log = h('section', { class: 'panel' }, h('div', { class: 'phead' }, h('h2', null, recent ? H.t('Dernières tâches') : H.t('Tâches'), busy ? h('span', { class: 'busy' }, '…') : null),
+        shown.length ? H.button(all ? H.t('Tout replier') : H.t('Tout déplier'), null, { 'data-key': 'jobs-all', onclick: function () { shown.forEach(function (j) { openJobs[j.id] = !all; }); showJobs('jobs-all'); } }) : null));
+      if (!shown.length) log.appendChild(h('p', { class: 'muted' }, H.t('Aucune tâche pour l’instant.')));
+      shown.forEach(function (j) {
         var status = { waiting: H.t('en attente'), running: H.t('en cours'), done: H.t('terminée'), failed: H.t('échec') }[j.status], open = !!openJobs[j.id];
         var node = h('div', { class: 'job ' + j.status, 'data-job': j.id }, h('button', { class: 'jhead f', 'aria-expanded': open ? 'true' : 'false', 'data-key': 'job-' + j.id,
-          onclick: function () { openJobs[j.id] = !open; showJobs('job-' + j.id); } }, h('span', { class: 'jt' }, h('b', null, H.tr(j.label)), h('span', null, status))));
+          onclick: function () { openJobs[j.id] = !open; showJobs('job-' + j.id); } }, h('span', { class: 'jt' }, h('b', null, H.tr(j.label)), h('span', null, recent && j.ended ? status + ' · ' + H.ago(j.ended) : status))));
         if (open) node.appendChild(logText(j) ? h('pre', null, logText(j)) : h('p', { class: 'muted' }, H.t('Rien n’a été noté.')));
+        if (recent && j.status === 'failed') node.appendChild(h('p', { class: 'muted hint' }, H.t('Ouvre le journal pour voir ce qui a échoué. Si une bibliothèque est introuvable, vérifie le dossier ou le partage réseau ; sinon relance la tâche depuis l’onglet Médiathèque.')));
         log.appendChild(node);
       });
       return log;
     }
     function logText(j) { return (j.log || []).map(function (line) { return H.tr(line); }).join('\n'); }
+    function listed() { return activeTab() === 'etat' ? jobs.slice(0, RECENT_JOBS) : jobs; }          // les tâches que le panneau montre : les plus récentes d'abord (le serveur les range ainsi)
     // Le défilement d'un journal : où il en est, et s'il était lu jusqu'en bas (alors il suit la fin).
     function logState(pre) { return { top: pre.scrollTop, end: pre.scrollHeight - pre.scrollTop - pre.clientHeight < 4 }; }
     function logKeep(pre, was) { pre.scrollTop = was.end ? pre.scrollHeight : was.top; }
@@ -180,10 +231,10 @@
     // Les journaux grossissent toutes les 1,5 s : on ne change que le texte de ceux qui ont changé, sans toucher au reste (focus, défilement, sélection).
     // Faux (rien n'a été modifié) si autre chose que des journaux a changé : une tâche ajoutée ou finie, un journal qui apparaît.
     function patchLogs() {
-      var nodes = logPanel.querySelectorAll('.job'), todo = [];
-      if (nodes.length !== jobs.length) return false;
-      for (var i = 0; i < jobs.length; i++) {
-        var j = jobs[i], node = nodes[i], pre = node.querySelector('pre'), text = logText(j);
+      var nodes = logPanel.querySelectorAll('.job'), todo = [], list = listed();
+      if (nodes.length !== list.length) return false;
+      for (var i = 0; i < list.length; i++) {
+        var j = list[i], node = nodes[i], pre = node.querySelector('pre'), text = logText(j);
         if (node.getAttribute('data-job') !== String(j.id) || node.className !== 'job ' + j.status) return false;
         if (openJobs[j.id] && !!pre !== !!text) return false;
         if (pre && pre.textContent !== text) todo.push([pre, text]);
@@ -204,6 +255,95 @@
       logPanel = fresh;
       logRestore(fresh, kept);
       if (focus) H.focus.key(fresh, focus, true);
+    }
+
+    // --- État : qui lit, télécharge ou envoie en ce moment (peut-on relancer le serveur ?), puis les dernières décisions de lecture ----------------
+    // `/api/activity` est relue toutes les 3 s tant que l'onglet est ouvert, la page affichée et le document visible. Chaque lecture ne remplace que ses deux zones (le direct, les décisions) : jamais la page entière, dont le focus et le défilement resteraient en route.
+    // Un minuteur à part de `poll` ; quand `busy` change, c'est `poll` qui relit l'état du serveur et les tâches.
+    function watching() { return !closed && activeTab() === 'etat' && !document.hidden && H.focus.shown(el); }
+    function startAct() { if (actRunning || !watching()) return; actRunning = true; actTick(); }
+    function stopAct() { clearTimeout(actTimer); actTimer = null; actToken++; actRunning = false; }          // une réponse encore en route ne sera plus écoutée (actToken)
+    function actTick() {
+      actTimer = null;
+      if (!watching()) { actRunning = false; return; }          // la page est masquée (quittée, ou un autre onglet) : on s'arrête, `refresh` ou la visibilité relancent
+      var mine = actToken;
+      H.api('/api/activity').then(function (a) { return { a: a }; }, function (e) { return { error: e.message || String(e) }; }).then(function (got) {
+        if (mine !== actToken) return;
+        if (!watching()) { actRunning = false; return; }
+        var before = actBusy === null ? busy : actBusy;
+        if (got.a) { act = got.a; actError = ''; actBusy = !!act.busy; } else actError = got.error;
+        paintActivity();
+        if (got.a && actBusy !== before) poll();
+        actTimer = setTimeout(actTick, H.adminStatus.every);
+      });
+    }
+    // Remplace le contenu d'une zone seulement s'il a changé, en rendant le focus à la commande qui l'avait.
+    function swap(zone, fresh) {
+      if (!zone || zone.innerHTML === fresh.innerHTML) return;
+      var focus = document.activeElement && zone.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+      H.clear(zone);
+      while (fresh.firstChild) zone.appendChild(fresh.firstChild);
+      if (focus && !H.focus.key(zone, focus, true)) H.focus.firstIfShown(el);
+    }
+    function paintActivity() { swap(zones.live, liveNode()); swap(zones.decisions, decisionsNode()); }
+    function missingLibs() { return ((state && state.libraries) || []).filter(function (l) { return !l.exists; }); }
+    function etatTab(body) {
+      zones = { live: liveNode(), decisions: decisionsNode() };
+      body.appendChild(zones.live);
+      var gone = missingLibs();
+      if (gone.length) body.appendChild(missingPanel(gone));
+      logPanel = jobsPanel();
+      body.appendChild(logPanel);
+      body.appendChild(zones.decisions);
+    }
+    function liveNode() {
+      var box = h('div', { 'data-etat': 'live' }), panel = h('section', { class: 'panel' }, h('h2', null, H.t('En ce moment')));
+      box.appendChild(panel);
+      if (actError) panel.appendChild(h('p', { class: 'muted', role: 'alert', 'data-etat': 'error' }, H.t('Impossible de lire l’activité du serveur : {error}', { error: H.tr(actError) })));          // une lecture qui échoue ne dit jamais « on peut relancer »
+      else if (!act) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
+      else {
+        var said = relaunchMessage(act);
+        if (said) panel.appendChild(h('p', { class: 'relaunch', role: 'status', 'data-etat': 'relaunch' }, said));
+        panel.appendChild(h('dl', null, activityFacts(act, missingLibs().length).map(function (f) { return [h('dt', null, f[0]), h('dd', null, String(f[1]))]; })));
+        var list = h('section', { class: 'panel' }, h('h2', null, H.t('Transferts')));
+        if (!act.transfers.length) list.appendChild(h('p', { class: 'muted' }, H.t('Aucun transfert pour l’instant.')));
+        act.transfers.forEach(function (t) { list.appendChild(transferRow(t)); });
+        box.appendChild(list);
+      }
+      return box;
+    }
+    function missingPanel(gone) {
+      var panel = h('section', { class: 'panel', 'data-etat': 'libs' }, h('h2', null, H.t('Bibliothèques introuvables')));
+      gone.forEach(function (l) {
+        panel.appendChild(h('div', { class: 'line', 'data-missing': l.id }, h('div', { class: 'what' }, h('b', null, H.libLabel(l)),
+          h('span', null, H.t('Vérifie que le dossier existe et que le disque ou le partage réseau est bien monté.')))));
+      });
+      return panel;
+    }
+    function decisionsNode() {
+      var box = h('div', { 'data-etat': 'decisions' }), panel = h('section', { class: 'panel' }, h('h2', null, H.t('Dernières décisions de lecture')));
+      box.appendChild(panel);
+      if (!act) { if (!actError) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…'))); }
+      else if (!act.decisions.length) panel.appendChild(h('p', { class: 'muted' }, H.t('Aucune lecture depuis le démarrage du serveur.')));
+      else act.decisions.forEach(function (d) { panel.appendChild(decisionRow(d)); });
+      return box;
+    }
+    // Une décision : quand, qui, sur quel appareil, quel titre, ce que le serveur a choisi et pourquoi ; ce que l'appareil a annoncé (`caps`) se demande. Tout vient du réseau : du texte, jamais du HTML.
+    function decisionRow(d) {
+      var key = d.at + '-' + d.entry + '-' + d.user, open = !!openCaps[key];
+      var reasons = [].concat(d.why || []).map(function (w) { return H.tr(w); }).filter(Boolean).join(' ; ');          // la liste de raisons du serveur, ou un texte
+      return h('div', { class: 'line decision', 'data-decision': key }, h('div', { class: 'what' }, h('b', null, d.title),
+        h('span', null, [U.when(d.at), d.user, deviceName(d.device) || d.agent].filter(Boolean).join(' · ')),
+        h('span', null, [KINDS[d.mode] || d.mode, reasons].filter(Boolean).join(' : ')),
+        open ? h('span', { class: 'caps' }, capsText(d.caps)) : null),
+        H.button(H.t('Détail'), null, { 'data-key': 'caps-' + key, 'data-detail': '1', 'aria-expanded': open ? 'true' : 'false', 'aria-label': H.t('Détail de ce que l’appareil a annoncé : {title}', { title: d.title }),
+          onclick: function () { openCaps[key] = !open; paintActivity(); } }));
+    }
+    function transferRow(t) {
+      var state = !ongoing(t) ? H.t('terminé') : t.connections > 0 ? H.t('en cours') : H.t('en pause ou en mémoire tampon');
+      return h('div', { class: 'line transfer', 'data-kind': t.kind, 'data-state': ongoing(t) ? 'ongoing' : 'finished' }, h('div', { class: 'what' }, h('b', null, t.title),
+        h('span', null, [t.user, deviceName(t.device) || t.agent, t.origin === 'local' ? H.t('réseau local') : H.t('à distance')].filter(Boolean).join(' · ')),
+        h('span', null, [KINDS[t.kind] || t.kind, state, H.t('démarré {when}', { when: H.ago(t.started) }), t.bytes > 0 ? U.size(t.bytes) : ''].filter(Boolean).join(' · '))));
     }
 
     // --- Demandes : toutes les demandes, filtrées par état, avec leurs demandeurs et leurs messages ----------------------
@@ -575,7 +715,9 @@
         if (busy) timer = setTimeout(poll, 1500);
       }).catch(function (e) { if (!closed) H.toast(e.message, 5000); });
     }
+    function onVisible() { if (document.hidden) stopAct(); else startAct(); }          // l'onglet du navigateur caché : plus de lecture ; revenu : elle reprend
+    document.addEventListener('visibilitychange', onVisible);
     poll();
-    return { el: el, nav: '#/admin', refresh: function () { if (activeTab() === 'demandes' && !reqLoading) loadRequests(); if (activeTab() === 'suggestions' && !sgLoading) loadSuggestions(); return poll(); }, destroy: function () { closed = true; clearTimeout(timer); } };          // au retour (une fiche, une saga) : la liste des demandes a pu changer
+    return { el: el, nav: '#/admin', refresh: function () { if (activeTab() === 'demandes' && !reqLoading) loadRequests(); if (activeTab() === 'suggestions' && !sgLoading) loadSuggestions(); startAct(); return poll(); }, destroy: function () { closed = true; clearTimeout(timer); stopAct(); document.removeEventListener('visibilitychange', onVisible); } };          // au retour (une fiche, une saga) : la liste des demandes a pu changer
   });
 })();
