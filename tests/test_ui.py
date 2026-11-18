@@ -907,11 +907,11 @@ class TestNextFilmOfASaga(UiCase):
         self.page.wait_for_function("id => location.hash.indexOf(id) >= 0", arg=entry, timeout=15000)
 
     def test_the_end_of_a_saga_film_offers_the_next_one_and_launches_nothing(self):
-        self.offered()
+        with self.page.expect_response(lambda r: r.url.endswith("/api/progress") and r.request.post_data_json["done"]):
+            self.offered()
         expect(self.panel).to_contain_text("Saga Deux")
         expect(self.button("Regarder")).to_be_focused()
         expect(self.button("Retour à la fiche")).to_be_visible()
-        self.page.wait_for_timeout(500)
         self.assertIn(self.first, self.page.url)
         self.assertTrue(self.progress("Saga Un")["done"])
         self.assertIsNone(self.progress("Saga Deux"))
@@ -964,6 +964,43 @@ class TestNextFilmOfASaga(UiCase):
         self.button("Retour à la fiche").click()
         self.shown(self.sheet)
         self.assertEqual(self.page.evaluate("document.querySelectorAll('#views > .view').length"), 1)
+
+    def back_to_the_panel(self):
+        """Du panneau à la fiche, puis la touche Retour : on revient au lecteur, film fini, panneau toujours là."""
+        self.button("Retour à la fiche").click()
+        self.shown(self.sheet)
+        self.page.keyboard.press("Escape")
+        self.shown("#/play/" + self.first)
+        expect(self.panel).to_contain_text("Film suivant de « Duo »")
+        self.assertTrue(self.page.evaluate("document.querySelector('.player video').ended"))
+
+    def test_a_player_opened_directly_does_not_leave_the_app_after_its_film_page(self):
+        self.offered()
+        self.back_to_the_panel()
+
+    def test_a_player_reopened_from_its_film_page_does_not_restart_the_film(self):
+        self.play(self.first)
+        self.page.keyboard.press("Escape")
+        self.shown(self.sheet)
+        self.page.evaluate("h => { location.hash = h; }", "#/play/" + self.first)
+        self.shown("#/play/" + self.first)
+        self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.play(); v.currentTime = v.duration - 0.4; })()")
+        expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
+        self.back_to_the_panel()
+
+    def test_the_next_film_of_a_saga_starts_at_normal_speed(self):
+        self.play(self.first)
+        self.page.locator(".player .btn.spd").click()
+        self.page.locator(".veil .opt", has_text="1,5×").click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.currentTime = v.duration - 0.4; })()")
+        expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
+        self.button("Regarder").click()
+        self.wait_on(self.second)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        self.assertEqual(self.page.evaluate("document.querySelector('.player video').playbackRate"), 1)
+        self.assertEqual(self.page.inner_text(".player .btn.spd"), "Vitesse")
 
     def test_the_last_film_of_the_saga_goes_back_to_its_page_as_before(self):
         self.finish(self.second)

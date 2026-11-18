@@ -6,7 +6,7 @@
 
   var QUALITIES = { auto: { k: 0, h: 0, label: H.t('Qualité d’origine') }, '1080': { k: 8000, h: 1080, label: '1080p · 8 Mb/s' }, '720': { k: 4000, h: 720, label: '720p · 4 Mb/s' }, '480': { k: 1500, h: 480, label: H.t('480p · 1,5 Mb/s') } };
   var MODES = { direct: H.t('Lecture directe'), remux: H.t('Son converti'), transcode: H.t('Image convertie') };
-  // La vitesse passe à l'épisode que « Suivant » (ou la fin de l'épisode) enchaîne, et à lui seul : toute autre ouverture du lecteur repart à 1×.
+  // La vitesse passe à l'épisode que « Suivant » (ou la fin de l'épisode) enchaîne, et à lui seul : toute autre ouverture du lecteur, le film suivant d'une saga compris, repart à 1×.
   var carried = null;
 
   // Ce que ce navigateur sait lire, d'après lui-même.
@@ -161,10 +161,10 @@
       offered = true;
       panel(H.t('Film suivant de « {saga} »', { saga: next.saga }), next.title, H.button(H.t('Regarder'), 'play', { onclick: goNext }), H.button(H.t('Retour à la fiche'), 'back', { onclick: toSheet }));
     }
-    // La fiche du film : celle d'où l'on vient si elle est juste derrière le lecteur (pas de seconde copie dans l'historique), sinon elle prend la place du lecteur.
+    // La fiche du film : celle d'où l'on vient si elle est juste derrière le lecteur ; sinon elle prend la place du lecteur. Sans page gardée derrière lui, elle s'ajoute à l'historique : la mettre à sa place ferait sortir de l'application ou doublerait une entrée.
     function toSheet() {
       var sheet = '#/i/' + plan.item, below = H.below();
-      if (below && below.hash === sheet) history.back(); else H.go(sheet, true);
+      if (below && below.hash === sheet) history.back(); else if (below) H.go(sheet, true); else location.hash = sheet;
     }
     // Si le lecteur refuse ce que le serveur lui donne, on descend d'un cran : conteneur converti, puis image convertie.
     video.addEventListener('error', function () {
@@ -304,7 +304,7 @@
     function pickSpeed() {
       H.speedMenu(speed, function (v) { if (v === speed) return; setSpeed(v); flash(H.speedLabel(speed)); }, trackMenu);
     }
-    function carry() { if (plan && plan.next && speed !== 1) carried = { id: plan.next.id, rate: speed }; }
+    function carry() { if (plan && plan.next && !plan.next.saga && speed !== 1) carried = { id: plan.next.id, rate: speed }; }
     // Le sous-titre du premier plan : celui que le serveur a choisi d'après les langues du compte (au plus un `selected` ; jamais une piste image, dont l'extraction peut durer).
     // Les plans suivants (autre piste audio, autre qualité) gardent le sous-titre en cours : c'est peut-être celui que l'utilisateur vient de choisir.
     function chooseDefaultSub() {
