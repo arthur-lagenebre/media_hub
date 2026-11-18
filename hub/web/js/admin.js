@@ -57,7 +57,7 @@
     if (!H.isAdmin()) return { el: h('section', { class: 'blank' }, h('h1', null, H.t('Administration'))), nav: '#/settings', shown: function () { H.go('#/settings', true); } };
     var el = h('section', { class: 'admin' }), timer = null, wasBusy = false, busy = false, state = null, jobs = [], users = null, usersError = '', logPanel = null, lastPage = '', lastTasks = '', closed = false;
     var tab = query.tab || H.pref('admin.tab') || '', openJobs = {};
-    var act = null, actError = '', actBusy = null, actTimer = null, actRunning = false, actToken = 0, openCaps = {}, zones = {};          // l'onglet État : la dernière lecture de /api/activity, son erreur, son minuteur
+    var act = null, actFresh = false, actError = '', actBusy = null, actTimer = null, actRunning = false, actToken = 0, openCaps = {}, zones = {};          // l'onglet État : la dernière lecture de /api/activity, son erreur, son minuteur
     function start(path, body, text) {
       return H.api(path, body).then(function () { H.toast(text); poll(); }).catch(function (e) { H.toast(e.message, 5000); });
     }
@@ -261,7 +261,8 @@
     // `/api/activity` est relue toutes les 3 s tant que l'onglet est ouvert, la page affichée et le document visible. Chaque lecture ne remplace que ses deux zones (le direct, les décisions) : jamais la page entière, dont le focus et le défilement resteraient en route.
     // Un minuteur à part de `poll` ; quand `busy` change, c'est `poll` qui relit l'état du serveur et les tâches.
     function watching() { return !closed && activeTab() === 'etat' && !document.hidden && H.focus.shown(el); }
-    function startAct() { if (actRunning || !watching()) return; actRunning = true; actTick(); }
+    // À la reprise, la dernière lecture peut dater : la liste reste affichée, mais « on peut relancer » attend la réponse suivante.
+    function startAct() { if (actRunning || !watching()) return; actRunning = true; actFresh = false; paintActivity(); actTick(); }
     function stopAct() { clearTimeout(actTimer); actTimer = null; actToken++; actRunning = false; }          // une réponse encore en route ne sera plus écoutée (actToken)
     function actTick() {
       actTimer = null;
@@ -271,6 +272,7 @@
         if (mine !== actToken) return;
         if (!watching()) { actRunning = false; return; }
         var before = actBusy === null ? busy : actBusy;
+        actFresh = !!got.a;
         if (got.a) { act = got.a; actError = ''; actBusy = !!act.busy; } else actError = got.error;
         paintActivity();
         if (got.a && actBusy !== before) poll();
@@ -302,7 +304,7 @@
       if (actError) panel.appendChild(h('p', { class: 'muted', role: 'alert', 'data-etat': 'error' }, H.t('Impossible de lire l’activité du serveur : {error}', { error: H.tr(actError) })));          // une lecture qui échoue ne dit jamais « on peut relancer »
       else if (!act) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
       else {
-        var said = relaunchMessage(act);
+        var said = actFresh ? relaunchMessage(act) : '';
         if (said) panel.appendChild(h('p', { class: 'relaunch', role: 'status', 'data-etat': 'relaunch' }, said));
         panel.appendChild(h('dl', null, activityFacts(act, missingLibs().length).map(function (f) { return [h('dt', null, f[0]), h('dd', null, String(f[1]))]; })));
         var list = h('section', { class: 'panel' }, h('h2', null, H.t('Transferts')));
@@ -325,12 +327,24 @@
       box.appendChild(panel);
       if (!act) { if (!actError) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…'))); }
       else if (!act.decisions.length) panel.appendChild(h('p', { class: 'muted' }, H.t('Aucune lecture depuis le démarrage du serveur.')));
-      else act.decisions.forEach(function (d) { panel.appendChild(decisionRow(d)); });
+      else {
+        var keys = decisionKeys(act.decisions);
+        act.decisions.forEach(function (d, i) { panel.appendChild(decisionRow(d, keys[i])); });
+      }
       return box;
     }
+    // La clé d'une décision, stable d'une lecture à l'autre : deux décisions identiques dans la même seconde se distinguent par leur rang, compté depuis la plus ancienne (les nouvelles arrivent en tête).
+    function decisionKeys(list) {
+      var seen = {};
+      return list.slice().reverse().map(function (d) {
+        var key = d.at + '-' + d.entry + '-' + d.user;
+        seen[key] = (seen[key] || 0) + 1;
+        return key + '-' + seen[key];
+      }).reverse();
+    }
     // Une décision : quand, qui, sur quel appareil, quel titre, ce que le serveur a choisi et pourquoi ; ce que l'appareil a annoncé (`caps`) se demande. Tout vient du réseau : du texte, jamais du HTML.
-    function decisionRow(d) {
-      var key = d.at + '-' + d.entry + '-' + d.user, open = !!openCaps[key];
+    function decisionRow(d, key) {
+      var open = !!openCaps[key];
       var reasons = [].concat(d.why || []).map(function (w) { return H.tr(w); }).filter(Boolean).join(' ; ');          // la liste de raisons du serveur, ou un texte
       return h('div', { class: 'line decision', 'data-decision': key }, h('div', { class: 'what' }, h('b', null, d.title),
         h('span', null, [U.when(d.at), d.user, deviceName(d.device) || d.agent].filter(Boolean).join(' · ')),

@@ -2489,6 +2489,32 @@ class TestAdminStatusTab(UiCase):
             expect(self.fact(label)).to_have_text("0")
         expect(self.message()).to_have_count(0)
 
+    def test_coming_back_to_the_tab_does_not_repeat_an_old_restart_message(self):
+        """L'ancienne lecture ne dit plus rien de sûr : la phrase rassurante attend la réponse suivante."""
+        self.open_status()
+        expect(self.message()).to_be_visible(timeout=20000)
+        self.view(".tabs [data-key=tab-serveur]").click()
+        expect(self.message()).to_have_count(0)
+        self.hold = True
+        self.view(".tabs [data-key=tab-etat]").click()
+        self.until(lambda: self.held, tries=200)
+        expect(self.message()).to_have_count(0)
+        self.hold = False
+        for route in self.held:
+            route.fulfill(content_type="application/json", body=json.dumps(self.activity))
+        expect(self.message()).to_be_visible(timeout=20000)
+
+    def test_two_decisions_of_the_same_second_open_separately(self):
+        second = int(time.time()) - 30
+        self.activity["decisions"] = [activity_decision(at=second, caps={"video": ["hevc"]}), activity_decision(at=second, caps={"video": ["av1"]})]
+        self.open_status()
+        rows = self.view("[data-etat=decisions] .decision")
+        expect(rows).to_have_count(2, timeout=20000)
+        rows.nth(1).locator("[data-detail]").click()
+        expect(rows.nth(1)).to_contain_text("av1")
+        self.assertNotIn("hevc", rows.nth(0).inner_text())
+        expect(rows.nth(1).locator("[data-detail]")).to_be_focused()
+
     def test_the_summary_counts_the_running_transfers_by_kind(self):
         self.activity.update(streams=2, transfers=[activity_transfer(kind="direct"), activity_transfer(kind="audio", title="Piste"), activity_transfer(kind="remux", title="R"),
                                                    activity_transfer(kind="transcode", title="T"), activity_transfer(kind="download", title="D"), activity_transfer(kind="upload", title="U"),
