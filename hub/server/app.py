@@ -1707,13 +1707,28 @@ ITEM_META_KEYS = ("directors", "writers", "actors", "artist", "artist_id", "arti
                   "seasons_total", "tmdb", "missing", "unit", "units", "years", "discs", "disc_titles", "release_types", "season_summaries", "doubts")
 
 
-def tagged_saga(hub, item, movies, seen, info, ratings=None):
-    """(films, manquants) de la saga de l'étiquette d'un film : numérotés d'après la collection TMDB quand on la connaît, sinon par date de sortie."""
-    tagged = sorted((r for r in movies if r["grp"] == item["grp"]), key=release_key)
-    ranks, absent = missing.tagged(item["grp"], tagged, info, set(hub.sagas.ignored()))
+def tagged_films(hub, group, movies, info):
+    """(films dans l'ordre de la saga, rangs, manquants) de la saga de l'étiquette `group` : l'ordre de la collection TMDB quand on la connaît (les rangs viennent d'elle), sinon celui des dates de sortie (rangs : None)."""
+    tagged = sorted((r for r in movies if r["grp"] == group), key=release_key)
+    ranks, absent = missing.tagged(group, tagged, info, set(hub.sagas.ignored()))
     if ranks is not None:
         tagged.sort(key=lambda r: ranks[r["id"]])
+    return tagged, ranks, absent
+
+
+def tagged_saga(hub, item, movies, seen, info, ratings=None):
+    """(films, manquants) de la saga de l'étiquette d'un film : numérotés d'après la collection TMDB quand on la connaît, sinon par date de sortie."""
+    tagged, ranks, absent = tagged_films(hub, item["grp"], movies, info)
     return number_films([with_seen(r, seen, card_quality(hub.db), ratings) for r in tagged], ranks), absent
+
+
+def tagged_places(hub, group, movies):
+    """[(film, rang)] de la saga de l'étiquette `group`, dans l'ordre de sa page. Sans collection TMDB, les versions d'un même film (même identifiant TMDB) prennent la place de la première sortie : comme dans une saga du fichier, elles ont le même rang."""
+    films, ranks, _ = tagged_films(hub, group, movies, missing.load(hub.db))
+    if ranks is None:
+        places = {}
+        ranks = {film["id"]: places.setdefault(sagafile.tmdb_of(film) or film["id"], len(places)) for film in films}
+    return sorted(((film, ranks[film["id"]]) for film in films), key=lambda place: place[1])
 
 
 def file_saga(name, films, listed, seen, owned, info, quality=None, ratings=None):
@@ -1722,12 +1737,22 @@ def file_saga(name, films, listed, seen, owned, info, quality=None, ratings=None
     return {"name": name, "films": numbered, "missing": missing.listed(listed.get(name, []), owned, info)}
 
 
+def library_movies(hub, lib_id):
+    """Les films d'une bibliothèque : une saga ne compare jamais que ceux-là."""
+    return hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (lib_id,))
+
+
+def file_sagas_of(custom, item):
+    """Les sagas du fichier (`custom`, voir Sagas.of_movies) où figure ce film, dans l'ordre du fichier."""
+    return {name: films for name, films in custom.items() if any(f["id"] == item["id"] for f, _ in films)}
+
+
 def movie_sagas(hub, item, lib, user, ratings=None):
     """Ses sagas : celle de l'étiquette d'abord (`saga`, gardée pour les clients d'avant `sagas`), puis celles du fichier (sagas.py), chacune avec les films qui la composent et ceux qui lui manquent."""
-    movies = hub.db.query("SELECT * FROM items WHERE lib=? AND type='movie'", (item["lib"],))
+    movies = library_movies(hub, item["lib"])
     seen = seen_counts(hub, user, lib.id)
     custom = hub.sagas.of_movies(movies)
-    mine = {name: films for name, films in custom.items() if any(f["id"] == item["id"] for f, _ in films)}
+    mine = file_sagas_of(custom, item)
     info, owned = (missing.load(hub.db), sagafile.by_tmdb(movies)) if item["grp"] or mine else (None, None)          # TMDB ne sert que s'il y a une saga
     out, sagas = {}, []
     if item["grp"]:
@@ -2372,6 +2397,45 @@ def next_summary(following):
     return None
 
 
+def sagas_to_follow(hub, item, movies):
+    """Les sagas où chercher la suite d'un film, (nom, [(film, rang)]) : celles du fichier dans leur ordre, puis celle de l'étiquette, sauf si une saga du fichier porte son nom (elle la remplace, comme sur la fiche)."""
+    custom = hub.sagas.of_movies(movies)
+    yield from file_sagas_of(custom, item).items()
+    if item["grp"] and item["grp"] not in custom:
+        yield item["grp"], tagged_places(hub, item["grp"], movies)
+
+
+def first_video(hub, item_id):
+    """Le premier fichier vidéo d'un élément, ou None."""
+    return min(hub.db.query("SELECT * FROM entries WHERE item_id=? AND kind='video'", (item_id,)), key=order_key, default=None)
+
+
+def film_after(hub, item, films):
+    """(film, fichier) du premier film présent après `item` dans `films` ([(film, rang)] dans l'ordre de la saga), ou None. Les versions de `item` ont son rang : aucune ne le suit."""
+    rank = next(place for film, place in films if film["id"] == item["id"])
+    later = ((film, first_video(hub, film["id"])) for film, place in films if place > rank)
+    return next((found for found in later if found[1] is not None), None)
+
+
+def next_in_saga(hub, entry):
+    """Ce qui suit un film fini dans sa saga, sous la forme de `next` avec le nom de la saga en plus ; None si ce n'est pas un film ou s'il n'y a pas de suite présente. Seule sa bibliothèque compte : le droit de lire le film suivant est celui de lire ce film."""
+    movies = library_movies(hub, entry["lib"])
+    item = next((movie for movie in movies if movie["id"] == entry["item_id"]), None)
+    if item is None:
+        return None
+    for name, films in sagas_to_follow(hub, item, movies):
+        found = film_after(hub, item, films)
+        if found:
+            return {**next_summary(found[1]), "title": found[0]["title"], "saga": name}
+    return None
+
+
+def play_next(hub, entry):
+    """Le `next` du plan de lecture : le fichier suivant de l'élément, sinon, après la dernière partie d'un film, le film suivant de sa saga."""
+    following = next_entry(hub, entry)
+    return next_summary(following) if following is not None else next_in_saga(hub, entry)
+
+
 @route("POST", r"/api/play/(\w+)")
 def api_play(h, m, q):
     """Le plan de lecture d'un fichier vidéo pour CE lecteur. Le client l'appelle à l'ouverture, puis à chaque changement de piste audio.
@@ -2405,7 +2469,7 @@ def api_play(h, m, q):
         "audio": [{"index": t["index"], "label": track_label(t, h.lang), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
         "subs": subs,
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
-        "next": next_summary(next_entry(hub, entry)),
+        "next": play_next(hub, entry),
     })
 
 

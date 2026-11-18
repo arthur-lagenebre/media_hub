@@ -651,6 +651,7 @@
     if (replace) { H.replaceNext = true; location.replace(hash); } else location.hash = hash;
   };
   H.current = function () { return stack[stack.length - 1] || null; };
+  H.below = function () { return stack[stack.length - 2] || null; };          // la page gardée juste derrière la page courante
   // Jette les pages gardées en réserve derrière la page courante : ce qu'elles montrent est périmé (un nom de bibliothèque changé). Retour les refait à neuf, avec les bons textes.
   H.dropParked = function () { while (stack.length > 1) destroy(stack.shift()); };
   // Retour : ferme la fenêtre ouverte, sinon remonte d'une page ; `fallback` sert quand la page a été ouverte directement.
