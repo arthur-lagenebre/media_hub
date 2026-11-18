@@ -861,6 +861,7 @@
     'Recherche…': 'Searching…',
     'Aucun titre trouvé dans TMDB pour « {q} ».': 'No title found in TMDB for “{q}”.',
     'Ouvrir « {title} »': 'Open “{title}”',
+    'Ouvrir « {title} » sur TMDB (nouvel onglet)': 'Open “{title}” on TMDB (new tab)',
     'L’administrateur verra ta demande et ajoutera la série s’il le peut. Rien n’est téléchargé tout seul.': 'The administrator will see your request and add the series if they can. Nothing is downloaded automatically.',
     'La recherche de titres à demander n’est pas configurée sur ce serveur. Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée.': 'Searching for titles to request isn’t set up on this server. A movie missing from a saga, or from a person’s filmography, is requested from its greyed-out box.',
     'L’administrateur t’a retiré le droit de demander des films et des séries.': 'The administrator took away your right to request movies and series.',

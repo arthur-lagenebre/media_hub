@@ -549,6 +549,8 @@ html:not([data-device="pc"]) .card.wanted.ask:hover:not(:focus) .rqbtn:not(.on) 
 .reqrow[data-status="declined"] .what .rqstatus { color: #ffa595; }
 .reqrow[data-status="added"] .what .rqstatus { color: #9bd16b; }
 .reqrow .what .rqnote { overflow-wrap: anywhere; }
+.rqlink { text-decoration: none; }
+.rqlink:hover, .rqlink:focus { text-decoration: underline; text-underline-offset: 0.15em; }
 .rqusers { margin: 0.35rem 0 0; padding: 0; list-style: none; font-size: 0.88rem; color: var(--mute); }
 .rqusers li { overflow-wrap: anywhere; }
 .rqusers b { color: var(--text); font-weight: 650; }

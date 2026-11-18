@@ -124,9 +124,7 @@ class UiCase(unittest.TestCase):
     def setUp(self):
         self.context = self.browser.new_context(viewport={"width": 1920, "height": 1080})
         self.page = self.context.new_page()
-        slowdown = float(os.environ.get("HUB_UI_SLOWDOWN", "1"))
-        if slowdown > 1:                    # un poste chargé, à volonté : `HUB_UI_SLOWDOWN=8` ralentit le navigateur d'autant, pour débusquer les attentes qui comptent sur le temps
-            self.context.new_cdp_session(self.page).send("Emulation.setCPUThrottlingRate", {"rate": slowdown})
+        slow_down(self.page)
         self.errors = []
         self.page.on("pageerror", lambda e: self.errors.append(str(e)))
         self.page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and not any(code in m.text for code in ("404", "500", "503")) else None)
@@ -7166,6 +7164,13 @@ class InboxUiCase(unittest.TestCase):
         self.assertFalse((self.box / "Léa" / "Été" / "Saison 1").exists())                              # le sous-dossier vidé a disparu, pas celui qui garde un fichier
 
 
+def slow_down(page):
+    """Un poste chargé, à volonté : `HUB_UI_SLOWDOWN=8` ralentit le navigateur d'autant, pour débusquer les attentes qui comptent sur le temps."""
+    slowdown = float(os.environ.get("HUB_UI_SLOWDOWN", "1"))
+    if slowdown > 1:
+        page.context.new_cdp_session(page).send("Emulation.setCPUThrottlingRate", {"rate": slowdown})
+
+
 class RequestsUiCase(unittest.TestCase):
     """Le serveur des tests de demandes (sans test à lui) : un serveur avec comptes (`admin` / `secret`, `alice` et `bob`) pour toute la classe ; « Saga DCEU » attend deux films (« Film intermédiaire », 1000, et « Wonder Woman », 297762),
     « Réal Demande » en a réalisé un qu'on n'a pas (« Absent Personne », 9500). Les demandes sont effacées entre deux tests.
@@ -7235,6 +7240,7 @@ class RequestsUiCase(unittest.TestCase):
         if device:
             context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
         page = context.new_page()
+        slow_down(page)
         page.on("pageerror", lambda e: self.errors.append(str(e)))
         page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text else None)
         page.goto(self.base + "/login")
@@ -7297,6 +7303,32 @@ class RequestsUiCase(unittest.TestCase):
             except AssertionError:
                 continue
         expect(self.dialog(page)).to_be_hidden()
+
+    def title_link(self, row):
+        """Le lien du titre d'une ligne (demande ou résultat de recherche)."""
+        return row.locator("b a")
+
+    def assert_tmdb_link(self, link, title, address):
+        """`link` mène à la fiche TMDB `address` dans un nouvel onglet, sans lien avec cette page, et dit où il va."""
+        expect(link).to_have_text(title)
+        expect(link).to_have_attribute("href", address)
+        expect(link).to_have_attribute("target", "_blank")
+        self.assertIn("noopener", link.get_attribute("rel").split())
+        expect(link).to_have_attribute("aria-label", f"Ouvrir « {title} » sur TMDB (nouvel onglet)")
+
+    def assert_opens_in_a_new_tab(self, page, link, address):
+        """Un clic sur `link` ouvre `address` dans un autre onglet (TMDB simulé) ; la page reste où elle est, sans fenêtre ouverte."""
+        page.context.route("https://www.themoviedb.org/**", lambda route: route.fulfill(status=200, content_type="text/html", body="<title>TMDB</title>"))
+        here = page.url
+        with page.context.expect_page() as opened:
+            link.click()
+        expect(opened.value).to_have_url(address)
+        opened.value.close()
+        self.assertEqual(page.url, here)
+        expect(self.dialog(page)).to_have_count(0)
+
+    def focused_key(self, page, key):
+        page.wait_for_function("k => document.activeElement && document.activeElement.getAttribute('data-key') === k", arg=key)
 
     def key(self, page):
         return page.evaluate("document.activeElement && document.activeElement.getAttribute('data-key')")
@@ -7502,7 +7534,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.count_rows(page, 2)
         added, pending = self.rows(page).filter(has_text="Wonder Woman"), self.rows(page).filter(has_text="Absent Personne")
         self.assertEqual(added.locator(".rqhint").inner_text(), "Pas encore visible pour toi : demande à l’administrateur où le trouver.")
-        self.assertEqual(added.locator("a").count(), 0)                                                     # rien à ouvrir
+        self.assertEqual(added.locator("a:not([data-aside])").count(), 0)                                   # rien à ouvrir (le titre mène seulement à TMDB)
         self.assertEqual(pending.locator(".rqhint").count(), 0)
         english = self.session("alice", lang="en")
         english.goto(self.base + "/#/requests")
@@ -7768,6 +7800,91 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.assertTrue(self.rows(page).locator("button").evaluate_all("els => els.every(e => e.getBoundingClientRect().height >= 32)"))       # une cible tactile assez grande
 
     # --- En anglais ----------------------------------------------------------------
+    # --- Le titre mène à la fiche TMDB --------------------------------------------------
+    def ask_film_and_show(self, name):
+        """`name` demande un film (1000) puis une série (5001) ; rend leurs identifiants de demande."""
+        film = self.ask(name, 1000)["id"]
+        return film, self.call(name, "/api/requests", {"kind": "show", "tmdb": 5001, "title": "Une série", "year": "2015"})["id"]
+
+    def test_my_requests_link_each_title_to_its_tmdb_page(self):
+        self.ask_film_and_show("alice")
+        page = self.session("alice")
+        self.open(page, "#/requests")
+        self.count_rows(page, 2)
+        film = self.title_link(self.rows(page).filter(has_text="Film intermédiaire"))
+        self.assert_tmdb_link(film, "Film intermédiaire (2014)", "https://www.themoviedb.org/movie/1000")
+        self.assert_tmdb_link(self.title_link(self.rows(page).filter(has_text="Une série")), "Une série (2015)", "https://www.themoviedb.org/tv/5001")
+        self.assert_opens_in_a_new_tab(page, film, "https://www.themoviedb.org/movie/1000")
+        self.assertEqual(len(self.mine("alice")), 2)
+
+    def test_the_title_link_never_takes_the_landing_focus_and_keeps_the_arrows_order(self):
+        film, show = self.ask_film_and_show("alice")
+        page = self.session("alice")
+        self.open(page, "#/requests")
+        self.count_rows(page, 2)
+        first, second = (show, film) if self.rows(page).first.get_attribute("data-request") == str(show) else (film, show)
+        self.focused_key(page, f"rm-{first}")                                                               # le bouton de la ligne, pas le lien
+        page.keyboard.press("ArrowDown")
+        self.focused_key(page, f"rm-{second}")                                                              # d'un bouton au bouton suivant
+        page.keyboard.press("ArrowLeft")
+        title = "tmdb-show-5001" if second == show else "tmdb-movie-1000"
+        self.focused_key(page, title)                                                                       # le lien s'atteint aux flèches
+        self.assertNotEqual(page.evaluate("getComputedStyle(document.activeElement).outlineStyle"), "none")
+        self.assertIn("underline", page.evaluate("getComputedStyle(document.activeElement).textDecorationLine"))
+        page.keyboard.press("ArrowRight")
+        self.focused_key(page, f"rm-{second}")
+
+    def test_a_refreshed_list_keeps_the_focus_on_the_title_link(self):
+        self.ask("alice", 1000)
+        page = self.session("alice")
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        self.title_link(self.rows(page)).evaluate("e => { e.setAttribute('data-before', '1'); e.focus(); }")
+        page.evaluate("location.hash = '#/settings'")
+        self.shown(page, "#/settings")
+        page.keyboard.press("Escape")                                                                       # au retour, la liste est relue et redessinée
+        self.shown(page, "#/requests")
+        page.wait_for_function("document.activeElement && document.activeElement.getAttribute('data-key') === 'tmdb-movie-1000' && !document.activeElement.hasAttribute('data-before')")
+
+    def test_the_administrator_list_links_titles_and_its_buttons_still_work(self):
+        self.ask_film_and_show("alice")
+        page = self.session("admin")
+        self.open(page, "#/admin?tab=demandes")
+        self.count_rows(page, 2)
+        rows = self.rows(page)
+        row = rows.filter(has_text="Film intermédiaire")
+        self.assert_tmdb_link(self.title_link(row), "Film intermédiaire (2014)", "https://www.themoviedb.org/movie/1000")
+        self.assert_tmdb_link(self.title_link(rows.filter(has_text="Une série")), "Une série (2015)", "https://www.themoviedb.org/tv/5001")
+        self.assert_opens_in_a_new_tab(page, self.title_link(row), "https://www.themoviedb.org/movie/1000")
+        self.assertEqual({r["status"] for r in self.call("admin", "/api/requests")["requests"]}, {"pending"})   # le lien ne touche pas à la demande
+        row.locator("button", has_text="Marquer ajouté").click()
+        row.locator(".rqstatus", has_text="Ajouté").wait_for()
+        expect(self.title_link(row)).to_have_attribute("href", "https://www.themoviedb.org/movie/1000")
+
+    def test_on_the_tv_a_request_title_is_plain_text(self):
+        self.ask_film_and_show("alice")
+        for name, target in (("alice", "#/requests"), ("admin", "#/admin?tab=demandes")):
+            page = self.session(name, device="tv")
+            self.open(page, target)
+            self.count_rows(page, 2)
+            expect(self.rows(page).locator("b", has_text="Film intermédiaire (2014)")).to_have_count(1)
+            expect(self.rows(page).locator(".what a")).to_have_count(0)
+
+    def test_a_request_without_an_address_shows_its_title_as_text(self):
+        self.ask("alice", 1000)
+        page = self.session("alice")
+
+        def without_url(route):
+            answer = route.fetch().json()
+            for request in answer["requests"]:
+                del request["url"]
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(answer))
+        page.route(lambda url: url.endswith("/api/requests?mine=1"), without_url)
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        expect(self.rows(page).locator("b", has_text="Film intermédiaire (2014)")).to_have_count(1)
+        expect(self.rows(page).locator(".what a")).to_have_count(0)
+
     def test_requests_are_in_english(self):
         self.hub.cfg.request_max = 1
         self.ask("alice", 9500)
@@ -8078,9 +8195,6 @@ class TestRequestSearchInTheUi(RequestsUiCase):
             route.fulfill(status=status, content_type="application/json", body=json.dumps({"error": message}))
         return handler
 
-    def focused_key(self, page, key):
-        page.wait_for_function("k => document.activeElement && document.activeElement.getAttribute('data-key') === k", arg=key)
-
     def library_search(self, page, text):
         """Cherche `text` dans la recherche habituelle de la médiathèque (#/search) et attend que la page ait répondu."""
         self.open(page, "#/search")
@@ -8171,7 +8285,7 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         self.assertEqual(voyage.locator("button").inner_text().strip(), "Demander aussi")
         retour = self.hit(page, "Le Grand Retour")
         self.assertIn("Refusé", retour.inner_text())
-        self.assertEqual(retour.locator("button, a, .f").count(), 0)                                        # rien à faire : rien à viser
+        self.assertEqual(retour.locator("button, a:not([data-aside]), .f:not([data-aside])").count(), 0)    # rien à faire : seul le titre mène à TMDB
         self.assertNotIn("bob", page.locator("body").inner_text().lower())
         voyage.locator("button").click()
         with self.sent(page) as info:
@@ -8382,6 +8496,7 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         expect(self.hits(page)).to_have_count(3)
         self.assertEqual(self.hits(page).locator(".rqkind").all_inner_texts(), ["Movie", "Movie", "Series"])
         self.assertIn("Coming soon", self.hit(page, "Le Grand Retour").inner_text())
+        expect(self.title_link(self.hit(page, "Le Grand Voyage"))).to_have_attribute("aria-label", "Open “Le Grand Voyage” on TMDB (new tab)")
         self.hit(page, "Le Grand Voyage").locator("button", has_text="Request").click()
         box = self.dialog(page)
         self.assertEqual(box.locator("h3").inner_text(), "Request “Le Grand Voyage”")
@@ -8394,6 +8509,57 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         self.library_search(page, "Grand Voyage")
         expect(self.view(page, "[data-key=req-notfound]")).to_have_text("Not found? Request “Grand Voyage”")
         self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    # --- Le titre mène à la fiche TMDB --------------------------------------------------
+    def test_a_result_title_links_to_its_tmdb_page_and_its_button_still_asks(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.search(page, "grand")
+        expect(self.hits(page)).to_have_count(3)
+        film = self.title_link(self.hit(page, "Le Grand Voyage"))
+        self.assert_tmdb_link(film, "Le Grand Voyage", "https://www.themoviedb.org/movie/4001")
+        self.assert_tmdb_link(self.title_link(self.hit(page, "La Grande Série")), "La Grande Série", "https://www.themoviedb.org/tv/5001")
+        self.assert_opens_in_a_new_tab(page, film, "https://www.themoviedb.org/movie/4001")
+        self.assertEqual(self.mine("alice"), [])                                                             # le lien ne demande rien
+        self.hit(page, "Le Grand Voyage").locator("button", has_text="Demander").click()
+        self.dialog(page).wait_for()
+
+    def test_enter_lands_on_the_action_of_the_first_result_not_on_its_title(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.search(page, "grand")
+        expect(self.hits(page)).to_have_count(3)
+        page.keyboard.press("Enter")
+        self.focused_key(page, "rq-movie-4001")
+        page.keyboard.press("ArrowDown")
+        self.focused_key(page, "rq-movie-4002")                                                              # d'un bouton au bouton suivant, sans passer par le lien
+        page.keyboard.press("ArrowLeft")
+        self.focused_key(page, "tmdb-movie-4002")                                                            # le titre de la même ligne, si loin soit-il
+        page.keyboard.press("ArrowRight")
+        self.focused_key(page, "rq-movie-4002")
+        self.view(page, "input[type=search]").focus()
+        self.search(page, "personne")
+        expect(self.hits(page)).to_have_count(1)
+        page.keyboard.press("Enter")
+        self.focused_key(page, "rq-movie-9101")                                                              # « Ouvrir », pour un titre déjà là
+        self.assertIn("Ouvrir", page.evaluate("document.activeElement.textContent"))
+
+    def test_on_the_tv_a_result_title_is_plain_text(self):
+        page = self.session("alice", device="tv")
+        self.open(page, self.PAGE)
+        self.search(page, "grand")
+        expect(self.hits(page)).to_have_count(3)
+        expect(self.hit(page, "Le Grand Voyage").locator(".rqtitle")).to_have_text("Le Grand Voyage")
+        expect(self.hits(page).locator(".what a")).to_have_count(0)
+
+    def test_a_result_without_an_address_shows_its_title_as_text(self):
+        page = self.session("alice")
+        body = json.dumps({"results": [{"kind": "movie", "tmdb": 7, "title": "Sans adresse", "year": "", "date": "", "overview": ""}]})
+        page.route("**/api/requests/search*", lambda route: route.fulfill(status=200, content_type="application/json", body=body))
+        self.open(page, self.PAGE)
+        self.search(page, "adresse")
+        expect(self.hit(page, "Sans adresse").locator(".rqtitle")).to_have_text("Sans adresse")
+        expect(self.hits(page).locator(".what a")).to_have_count(0)
 
     # --- Affiches -----------------------------------------------------------------------
     def test_the_posters_arrive_in_my_requests_once_the_task_has_run(self):

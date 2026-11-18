@@ -1290,6 +1290,13 @@
   var REQUEST_STATUS = { pending: H.t('En attente'), added: H.t('Ajouté'), declined: H.t('Refusé') };
   // Le titre d'une demande, avec son année : « Film intermédiaire (2014) ». Le titre vient du serveur (TMDB, ou ce que le compte a envoyé) : toujours en texte.
   function requestTitle(r) { return (r.title || (r.kind === 'show' ? H.t('Série TMDB {n}', { n: r.tmdb }) : H.t('Film TMDB {n}', { n: r.tmdb }))) + (r.year ? ' (' + r.year + ')' : ''); }
+  // Le titre affiché d'une demande ou d'un résultat : un lien vers sa fiche TMDB (`url`, donnée par le serveur), dans un nouvel onglet. Sur la télé, ou sans adresse, un simple texte : rien à y atteindre.
+  // `data-aside` : le lien s'atteint aux flèches, mais le focus n'y arrive jamais de lui-même (voir H.focus.first) ; `data-key` le lui rend quand la liste se redessine.
+  function requestHeading(r, text, cls) {
+    var link = H.device === 'tv' || !r.url ? text : h('a', { class: 'rqlink f', href: r.url, target: '_blank', rel: 'noopener noreferrer', 'data-aside': '1', 'data-key': 'tmdb-' + r.kind + '-' + r.tmdb,
+      'aria-label': H.t('Ouvrir « {title} » sur TMDB (nouvel onglet)', { title: text }) }, text);
+    return h('b', { class: cls || null }, link);
+  }
   // L'état en toutes lettres, avec le motif d'un refus : « Refusé : pas en France ».
   function requestStatus(r) {
     var said = REQUEST_STATUS[r.status] || r.status;
@@ -1303,7 +1310,7 @@
     return next ? prefix + next.id : null;
   }
   // Ce que l'onglet Demandes de la page Administration (admin.js) reprend d'ici.
-  H.requests = { title: requestTitle, status: requestStatus, picture: requestPicture, open: openLink, neighbour: neighbourKey, gone: goneAlready };
+  H.requests = { title: requestTitle, heading: requestHeading, status: requestStatus, picture: requestPicture, open: openLink, neighbour: neighbourKey, gone: goneAlready };
 
   // #/requests : les demandes du compte (GET /api/requests?mine=1), de la plus récente à la plus ancienne. Chacune se retire ; une demande arrivée mène à l'élément quand le compte le voit.
   // Ce que le compte voit : ses demandes et son message, jamais qui d'autre a demandé le même film.
@@ -1314,7 +1321,7 @@
     var el = h('section', { class: 'myrequests' }, h('h1', null, H.t('Mes demandes')), intro, add, out);
     var list = [];
     function row(r) {
-      var what = h('div', { class: 'what' }, h('b', null, requestTitle(r)), h('span', { class: 'rqstatus' }, requestStatus(r)),
+      var what = h('div', { class: 'what' }, requestHeading(r, requestTitle(r)), h('span', { class: 'rqstatus' }, requestStatus(r)),
         r.status === 'added' && !r.item ? h('span', { class: 'rqhint' }, H.t('Pas encore visible pour toi : demande à l’administrateur où le trouver.')) : null,      // ajoutée sans élément qu'il voit (bibliothèque cachée, ou marquée avant le scan) : ne dit pas où, voir docs/decisions.md
         r.note ? h('span', { class: 'rqnote' }, H.t('Ton message : « {note} »', { note: r.note })) : null,
         r.asked ? h('span', null, H.t('Demandé le {date}', { date: H.date(r.asked) })) : null);
@@ -1450,7 +1457,7 @@
         else askFor(r, function (res) { H.toast(H.t('Demandé : {title}', { title: r.title })); r.request = { status: res.status, mine: true, id: res.id }; paint(true); });
       } });
       // La sorte : les mots de H.plural (« film », « série »), la majuscule vient du CSS ; une clé « Film » traduirait aussi un dossier nommé « Film » dans les messages du serveur (H.tr)
-      var head = h('div', { class: 'rqhead' }, h('span', { class: 'rqkind' }, r.kind === 'show' ? H.t('série') : H.t('film')), h('b', { class: 'rqtitle' }, r.title || '?'),
+      var head = h('div', { class: 'rqhead' }, h('span', { class: 'rqkind' }, r.kind === 'show' ? H.t('série') : H.t('film')), requestHeading(r, r.title || '?', 'rqtitle'),
         r.year ? h('span', { class: 'rqyear' }, r.year) : null, r.date && r.date > today() ? h('span', { class: 'rqsoon' }, H.t('À venir')) : null);
       H.clear(row).appendChild(h('div', { class: 'what' }, head, look && look.line ? h('span', { class: 'rqstate' }, look.line) : null, r.overview ? h('p', { class: 'rqsum' }, r.overview) : null));
       if (action) row.appendChild(action);
@@ -1485,9 +1492,9 @@
       h('div', { class: 'tools' }, input, pick), say, list);
     function paint() { filterLabel(pick, H.t('Type'), REQUEST_KINDS.filter(function (k) { return k[0] === kind; })[0][1]); }
     function tell(text, error) { say.textContent = text; say.classList.toggle('err', !!error); }
-    function landOnResults() {            // après Entrée : le premier résultat, pour la télécommande
+    function landOnResults() {            // après Entrée : le bouton du premier résultat, pour la télécommande
       toResults = false;
-      var first = list.querySelector('.f');
+      var first = list.querySelector('.f:not([data-aside])');
       if (first && document.body.contains(el) && el.style.display !== 'none' && !H.overlay.isOpen() && (document.activeElement === input || document.activeElement === document.body)) H.focus.set(first);
     }
     function run() {

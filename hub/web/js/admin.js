@@ -246,7 +246,7 @@
       var list = h('ul', { class: 'rqusers' }, who.map(function (u) {
         return h('li', null, h('b', null, u.name || H.t('compte supprimé')), ' · ' + H.date(u.created), u.note ? [' · ', h('q', null, u.note)] : null);
       }));
-      var what = h('div', { class: 'what' }, h('b', null, R.title(r)), h('span', { class: 'rqstatus' }, R.status(r)),
+      var what = h('div', { class: 'what' }, R.heading(r, R.title(r)), h('span', { class: 'rqstatus' }, R.status(r)),
         h('span', null, H.plural(who.length, 'demandeur') + ' · ' + H.t('demandée le {date}', { date: H.date(r.created) })), who.length ? list : null);
       var buttons = [];
       if (r.item) buttons.push(R.open(r));
