@@ -321,13 +321,51 @@ class TestEnoughSignal(RecommendCase):
         for day in ("2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17"):
             self.assertEqual(set(self.by_anchor(self.alice, day)), {"a1", "a2"}, day)
 
-    def test_at_most_two_shelves_of_twelve(self):
+    def test_at_most_two_shelves(self):
         many = [film(f"r{n:02d}", f"Ridley {n:02d}", ["Ridley"]) for n in range(20)]
         self.fill("films", FILMS + many)
         self.rate(self.alice, "a1", "a2", "s1", "s2")
-        shelves = self.shelves(self.alice)
-        self.assertEqual(len(shelves), 2)
-        self.assertTrue(all(4 <= len(s["items"]) <= 12 for s in shelves))
+        self.assertEqual(len(self.shelves(self.alice)), 2)
+
+
+class TestFullShelves(RecommendCase):
+    """Deux ancres qui se disputent les mêmes films : un rayon peut aller jusqu'à 48 cartes, sans jamais coûter sa place à l'autre."""
+
+    def contest(self, count, sagas=False):
+        """Deux ancres terminées et `count` films qui ne ressemblent qu'à elles, 20 par réalisateur (assez peu pour rester sous MAX_SHARE), tous aussi proches : l'ordre est celui des titres. Rend les rayons."""
+        directors = [f"Réal {n}" for n in range(count // 20)]
+        pool = [film(self.pooled(n), f"Commun {n:03d}", [directors[n % len(directors)]], grp=f"Saga {n // 2}" if sagas else "") for n in range(count)]
+        self.fill("films", FILMS + [film("b1", "Base un", directors), film("b2", "Base deux", directors)] + pool)
+        self.watch(self.alice, "b1")
+        self.watch(self.alice, "b2")
+        return [[i["id"] for i in s["items"]] for s in self.shelves(self.alice)]
+
+    @staticmethod
+    def pooled(n):
+        return f"p{n:03d}"
+
+    def test_a_small_pool_still_gives_both_shelves(self):
+        first, second = self.contest(20)
+        self.assertEqual(first, [self.pooled(n) for n in range(12)])
+        self.assertEqual(second, [self.pooled(n) for n in range(12, 20)])
+
+    def test_what_is_left_is_shared_turn_by_turn_after_the_first_twelve_of_each(self):
+        first, second = self.contest(60)
+        self.assertEqual(first, [self.pooled(n) for n in [*range(12), *range(24, 60, 2)]])
+        self.assertEqual(second, [self.pooled(n) for n in [*range(12, 24), *range(25, 60, 2)]])
+
+    def test_a_shelf_stops_at_48_cards(self):
+        self.assertEqual([len(cards) for cards in self.contest(120)], [48, 48])
+
+    def test_no_film_is_in_both_shelves(self):
+        first, second = self.contest(120)
+        self.assertFalse(set(first) & set(second))
+
+    def test_a_long_shelf_still_has_one_film_per_saga(self):
+        for cards in self.contest(60, sagas=True):
+            self.assertGreater(len(cards), 12)
+            sagas = [int(ident[1:]) // 2 for ident in cards]
+            self.assertEqual(len(sagas), len(set(sagas)))
 
 
 class TestDays(RecommendCase):

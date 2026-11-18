@@ -14,7 +14,7 @@ import unittest
 import urllib.request
 
 from tests.test_server import Running
-from tests.test_ui import UiCase, sync_playwright
+from tests.test_ui import UiCase, expect, sync_playwright
 
 IDS = ("films", "series", "musique", "livres")
 TRICKY = '<b>x</b> &amp; "q" \'a\''                 # du HTML, une entité, deux sortes de guillemets : tout doit s'afficher tel quel
@@ -192,10 +192,9 @@ class TestRenameDialog(RenameCase):
         box = self.open_rename()
         box.locator("input").evaluate("e => e.removeAttribute('maxlength')")                                           # le champ s'arrête à 40 ; on saute cette barrière pour voir le refus du serveur
         box.locator("input").fill("x" * 41)
-        box.locator(".btns .btn.primary").click()
-        error = box.locator("p.formerr")
-        self.until(lambda: error.inner_text() != "")
-        self.assertEqual(error.inner_text(), "le libellé fait 40 caractères au plus")
+        with self.page.expect_response(lambda r: r.url.endswith("/label") and r.request.method == "POST"):      # sous charge, le refus met plus de temps à revenir que l'écran n'en laisse à `until`
+            box.locator(".btns .btn.primary").click()
+        expect(box.locator("p.formerr")).to_have_text("le libellé fait 40 caractères au plus")
         self.assertTrue(box.is_visible())
 
     def test_a_double_click_on_save_sends_one_request(self):

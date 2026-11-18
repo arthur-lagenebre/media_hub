@@ -975,18 +975,18 @@ class TestSettingsRoutes(RouteCase):
         return self.hub.cookie(who)
 
     def test_the_settings_of_an_account_start_at_the_defaults(self):
-        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}})
+        self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json(), {"settings": {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}})
 
     def test_a_choice_is_kept_for_the_account_that_made_it(self):
         reply = self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}}))
+        self.assertEqual((reply.status, reply.json()), (200, {"settings": {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}}))
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.bob)).json()["settings"]["music_view"], "artists")
         self.assertEqual(self.get("/api/me/settings", headers=self.as_(self.alice)).json()["settings"]["music_view"], "albums")
 
     def test_the_state_carries_the_settings_so_the_page_needs_no_second_call(self):
         self.post("/api/me/settings", {"music_view": "artists"}, headers=self.as_(self.bob))
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
-        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.bob)).json()["settings"], {"music_view": "artists", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
+        self.assertEqual(self.get("/api/state", headers=self.as_(self.alice)).json()["settings"], {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"})
 
     def test_a_wrong_setting_is_a_400_with_the_reason(self):
         for body, reason in (({"couleur": "rouge"}, "réglage inconnu"), ({"music_view": "mosaique"}, "valeur inconnue"), ({}, "aucun réglage")):
@@ -1094,7 +1094,7 @@ class TestHomeUnseen(RouteCase):
 
     def setUp(self):
         super().setUp()
-        self.fill([item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n) for n in range(60)], [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(60)])
+        self.fill([item(f"mv{n:03d}", title=f"Film {n:03d}", added=1000 + n) for n in range(120)], [entry(f"v{n:03d}", f"mv{n:03d}", duration=100.0) for n in range(120)])
 
     def unseen(self, day="2026-11-04"):
         with mock.patch("hub.server.app.today", return_value=day):
@@ -1106,9 +1106,9 @@ class TestHomeUnseen(RouteCase):
         self.assertNotIn("unseen", libs)
         self.assertEqual([(l["id"], len(l["unseen"])) for l in libs["libraries"]], [("lib", app.UNSEEN)])
 
-    def test_it_offers_at_most_forty_eight_films_the_account_has_not_started(self):
+    def test_it_offers_at_most_ninety_six_films_the_account_has_not_started(self):
         ids = self.unseen()
-        self.assertEqual((len(ids), len(set(ids))), (48, 48))                                         # de quoi remplir le rayon (24 au plus) une fois « Nouveautés » (24) retiré
+        self.assertEqual((len(ids), len(set(ids))), (96, 96))                                         # de quoi remplir un rayon de 48 une fois retirées les 48 cartes de « Nouveautés »
         self.assertTrue(all(i.startswith("mv") for i in ids))
 
     def test_a_film_that_was_started_or_seen_is_not_offered_any_more(self):
@@ -1119,30 +1119,30 @@ class TestHomeUnseen(RouteCase):
         after = self.unseen()
         self.assertNotIn(started, after)
         self.assertNotIn(seen, after)
-        self.assertEqual(len(after), 48)                                                              # la place laissée est reprise par un autre film
-        self.assertEqual(after[:46], [i for i in before[2:] if i in after][:46])                      # le reste garde son ordre
+        self.assertEqual(len(after), 96)                                                              # la place laissée est reprise par un autre film
+        self.assertEqual(after[:94], [i for i in before[2:] if i in after][:94])                      # le reste garde son ordre
 
     def test_the_order_is_the_same_all_day_and_changes_from_one_day_to_the_next(self):
         self.assertEqual(self.unseen("2026-11-04"), self.unseen("2026-11-04"))
         self.assertNotEqual(self.unseen("2026-11-04"), self.unseen("2026-11-05"))
 
     def test_a_library_that_is_all_started_offers_nothing(self):
-        for n in range(60):
-            self.post("/api/progress", {"entry": f"v{n:02d}", "position": 5, "duration": 100})
+        for n in range(120):
+            self.post("/api/progress", {"entry": f"v{n:03d}", "position": 5, "duration": 100})
         self.assertEqual(self.unseen(), [])
 
 
 class TestHomeUnseenSort(RouteCase):
-    """Le réglage `home_unseen_sort` du compte : l'ordre du rayon « Pas encore vu » se décide sur le serveur, avant la coupe à 48 (sinon le haut du classement n'arriverait jamais au navigateur)."""
+    """Le réglage `home_unseen_sort` du compte : l'ordre du rayon « Pas encore vu » se décide sur le serveur, avant la coupe à UNSEEN (sinon le haut du classement n'arriverait jamais au navigateur)."""
 
     def setUp(self):
         super().setUp()
         rating = lambda n, votes: {"tmdb_rating": {"tmdb": n, "vote": 5 + n / 10, "votes": votes, "at": 0}}
         films = []
-        for n in range(60):                                                                           # 0-19 : notés (n/10 + 5), 20-24 : trop peu de votes pour être montrés, 25-59 : sans note
+        for n in range(120):                                                                          # 0-19 : notés (n/10 + 5), 20-24 : trop peu de votes pour être montrés, 25-119 : sans note
             meta = rating(n, 100) if n < 20 else rating(n, app.MIN_VOTES - 1) if n < 25 else {}
-            films.append(item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n * 7 % 60, meta=meta))      # `added` ne suit ni le titre ni la note (7 est premier avec 60 : 60 dates distinctes)
-        self.fill(films, [entry(f"v{n:02d}", f"mv{n:02d}", duration=100.0) for n in range(60)])
+            films.append(item(f"mv{n:03d}", title=f"Film {n:03d}", added=1000 + n * 7 % 120, meta=meta))     # `added` ne suit ni le titre ni la note (7 est premier avec 120 : 120 dates distinctes)
+        self.fill(films, [entry(f"v{n:03d}", f"mv{n:03d}", duration=100.0) for n in range(120)])
 
     def shelf(self, sort=None, day="2026-11-04"):
         if sort:
@@ -1152,19 +1152,19 @@ class TestHomeUnseenSort(RouteCase):
 
     def test_rating_puts_the_best_rated_first_and_what_has_no_shown_rating_last(self):
         ids = self.shelf("rating")
-        self.assertEqual(ids[:20], [f"mv{n:02d}" for n in range(19, -1, -1)])                         # de la meilleure note à la moins bonne
+        self.assertEqual(ids[:20], [f"mv{n:03d}" for n in range(19, -1, -1)])                         # de la meilleure note à la moins bonne
         self.assertEqual(len(ids), app.UNSEEN)
         self.assertTrue(all(int(i[2:]) >= 20 for i in ids[20:]))                                      # puis des films sans note montrée (moins de 25 votes ou aucune)
 
     def test_the_cut_comes_after_the_sort(self):
         ids = self.shelf("rating")
-        self.assertIn("mv19", ids)                                                                    # le mieux noté y est, qu'il tombe ou non dans le tirage du jour
-        self.assertNotIn("mv59", ids)
+        self.assertIn("mv019", ids)                                                                    # le mieux noté y est, qu'il tombe ou non dans le tirage du jour
+        self.assertNotIn("mv119", ids)
         self.assertEqual(self.shelf("rating", "2026-11-05"), ids)                                     # l'ordre ne dépend plus du jour
 
     def test_added_puts_the_most_recent_first(self):
-        by_added = sorted(range(60), key=lambda n: -(1000 + n * 7 % 60))
-        self.assertEqual(self.shelf("added"), [f"mv{n:02d}" for n in by_added[:app.UNSEEN]])
+        by_added = sorted(range(120), key=lambda n: -(1000 + n * 7 % 120))
+        self.assertEqual(self.shelf("added"), [f"mv{n:03d}" for n in by_added[:app.UNSEEN]])
 
     def test_random_is_the_default_and_keeps_the_daily_order(self):
         default = self.shelf()
@@ -1174,15 +1174,15 @@ class TestHomeUnseenSort(RouteCase):
 
     def test_a_film_started_leaves_the_sorted_shelf_and_the_next_one_takes_its_place(self):
         before = self.shelf("rating")
-        self.post("/api/progress", {"entry": "v19", "position": 5, "duration": 100})
+        self.post("/api/progress", {"entry": "v019", "position": 5, "duration": 100})
         after = self.shelf()
-        self.assertEqual(after, before[1:] + ["mv48"])                                                # le premier non montré de la fin de classement
+        self.assertEqual(after, before[1:] + ["mv096"])                                                # le premier non montré de la fin de classement
 
     def test_each_account_has_its_own_order(self):
         alice, bob = accounts.create(self.db, "alice", "motdepasse12"), accounts.create(self.db, "bob", "motdepasse12")
         self.post("/api/me/settings", {"home_unseen_sort": "rating"}, headers=self.hub.cookie(alice))
         home = lambda who: [r["id"] for r in self.get("/api/home", headers=self.hub.cookie(who)).json()["libraries"][0]["unseen"]]
-        self.assertEqual(home(alice)[0], "mv19")
+        self.assertEqual(home(alice)[0], "mv019")
         self.assertNotEqual(home(bob)[:3], home(alice)[:3])
 
 
@@ -1199,10 +1199,25 @@ class TestHomeUnseenBesideLatest(RouteCase):
             with self.subTest(sort=sort):
                 self.assertEqual(self.post("/api/me/settings", {"home_unseen_sort": sort}).status, 200)
                 shelf = self.get("/api/home").json()["libraries"][0]
-                latest = {r["id"] for r in shelf["recent"]}
+                latest = {r["id"] for r in shelf["recent"][:24]}                                                    # ce que « Nouveautés » montre : le serveur en envoie plus, le navigateur coupe
                 left = [r["id"] for r in shelf["unseen"] if r["id"] not in latest]
-                self.assertEqual(len(shelf["recent"]), 24)
                 self.assertGreaterEqual(len(left), 12)                                                              # le plus grand rayon par défaut, 12, reste plein
+
+
+class TestHomeShelfSize(RouteCase):
+    """Le serveur envoie de quoi remplir la plus grande grille : 48 cartes par rayon (la musique : voir TestHomeMusic), et le double pour « Pas encore vu », dont le navigateur retire ce que « Nouveautés » montre."""
+
+    def test_the_unseen_shelf_can_still_be_filled_once_the_48_latest_are_removed(self):
+        self.fill([item(f"mv{n:03d}", title=f"Film {n:03d}", added=1000 + n) for n in range(120)], [entry(f"v{n:03d}", f"mv{n:03d}") for n in range(120)])
+        self.assertEqual(self.post("/api/me/settings", {"home_unseen_sort": "added"}).status, 200)          # le pire cas : les deux rayons partent des mêmes films
+        shelf = self.get("/api/home").json()["libraries"][0]
+        latest = {r["id"] for r in shelf["recent"]}
+        self.assertEqual((len(shelf["unseen"]), len([r for r in shelf["unseen"] if r["id"] not in latest])), (96, 48))
+
+    def test_the_latest_of_a_video_library_are_the_48_most_recent(self):
+        self.fill([item(f"mv{n:02d}", title=f"Film {n:02d}", added=1000 + n) for n in range(60)], [entry(f"v{n:02d}", f"mv{n:02d}") for n in range(60)])
+        recent = self.get("/api/home").json()["libraries"][0]["recent"]
+        self.assertEqual([r["id"] for r in recent], [f"mv{n:02d}" for n in range(59, 11, -1)])
 
 
 class TestHomeUnseenPerLibrary(RouteCase):
@@ -1283,10 +1298,10 @@ class TestHomeMusic(RouteCase):
         self.fill([self.album("u1", "Un", "Artiste inconnu", "ar9", -1), self.album("u2", "Deux", "Artiste inconnu", "ar9", -2)], [])
         self.assertEqual([(r["type"], r["id"]) for r in self.recent()], [("album", "u1"), ("album", "u2")])
 
-    def test_a_single_album_artist_stays_an_album_and_the_list_stops_at_24(self):
-        self.fill([self.album(f"x{n:02d}", f"Titre {n:02d}", f"Artiste {n:02d}", f"id{n:02d}", -n) for n in range(30)], [])
+    def test_a_single_album_artist_stays_an_album_and_the_list_stops_at_48(self):
+        self.fill([self.album(f"x{n:02d}", f"Titre {n:02d}", f"Artiste {n:02d}", f"id{n:02d}", -n) for n in range(60)], [])
         out = self.recent()
-        self.assertEqual((len(out), {r["type"] for r in out}, out[0]["id"]), (24, {"album"}, "x00"))
+        self.assertEqual((len(out), {r["type"] for r in out}, out[0]["id"]), (48, {"album"}, "x00"))
 
 
 class TestPersonRoute(unittest.TestCase):

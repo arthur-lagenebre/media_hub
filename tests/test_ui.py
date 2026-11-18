@@ -72,6 +72,11 @@ def width_rem(locator):
     return locator.evaluate("el => el.getBoundingClientRect().width / parseFloat(getComputedStyle(document.documentElement).fontSize)")
 
 
+def columns_of(grid):
+    """Le nombre de colonnes d'une grille, telle que le navigateur l'a mise en page."""
+    return grid.evaluate("g => getComputedStyle(g).gridTemplateColumns.split(' ').length")
+
+
 @unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
 class UiCase(unittest.TestCase):
     @classmethod
@@ -4397,9 +4402,9 @@ class TestHome(UiCase):
         return {it["id"]: it["added"] for lib in libs for it in lib["recent"]}
 
     def expected_latest(self):
-        """Les ids que l'accueil doit montrer : ce que chaque bibliothèque rend, mêlé du plus récent au plus ancien, 24 au plus."""
+        """Les ids que l'accueil doit montrer : ce que chaque bibliothèque rend, mêlé du plus récent au plus ancien, deux rangées au plus."""
         mixed = [(-it["added"], i, k, it["id"]) for i, lib in enumerate(self.api("/api/home")["libraries"]) for k, it in enumerate(lib["recent"])]
-        return [row[3] for row in sorted(mixed)][:24]
+        return [row[3] for row in sorted(mixed)][:2 * columns_of(self.view(".shelf.latest .grid"))]
 
     def test_the_home_says_hello_and_mixes_the_latest_additions_of_every_library(self):
         self.open()
@@ -4409,12 +4414,11 @@ class TestHome(UiCase):
         known = self.latest_from_api()
         shown = cards.evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
         self.assertEqual(shown, self.expected_latest())
-        self.assertLessEqual(len(shown), 24)
         libs = set(cards.evaluate_all("els => els.map(e => e.getAttribute('data-lib'))"))
         self.assertGreaterEqual(len(libs), 3)
         added = [known[key] for key in shown]
         self.assertEqual(added, sorted(added, reverse=True))                                    # du plus récent au plus ancien
-        self.assertEqual(self.view(".shelf[data-lib]").count(), 0)                              # plus d'étagère par bibliothèque
+        self.assertEqual(self.view(".shelf[data-lib]:not(.unseen)").count(), 0)                 # plus d'étagère d'ajouts par bibliothèque
         self.assertEqual(self.view(".card.more").count(), 0)
 
     def test_each_card_has_a_dot_in_the_colour_of_its_library_and_no_word_for_its_kind(self):
@@ -4456,8 +4460,8 @@ class TestHome(UiCase):
         self.assertLessEqual(last, self.page.evaluate("innerWidth") - edges[1] + 1)      # au bout, la dernière carte reste dans la marge
 
 
-class TestHomeUnseen(UiCase):
-    """« Pas encore vu » à l'accueil, après « Nouveautés » : des films et des séries que le compte n'a pas touchés ; chaque rayon se masque dans les réglages du compte."""
+class HomeShelvesCase(UiCase):
+    """Un accueil aux rayons bien remplis : 100 films et 100 séries de plus, jamais vus."""
 
     def setUp(self):
         super().setUp()
@@ -4472,13 +4476,28 @@ class TestHomeUnseen(UiCase):
         day = mock.patch("hub.server.app.today", return_value="2026-11-04")          # le serveur tourne dans ce processus : l'ordre du jour ne change pas pendant le test
         day.start()
         self.addCleanup(day.stop)
-        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show"}))
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_sort": "random", "home_requests": "show"}))
 
     def libraries(self):
         return self.api("/api/home")["libraries"]
 
     def offered(self, lib="films"):
         return [u["id"] for l in self.libraries() if l["id"] == lib for u in l["unseen"]]
+
+    def keys(self, shelf):
+        return self.view(f"{shelf} .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
+
+    def shown(self, lib="films"):
+        return self.keys(f".shelf.unseen[data-lib={lib}]")
+
+    def capacity(self, shelf, rows=2):
+        return rows * columns_of(self.view(f"{shelf} .grid"))
+
+
+class TestHomeUnseen(HomeShelvesCase):
+    """« Pas encore vu » à l'accueil, après « Nouveautés » : des films et des séries que le compte n'a pas touchés ; chaque rayon se masque dans les réglages du compte."""
+
+    FILMS = ".shelf.unseen[data-lib=films]"
 
     def test_each_video_library_has_its_own_shelf_after_the_new_ones(self):
         self.open()
@@ -4494,8 +4513,8 @@ class TestHomeUnseen(UiCase):
         self.view(".shelf.unseen .card").first.wait_for()
         latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
         shown = self.view(".shelf.unseen[data-lib=films] .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
-        self.assertEqual(shown, [i for i in self.offered() if i not in latest][:12])
-        self.assertEqual(len(shown), 12)
+        self.assertEqual(shown, [i for i in self.offered() if i not in latest][:self.capacity(self.FILMS)])
+        self.assertEqual(len(shown), self.capacity(self.FILMS))
         self.assertFalse(set(shown) & set(latest))
 
     def test_a_film_that_is_started_leaves_the_shelf(self):
@@ -4517,7 +4536,7 @@ class TestHomeUnseen(UiCase):
         self.open()
         self.view(".shelf.unseen[data-lib=films] .card").first.wait_for()
         self.assertNotIn(first, self.shown())                                                                # le « pas intéressé » du compte
-        self.assertEqual(len(self.shown()), 12)                                                              # le rayon se remplit avec le suivant
+        self.assertEqual(len(self.shown()), self.capacity(self.FILMS))                                       # le rayon se remplit avec le suivant
         self.api(f"/api/item/{first}/rating", {"rating": "mid"})                                              # « Bof » n'exclut rien
         self.open()
         self.view(".shelf.unseen[data-lib=films] .card").first.wait_for()
@@ -4537,7 +4556,7 @@ class TestHomeUnseen(UiCase):
         self.view(".shelf.unseen .card").first.wait_for()
         self.assertNotIn("Nouveautés", self.view(".shelf h2").all_inner_texts())
         shown = self.view(".shelf.unseen[data-lib=films] .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
-        self.assertEqual(shown, self.offered()[:12])                                                       # sans nouveautés, rien à ne pas répéter
+        self.assertEqual(shown, self.offered()[:self.capacity(self.FILMS)])                                # sans nouveautés, rien à ne pas répéter
         self.api("/api/me/settings", {"home_unseen": "hide"})
         self.open()
         self.view(".greeting").wait_for()
@@ -4554,31 +4573,6 @@ class TestHomeUnseen(UiCase):
             self.until(lambda key=key: self.api("/api/me/settings")["settings"][key] == "hide")
             self.until(lambda line=line: "Masqué" in line.inner_text())
 
-    def shown(self, lib="films"):
-        return self.view(f".shelf.unseen[data-lib={lib}] .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
-
-    def test_the_account_chooses_how_many_cards_each_shelf_shows(self):
-        self.open()
-        self.view(".shelf.unseen .card").first.wait_for()
-        latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
-        wanted = [i for i in self.offered() if i not in latest]
-        self.assertEqual(self.shown(), wanted[:12])                                                        # sans réglage, 12 comme avant
-        for count in (6, 24):
-            self.api("/api/me/settings", {"home_unseen_count": str(count)})
-            self.open()
-            self.view(".shelf.unseen .card").first.wait_for()
-            self.assertEqual(self.shown(), wanted[:count])
-            self.assertGreater(len(self.shown("series")), count - 3)                                       # le même nombre dans chaque rayon, moins ce que les nouveautés montrent déjà
-
-    def test_the_number_of_cards_is_chosen_in_the_settings_of_the_account(self):
-        self.open("#/settings?tab=preferences")
-        line = self.view(".panel", has_text="Affichage").locator(".line").filter(has=self.page.locator("b", has_text="Pas encore vu : cartes par rayon"))
-        self.assertIn("12 cartes", line.inner_text())
-        line.locator("button", has_text="Changer").click()
-        self.page.locator(".menu .opt .lbl", has_text="6 cartes").click()
-        self.until(lambda: self.api("/api/me/settings")["settings"]["home_unseen_count"] == "6")
-        self.until(lambda: "6 cartes" in line.inner_text())
-
     def test_the_order_of_the_shelf_is_chosen_in_the_settings_of_the_account_and_the_home_follows(self):
         self.open("#/settings?tab=preferences")
         line = self.view(".panel", has_text="Affichage").locator(".line").filter(has=self.page.locator("b", has_text="Pas encore vu : trier par"))
@@ -4591,13 +4585,13 @@ class TestHomeUnseen(UiCase):
         self.open()
         self.view(".shelf.unseen .card").first.wait_for()
         latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
-        self.assertEqual(self.shown(), [i for i in self.offered() if i not in latest][:12])                # l'ordre vient du serveur
+        self.assertEqual(self.shown(), [i for i in self.offered() if i not in latest][:self.capacity(self.FILMS)])      # l'ordre vient du serveur
         added = {r["id"]: r["added"] for r in self.run_.hub.db.query("SELECT id, added FROM items WHERE lib='films'")}
         offered = [added[i] for i in self.offered()]
         self.assertEqual(offered, sorted(offered, reverse=True))                                          # du plus récemment ajouté au plus ancien
 
     def add_newest_films(self, count=60, rated=False):
-        """`count` films jamais vus, tous plus récents que le reste (des dates d'ajout distinctes) ; `rated` : les plus récents sont aussi les mieux notés. « Nouveautés » en prend 24 : le rayon ne doit pas s'en trouver vide. Remis en l'état par le nettoyage de `setUp` (celui qui restaure les films d'origine)."""
+        """`count` films jamais vus, tous plus récents que le reste (des dates d'ajout distinctes) ; `rated` : les plus récents sont aussi les mieux notés. « Nouveautés » en prend ses rangées : le rayon ne doit pas s'en trouver vide. Remis en l'état par le nettoyage de `setUp` (celui qui restaure les films d'origine)."""
         db = self.run_.hub.db
         items = [dict(r) for r in db.query("SELECT * FROM items WHERE lib='films'")]
         entries = [dict(r) for r in db.query("SELECT * FROM entries WHERE lib='films'")]
@@ -4607,25 +4601,235 @@ class TestHomeUnseen(UiCase):
         files = [{**entries[0], "id": f"neuff{n:03d}", "item_id": f"neuf{n:03d}", "rel": f"neuf{n:03d}/film.mkv"} for n in range(count)]
         db.replace_library("films", items + new, entries + files)
 
-    def assert_the_shelf_keeps_twelve_cards_that_the_new_ones_do_not_show(self):
+    def assert_the_shelf_stays_full_of_cards_that_the_new_ones_do_not_show(self):
         self.open()
         self.view(".shelf.unseen[data-lib=films] .card").first.wait_for()
         latest = self.view(".shelf.latest .card").evaluate_all("els => els.map(e => e.getAttribute('data-key'))")
-        self.assertEqual(sum(key.startswith("neuf") for key in latest), 24)                                 # les nouveautés ne sont faites que de ces films
+        self.assertEqual(sum(key.startswith("neuf") for key in latest), len(latest))                        # les nouveautés ne sont faites que de ces films
         shown = self.shown()
-        self.assertGreaterEqual(len(shown), 12)
+        self.assertEqual(len(shown), self.capacity(self.FILMS))
         self.assertFalse(set(shown) & set(latest))
         self.assertTrue(all(key.startswith("neuf") for key in shown), shown)                                  # le tri a bien pris les plus récents / les mieux notés, pas le reste
 
     def test_sorted_by_date_added_the_shelf_is_not_emptied_by_the_new_ones(self):
         self.add_newest_films()
         self.api("/api/me/settings", {"home_unseen_sort": "added"})
-        self.assert_the_shelf_keeps_twelve_cards_that_the_new_ones_do_not_show()
+        self.assert_the_shelf_stays_full_of_cards_that_the_new_ones_do_not_show()
 
     def test_sorted_by_rating_the_shelf_is_not_emptied_when_the_best_rated_are_the_newest(self):
         self.add_newest_films(rated=True)
         self.api("/api/me/settings", {"home_unseen_sort": "rating"})
-        self.assert_the_shelf_keeps_twelve_cards_that_the_new_ones_do_not_show()
+        self.assert_the_shelf_stays_full_of_cards_that_the_new_ones_do_not_show()
+
+
+class TestHomeShelfRows(HomeShelvesCase):
+    """« Rangées par rayon » : chaque rayon de l'accueil montre colonnes × rangées cartes, se recoupe quand la grille change, et les cartes en trop ne sont pas dans la page."""
+
+    LATEST = ".shelf.latest"
+    FILMS = ".shelf.unseen[data-lib=films]"
+    SERIES = ".shelf.unseen[data-lib=series]"
+    WIDTHS = (1920, 800)
+
+    def home(self, rows="2", width=1920, text=None):
+        self.api("/api/me/settings", {"home_shelf_rows": rows})
+        self.page.set_viewport_size({"width": width, "height": 900})
+        self.open()
+        self.page.evaluate("t => t ? localStorage.setItem('hub.textSize', JSON.stringify(t)) : localStorage.removeItem('hub.textSize')", text)
+        self.open()
+        self.view(f"{self.FILMS} .card").first.wait_for()
+
+    def assert_full(self, shelf, rows=2):
+        self.page.wait_for_function("""([shelf, rows]) => {
+          var grid = Hub.current().el.querySelector(shelf + ' .grid');
+          return !!grid && grid.offsetWidth > 0 && grid.querySelectorAll('.card').length === rows * getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+        }""", arg=[shelf, rows])                                                                            # la grille et ses cartes lues ensemble : l'accueil peut être en train de se redessiner
+        tops = self.view(f"{shelf} .card").evaluate_all("els => els.map(e => e.offsetTop)")
+        self.assertEqual(len(set(tops)), rows, shelf)
+
+    def assert_no_repeat(self, rows=2):
+        latest = self.keys(self.LATEST)
+        self.assertEqual(self.shown(), [i for i in self.offered() if i not in latest][:self.capacity(self.FILMS, rows)])
+
+    def offered_beyond(self):
+        """Une carte du rayon « Pas encore vu » des films, et la première qu'il ne montre pas (ni « Nouveautés »)."""
+        shown, latest = self.shown(), self.keys(self.LATEST)
+        return shown[0], [i for i in self.offered() if i not in shown and i not in latest][0]
+
+    def test_each_shelf_shows_full_rows_at_every_width_and_text_size(self):
+        for width in self.WIDTHS:
+            for text in (None, "small"):
+                for rows in (1, 2, 3):
+                    with self.subTest(width=width, text=text, rows=rows):
+                        self.home(str(rows), width, text)
+                        for shelf in (self.LATEST, self.FILMS, self.SERIES):
+                            self.assert_full(shelf, rows)
+                        self.assert_no_repeat(rows)
+
+    def test_resizing_cuts_again_and_puts_the_cards_back_without_asking_the_server(self):
+        self.home()
+        before = self.keys(self.LATEST)
+        calls = []
+        self.page.on("request", lambda r: calls.append(r.url) if "/api/home" in r.url else None)
+        self.page.set_viewport_size({"width": 800, "height": 900})
+        self.assert_full(self.LATEST)
+        narrow = self.keys(self.LATEST)
+        self.assertLess(len(narrow), len(before))
+        self.assertEqual(narrow, before[:len(narrow)])
+        self.assert_full(self.FILMS)
+        self.assert_no_repeat()
+        self.page.set_viewport_size({"width": 1920, "height": 900})
+        expect(self.view(f"{self.LATEST} .card")).to_have_count(len(before))
+        self.assertEqual(self.keys(self.LATEST), before)
+        self.assert_full(self.FILMS)
+        self.assert_no_repeat()
+        self.assertEqual(calls, [])
+
+    def test_changing_the_text_size_cuts_again(self):
+        self.home(width=1000)
+        before = columns_of(self.view(f"{self.LATEST} .grid"))
+        self.page.evaluate("Hub.pref('textSize', 'small'); Hub.applyTextSize()")
+        self.until(lambda: columns_of(self.view(f"{self.LATEST} .grid")) > before)
+        self.assert_full(self.LATEST)
+        self.assert_full(self.FILMS)
+
+    def test_the_focus_of_a_card_that_is_cut_goes_to_a_card_that_stays(self):
+        self.home()
+        self.view(f"{self.LATEST} .card").last.focus()
+        self.page.set_viewport_size({"width": 800, "height": 900})
+        self.assert_full(self.LATEST)
+        self.until(lambda: self.page.evaluate("document.activeElement.getAttribute('data-key')") == self.keys(self.LATEST)[-1])
+
+    def test_closing_a_menu_whose_card_was_cut_puts_the_focus_on_a_card_that_stays(self):
+        self.home()
+        before = self.keys(self.LATEST)
+        card = self.view(f"{self.LATEST} .card[data-type=movie]").last
+        key = card.get_attribute("data-key")
+        card.focus()
+        self.page.keyboard.press("ContextMenu")
+        self.page.locator(".veil .menu.choice").wait_for()
+        self.page.set_viewport_size({"width": 800, "height": 900})
+        self.assert_full(self.LATEST)
+        kept = self.keys(self.LATEST)
+        self.assertNotIn(key, kept)
+        self.assertTrue(self.page.evaluate("!!document.activeElement.closest('.veil')"))                    # la coupe ne prend pas le focus à la fenêtre ouverte
+        self.page.keyboard.press("Escape")
+        self.page.locator(".veil").wait_for(state="detached")
+        self.assertEqual(self.page.evaluate("document.activeElement.getAttribute('data-key')"), kept[min(before.index(key), len(kept) - 1)])
+
+    def test_without_resize_observer_the_window_size_still_cuts_again(self):
+        self.page.add_init_script("delete window.ResizeObserver")                                           # un vieux navigateur de télé
+        self.home()
+        before = self.keys(self.LATEST)
+        self.page.set_viewport_size({"width": 800, "height": 900})
+        self.assert_full(self.LATEST)
+        self.assert_full(self.FILMS)
+        self.assert_no_repeat()
+        self.assertLess(len(self.keys(self.LATEST)), len(before))
+
+    def test_a_short_shelf_keeps_an_incomplete_last_row(self):
+        def short(route):
+            data = route.fetch().json()
+            for lib in data["libraries"]:
+                lib["unseen"] = lib.get("unseen", [])[:3]
+            route.fulfill(json=data)
+        self.api("/api/me/settings", {"home_latest": "hide"})
+        self.page.route("**/api/home", short)
+        self.open()
+        expect(self.view(f"{self.FILMS} .card")).to_have_count(3)
+
+    def test_a_shelf_with_nothing_left_beside_the_new_ones_is_hidden(self):
+        def only_the_latest(route):
+            data = route.fetch().json()
+            films = next(l for l in data["libraries"] if l["id"] == "films")
+            films["recent"][0]["added"] = 9_999_999_999                                                     # le premier des nouveautés, quelle que soit la largeur
+            films["unseen"] = films["recent"][:1]
+            route.fulfill(json=data)
+        self.page.route("**/api/home", only_the_latest)
+        self.open()
+        self.view(f"{self.SERIES} .card").first.wait_for()
+        expect(self.view(f"{self.FILMS}:visible")).to_have_count(0)
+
+    def test_resume_and_arrived_requests_are_never_cut(self):
+        entry = self.entries("films", "Inception")[0]
+        self.api("/api/progress", {"entry": entry["id"], "position": 100, "duration": 3000, "done": False})
+        self.addCleanup(lambda: self.api("/api/item/" + self.item("films", "Inception")["id"] + "/seen", {"done": False}))
+
+        def crowded(route):
+            data = route.fetch().json()
+            card = data["libraries"][0]["recent"][0]
+            data["requests_ready"] = [{"id": f"r{n}", "kind": "movie", "tmdb": n, "title": "x", "year": "", "item": card["id"], "card": {**card, "id": f"demande{n}"}} for n in range(40)]
+            data["continue"] = [{**data["continue"][0], "id": f"reprise{n}"} for n in range(24)]
+            route.fulfill(json=data)
+        self.page.route("**/api/home", crowded)
+        self.api("/api/me/settings", {"home_shelf_rows": "1"})
+        self.open()
+        expect(self.view(".shelf.ready .card")).to_have_count(40)
+        expect(self.view(".shelf .row .card")).to_have_count(24)
+        self.page.set_viewport_size({"width": 800, "height": 900})
+        self.assert_full(self.LATEST, 1)
+        self.assertEqual((self.view(".shelf.ready .card").count(), self.view(".shelf .row .card").count()), (40, 24))
+
+    def test_a_card_that_is_not_liked_is_replaced_by_the_next_one_and_a_cut_one_never_comes_back(self):
+        self.home()
+        first, spare = self.offered_beyond()
+        self.page.evaluate("id => Hub.rated(id, 'down')", first)
+        self.until(lambda: first not in self.shown() and len(self.shown()) == self.capacity(self.FILMS))
+        self.page.evaluate("id => Hub.rated(id, 'down')", spare)
+        self.page.set_viewport_size({"width": 2560, "height": 900})
+        self.assert_full(self.FILMS)
+        self.assertNotIn(spare, self.shown())
+
+    def test_a_card_that_was_cut_comes_back_with_its_new_rating(self):
+        self.home(width=800)
+        _, spare = self.offered_beyond()
+        self.page.evaluate("id => Hub.rated(id, 'up')", spare)
+        self.page.set_viewport_size({"width": 2560, "height": 900})
+        self.assert_full(self.FILMS)
+        expect(self.view(f'.card[data-key="{spare}"] .badge.mine').first).to_be_visible()                   # dans ce rayon, ou dans « Nouveautés » qui s'est agrandi
+
+    def test_the_rows_are_chosen_in_the_settings_and_the_home_follows_without_a_reload(self):
+        self.home()
+        self.page.evaluate("window.sameDocument = true")
+        self.page.evaluate("location.hash = '#/settings?tab=preferences'")
+        line = self.view(".panel", has_text="Affichage").locator(".line").filter(has=self.page.locator("b", has_text="Rangées par rayon"))
+        self.until(lambda: "2 rangées" in line.inner_text())
+        line.locator("button", has_text="Changer").click()
+        self.assertEqual(self.page.locator(".menu .opt .lbl").all_inner_texts(), ["1 rangée", "2 rangées", "3 rangées"])
+        self.page.locator(".menu .opt .lbl", has_text="3 rangées").click()
+        self.until(lambda: self.api("/api/me/settings")["settings"]["home_shelf_rows"] == "3")
+        self.until(lambda: "3 rangées" in line.inner_text())
+        self.page.evaluate("location.hash = '#/'")
+        self.view(f"{self.LATEST} .card").first.wait_for()
+        self.assert_full(self.LATEST, 3)
+        self.assert_full(self.FILMS, 3)
+        self.assertTrue(self.page.evaluate("window.sameDocument"))
+
+    def test_a_home_that_was_parked_is_cut_for_the_new_width_when_it_comes_back(self):
+        self.home()
+        self.page.evaluate("location.hash = '#/settings'")
+        self.view(".panel").first.wait_for()
+        self.page.set_viewport_size({"width": 800, "height": 900})
+        self.page.evaluate("location.hash = '#/'")
+        self.view(f"{self.LATEST} .card").first.wait_for()
+        self.assert_full(self.LATEST)
+        self.assert_full(self.FILMS)
+
+    def test_the_observer_stops_with_the_page(self):
+        self.page.add_init_script("""(() => {
+          var Real = window.ResizeObserver;
+          window.observers = [];
+          window.ResizeObserver = class extends Real {
+            constructor(cb) { super(cb); this.watching = 0; window.observers.push(this); }
+            observe(el) { this.watching++; super.observe(el); }
+            disconnect() { this.watching = 0; super.disconnect(); }
+          };
+        })()""")
+        self.home()
+        self.assertGreater(self.page.evaluate("observers.reduce((n, o) => n + o.watching, 0)"), 0)
+        self.page.evaluate("location.hash = '#/settings'")
+        self.view(".panel").first.wait_for()
+        self.page.evaluate("Hub.dropParked()")
+        self.assertEqual(self.page.evaluate("observers.reduce((n, o) => n + o.watching, 0)"), 0)
 
 
 class TestHomeWithNoShelf(UiCase):
@@ -5103,7 +5307,7 @@ class TestSettings(UiCase):
         self.assertEqual(panels.nth(0).locator(".line .what b").all_inner_texts(), ["Appareil", "Taille du texte", "Langue"])
         self.assertEqual(panels.nth(1).locator(".line .what b").all_inner_texts(), ["Qualité", "Son surround 5.1"])
         self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Langues du son", "Langues des sous-titres", "Sous-titres d’office"])
-        self.assertEqual(panels.nth(3).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Nouveautés", "Pas encore vu", "Pas encore vu : cartes par rayon", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…"])
+        self.assertEqual(panels.nth(3).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Rangées par rayon", "Nouveautés", "Pas encore vu", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…"])
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
@@ -8279,6 +8483,20 @@ class TestRecommendationsInTheUi(unittest.TestCase):
             context.close()
         self.assertEqual(self.errors, [], "erreurs JavaScript")
 
+    def test_a_long_shelf_is_cut_to_the_rows_of_the_account(self):
+        self.like("alice", "ancrepolar", "ancrewestern")
+
+        def long_shelves(route):
+            data = route.fetch().json()
+            for shelf in data["shelves"]:
+                shelf["items"] = [{**shelf["items"][0], "id": f"{shelf['anchor']['id']}{n}"} for n in range(48)]
+            route.fulfill(json=data)
+        page, _ = self.opened("alice", setup=lambda p: p.route("**" + self.ROUTE, long_shelves))
+        expect(self.shelves(page)).to_have_count(2)
+        wanted = 2 * columns_of(self.view(page, ".shelf.recommend .grid").first)
+        for n in range(2):
+            expect(self.shelves(page).nth(n).locator(".card")).to_have_count(wanted)
+
     # --- Aides ---------------------------------------------------------------
     def opened(self, name, lang=None, setup=None):
         """Une page connectée en tant que `name`, arrivée sur l'accueil, et la réponse de `GET /api/recommendations` que l'accueil a demandée.
@@ -8613,7 +8831,7 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         page.locator(".veil .menu.choice h3", has_text="Mon avis").wait_for()
         self.pick(page, "Je n’aime pas")
         shelf.locator(f".card[data-key='{key}']").wait_for(state="detached")
-        self.assertEqual(shelf.locator(".card").count(), count - 1)
+        self.assertEqual(shelf.locator(".card").count(), count)                                   # la suivante, jusque-là coupée, prend sa place
         self.assertEqual(self.call("alice", "/api/item/" + key)["rating"], "down")
         self.assertEqual(page.evaluate("window.__same"), 1)
 

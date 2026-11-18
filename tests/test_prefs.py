@@ -10,15 +10,17 @@ from pathlib import Path
 from hub import prefs
 from hub.db import Database
 
-ALL = {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}      # les réglages d'un compte qui n'a rien choisi
+ALL = {"music_view": "albums", "movie_view": "sagas", "home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show", "audio_langs": [], "sub_langs": [], "sub_mode": "forced"}      # les réglages d'un compte qui n'a rien choisi
 
 
-class TestPrefs(unittest.TestCase):
+class PrefsCase(unittest.TestCase):
     def setUp(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, True)
         self.db = Database(root / "hub.db")
 
+
+class TestPrefs(PrefsCase):
     def test_an_account_without_a_choice_gets_the_defaults(self):
         self.assertEqual(prefs.load(self.db, "u1"), ALL)
 
@@ -33,7 +35,7 @@ class TestPrefs(unittest.TestCase):
         self.assertEqual(prefs.save(self.db, "u1", ALL), ALL)
 
     def test_the_two_shelves_of_the_home_are_shown_unless_the_account_hides_them_one_by_one(self):
-        self.assertEqual({k: v for k, v in prefs.load(self.db, "u1").items() if k.startswith("home_")}, {"home_latest": "show", "home_unseen": "show", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
+        self.assertEqual({k: v for k, v in prefs.load(self.db, "u1").items() if k.startswith("home_")}, {"home_latest": "show", "home_unseen": "show", "home_shelf_rows": "2", "home_unseen_count": "12", "home_unseen_sort": "random", "home_requests": "show", "home_recommend": "show"})
         self.assertEqual(prefs.save(self.db, "u1", {"home_unseen": "hide"})["home_latest"], "show")                 # chacun a son réglage
         loaded = prefs.load(self.db, "u1")
         self.assertEqual((loaded["home_latest"], loaded["home_unseen"]), ("show", "hide"))
@@ -81,12 +83,54 @@ class TestPrefs(unittest.TestCase):
         self.assertEqual(prefs.load(self.db, "u1")["home_recommend"], "hide")
 
 
-class TestLanguagePrefs(unittest.TestCase):
-    def setUp(self):
-        root = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, root, True)
-        self.db = Database(root / "hub.db")
+class TestShelfRows(PrefsCase):
+    """« Rangées par rayon » : le réglage commun aux rayons de l'accueil, qui reprend sans écrire en base l'ancien choix en nombre de cartes."""
 
+    def rows_with(self, **kept):
+        self.db.kv_set(prefs.KEY + "u1", kept)
+        return prefs.load(self.db, "u1")["home_shelf_rows"]
+
+    def test_two_rows_by_default(self):
+        self.assertEqual(prefs.load(self.db, "u1")["home_shelf_rows"], "2")
+
+    def test_one_two_or_three_rows_can_be_chosen_for_that_account_only(self):
+        for rows in ("1", "2", "3"):
+            self.assertEqual(prefs.save(self.db, "u1", {"home_shelf_rows": rows})["home_shelf_rows"], rows)
+            self.assertEqual(prefs.load(self.db, "u1")["home_shelf_rows"], rows)
+        self.assertEqual(prefs.load(self.db, "u2")["home_shelf_rows"], "2")
+
+    def test_any_other_number_of_rows_is_refused_and_changes_nothing(self):
+        prefs.save(self.db, "u1", {"home_shelf_rows": "3"})
+        for value in ("0", "4", "", 2, None, ["2"]):
+            with self.assertRaisesRegex(ValueError, "valeur inconnue pour home_shelf_rows"):
+                prefs.save(self.db, "u1", {"home_shelf_rows": value})
+        self.assertEqual(prefs.load(self.db, "u1")["home_shelf_rows"], "3")
+
+    def test_the_old_number_of_cards_gives_the_rows(self):
+        for cards, rows in (("6", "1"), ("12", "2"), ("18", "3"), ("24", "3")):
+            with self.subTest(cards=cards):
+                self.assertEqual(self.rows_with(home_unseen_count=cards), rows)
+
+    def test_taking_over_the_old_choice_writes_nothing_and_keeps_it(self):
+        self.db.kv_set(prefs.KEY + "u1", {"home_unseen_count": "18"})
+        self.assertEqual(prefs.load(self.db, "u1")["home_unseen_count"], "18")
+        self.assertEqual(self.db.kv_get(prefs.KEY + "u1"), {"home_unseen_count": "18"})
+
+    def test_saved_rows_win_over_the_old_number_of_cards(self):
+        self.assertEqual(self.rows_with(home_unseen_count="24", home_shelf_rows="1"), "1")
+        prefs.save(self.db, "u1", {"home_unseen_count": "6"})
+        self.assertEqual(prefs.load(self.db, "u1")["home_shelf_rows"], "1")
+
+    def test_damaged_rows_fall_back_on_the_old_number_of_cards(self):
+        self.assertEqual(self.rows_with(home_unseen_count="6", home_shelf_rows="9"), "1")
+
+    def test_damaged_values_everywhere_give_the_default(self):
+        for damaged in ("9", ["12"], {"a": 1}, None):
+            with self.subTest(damaged=damaged):
+                self.assertEqual(self.rows_with(home_unseen_count=damaged, home_shelf_rows=damaged), "2")
+
+
+class TestLanguagePrefs(PrefsCase):
     def test_without_a_choice_the_file_decides_the_audio_and_only_forced_subtitles_are_shown(self):
         loaded = prefs.load(self.db, "u1")
         self.assertEqual((loaded["audio_langs"], loaded["sub_langs"], loaded["sub_mode"]), ([], [], "forced"))

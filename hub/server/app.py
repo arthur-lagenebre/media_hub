@@ -1110,7 +1110,7 @@ def continue_row(hub, profile, libs=None, ratings=None):
 
 
 today = missing.today                       # le jour (« 2026-11-04 ») : un nom à part pour que les tests puissent le fixer
-UNSEEN = 48                                 # ce que le serveur offre par bibliothèque : le navigateur en retire ce que « Nouveautés » (24) montre déjà, puis coupe à `home_unseen_count` (24 au plus) ; à 24 seulement, les tris « date d'ajout » et « note » (les mieux notés sont souvent les plus récents) vidaient le rayon
+UNSEEN = 2 * prefs.SHELF_CARDS              # ce que le serveur offre par bibliothèque : le navigateur en retire ce que « Nouveautés » montre (SHELF_CARDS au plus) et doit encore pouvoir remplir un rayon de SHELF_CARDS ; avec moins, les tris « date d'ajout » et « note » (les mieux notés sont souvent les plus récents) videraient le rayon
 
 
 def unseen_row(rows, seen, profile, day, n=UNSEEN, sort="random", quality=None, ratings=None):
@@ -1143,9 +1143,9 @@ def api_home(h, m, q):
     for lib in h.visible_libs():
         items = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
         if lib.kind == "music":
-            recent = recent_music(items, seen, 24)
+            recent = recent_music(items, seen, prefs.SHELF_CARDS)
         else:
-            recent = [with_seen(r, seen, quality, ratings) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort, id LIMIT 24", (lib.id,))]
+            recent = [with_seen(r, seen, quality, ratings) for r in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY added DESC, sort, id LIMIT ?", (lib.id, prefs.SHELF_CARDS))]
         row = {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind, "recent": recent, "count": len(items)}
         if lib.kind in UNSEEN_KINDS:
             row["unseen"] = unseen_row(items, seen, h.user["id"], day, sort=order, quality=quality, ratings=ratings)

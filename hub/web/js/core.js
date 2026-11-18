@@ -328,7 +328,8 @@
     },
     closeAll: function () { while (overlays.length) cleanup(overlays.pop()); },
     isOpen: function () { return overlays.length > 0; },
-    top: function () { return overlays[overlays.length - 1] || null; }
+    top: function () { return overlays[overlays.length - 1] || null; },
+    bottom: function () { return overlays[0] || null; }          // la première ouverte : son `opener` est dans la page
   };
   function cleanup(back) {
     if (back.parentNode) back.parentNode.removeChild(back);

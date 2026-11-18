@@ -660,7 +660,7 @@ class TestRatingsAtVolume(RatingCase):
 
     def test_the_home_stays_right_and_reads_once(self):
         films = self.timed(self.alice, "/api/home")["libraries"][0]
-        latest = [f"f{n:04d}" for n in range(self.COUNT - 1, self.COUNT - 25, -1)]
+        latest = [f"f{n:04d}" for n in range(self.COUNT - 1, self.COUNT - 49, -1)]
         self.assertEqual(sorted(c["id"] for c in films["recent"]), sorted(latest))
         self.assertEqual(self.ratings_in(films["recent"]), {i: self.mine[i] for i in latest if self.mine[i]})
         self.assertEqual(len(films["unseen"]), app.UNSEEN)               # le serveur coupe à UNSEEN, après avoir retiré ce qui ne plaît pas

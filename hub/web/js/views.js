@@ -290,8 +290,23 @@
       Array.prototype.forEach.call(pic.querySelectorAll('.badge'), function (b) { pic.removeChild(b); });
       cardMarks(pic, it);
     });
+    ratedOutOfPage(id, value);
     if (value === 'down') Array.prototype.forEach.call(document.querySelectorAll(SUGGESTED_CARDS), function (card) { if (card.hubItem && card.hubItem.id === id) dropCard(card); });
   };
+  // Les cartes qu'un rayon a coupées ne sont pas dans la page : l'avis se note sur leur élément, leur carte sera refaite si elle revient, et « Je n'aime pas » les retire des rayons qui suggèrent.
+  function ratedOutOfPage(id, value) {
+    Array.prototype.forEach.call(document.querySelectorAll('.grid'), function (grid) {
+      if (!grid.hubEntries) return;
+      var leaves = value === 'down' && grid.closest('.shelf.unseen, .shelf.recommend');
+      grid.hubEntries = grid.hubEntries.filter(function (e) {
+        if (e.item.id !== id) return true;
+        if (value) e.item.rating = value; else delete e.item.rating;
+        var cut = !e.card || !e.card.parentNode;
+        if (cut) e.card = null;
+        return !(leaves && cut);
+      });
+    });
+  }
   // Une carte notée « Je n'aime pas » quitte les rayons qui suggèrent (« Pas encore vu », « Parce que tu as aimé ») sans recharger la page ; un rayon vidé disparaît.
   // Si elle avait le focus, il passe à sa voisine (la suivante, sinon la précédente), sinon au rayon d'après (ou d'avant), sinon au premier élément de la page : jamais dans le vide.
   // Le dernier rayon parti, l'accueil se redessine (`hubRedraw`) : d'autres suggestions, ou les bibliothèques en tuiles, la première avec le focus ; jamais « Bonjour » seul.
@@ -299,18 +314,21 @@
   function firstIn(node) { return node.classList && node.classList.contains('f') ? node : node.querySelector && node.querySelector('.f'); }
   function nearShelf(shelf) {
     var x;
-    for (x = shelf.nextElementSibling; x; x = x.nextElementSibling) if (firstIn(x)) return firstIn(x);
-    for (x = shelf.previousElementSibling; x; x = x.previousElementSibling) if (firstIn(x)) return firstIn(x);
+    for (x = shelf.nextElementSibling; x; x = x.nextElementSibling) if (!x.hidden && firstIn(x)) return firstIn(x);
+    for (x = shelf.previousElementSibling; x; x = x.previousElementSibling) if (!x.hidden && firstIn(x)) return firstIn(x);
     return null;
   }
   function dropCard(card) {
-    var shelf = card.closest('.shelf'), page = shelf.parentNode, had = card.contains(document.activeElement);
-    var next = card.nextElementSibling || card.previousElementSibling;
-    card.parentNode.removeChild(card);
-    if (!shelf.querySelector('.card')) {
+    var grid = card.parentNode, shelf = card.closest('.shelf'), page = shelf.parentNode, had = card.contains(document.activeElement);
+    var at = Array.prototype.indexOf.call(grid.children, card);
+    grid.hubEntries = grid.hubEntries.filter(function (e) { return e.card !== card; });
+    grid.removeChild(card);
+    if (page && page.hubFit) page.hubFit();          // la carte suivante du rayon prend la place
+    var next = grid.children[at] || grid.children[at - 1];
+    if (!next) {
       next = nearShelf(shelf);
       if (page) page.removeChild(shelf);
-      if (page && page.hubRedraw && !page.querySelector('.shelf, .libtiles')) { page.hubRedraw(); return; }
+      if (page && page.hubRedraw && !page.querySelector('.shelf:not([hidden]), .libtiles')) { page.hubRedraw(); return; }
     }
     if (had && !H.focus.set(next)) H.focus.first();
   }
@@ -395,8 +413,7 @@
 
   // --- Accueil -------------------------------------------------------------------
   // Les derniers ajouts de toutes les bibliothèques, mêlés, du plus récent au plus ancien (à date égale, l'ordre des bibliothèques puis celui de leur liste) ; chacun garde sa bibliothèque.
-  // `n` : au plus ce nombre en tout. Le serveur a déjà fait ce qui est propre à une bibliothèque : en musique, l'arrivée d'un artiste n'est qu'une carte (voir recent_music).
-  var LATEST = 24;          // quatre lignes pleines de six, trois de huit
+  // `n` : au plus ce nombre en tout (sans `n`, tout : c'est la coupe du rayon qui décide). Le serveur a déjà fait ce qui est propre à une bibliothèque : en musique, l'arrivée d'un artiste n'est qu'une carte (voir recent_music).
   H.latest = function (libraries, n) {
     var all = [];
     libraries.forEach(function (lib, i) { lib.recent.forEach(function (it, k) { all.push({ item: it, lib: lib, at: it.added || 0, order: i * 1000 + k }); }); });
@@ -410,43 +427,105 @@
     if (sub) sub.insertBefore(h('i', { class: 'dot' }), sub.firstChild);
     return card;
   }
-  // « Pas encore vu » : un rayon par bibliothèque que le serveur dit avoir un `unseen` (films, séries… et toute bibliothèque vidéo ajoutée plus tard), dans l'ordre des bibliothèques.
-  // Chaque rayon : ce que le serveur propose, sans ce que `taken` (les nouveautés montrées) affiche déjà, `shown` au plus (le réglage du compte, 12 par défaut) ; une bibliothèque sans rien à proposer n'a pas de rayon.
-  var UNSEEN_SHOWN = 12;
-  H.unseen = function (libraries, taken, shown) {
-    shown = shown > 0 ? shown : UNSEEN_SHOWN;
-    var skip = {};
-    taken.forEach(function (e) { skip[e.item.id] = true; });
-    return libraries.map(function (lib) {
-      return { lib: lib, items: (lib.unseen || []).filter(function (it) { return !skip[it.id]; }).slice(0, shown) };
-    }).filter(function (shelf) { return shelf.items.length; });
-  };
+  // Les rayons coupés en rangées : chacun montre colonnes × `home_shelf_rows` cartes, et une dernière rangée incomplète s'il n'a pas de quoi la remplir.
+  // Un rayon, même ajouté plus tard, n'a qu'à faire sa grille avec `cutGrid` : la coupe, la recoupe et le focus suivent. « Reprendre » et « Tes demandes sont arrivées » n'y passent pas : on les voit en entier.
+  // Une carte n'est fabriquée que la première fois qu'elle se montre (les autres ne demandent pas leur image), puis gardée pour revenir ; une carte coupée n'est pas dans la page : ni le clavier ni la télécommande ne s'y posent.
+  var SHELF_ROWS = 2;
+  function cutGrid(entries) {          // `entries` : [{item, make}], `make()` fabrique la carte de `item`
+    var grid = h('div', { class: 'grid' });
+    grid.hubEntries = entries;
+    return grid;
+  }
+  function plainEntries(items) {
+    return items.map(function (it) { return { item: it, make: function () { return H.card(it, false); } }; });
+  }
+  // Les colonnes de la grille telle qu'elle est mise en page, lues et non recalculées : elles dépendent de la largeur, de la taille du texte et de l'appareil. 0 : la grille n'est pas affichée (la page est en réserve).
+  function columnsOf(grid) {
+    if (!grid.offsetWidth) return 0;
+    var tracks = getComputedStyle(grid).gridTemplateColumns;
+    return tracks && tracks !== 'none' ? tracks.trim().split(/\s+/).length : 1;
+  }
+  // La carte qui avait le focus vient d'être coupée : il passe à celle qui prend sa place, sinon à la dernière du rayon, sinon au rayon voisin.
+  // Une fenêtre ouverte depuis cette carte (`under`) garde le focus : c'est à sa fermeture qu'il reviendra sur la remplaçante.
+  function refocusShelf(grid, at, under) {
+    var next = grid.children[Math.min(at, grid.children.length - 1)] || nearShelf(grid.parentNode);
+    if (under) under.opener = next;
+    else if (!H.focus.set(next)) H.focus.first();
+  }
+  // Coupe un rayon, sans les éléments de `skip` ; rend ce qu'il montre. Un rayon à qui il ne reste rien se cache, et revient si la coupe des autres lui rend des cartes.
+  function fitShelf(grid, skip) {
+    var shelf = grid.parentNode;
+    shelf.hidden = false;          // un rayon caché n'a pas de colonnes à lire
+    var cols = columnsOf(grid);
+    if (!cols) return [];
+    var kept = grid.hubEntries.filter(function (e) { return !skip[e.item.id]; }).slice(0, cols * (parseInt(H.setting('home_shelf_rows'), 10) || SHELF_ROWS));
+    var wanted = kept.map(function (e) { return e.card || (e.card = e.make()); });
+    var before = Array.prototype.slice.call(grid.children), at = -1, under = H.overlay.bottom();
+    var held = under ? under.opener : document.activeElement;
+    before.forEach(function (card, i) { if (card.contains(held)) at = i; });
+    before.forEach(function (card) { if (wanted.indexOf(card) < 0) grid.removeChild(card); });
+    wanted.forEach(function (card, i) { if (grid.children[i] !== card) grid.insertBefore(card, grid.children[i] || null); });
+    shelf.hidden = !wanted.length;
+    if (at >= 0 && wanted.indexOf(before[at]) < 0) refocusShelf(grid, at, under);
+    return kept;
+  }
+  function cutGrids(home) {
+    return Array.prototype.filter.call(home.querySelectorAll('.shelf .grid'), function (grid) { return grid.hubEntries; });
+  }
+  // Coupe tous les rayons, dans l'ordre de la page : « Pas encore vu » retire ce que « Nouveautés » montre réellement, une fois coupé.
+  function fitShelves(home) {
+    var latest = {};
+    cutGrids(home).forEach(function (grid) {
+      var classes = grid.parentNode.classList, kept = fitShelf(grid, classes.contains('unseen') ? latest : {});
+      if (classes.contains('latest')) kept.forEach(function (e) { latest[e.item.id] = true; });
+    });
+  }
+  // Recoupe les rayons quand leurs grilles changent de taille (fenêtre, rotation, taille du texte), une fois par image. `refresh` : les rayons viennent de changer ; `stop` : la page s'en va.
+  function shelfWatcher(home) {
+    var frame = 0;
+    function later() {
+      if (!frame) frame = requestAnimationFrame(function () { frame = 0; fitShelves(home); });
+    }
+    var observer = window.ResizeObserver ? new ResizeObserver(later) : null;
+    if (!observer) window.addEventListener('resize', later);          // une vieille télé : la fenêtre seule
+    return {
+      refresh: function () {
+        if (observer) { observer.disconnect(); cutGrids(home).forEach(function (grid) { observer.observe(grid); }); }
+        fitShelves(home);
+      },
+      stop: function () {
+        cancelAnimationFrame(frame);
+        if (observer) { observer.disconnect(); observer = null; } else window.removeEventListener('resize', later);
+      }
+    };
+  }
   function cardsSection(cls, title, entries) {
-    return h('section', { class: 'shelf ' + cls }, h('h2', null, title), h('div', { class: 'grid' }, entries.map(latestCard)));
+    return h('section', { class: 'shelf ' + cls }, h('h2', null, title), cutGrid(entries.map(function (e) { return { item: e.item, make: function () { return latestCard(e); } }; })));
   }
   // Le rayon d'une bibliothèque : son titre est un lien vers elle, précédé du point de sa couleur (comme dans la recherche).
   function libraryShelf(cls, title, lib, items) {
     return h('section', { class: 'shelf ' + cls, 'data-lib': lib.id },
       h('h2', null, h('a', { class: 'f head', href: '#/l/' + lib.id }, title + ' · ' + H.libLabel(lib))),
-      h('div', { class: 'grid' }, items.map(function (it) { return H.card(it, false); })));
+      cutGrid(plainEntries(items)));
   }
   // « Parce que tu as aimé <titre> » : un rayon par ancre que le serveur propose, en cartes comme les autres ; chaque carte garde son ancre (`because`) pour « Pourquoi cette suggestion ? ».
   function recommendShelf(s) {
     return h('section', { class: 'shelf recommend', 'data-anchor': s.anchor.id },
       h('h2', null, H.t('Parce que tu as aimé {title}', { title: s.anchor.title })),
-      h('div', { class: 'grid' }, s.items.map(function (it) { it.because = s.anchor; return H.card(it, false); })));
+      cutGrid(plainEntries(s.items.map(function (it) { it.because = s.anchor; return it; }))));
   }
   // Les rayons de suggestions arrivent après l'accueil, sans le retenir : ils se posent devant `spot` (juste après « Reprendre »), seulement si l'accueil qui les a demandés est toujours celui-là (`still()`).
   // Un échec ou une réponse vide ne montre rien. Une carte que la personne a choisie (aux flèches, à la souris, ou après avoir fait défiler) garde le focus et reste en vue si les rayons l'ont poussée vers le bas.
   // Sinon, le focus que l'accueil avait posé de lui-même (`hubAuto`, page encore en haut) passe à la première suggestion, sans défilement : on arrive sur « Bonjour », pas au milieu de la page.
   // Ces rayons sont du contenu comme les autres : sur un accueil qui n'en avait aucun, ils prennent la place de la phrase et des tuiles des bibliothèques (`libraryTiles`), et le focus d'une tuile passe à leur première carte.
-  function recommendations(spot, still) {
+  function recommendations(spot, still, fit) {
     H.api('/api/recommendations').then(function (data) {
       var shelves = (data && data.shelves || []).filter(function (s) { return s.anchor && s.items && s.items.length; });
       var home = spot.parentNode;
       if (!shelves.length || !still() || !home) return;
       var a = document.activeElement, untouched = a && a === home.hubAuto && !window.pageYOffset;          // lu avant d'insérer les rayons
       var drawn = shelves.map(function (s) { return home.insertBefore(recommendShelf(s), spot); });
+      fit();
       var tiles = home.querySelector('.libtiles'), note = home.querySelector('.libtiles-note');
       var lost = tiles && a && tiles.contains(a);
       if (note) note.parentNode.removeChild(note);
@@ -496,6 +575,8 @@
   H.route(/^\/$/, function () {
     var el = h('section', { class: 'home' });
     var timer = null, drawn = 0;          // `drawn` : le numéro du dernier dessin de l'accueil (une réponse tardive des suggestions ne se pose que sur celui qui l'a demandée)
+    var shelves = shelfWatcher(el);
+    el.hubFit = shelves.refresh;          // une carte vient de quitter un rayon (dropCard)
     function dismissed(card) {
       var next = card.nextElementSibling && card.nextElementSibling.classList.contains('card') ? card.nextElementSibling : card.previousElementSibling;
       load(next && next.getAttribute('data-key'));
@@ -519,14 +600,16 @@
         if (ready.length) el.appendChild(readyShelf(ready));
         if (data.continue.length) el.appendChild(row(H.t('Reprendre'), null, data.continue.map(function (c) { return resumeCard(c, dismissed); })));
         var spot = el.appendChild(document.createComment('recommend')), mine = ++drawn;          // la place des rayons « Parce que tu as aimé », qui arrivent plus tard
-        var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries, LATEST);          // chaque rayon se masque dans les réglages du compte
+        var latest = H.setting('home_latest') === 'hide' ? [] : H.latest(data.libraries);          // chaque rayon se masque dans les réglages du compte
         if (latest.length) el.appendChild(cardsSection('latest', H.t('Nouveautés'), latest));
-        var unseen = H.setting('home_unseen') === 'hide' ? [] : H.unseen(data.libraries, latest, parseInt(H.setting('home_unseen_count'), 10));
-        unseen.forEach(function (shelf) {
-          el.appendChild(libraryShelf('unseen', H.t('Pas encore vu'), shelf.lib, shelf.items));
+        // « Pas encore vu » : un rayon par bibliothèque que le serveur dit avoir un `unseen` (films, séries… et toute bibliothèque vidéo ajoutée plus tard), dans l'ordre des bibliothèques.
+        var unseen = H.setting('home_unseen') === 'hide' ? [] : data.libraries.filter(function (lib) { return lib.unseen && lib.unseen.length; });
+        unseen.forEach(function (lib) {
+          el.appendChild(libraryShelf('unseen', H.t('Pas encore vu'), lib, lib.unseen));
         });
         if (!data.continue.length && !latest.length && !unseen.length && !ready.length) libraryTiles(data.libraries).forEach(function (node) { el.appendChild(node); });       // aucun rayon : les bibliothèques, pour ne pas laisser une page nue
-        if (H.setting('home_recommend') !== 'hide') recommendations(spot, function () { return mine === drawn && spot.parentNode === el; });       // masqué : la route n'est pas appelée
+        shelves.refresh();
+        if (H.setting('home_recommend') !== 'hide') recommendations(spot, function () { return mine === drawn && spot.parentNode === el; }, shelves.refresh);       // masqué : la route n'est pas appelée
         if (!document.body.contains(el) || el.style.display === 'none') return;       // une réponse tardive, la page a été quittée : `H.focus.first()` prendrait le focus de la page courante (la barre de la liseuse, dont les flèches ne tournent plus les pages)
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
@@ -535,7 +618,7 @@
     }
     el.hubRedraw = function () { load(); };          // plus aucun rayon après « Je n'aime pas » (dropCard)
     load();
-    return { el: el, nav: '#/', refresh: load, destroy: function () { clearTimeout(timer); } };
+    return { el: el, nav: '#/', refresh: load, destroy: function () { clearTimeout(timer); shelves.stop(); } };
   });
 
   // --- Bibliothèque ----------------------------------------------------------------
@@ -1618,10 +1701,10 @@
       choices: [{ label: H.t('Albums'), detail: H.t('Tous les albums, regroupés sous le nom de leur artiste'), value: 'albums' }, { label: H.t('Artistes'), detail: H.t('Un artiste par carte, avec sa photo, sans ses albums'), value: 'artists' }] },
       { key: 'movie_view', title: H.t('Bibliothèque de films'), note: H.t('Comment elle s’ouvre'),
         choices: [{ label: H.t('Sagas'), detail: H.t('Les films d’une même saga sur une seule carte'), value: 'sagas' }, { label: H.t('Films'), detail: H.t('Tous les films, chacun sur sa carte'), value: 'films' }] },
+      { key: 'home_shelf_rows', title: H.t('Rangées par rayon'), note: H.t('Sur la page d’accueil'),
+        choices: [{ label: H.t('1 rangée'), detail: H.t('Peu'), value: '1' }, { label: H.t('2 rangées'), detail: H.t('Habituel'), value: '2' }, { label: H.t('3 rangées'), detail: H.t('Beaucoup'), value: '3' }] },
       { key: 'home_latest', title: H.t('Nouveautés'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
       { key: 'home_unseen', title: H.t('Pas encore vu'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
-      { key: 'home_unseen_count', title: H.t('Pas encore vu : cartes par rayon'), note: H.t('Sur la page d’accueil'),
-        choices: [['6', H.t('Peu')], ['12', H.t('Habituel')], ['18', H.t('Beaucoup')], ['24', H.t('Le maximum')]].map(function (c) { return { label: H.t('{n} cartes', { n: c[0] }), detail: c[1], value: c[0] }; }) },
       { key: 'home_unseen_sort', title: H.t('Pas encore vu : trier par'), note: H.t('Sur la page d’accueil'),
         choices: [{ label: H.t('Au hasard'), detail: H.t('Un ordre qui change chaque jour'), value: 'random' }, { label: H.t('Note TMDB'), detail: H.t('Les mieux notés d’abord, ceux sans note à la fin'), value: 'rating' },
           { label: H.t('Date d’ajout'), detail: H.t('Les plus récemment ajoutés d’abord'), value: 'added' }] },
