@@ -152,13 +152,15 @@ def write_cbz(path, pages=3, **info):
     return path
 
 
-def write_epub(path, title="Un roman", author="Quelqu'un", chapters=2, body=None):
-    """`body(n)` : le HTML du chapitre n (par défaut un titre et une phrase) ; il peut renvoyer vers les autres chapitres (c1.xhtml, c2.xhtml...)."""
+def write_epub(path, title="Un roman", author="Quelqu'un", chapters=2, body=None, manifest_extra="", spine_extra="", spine_attrs="", files=None):
+    """`body(n)` : le HTML du chapitre n (par défaut un titre et une phrase) ; il peut renvoyer vers les autres chapitres (c1.xhtml, c2.xhtml...).
+
+    `manifest_extra`, `spine_extra` : du XML ajouté au manifeste et au spine ; `spine_attrs` : les attributs du spine (` toc="ncx"`) ; `files` : {chemin: contenu} d'autres fichiers de l'archive (un sommaire, par exemple)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    manifest = "".join(f'<item id="c{n}" href="c{n}.xhtml" media-type="application/xhtml+xml"/>' for n in range(1, chapters + 1))
-    spine = "".join(f'<itemref idref="c{n}"/>' for n in range(1, chapters + 1))
+    manifest = "".join(f'<item id="c{n}" href="c{n}.xhtml" media-type="application/xhtml+xml"/>' for n in range(1, chapters + 1)) + manifest_extra
+    spine = "".join(f'<itemref idref="c{n}"/>' for n in range(1, chapters + 1)) + spine_extra
     opf = (f'<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
-           f"<dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:identifier id=\"id\">x</dc:identifier></metadata><manifest>{manifest}</manifest><spine>{spine}</spine></package>")
+           f"<dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:identifier id=\"id\">x</dc:identifier></metadata><manifest>{manifest}</manifest><spine{spine_attrs}>{spine}</spine></package>")
     container = '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("mimetype", "application/epub+zip")
@@ -167,6 +169,8 @@ def write_epub(path, title="Un roman", author="Quelqu'un", chapters=2, body=None
         for n in range(1, chapters + 1):
             content = body(n) if body else f"<h1>Chapitre {n}</h1><p>Texte du chapitre {n}.</p>"
             z.writestr(f"c{n}.xhtml", f"<html xmlns='http://www.w3.org/1999/xhtml'><body>{content}</body></html>")
+        for name, content in (files or {}).items():
+            z.writestr(name, content)
     return path
 
 

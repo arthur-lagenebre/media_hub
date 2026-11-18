@@ -2817,8 +2817,9 @@ def api_book(h, m, q):
             out["page_url"] = f"/book/{entry['id']}/page/{{n}}"          # `{n}` : le numéro de page, à partir de 0
             out["rtl"] = bookmedia.reads_right_to_left(meta.get("info"), meta_json(hub.item(entry["item_id"])["meta"]).get("section"))
         elif kind == "epub":
-            spine = bookmedia.epub_spine(path)
-            out["chapters"] = [f"/book/{entry['id']}/epub/{c}" for c in spine["spine"]]
+            book = bookmedia.epub_book(path)
+            out["chapters"] = [f"/book/{entry['id']}/epub/{c}" for c in book["spine"]]
+            out["toc"] = book["toc"]
         else:
             out["readable"] = False
     except BookError as e:
