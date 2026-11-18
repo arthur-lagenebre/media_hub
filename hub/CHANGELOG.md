@@ -1,3 +1,8 @@
+## 0.33.0 — 2026-11-18
+- Dans Paramètres › Préférences › Affichage, « Rangées par rayon » règle tous les rayons de l'accueil : 1, 2 ou 3 rangées. Ton ancien choix de cartes est repris.
+- Les rayons de l'accueil remplissent leurs rangées quelle que soit la largeur de l'écran ou la taille du texte, et se rajustent si elles changent.
+- « Parce que tu as aimé » peut proposer bien plus de films et de séries.
+
 ## 0.32.0 — 2026-11-18
 - À la fin d'un film d'une saga, le lecteur te propose le film suivant : tu choisis de le regarder ou de revenir à la fiche.
 - Pendant un film d'une saga, « Suivant » ouvre le film suivant, et celui que tu quittes reste à reprendre.
