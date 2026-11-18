@@ -276,6 +276,26 @@ class TestNavigation(UiCase):
             self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 391, hash)
 
 
+    def test_a_late_save_of_the_settings_does_not_scroll_the_page_we_moved_to(self):
+        """Un réglage enregistré rend le focus à son bouton quand le serveur répond : la page des paramètres, quittée, est masquée, et la page affichée ne doit pas défiler pour « montrer » un bouton qui n'est plus là."""
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show"}))
+        self.page.set_viewport_size({"width": 1920, "height": 500})
+        late = []
+        self.page.route(lambda url: url.endswith("/api/me/settings"), lambda route: late.append(route) if route.request.method == "POST" else route.continue_())
+        self.open("#/settings?tab=preferences")
+        self.page.locator("#views > .settings [data-key='display-home_latest']").click()
+        self.page.locator(".menu .opt", has_text="Masqué").click()
+        self.until(lambda: len(late) == 1)
+        self.page.goto(self.base + "/#/admin")
+        self.shown("#/admin")
+        self.view(".tabs").wait_for()
+        self.page.evaluate("window.scrollTo(0, 300)")
+        self.until(lambda: self.page.evaluate("window.scrollY") == 300)
+        for route in late:
+            route.continue_()
+        self.page.wait_for_selector("#views > .settings span:text-is('Sur la page d’accueil : Masqué')", state="attached")       # la page masquée s'est redessinée
+        self.assertEqual(self.page.evaluate("window.scrollY"), 300)
+
 class TestDetailPages(UiCase):
     def test_show_seasons_and_episodes(self):
         item = self.item("series", "Dark")
@@ -1570,6 +1590,71 @@ class TestReaderSpreads(UiCase):
         self.assertFalse(self.page.evaluate("!!document.activeElement.closest('.rbar')"))
         self.turn("ArrowRight")
         self.wait_pages([1, 2])
+
+    def read_while_a_page_waits(self, hash, request):
+        """Ouvre la page `hash` dont la réponse (la requête qui contient `request`) est retenue, passe à la liseuse, puis rend la réponse : la page, masquée, se dessine derrière la liseuse."""
+        entry = self.entry("Diptyque")
+        self.api(f"/api/entry/{entry}/seen", {"done": False})
+        self.prefs(True)
+        late = []
+        self.page.route(lambda url: request in url, lambda route: late.append(route))
+        self.page.goto(self.base + "/" + hash)
+        self.until(lambda: len(late) == 1)
+        target = f"#/read/{entry}?p=0"
+        self.page.goto(self.base + "/" + target)
+        self.shown(target)
+        self.wait_pages(None)
+        return late
+
+    def assert_the_reader_keeps_the_focus(self, late, drawn):
+        """Rend les réponses retenues, attend que la page masquée se soit dessinée (`drawn`, un sélecteur de sa vue), puis vérifie que la liseuse a gardé le focus : ni sur sa barre, ni sur la page quittée, et une flèche tourne la page."""
+        for route in late:
+            route.continue_()
+        self.page.wait_for_selector(drawn, state="attached")
+        self.assertFalse(self.page.evaluate("!!document.activeElement.closest('.rbar')"), "le focus a pris la barre de la liseuse")
+        self.assertFalse(self.page.evaluate("!!document.activeElement.closest('#views > .view:not(.reader)')"), "le focus est dans la page quittée")
+        self.turn("ArrowRight")
+        self.wait_pages([1, 2])
+
+    def test_a_late_film_sheet_does_not_take_the_focus_off_the_reader(self):
+        late = self.read_while_a_page_waits("#/i/" + self.item("films", "Man of Steel")["id"], "/api/item/")
+        self.assert_the_reader_keeps_the_focus(late, "#views > .detail .hero")
+
+    def test_a_late_saga_page_does_not_take_the_focus_off_the_reader(self):
+        late = self.read_while_a_page_waits("#/saga/films?g=Saga%20DCEU", "group=Saga%20DCEU")
+        self.assert_the_reader_keeps_the_focus(late, "#views > .sagapage .hero")
+
+    def test_a_late_artist_sheet_does_not_take_the_focus_off_the_reader(self):
+        artist, undo = give_artist_a_sheet(self.run_.hub.db)
+        self.addCleanup(undo)
+        late = self.read_while_a_page_waits(f"#/artist/musique/{artist}", f"/api/artist/musique/{artist}")
+        self.assert_the_reader_keeps_the_focus(late, "#views > .detail .hero")
+
+    def test_a_late_saga_editor_does_not_take_the_focus_off_the_reader(self):
+        late = self.read_while_a_page_waits("#/sagas?g=Inconnue", "/api/sagas")
+        self.assert_the_reader_keeps_the_focus(late, "#views > .sagaedit .blank")
+
+    def test_a_late_administration_page_does_not_take_the_focus_off_the_reader(self):
+        late = self.read_while_a_page_waits("#/admin", "/api/jobs")
+        self.assert_the_reader_keeps_the_focus(late, "#views > .admin .tabs")
+
+    def test_a_late_save_of_the_settings_does_not_take_the_focus_off_the_reader(self):
+        """Un réglage enregistré redessine la page des paramètres quand le serveur répond : si la personne l'a quittée, la réponse ne lui prend pas le focus."""
+        self.addCleanup(lambda: self.api("/api/me/settings", {"home_latest": "show"}))
+        entry = self.entry("Diptyque")
+        self.api(f"/api/entry/{entry}/seen", {"done": False})
+        self.prefs(True)
+        late = []
+        self.page.route(lambda url: url.endswith("/api/me/settings"), lambda route: late.append(route) if route.request.method == "POST" else route.continue_())
+        self.page.goto(self.base + "/#/settings?tab=preferences")
+        self.page.locator("#views > .settings [data-key='display-home_latest']").click()
+        self.page.locator(".menu .opt", has_text="Masqué").click()
+        self.until(lambda: len(late) == 1)
+        target = f"#/read/{entry}?p=0"
+        self.page.goto(self.base + "/" + target)
+        self.shown(target)
+        self.wait_pages(None)
+        self.assert_the_reader_keeps_the_focus(late, "#views > .settings span:text-is('Sur la page d’accueil : Masqué')")           # la page s'est redessinée avec le réglage enregistré
 
     def test_the_double_page_shows_the_cover_alone_then_pairs_of_pages(self):
         self.read("Diptyque")

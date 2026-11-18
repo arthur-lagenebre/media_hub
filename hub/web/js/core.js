@@ -503,7 +503,7 @@
   }
   H.focus = {
     set: function (el, noScroll) {
-      if (!el) return false;
+      if (!el || !H.focus.shown(el)) return false;          // un élément d'une page quittée (masquée) ou retirée : ni focus, ni défilement pour le « montrer » (ses mesures sont des zéros : `reveal` remonterait la page affichée)
       try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
       if (!noScroll) reveal(el);
       return true;
@@ -523,6 +523,13 @@
       }
       return H.focus.set(pick(root), true);
     },
+    // Une page qui se redessine à l'arrivée d'une réponse peut avoir été quittée entre-temps : `first()` sans racine prendrait alors le focus de la page courante (la barre de la liseuse, dont les flèches ne tournent plus les pages).
+    // `shown(el)` : `el` est dans le document et aucun de ses parents n'est masqué (une page en réserve est `display: none`) ; une page revenue par Retour est de nouveau affichée, elle passe.
+    shown: function (el) {
+      for (var n = el; n && n !== document.body; n = n.parentNode) if (n.style && n.style.display === 'none') return false;
+      return !!el && document.body.contains(el);
+    },
+    firstIfShown: function (el) { return H.focus.shown(el) && H.focus.first(); },
     key: function (root, key, noScroll) {
       var el = null;
       Array.prototype.forEach.call((root || document).querySelectorAll('[data-key]'), function (x) { if (!el && x.getAttribute('data-key') === key) el = x; });

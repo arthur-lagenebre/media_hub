@@ -54,7 +54,7 @@
       if (logPanel) logRestore(logPanel, kept);          // un journal lu à mi-chemin le reste quand la page est refaite (une tâche qui se termine)
       var on = bar.querySelector('.on');
       if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir (après le contenu : lire offsetLeft sur une page à moitié reconstruite la ramenait en haut)
-      if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
+      if (H.overlay.isOpen() || !H.focus.shown(el)) return;             // une fenêtre de saisie est ouverte : on ne lui prend pas le focus ; ni quand la page a été quittée avant la réponse
       if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
     }
 
@@ -510,7 +510,7 @@
         } });
     }
     function refreshUsers(key) {
-      poll().then(function () { if (!(key && H.focus.key(el, key))) H.focus.first(); });
+      poll().then(function () { if (H.focus.shown(el) && !(key && H.focus.key(el, key))) H.focus.first(); });          // une réponse tardive : la page a été quittée
     }
 
     // --- Serveur : ce qui se lit plus qu'il ne se règle. La mention TMDB est dans Paramètres > À propos, que tous les comptes voient. --------
