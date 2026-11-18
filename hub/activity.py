@@ -22,6 +22,7 @@ DECISIONS_KEPT = 100            # les décisions de lecture gardées, les plus r
 KINDS = ("direct", "audio", "remux", "transcode", "download", "upload", "backup")
 PLAYING = ("direct", "audio", "remux", "transcode")
 DEVICES = ("pc", "phone", "tablet", "tv")
+TAILSCALE_V4 = ipaddress.ip_network("100.64.0.0/10")    # les appareils du réseau privé Tailscale comptent comme locaux
 TITLE_MAX = 200
 AGENT_MAX = 60
 CAPS_ITEMS = 12                 # des listes de `caps` : au plus ce nombre de mots, de ce nombre de caractères
@@ -74,14 +75,15 @@ def clean_caps(caps):
 
 
 def origin_of(address):
-    """`local` pour la boucle locale et les adresses privées (réseau de la maison, IPv6 locale), `remote` pour le reste, adresse illisible comprise. `address` est celui de `client_ip` : une adresse, ou, pour l'IPv6 derrière le proxy, un réseau /64.
-    Une adresse Tailscale en 100.64.0.0/10 n'est pas privée pour Python : `remote` ; en `fd7a:115c:a1e0::/48` (un réseau local unique) : `local`."""
+    """`local` pour la boucle locale, les adresses privées (réseau de la maison, IPv6 locale) et Tailscale, `remote` pour le reste, adresse illisible comprise. `address` est celui de `client_ip` : une adresse, ou, pour l'IPv6 derrière le proxy, un réseau /64.
+    Tailscale en IPv6 (`fd7a:115c:a1e0::/48`) est déjà un réseau local unique ; en IPv4, sa plage n'est pas privée pour Python, d'où `TAILSCALE_V4`."""
     try:
         found = ipaddress.ip_network(str(address).partition("%")[0], strict=False).network_address
     except ValueError:
         return "remote"
     found = getattr(found, "ipv4_mapped", None) or found
-    return "local" if found.is_loopback or found.is_private else "remote"
+    tailscale = found.version == 4 and found in TAILSCALE_V4
+    return "local" if found.is_loopback or found.is_private or tailscale else "remote"
 
 
 @dataclass

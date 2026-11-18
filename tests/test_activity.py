@@ -101,7 +101,8 @@ class TestRegistry(unittest.TestCase):
     def test_the_origin_follows_the_address(self):
         for address, origin in (("127.0.0.1", "local"), ("::1", "local"), ("192.168.1.20", "local"), ("10.0.0.2", "local"), ("172.16.5.5", "local"), ("::ffff:192.168.1.5", "local"),
                                 ("fe80::1%eth0", "local"), ("fd12:3456:789a::/64", "local"), ("8.8.8.8", "remote"), ("::ffff:8.8.8.8", "remote"), ("2606:4700:4700::/64", "remote"),
-                                ("100.101.102.103", "remote"), ("fd7a:115c:a1e0::1", "local"), ("n'importe quoi", "remote"), ("", "remote")):
+                                ("100.101.102.103", "local"), ("100.64.0.0", "local"), ("100.127.255.255", "local"), ("::ffff:100.101.102.103", "local"), ("100.63.255.255", "remote"), ("100.128.0.0", "remote"),
+                                ("fd7a:115c:a1e0::1", "local"), ("n'importe quoi", "remote"), ("", "remote")):
             self.assertEqual(activity.origin_of(address), origin, address)
 
     def test_a_progress_report_prolongs_an_existing_line_and_never_creates_one(self):
