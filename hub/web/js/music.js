@@ -418,6 +418,7 @@
       el.appendChild(artistHero(d, artistInfo(d, info)));
       el.appendChild(artistBody(d, info));
       H.audio.mark();
+      if (!H.focus.shown(el)) return;          // une réponse tardive : la page a été quittée
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
     load();
@@ -474,6 +475,7 @@
       }
       el.appendChild(body);
       H.audio.mark();
+      if (!H.focus.shown(el)) return;          // une réponse tardive : la page a été quittée
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
     load();

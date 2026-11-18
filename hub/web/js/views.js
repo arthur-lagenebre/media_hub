@@ -646,7 +646,7 @@
         if (!data.continue.length && !latest.length && !unseen.length && !ready.length) libraryTiles(data.libraries).forEach(function (node) { el.appendChild(node); });       // aucun rayon : les bibliothèques, pour ne pas laisser une page nue
         shelves.refresh();
         if (H.setting('home_recommend') !== 'hide') recommendations(spot, function () { return mine === drawn && spot.parentNode === el; }, shelves.refresh);       // masqué : la route n'est pas appelée
-        if (!document.body.contains(el) || el.style.display === 'none') return;       // une réponse tardive, la page a été quittée : `H.focus.first()` prendrait le focus de la page courante (la barre de la liseuse, dont les flèches ne tournent plus les pages)
+        if (!H.focus.shown(el)) return;       // une réponse tardive, la page a été quittée : voir `H.focus.shown`
         if (typeof focusKey === 'string' && H.focus.key(el, focusKey)) return;
         var a = document.activeElement;
         if (!a || a === document.body || (a.closest && a.closest('#nav'))) { H.focus.first(); el.hubAuto = document.activeElement; }       // posé par l'accueil, pas par la personne (voir `recommendations`)
@@ -1038,6 +1038,7 @@
       el.setAttribute('data-lib', d.library.id);
       el.appendChild(heroBlock(d, infoBlock(d, viewing(d))));
       el.appendChild(bodyBlock(d));
+      if (!H.focus.shown(el)) return;          // une réponse tardive : la page a été quittée
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
 
@@ -1182,6 +1183,7 @@
         h('div', { class: 'hero-in' }, h('div', { class: 'stack-big' }, H.stack(films.map(function (f) { return itemCover(f.id); }), name, 500)), info)));
       el.appendChild(h('div', { class: 'body' }, h('section', { class: 'sagaall' }, h('h2', null, H.t('Les films de la saga')),
         h('div', { class: 'grid' }, sagaCells(films, absent, function (f) { return H.card(f, false, true); }, { hide: H.isAdmin() ? hide : null })))));
+      if (!H.focus.shown(el)) return;          // une réponse tardive : la page a été quittée
       if (focusKey) H.focus.key(el, focusKey); else H.focus.first();
     }
     // Marque tous les films de la saga vus (ou non vus) : un appel par film, comme le menu « … » d'une carte de saga.
@@ -1255,7 +1257,7 @@
     function settle(key) {
       var active = document.activeElement;
       var free = !active || active === document.body || el.contains(active) || active.getClientRects().length === 0;
-      if (!free || active === button || !document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;          // sur le bouton « Chercher… », on y reste
+      if (!free || active === button || !H.focus.shown(el) || H.overlay.isOpen()) return;          // sur le bouton « Chercher… », on y reste
       if (key && H.focus.key(out, key, true)) return;
       H.focus.set(out.querySelector('.card') || out.querySelector('.f'), true);
     }
@@ -1379,7 +1381,7 @@
           h('a', { class: 'btn f', href: '#/search', 'data-autofocus': '1', 'data-key': 'req-search' }, H.icon('search'), h('span', { class: 'lbl' }, H.t('Rechercher')))));
       }
       list.forEach(function (r) { out.appendChild(row(r)); });
-      if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;          // une réponse tardive : la page a été quittée
+      if (!H.focus.shown(el) || H.overlay.isOpen()) return;          // une réponse tardive : la page a été quittée
       var kept = keep && document.activeElement && el.contains(document.activeElement) && !out.contains(document.activeElement);          // au retour, « Nouvelle demande » garde le focus
       if (!(key && H.focus.key(out, key, true)) && !kept) H.focus.first();
     }
@@ -1459,7 +1461,7 @@
       H.clear(out);
       if (!list.length) out.appendChild(h('p', { class: 'muted sgempty' }, H.t('Tu n’as envoyé aucune suggestion pour l’instant.')));
       list.forEach(function (s) { out.appendChild(row(s)); });
-      if (!document.body.contains(el) || el.style.display === 'none' || H.overlay.isOpen()) return;          // une réponse tardive : la page a été quittée
+      if (!H.focus.shown(el) || H.overlay.isOpen()) return;          // une réponse tardive : la page a été quittée
       if (!(key && H.focus.key(el, key, true)) && !keep) H.focus.first();
     }
     function load(focusKey, keep) {
@@ -1652,7 +1654,7 @@
       el.appendChild(body);
       var on = bar.querySelector('.on');
       if (on) bar.scrollLeft = Math.max(0, on.offsetLeft - 24);       // sur un téléphone, la rangée défile : l'onglet ouvert doit s'y voir
-      if (H.overlay.isOpen()) return;                                   // une fenêtre de saisie est ouverte : on ne lui prend pas le focus
+      if (H.overlay.isOpen() || !H.focus.shown(el)) return;             // une fenêtre de saisie est ouverte : on ne lui prend pas le focus ; ni quand la page a été quittée avant la réponse
       if (!(focus && H.focus.key(el, focus, true))) H.focus.first();   // sans défilement
     }
     // Les réglages qu'on touche une fois : l'apparence de ce navigateur, la lecture, l'affichage du compte.

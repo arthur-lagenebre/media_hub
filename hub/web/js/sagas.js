@@ -126,12 +126,12 @@
       if (name && i < 0) {
         el.appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Saga introuvable')), h('p', null, H.t('« {name} » n’est pas (ou plus) dans tes sagas.', { name: name })),
           h('a', { class: 'btn f', href: '#/sagas', 'data-autofocus': '1' }, H.t('Toutes les sagas'))));
-        if (!H.overlay.isOpen()) H.focus.first();
+        if (!H.overlay.isOpen()) H.focus.firstIfShown(el);          // une réponse tardive : la page a été quittée
         return;
       }
       if (name) showSaga(i); else showList();
       if (H.overlay.isOpen()) return;                                 // une fenêtre est ouverte (choix de films) : on ne lui prend pas le focus
-      if (!document.body.contains(el) || el.style.display === 'none') return;       // une réponse tardive, la page a été quittée : on ne vole pas le focus de la page courante
+      if (!H.focus.shown(el)) return;       // une réponse tardive, la page a été quittée : on ne vole pas le focus de la page courante
       if (!(focusKey && H.focus.key(el, focusKey, true))) H.focus.first();
     }
 
