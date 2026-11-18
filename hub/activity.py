@@ -25,6 +25,8 @@ DEVICES = ("pc", "phone", "tablet", "tv")
 TAILSCALE_V4 = ipaddress.ip_network("100.64.0.0/10")    # les appareils du réseau privé Tailscale comptent comme locaux
 TITLE_MAX = 200
 AGENT_MAX = 60
+WHY_ITEMS = 8                   # les raisons d'une décision : au plus ce nombre de phrases, de ce nombre de caractères
+WHY_TEXT = 300
 CAPS_ITEMS = 12                 # des listes de `caps` : au plus ce nombre de mots, de ce nombre de caractères
 CAPS_WORD = 24
 CAPS_LISTS = ("video", "audio", "containers")           # ce que lit `probe.plan`, et rien d'autre
@@ -74,6 +76,12 @@ def clean_caps(caps):
     return out
 
 
+def clean_why(why):
+    """Les raisons de `probe.plan` (une liste de phrases), en nombre et en longueur bornés ; ce qui n'est pas un texte est écarté."""
+    reasons = (clean_text(reason, WHY_TEXT) for reason in why) if isinstance(why, list) else ()
+    return [reason for reason in reasons if reason][:WHY_ITEMS]
+
+
 def origin_of(address):
     """`local` pour la boucle locale, les adresses privées (réseau de la maison, IPv6 locale) et Tailscale, `remote` pour le reste, adresse illisible comprise. `address` est celui de `client_ip` : une adresse, ou, pour l'IPv6 derrière le proxy, un réseau /64.
     Tailscale en IPv6 (`fd7a:115c:a1e0::/48`) est déjà un réseau local unique ; en IPv4, sa plage n'est pas privée pour Python, d'où `TAILSCALE_V4`."""
@@ -119,7 +127,7 @@ class Decision:
     title: str
     caps: dict
     mode: str
-    why: str
+    why: list
 
     def public(self):
         return {"at": int(self.at), "user": self.name, "device": self.device, "agent": self.agent, "entry": self.entry, "title": self.title, "caps": self.caps, "mode": self.mode, "why": self.why}
@@ -187,7 +195,7 @@ class Activity:
         """Garde une décision de lecture. Ce que le client a dit (`device`, `caps`, agent) est nettoyé ici, jamais gardé tel quel."""
         with self.lock:
             self.decisions.append(Decision(self.clock(), user, name, address, short_agent(agent), clean_device(device), entry, clean_text(title, TITLE_MAX), clean_caps(caps),
-                                           clean_text(mode, 20), clean_text(why, 300)))
+                                           clean_text(mode, 20), clean_why(why)))
 
     # --- La lecture -------------------------------------------------------
     def report(self):

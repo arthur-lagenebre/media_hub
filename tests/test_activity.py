@@ -180,14 +180,14 @@ class TestDecisions(unittest.TestCase):
         self.registry = Activity(self.clock)
 
     def decide(self, n=1, **over):
-        args = {"user": "u1", "name": "alice", "address": "192.168.1.5", "agent": "UA", "device": "tv", "entry": f"e{n}", "title": f"Film {n}", "caps": {}, "mode": "direct", "why": "ok", **over}
+        args = {"user": "u1", "name": "alice", "address": "192.168.1.5", "agent": "UA", "device": "tv", "entry": f"e{n}", "title": f"Film {n}", "caps": {}, "mode": "direct", "why": [], **over}
         self.registry.decide(*args.values())
 
     def test_a_decision_keeps_the_date_the_account_the_device_the_file_the_caps_the_mode_and_the_reasons(self):
-        self.decide(caps={"video": ["h264"], "channels": 2}, mode="remux", why="le conteneur ne passe pas")
+        self.decide(caps={"video": ["h264"], "channels": 2}, mode="remux", why=["conteneur mkv non lu par ce lecteur", "autre piste audio que celle par défaut"])
         decision, = self.registry.report()["decisions"]
         self.assertEqual(decision, {"at": 1000, "user": "alice", "device": "tv", "agent": "UA", "entry": "e1", "title": "Film 1", "caps": {"video": ["h264"], "channels": 2},
-                                    "mode": "remux", "why": "le conteneur ne passe pas"})
+                                    "mode": "remux", "why": ["conteneur mkv non lu par ce lecteur", "autre piste audio que celle par défaut"]})
         self.assertNotIn("192.168.1.5", json.dumps(decision))
 
     def test_the_most_recent_comes_first_and_the_queue_is_bounded(self):
@@ -219,9 +219,16 @@ class TestDecisions(unittest.TestCase):
         self.assertEqual(activity.clean_caps({"channels": 2.0, "height": 1080.5}), {"channels": 2})
 
     def test_the_text_of_a_decision_is_bounded(self):
-        self.decide(agent="Mozilla " + "z" * 1000, title="T" * 1000, why="w" * 1000)
+        self.decide(agent="Mozilla " + "z" * 1000, title="T" * 1000, why=["w" * 1000] * 100)
         decision, = self.registry.report()["decisions"]
         self.assertTrue(len(decision["agent"]) <= activity.AGENT_MAX and len(decision["title"]) <= activity.TITLE_MAX)
+        self.assertEqual(len(decision["why"]), activity.WHY_ITEMS)
+        self.assertEqual(len(decision["why"][0]), activity.WHY_TEXT)
+
+    def test_the_reasons_keep_only_non_empty_texts(self):
+        self.assertEqual(activity.clean_why(["image trop haute", 5, None, "", ["x"]]), ["image trop haute"])
+        for why in (None, "texte", 5, {"a": 1}):
+            self.assertEqual(activity.clean_why(why), [], repr(why))
 
     def test_the_agent_is_shortened(self):
         chrome = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -546,7 +553,7 @@ class TestRoute(ActivityCase):
 
     def test_a_decision_gives_its_device_to_the_transfers_of_the_same_client(self):
         with mock.patch.object(app, "probe_of", lambda hub, e: {"audio": [], "subs": [], "duration": 0, "video": {}}), \
-                mock.patch.object(app.prober, "plan", lambda *a: {"mode": "direct", "why": "lisible tel quel", "audio": None, "copy_audio": True}):
+                mock.patch.object(app.prober, "plan", lambda *a: {"mode": "direct", "why": ["lisible tel quel"], "audio": None, "copy_audio": True}):
             play = call(self.hub, "POST", "/api/play/f1", {"device": "tv", "caps": {"video": ["h264"], "x": 1}}, {**self.cookie(self.bob), "User-Agent": "Mozilla/5.0 (Linux; Android 11) Chrome/110.0"})[1]
         self.assertEqual(play.status, 200)
         call(self.hub, "GET", "/media/f1/file", headers={**self.cookie(self.bob), "Range": "bytes=0-3", "User-Agent": "Mozilla/5.0 (Linux; Android 11) Chrome/110.0"})
@@ -554,11 +561,11 @@ class TestRoute(ActivityCase):
         self.assertEqual([(t["user"], t["device"]) for t in out["transfers"]], [("bob", "tv")])
         decision, = out["decisions"]
         self.assertEqual({k: decision[k] for k in ("user", "device", "agent", "entry", "title", "caps", "mode", "why")},
-                         {"user": "bob", "device": "tv", "agent": "Chrome 110 · Android", "entry": "f1", "title": "Le Film", "caps": {"video": ["h264"]}, "mode": "direct", "why": "lisible tel quel"})
+                         {"user": "bob", "device": "tv", "agent": "Chrome 110 · Android", "entry": "f1", "title": "Le Film", "caps": {"video": ["h264"]}, "mode": "direct", "why": ["lisible tel quel"]})
 
     def test_a_play_without_a_device_is_valid_and_hostile_values_are_cleaned(self):
         with mock.patch.object(app, "probe_of", lambda hub, e: {"audio": [], "subs": [], "duration": 0, "video": {}}), \
-                mock.patch.object(app.prober, "plan", lambda *a: {"mode": "direct", "why": "ok", "audio": None, "copy_audio": True}):
+                mock.patch.object(app.prober, "plan", lambda *a: {"mode": "direct", "why": [], "audio": None, "copy_audio": True}):
             self.assertEqual(call(self.hub, "POST", "/api/play/f1", {}, self.cookie(self.bob))[1].status, 200)
             self.assertEqual(call(self.hub, "POST", "/api/play/f1", {"device": "<img src=x onerror=1>", "caps": {"video": ["h264", "x" * 999, 7], "path": "/srv"}}, self.cookie(self.bob))[1].status, 200)
         newest, oldest = self.read().json()["decisions"]
