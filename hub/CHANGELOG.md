@@ -1,3 +1,8 @@
+## 0.38.0 — 2026-11-19
+- Dans un livre EPUB, le bouton Sommaire liste ses parties et t'emmène à celle que tu choisis ; celle que tu lis est cochée.
+- Quand tu t'arrêtes en bas d'un chapitre, le livre se rouvre à cet endroit, et non plus au début du chapitre suivant.
+- Sur un téléphone, les intitulés des menus accompagnés d'une explication, comme celui des sous-titres, restent lisibles.
+
 ## 0.37.0 — 2026-11-19
 - Pendant un film ou un épisode, le bouton Chapitres liste les chapitres du fichier et t'emmène à celui que tu choisis.
 - Quand un chapitre est une introduction ou un générique, un bouton te propose de le passer. Rien ne saute jamais tout seul.

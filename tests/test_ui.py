@@ -1865,6 +1865,259 @@ class TestReaderGamebook(UiCase):
         self.shown("#/i/" + self.item("livres", "Heros")["id"])                    # l'ancre n'a rien ajouté à l'historique
 
 
+def toc_nav(items):
+    """Un nav EPUB 3 ; `items` : [(lien, titre échappé, [enfants])]."""
+    def rows(entries):
+        return "".join(f'<li><a href="{href}">{title}</a>{"<ol>" + rows(kids) + "</ol>" if kids else ""}</li>' for href, title, kids in entries)
+    return f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>{rows(items)}</ol></nav></body></html>'
+
+
+class TestReaderToc(UiCase):
+    """Le sommaire d'un EPUB : un choix dans la barre de la liseuse, qui saute au chapitre ou à l'ancre et laisse les flèches tourner les pages."""
+    NAV_ITEM = '<item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>'
+    TALL = '<div style="height:3000px"></div>'
+
+    @classmethod
+    def add_media(cls, root):
+        bodies = {1: f"<h1>Chapitre 1</h1>{cls.TALL}", 2: f'<h1>Chapitre 2</h1>{cls.TALL}<h2 id="a">Partie A</h2>{cls.TALL}<h2 id="b c">Partie B</h2>{cls.TALL}{cls.TALL}', 3: f"<h1>Chapitre 3</h1>{cls.TALL}"}
+        plan = toc_nav([("c1.xhtml", "Un", []), ("c2.xhtml", "Deux", [("c2.xhtml#a", "Partie A", []), ("c2.xhtml#b%20c", "Partie B", [])]), ("c3.xhtml", "&lt;b&gt;Trois&lt;/b&gt;", [])])
+        fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Plan" / "Plan.epub", "Plan", "Auteur", chapters=3, body=lambda n: bodies[n], manifest_extra=cls.NAV_ITEM, files={"nav.xhtml": plan})
+        nested = [("c2.xhtml", "Niveau 5 " + "tresloingsansespace" * 8, [])]
+        for level in (4, 3, 2, 1):
+            nested = [("c2.xhtml", f"Niveau {level}", nested)]
+        many = nested + [("c2.xhtml", f"Entrée {n}", []) for n in range(60)]
+        fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Profond" / "Profond.epub", "Profond", "Auteur", chapters=3, body=lambda n: f"<h1>Chapitre {n}</h1>", manifest_extra=cls.NAV_ITEM, files={"nav.xhtml": toc_nav(many)})
+
+    def read(self, title="Plan", position=0):
+        """Ouvre le livre à cette position et attend que le chapitre soit affiché et mis en forme."""
+        entry = self.entries("livres", title)[0]["id"]
+        self.api("/api/progress", {"entry": entry, "position": position, "duration": 4})
+        self.reopen(entry)
+        self.arrived(int(position) + 1)
+        return entry
+
+    def reopen(self, entry):
+        """La liseuse dans une page neuve : changer seulement d'adresse garderait l'ancienne en réserve, avec son iframe."""
+        self.page.goto("about:blank")
+        self.open("#/read/" + entry)
+
+    def arrived(self, number):
+        self.page.wait_for_function("""n => { var f = document.querySelector('.reader iframe'), d = f && f.contentDocument;
+          return !!d && !!d.getElementById('hub-style') && !!d.body && d.body.textContent.indexOf('Chapitre ' + n) === 0 && document.querySelector('.reader .pg').textContent.indexOf('Chapitre ' + n + ' /') === 0; }""", arg=number)
+
+    def scroll_y(self):
+        return self.page.evaluate("document.querySelector('.reader iframe').contentWindow.scrollY")
+
+    def scroll_to(self, y):
+        self.page.evaluate("y => document.querySelector('.reader iframe').contentWindow.scrollTo(0, y)", y)
+        self.page.wait_for_function("y => Math.abs(document.querySelector('.reader iframe').contentWindow.scrollY - y) < 2", arg=y)
+
+    def button(self):
+        return self.page.locator(".reader .bottom .btn", has_text="Sommaire")
+
+    def open_toc(self):
+        if self.page.evaluate("document.querySelector('.reader .rbar').hidden"):
+            self.page.keyboard.press("Enter")                                       # la barre s'était masquée
+            expect(self.button()).to_be_visible()
+        self.button().click()
+        self.page.wait_for_selector(".veil .menu.choice .opt")
+
+    def pick(self, title):
+        self.page.locator(".veil .opt", has_text=title).click()
+        self.page.wait_for_selector(".veil", state="detached")
+
+    def labels(self):
+        return self.page.evaluate("Array.prototype.map.call(document.querySelectorAll('.veil .opt .lbl'), function (l) { return l.textContent; })")
+
+    def current(self):
+        """Le titre de l'entrée marquée, une fois qu'elle a le focus."""
+        self.page.wait_for_function("document.activeElement && document.activeElement.classList.contains('opt') && document.activeElement.classList.contains('on')")
+        return self.page.evaluate("document.activeElement.querySelector('.lbl').textContent")
+
+    def close(self):
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_selector(".veil", state="detached")
+
+    def mark_page(self):
+        """Une marque dans le chapitre affiché : elle disparaît s'il est rechargé."""
+        self.page.evaluate("document.querySelector('.reader iframe').contentWindow.hubSame = true")
+
+    def assert_not_reloaded(self):
+        self.assertTrue(self.page.evaluate("document.querySelector('.reader iframe').contentWindow.hubSame === true"))
+
+    def test_the_button_is_there_only_for_an_epub_with_a_table_of_contents(self):
+        self.read()
+        expect(self.button()).to_be_visible()
+        self.reopen(self.entries("livres", "Dumas")[0]["id"])
+        expect(self.page.locator(".reader .bottom .btn", has_text="Chapitre suivant")).to_be_visible()
+        expect(self.button()).to_have_count(0)
+        self.reopen(self.entries("livres", "Naruto")[0]["id"])
+        expect(self.page.locator(".reader .bottom .btn", has_text="Ajuster")).to_be_visible()
+        expect(self.button()).to_have_count(0)
+
+    def test_the_levels_are_shown_by_an_indent(self):
+        self.read()
+        self.open_toc()
+        self.assertEqual(self.labels(), ["Un", "Deux", "Partie A", "Partie B", "<b>Trois</b>"])
+        left = self.page.evaluate("Array.prototype.map.call(document.querySelectorAll('.veil .opt .lbl'), function (l) { return l.getBoundingClientRect().left; })")
+        self.assertEqual((left[0], left[1], left[4]), (left[0], left[0], left[0]))
+        self.assertGreater(left[2], left[0])
+        self.assertEqual(left[2], left[3])
+
+    def test_a_deep_entry_with_a_long_title_fits_a_narrow_phone(self):
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        self.read("Profond")
+        self.open_toc()
+        sizes = self.page.evaluate("""() => { var list = document.querySelector('.veil .menu-list'), deep = list.querySelectorAll('.opt')[4], label = deep.querySelector('.lbl').getBoundingClientRect();
+          return { scroll: list.scrollWidth, client: list.clientWidth, label: label.width, row: deep.getBoundingClientRect().width }; }""")
+        self.assertLessEqual(sizes["scroll"], sizes["client"])
+        self.assertGreater(sizes["label"], sizes["row"] * 0.6)                      # le retrait laisse la place au titre
+
+    def test_a_title_with_html_stays_text(self):
+        self.read()
+        self.open_toc()
+        expect(self.page.locator(".veil .opt", has_text="<b>Trois</b>")).to_have_count(1)
+        expect(self.page.locator(".veil .opt b")).to_have_count(0)
+
+    def test_a_pick_goes_to_another_chapter_from_its_start(self):
+        self.read()
+        self.scroll_to(1000)
+        self.open_toc()
+        self.pick("Trois")
+        self.arrived(3)
+        self.assertEqual(self.scroll_y(), 0)
+
+    def test_the_remote_chooses_with_the_arrows_and_enter(self):
+        self.read()
+        self.open_toc()
+        self.assertEqual(self.current(), "Un")
+        self.page.keyboard.press("ArrowDown")
+        self.page.wait_for_function("document.activeElement.textContent.indexOf('Deux') >= 0")
+        self.page.keyboard.press("Enter")
+        self.arrived(2)
+
+    def test_a_pick_reaches_an_anchor_in_another_chapter(self):
+        self.read()
+        self.open_toc()
+        self.pick("Partie B")
+        self.arrived(2)
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 5000")
+
+    def test_a_pick_reaches_an_anchor_of_the_chapter_read_without_reloading_it(self):
+        self.read(position=1)
+        self.mark_page()
+        self.open_toc()
+        self.pick("Partie A")
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 2000")
+        self.assert_not_reloaded()
+
+    def test_a_pick_without_anchor_in_the_chapter_read_returns_to_its_start(self):
+        self.read(position=1)
+        self.scroll_to(4000)
+        self.mark_page()
+        self.open_toc()
+        self.pick("Deux")
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY === 0")
+        self.assert_not_reloaded()
+
+    def test_the_current_entry_is_marked_and_focused(self):
+        self.read()
+        self.open_toc()
+        self.assertEqual(self.current(), "Un")
+        self.pick("Trois")
+        self.arrived(3)
+        self.open_toc()
+        self.assertEqual(self.current(), "<b>Trois</b>")
+        expect(self.page.locator(".veil .opt.on")).to_have_count(1)
+
+    def test_the_current_entry_follows_the_reading_position_among_the_anchors(self):
+        self.read(position=1)
+        self.open_toc()
+        self.assertEqual(self.current(), "Deux")
+        self.close()
+        for y, title in ((3200, "Partie A"), (5000, "Partie A"), (6300, "Partie B"), (1000, "Deux")):
+            self.scroll_to(y)
+            self.open_toc()
+            self.assertEqual(self.current(), title, y)
+            self.close()
+
+    def test_the_last_anchor_counts_as_passed_at_the_end_of_the_chapter(self):
+        self.read(position=1)
+        self.page.evaluate("var w = document.querySelector('.reader iframe').contentWindow, b = w.document.body; b.removeChild(b.lastElementChild); b.removeChild(b.lastElementChild); w.scrollTo(0, w.document.documentElement.scrollHeight)")
+        self.page.wait_for_function("(() => { var w = document.querySelector('.reader iframe').contentWindow; return w.scrollY > 0 && w.scrollY + w.innerHeight >= w.document.documentElement.scrollHeight - 2; })()")
+        self.open_toc()
+        self.assertEqual(self.current(), "Partie B")
+
+    def test_without_an_entry_before_the_chapter_nothing_is_marked_and_the_first_is_focused(self):
+        self.read("Profond")
+        self.open_toc()
+        expect(self.page.locator(".veil .opt.on")).to_have_count(0)
+        self.page.wait_for_function("document.activeElement === document.querySelector('.veil .opt')")
+
+    def test_a_chapter_without_entry_marks_the_last_one_before_it_and_shows_it(self):
+        self.read("Profond", position=2)
+        self.open_toc()
+        self.assertEqual(self.current(), "Entrée 59")
+        self.page.wait_for_function("""(() => { var list = document.querySelector('.veil .menu-list').getBoundingClientRect(), on = document.querySelector('.veil .opt.on').getBoundingClientRect();
+          return on.top >= list.top - 1 && on.bottom <= list.bottom + 1; })()""")
+
+    def test_the_position_is_saved_and_resumed_after_a_jump(self):
+        entry = self.read()
+        self.open_toc()
+        self.pick("Partie B")
+        self.arrived(2)
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 5000")
+        self.until(lambda: 1 < self.api("/api/book/" + entry)["position"] < 2)
+        self.reopen(entry)
+        self.arrived(2)
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 5000")
+
+    def test_escape_and_back_close_without_changing_anything(self):
+        entry = self.read(position=1)
+        self.scroll_to(4000)
+        self.mark_page()
+        self.open_toc()
+        self.close()
+        self.page.wait_for_function("document.activeElement && document.activeElement.textContent.indexOf('Sommaire') >= 0")
+        self.open_toc()
+        self.page.go_back()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.assertEqual(self.scroll_y(), 4000)
+        self.assert_not_reloaded()
+        self.assertIn(entry, self.page.url)
+
+    def test_the_arrows_turn_the_pages_after_a_jump(self):
+        self.read(position=1)
+        self.open_toc()
+        self.pick("Partie A")
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 2000")
+        before = self.scroll_y()
+        self.page.keyboard.press("ArrowRight")
+        self.page.wait_for_function("y => document.querySelector('.reader iframe').contentWindow.scrollY > y", arg=before)
+        self.open_toc()
+        self.pick("Trois")
+        self.arrived(3)
+        self.page.keyboard.press("ArrowRight")
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 0")
+
+    def test_the_bar_stays_while_the_menu_is_open_and_hides_after_it_closes(self):
+        entry = self.entries("livres", "Plan")[0]["id"]
+        self.api("/api/progress", {"entry": entry, "position": 0, "duration": 4})
+        self.open()
+        self.page.evaluate("""hash => {          // le délai de la barre, raccourci et compté (l'horloge de Playwright s'injecterait aussi dans l'iframe sans script)
+          var later = window.setTimeout; window.hubBarTimers = 0;
+          window.setTimeout = function (fn, ms) { return ms !== 6000 ? later(fn, ms) : later(function () { window.hubBarTimers++; fn(); }, 200); };
+          location.hash = hash; }""", "#/read/" + entry)
+        self.arrived(1)
+        self.button().evaluate("b => b.click()")                                    # par le code : la barre peut déjà s'être masquée
+        self.page.wait_for_selector(".veil .opt")
+        seen = self.page.evaluate("window.hubBarTimers")
+        self.page.wait_for_function("n => window.hubBarTimers >= n + 2", arg=seen)  # le délai est écoulé deux fois, menu ouvert
+        expect(self.page.locator(".reader .rbar")).to_be_visible()
+        self.close()
+        expect(self.page.locator(".reader .rbar")).to_be_hidden()
+
+
 def solid_png(width, height):
     """Un vrai PNG uni de cette taille : la liseuse décide du couplage des pages d'après leurs dimensions."""
     def chunk(tag, data):
