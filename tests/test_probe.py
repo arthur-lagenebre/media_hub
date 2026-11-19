@@ -93,9 +93,10 @@ def spans(*raw, **kw):
 
 
 class TestChapters(unittest.TestCase):
-    def test_a_chapter_has_a_title_a_start_an_end_and_what_it_lets_skip(self):
+    def test_a_chapter_has_a_title_a_start_and_an_end(self):
+        """Ce qu'un chapitre permet de passer ne se garde pas : il se lit sur le titre à chaque plan de lecture (voir with_skips)."""
         raw = {"id": 1, "time_base": "1/1000", "start": 0, "start_time": "0.000000", "end": 90500, "end_time": "90.500000", "tags": {"TITLE": "Générique de début"}}
-        self.assertEqual(chapters(raw), [{"title": "Générique de début", "start": 0.0, "end": 90.5, "skip": "intro"}])
+        self.assertEqual(chapters(raw), [{"title": "Générique de début", "start": 0.0, "end": 90.5}])
 
     def test_a_file_without_chapters_has_an_empty_list(self):
         self.assertEqual(prober.summarize({"format": {"duration": "100"}})["chapters"], [])
@@ -170,18 +171,38 @@ class TestChapterSkip(unittest.TestCase):
     def test_the_titles_of_an_introduction(self):
         for title in ("Intro", "INTRO", "intro", "Introduction", "L'introduction", "L’intro", "Opening", "Opening Credits", "opening_credits", "OP", "op", "OP 1", "OP1", "OP-2",
                       "Générique de début", "GÉNÉRIQUE DE DÉBUT", "generique de debut", "Générique du début", "Générique-de-début", "Intro - Partie 1", "01. Intro",
-                      "OPENING", "Opening 2", "Opening-1", "Générique d'ouverture", "Générique d’ouverture", "Générique de l’ouverture"):
+                      "OPENING", "Opening 2", "Opening-1", "Générique d'ouverture", "Générique d’ouverture", "Générique de l’ouverture",
+                      "Main Titles", "MAIN TITLES", "main titles", "Main-Titles", "Main Titles 2"):
             self.assertEqual(prober.chapter_skip(title), "intro", title)
 
     def test_the_titles_of_the_credits(self):
-        for title in ("Credits", "CREDITS", "End Credits", "End-Credits", "Ending", "ED", "ed", "ED 2", "ED2", "Outro", "Générique", "GÉNÉRIQUE", "generique", "Générique de fin", "Générique-de-fin", "12 - Credits", "ENDING", "Ending 2", "Ending Credits"):
+        for title in ("Credits", "CREDITS", "End Credits", "End-Credits", "Ending", "ED", "ed", "ED 2", "ED2", "Outro", "Générique", "GÉNÉRIQUE", "generique", "Générique de fin", "Générique-de-fin", "12 - Credits", "ENDING", "Ending 2", "Ending Credits",
+                      "End Titles", "END TITLES", "End-Titles"):
             self.assertEqual(prober.chapter_skip(title), "credits", title)
 
     def test_the_false_friends(self):
         for title in ("", "Chapitre 1", "Reintroduction", "Réintroduction", "Re-introduction", "Introductions", "Introducing", "Sending", "Pending", "Bending the rules", "Credit Suisse", "Credit", "Accredits",
                       "Discredits", "Reopening", "Pré-générique", "Génériques", "Outros", "Scoop", "Top", "Stop", "OP Art", "Le OP", "OP 1 bis", "Ed Wood", "Red", "Ted", "Mr. Ed", "ED 2 fin", "Edition", "Opera",
-                      "The Opening", "Opening Scene", "Opening Night", "Opening 2 bis", "The Ending", "Happy Ending", "Ending Scene", "Never Ending"):
+                      "The Opening", "Opening Scene", "Opening Night", "Opening 2 bis", "The Ending", "Happy Ending", "Ending Scene", "Never Ending",
+                      "Titles", "Main Title Theme", "The Main Event", "Main", "End Title", "Prologue", "Cold Open"):
             self.assertIsNone(prober.chapter_skip(title), title)
+
+
+class TestWithSkips(unittest.TestCase):
+    def test_what_a_chapter_lets_skip_is_read_on_its_title(self):
+        stored = [{"title": "Main Titles", "start": 0.0, "end": 60.0}, {"title": "La scène", "start": 60.0, "end": 90.0}]
+        self.assertEqual(prober.with_skips(stored), [{"title": "Main Titles", "start": 0.0, "end": 60.0, "skip": "intro"}, {"title": "La scène", "start": 60.0, "end": 90.0, "skip": None}])
+
+    def test_a_skip_kept_by_an_older_hub_is_read_again(self):
+        """La 0.37.0 gardait `skip` dans la sonde : une reconnaissance améliorée depuis vaut sans relire le fichier."""
+        self.assertEqual(prober.with_skips([{"title": "Main Titles", "start": 0.0, "end": 60.0, "skip": None}])[0]["skip"], "intro")
+        self.assertIsNone(prober.with_skips([{"title": "Opening Scene", "start": 0.0, "end": 60.0, "skip": "intro"}])[0]["skip"])
+
+    def test_a_chapter_without_a_title_lets_nothing_skip(self):
+        self.assertEqual([c["skip"] for c in prober.with_skips([{"start": 0.0, "end": 1.0}, {"title": None, "start": 1.0, "end": 2.0}])], [None, None])
+
+    def test_nothing_gives_nothing(self):
+        self.assertEqual(prober.with_skips([]), [])
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg absent")
@@ -195,8 +216,8 @@ class TestRealChapters(unittest.TestCase):
         subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=10:d=3", "-f", "ffmetadata", "-i", str(root / "chapters.txt"),
                         "-map", "0", "-map_chapters", "1", "-c:v", "mpeg4", str(film)], check=True, capture_output=True, timeout=60)
         out = prober.run_ffprobe(shutil.which("ffprobe"), film)
-        self.assertEqual([(c["title"], c["start"], c["end"], c["skip"]) for c in out["chapters"]],
-                         [("Intro", 0.0, 1.0, "intro"), ("La scène", 1.0, 2.0, None), ("Générique de fin", 2.0, 3.0, "credits")])
+        self.assertEqual(out["chapters"], [{"title": "Intro", "start": 0.0, "end": 1.0}, {"title": "La scène", "start": 1.0, "end": 2.0}, {"title": "Générique de fin", "start": 2.0, "end": 3.0}])
+        self.assertEqual([c["skip"] for c in prober.with_skips(out["chapters"])], ["intro", None, "credits"])
         self.assertEqual(out["probe_version"], prober.PROBE_VERSION)
 
 

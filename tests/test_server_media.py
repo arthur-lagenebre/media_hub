@@ -53,7 +53,8 @@ PROBE = {"duration": 0, "audio": [{"index": 1, "lang": "fre", "title": "", "comm
 class TestPlayChapters(MediaCase):
     """Les chapitres du plan de lecture viennent de la sonde gardée : la lecture ne lance jamais ffprobe pour les obtenir."""
 
-    CHAPTERS = [{"title": "Intro", "start": 0.0, "end": 30.0, "skip": "intro"}, {"title": "Suite", "start": 30.0, "end": 100.0, "skip": None}]
+    CHAPTERS = [{"title": "Intro", "start": 0.0, "end": 30.0}, {"title": "Suite", "start": 30.0, "end": 100.0}]          # ce que la sonde garde
+    PLAYED = [{"title": "Intro", "start": 0.0, "end": 30.0, "skip": "intro"}, {"title": "Suite", "start": 30.0, "end": 100.0, "skip": None}]          # ce que le lecteur reçoit
 
     def setUp(self):
         super().setUp()
@@ -74,13 +75,19 @@ class TestPlayChapters(MediaCase):
     def test_the_chapters_of_the_summary_are_given_to_the_player(self):
         self.db.set_probe("f1", {**self.summary, "chapters": self.CHAPTERS})
         with mock.patch.object(app.prober, "run_ffprobe") as run:
-            self.assertEqual(self.play()["chapters"], self.CHAPTERS)
+            self.assertEqual(self.play()["chapters"], self.PLAYED)
+        run.assert_not_called()
+
+    def test_a_chapter_kept_by_0_37_0_is_recognised_with_the_titles_known_today(self):
+        self.db.set_probe("f1", {**self.summary, "chapters": [{"title": "Main Titles", "start": 0.0, "end": 30.0, "skip": None}]})
+        with mock.patch.object(app.prober, "run_ffprobe") as run:
+            self.assertEqual(self.play()["chapters"], [{"title": "Main Titles", "start": 0.0, "end": 30.0, "skip": "intro"}])
         run.assert_not_called()
 
     def test_a_file_never_probed_is_probed_once_and_gives_its_chapters(self):
         with mock.patch.object(app.prober, "run_ffprobe", return_value={**self.summary, "chapters": self.CHAPTERS}) as run:
-            self.assertEqual(self.play()["chapters"], self.CHAPTERS)
-            self.assertEqual(self.play()["chapters"], self.CHAPTERS)
+            self.assertEqual(self.play()["chapters"], self.PLAYED)
+            self.assertEqual(self.play()["chapters"], self.PLAYED)
         self.assertEqual(run.call_count, 1)
 
 

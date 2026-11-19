@@ -2495,7 +2495,7 @@ def api_play(h, m, q):
         "subs": subs,
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
         "next": play_next(hub, entry),
-        "chapters": probe.get("chapters", []),
+        "chapters": prober.with_skips(probe.get("chapters", [])),
     })
 
 
