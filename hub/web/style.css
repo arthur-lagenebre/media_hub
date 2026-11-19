@@ -318,7 +318,8 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .opt:last-child { margin-bottom: 0; }
 .opt:focus, .opt:hover:not(:disabled) { background: #2a343e; border-color: var(--accent); }
 .opt .mark { width: 1.7rem; color: var(--accent); }
-.opt .lbl { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.opt .lbl { flex: 1; }
+.opt .lbl:last-child { min-width: 0; overflow-wrap: anywhere; }          /* sans détail à côté : un long mot (le titre d'un sommaire) passe à la ligne au lieu de déborder */
 .opt .det { color: var(--mute); font-size: 0.85rem; margin-left: 1rem; }
 .opt.on { font-weight: 700; }
 .opt[data-level="1"] { padding-left: 1.4rem; }      /* une liste hiérarchique (le sommaire d'un livre) : la ligne garde toute sa largeur, seul le texte se décale */

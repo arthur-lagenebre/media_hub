@@ -308,8 +308,8 @@
     function progressOf() {
       var win = frame && frame.contentWindow, doc = win && win.document;
       if (!doc || !doc.documentElement) return;
-      var max = Math.max(1, doc.documentElement.scrollHeight - win.innerHeight);
-      pos = chap + Math.min(1, Math.max(0, win.scrollY / max));
+      var max = Math.max(1, doc.documentElement.scrollHeight - win.innerHeight), last = chap === info.chapters.length - 1;
+      pos = chap + Math.min(last ? 1 : 0.999, Math.max(0, win.scrollY / max));          // le bas d'un chapitre reste ce chapitre à la reprise ; seul celui du dernier termine le livre
       paint(); later();
     }
     function scroll(dir) {

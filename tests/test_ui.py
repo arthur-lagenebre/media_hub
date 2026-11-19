@@ -1885,7 +1885,10 @@ class TestReaderToc(UiCase):
         nested = [("c2.xhtml", "Niveau 5 " + "tresloingsansespace" * 8, [])]
         for level in (4, 3, 2, 1):
             nested = [("c2.xhtml", f"Niveau {level}", nested)]
-        many = nested + [("c2.xhtml", f"Entrée {n}", []) for n in range(60)]
+        many = nested + [("c2.xhtml", f"Entrée {n}", []) for n in range(60)] + [("c2.xhtml", "Long" + "titresansespace" * 10, [])]
+        end = toc_nav([("c1.xhtml", "Début", []), ("c1.xhtml#fin", "Dernière section", []), ("c2.xhtml", "Suite", [])])
+        fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Bout" / "Bout.epub", "Bout", "Auteur", chapters=2, manifest_extra=cls.NAV_ITEM, files={"nav.xhtml": end},
+                            body=lambda n: f'<h1>Chapitre 1</h1>{cls.TALL}<h2 id="fin">Dernière section</h2><p>Quelques lignes.</p>' if n == 1 else "<h1>Chapitre 2</h1>")
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Profond" / "Profond.epub", "Profond", "Auteur", chapters=3, body=lambda n: f"<h1>Chapitre {n}</h1>", manifest_extra=cls.NAV_ITEM, files={"nav.xhtml": toc_nav(many)})
 
     def read(self, title="Plan", position=0):
@@ -1937,6 +1940,10 @@ class TestReaderToc(UiCase):
     def close(self):
         self.page.keyboard.press("Escape")
         self.page.wait_for_selector(".veil", state="detached")
+
+    def saved(self, accept):
+        """À employer avec `with` : attend l'enregistrement d'une position que `accept` admet (la liseuse l'envoie 1,5 s après le dernier mouvement)."""
+        return self.page.expect_response(lambda r: r.url.endswith("/api/progress") and r.request.method == "POST" and accept(json.loads(r.request.post_data)["position"]))
 
     def mark_page(self):
         """Une marque dans le chapitre affiché : elle disparaît s'il est rechargé."""
@@ -2057,7 +2064,7 @@ class TestReaderToc(UiCase):
     def test_a_chapter_without_entry_marks_the_last_one_before_it_and_shows_it(self):
         self.read("Profond", position=2)
         self.open_toc()
-        self.assertEqual(self.current(), "Entrée 59")
+        self.assertTrue(self.current().startswith("Long"))
         self.page.wait_for_function("""(() => { var list = document.querySelector('.veil .menu-list').getBoundingClientRect(), on = document.querySelector('.veil .opt.on').getBoundingClientRect();
           return on.top >= list.top - 1 && on.bottom <= list.bottom + 1; })()""")
 
@@ -2071,6 +2078,24 @@ class TestReaderToc(UiCase):
         self.reopen(entry)
         self.arrived(2)
         self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 5000")
+
+    def test_a_jump_to_the_end_of_a_chapter_is_resumed_in_that_chapter(self):
+        entry = self.read("Bout")
+        self.open_toc()
+        with self.saved(lambda position: position > 0.5) as reply:
+            self.pick("Dernière section")
+        self.assertLess(json.loads(reply.value.request.post_data)["position"], 1)
+        self.reopen(entry)
+        self.arrived(1)
+        self.page.wait_for_function("document.querySelector('.reader iframe').contentWindow.scrollY > 1000")
+
+    def test_the_end_of_the_last_chapter_still_finishes_the_book(self):
+        entry = self.read(position=2)
+        with self.saved(lambda position: position == 3) as reply:
+            self.page.evaluate("var w = document.querySelector('.reader iframe').contentWindow; w.scrollTo(0, w.document.documentElement.scrollHeight)")
+        self.assertIs(reply.value.json()["done"], True)
+        item = self.item("livres", "Plan")["id"]
+        self.assertEqual(entry, self.api("/api/item/" + item)["entries"][0]["id"])
 
     def test_escape_and_back_close_without_changing_anything(self):
         entry = self.read(position=1)
