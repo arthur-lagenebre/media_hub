@@ -3139,13 +3139,25 @@ class TestReaderZoom(ReaderCase):
                           bottom: z.box.b <= z.stage.t + z.stage.h + 1, right: z.box.r <= z.stage.l + z.stage.w + 1}; }""")
                 self.assertEqual(edges, {"wider": True, "taller": True, "top": True, "left": True, "bottom": True, "right": True})
 
-    def test_a_click_on_a_side_does_not_turn_a_zoomed_page(self):
-        self.read("Loupe", double=False)
-        self.keys(("+", 150))
+    def scroll_to(self, side):
+        """Amène l'image zoomée au bord gauche ou droit (comme si on l'y avait fait défiler)."""
+        self.page.evaluate("s => { var st = document.querySelector('.reader .stage'); st.scrollLeft = s === 'gauche' ? 0 : st.scrollWidth; }", side)
+        self.until(lambda: self.corner()[0] == side)
+
+    def test_a_click_on_a_side_turns_a_zoomed_page_only_at_the_edge(self):
+        """Zoomé, un appui sur un côté montre la barre tant que l'image peut encore aller de ce côté ; au bord, il tourne la page, comme la flèche."""
+        self.read("Loupe", double=False, page=1)
+        self.keys(("+", 150), ("+", 200), ("+", 300))          # centrée : l'image peut aller des deux côtés
         for x in (40, 960):
             self.bar_shows(lambda: self.page.locator(".reader .stage").click(position={"x": x, "y": 350}))
-            self.assertEqual(self.label(), "Page 1 / 6")
-            self.wait_zoom(150)
+            self.assertEqual(self.label(), "Page 2 / 6")
+            self.wait_zoom(300)
+        self.hide_bar()
+        self.scroll_to("droite")
+        self.page.locator(".reader .stage").click(position={"x": 960, "y": 350})
+        self.turned_to("Page 3 / 6", 300, ("gauche", "haut"))
+        self.page.locator(".reader .stage").click(position={"x": 40, "y": 350})          # la nouvelle page s'ouvre au bord gauche : le côté gauche recule
+        self.turned_to("Page 2 / 6", 300, ("droite", "bas"))
 
     def corner(self):
         """Où en est le défilement de la page zoomée : (« gauche » ou « droite », « haut » ou « bas »), ou None sur un axe qui n'est à aucun bord."""
@@ -3266,6 +3278,27 @@ class TestReaderZoom(ReaderCase):
         self.tap(200, 400)
         self.tap(200, 400)
         self.wait_zoom(100)
+
+    def test_a_swipe_turns_a_zoomed_page_only_when_it_starts_at_the_edge(self):
+        """Zoomé, un glissement fait défiler l'image ; commencé alors qu'elle est déjà au bord, il tourne la page. Le glissement qui l'amène au bord ne la tourne pas."""
+        self.phone()
+        self.read("Loupe", double=False, page=1)
+        self.tap(195, 400)
+        self.tap(195, 400)
+        self.wait_zoom(200)
+        x = self.geometry()["stage"]["x"]
+        self.swipe(300, 400, -150, 0)                          # au milieu de l'image : elle défile vers la droite
+        self.scrolled("x", x)
+        self.scroll_to("droite")
+        self.swipe(200, 600, 0, -200)                          # un glissement vertical au bord droit : rien que du défilement
+        self.swipe(300, 400, 150, 0)                           # vers la droite, au bord droit : l'image revient vers la gauche
+        self.until(lambda: self.corner()[0] != "droite")
+        self.assertEqual(self.label(), "Page 2 / 6")
+        self.scroll_to("droite")
+        self.swipe(300, 400, -150, 0)                          # vers la gauche, déjà au bord droit : page suivante
+        self.turned_to("Page 3 / 6", 200, ("gauche", "haut"))
+        self.swipe(100, 400, 150, 0)                           # vers la droite, au bord gauche où elle s'ouvre : page précédente
+        self.turned_to("Page 2 / 6", 200, ("droite", "bas"))
 
     def test_a_pinch_zooms_the_page_and_not_the_browser(self):
         self.phone()

@@ -239,18 +239,26 @@
       stage.scrollLeft = right ? stage.scrollWidth : 0;
       stage.scrollTop = end ? stage.scrollHeight : 0;
     }
+    function room(x, y) {                 // ce que l'image zoomée peut encore défiler dans ce sens (x : -1 gauche, 1 droite ; y : -1 haut, 1 bas), en px
+      return x > 0 ? stage.scrollWidth - stage.clientWidth - stage.scrollLeft : x < 0 ? stage.scrollLeft : y > 0 ? stage.scrollHeight - stage.clientHeight - stage.scrollTop : stage.scrollTop;
+    }
+    function sideTurn(x) { turn(rtl ? -x : x); }          // tourne la page vers ce côté de l'écran (-1 gauche, 1 droite), selon le sens de lecture
     function pan(d, repeat) {             // zoomé : la flèche déplace l'image ; déjà au bord, un nouvel appui tourne la page (pas la répétition d'une flèche maintenue pour y arriver)
       var x = d[0], y = d[1];
-      var room = x > 0 ? stage.scrollWidth - stage.clientWidth - stage.scrollLeft : x < 0 ? stage.scrollLeft : y > 0 ? stage.scrollHeight - stage.clientHeight - stage.scrollTop : stage.scrollTop;
-      if (room > 1) stage.scrollBy(Math.round(x * stage.clientWidth * 0.25), Math.round(y * stage.clientHeight * 0.25));
-      else if (!repeat) turn(x ? ((x > 0) !== rtl ? 1 : -1) : y);
+      if (room(x, y) > 1) stage.scrollBy(Math.round(x * stage.clientWidth * 0.25), Math.round(y * stage.clientHeight * 0.25));
+      else if (!repeat) { if (x) sideTurn(x); else turn(y); }
     }
 
     // Appuis et gestes sur la zone de lecture. Au doigt, l'appui se traite à la levée du doigt (le clic du navigateur est annulé) : il attend un instant un éventuel second appui, sinon un double appui tournerait d'abord la page.
-    function tap(cx) {                    // un appui : sur un côté, la page tourne, sauf zoomé (on regarde l'image) ; au milieu, la barre
-      var r = stage.getBoundingClientRect(), x = (cx - r.left) / r.width;
-      if (zoom > 1 || (x >= 0.3 && x <= 0.7)) showBar(bar.hidden);
-      else turn((x < 0.3) === !rtl ? -1 : 1);
+    function tap(cx) {                    // un appui : sur un côté, la page tourne (zoomé, seulement si l'image est déjà au bord de ce côté, comme la flèche) ; sinon, la barre
+      var r = stage.getBoundingClientRect(), x = (cx - r.left) / r.width, side = x < 0.3 ? -1 : x > 0.7 ? 1 : 0;
+      if (!side || (zoom > 1 && room(side, 0) > 1)) showBar(bar.hidden);
+      else sideTurn(side);
+    }
+    function swiped(g, e) {               // zoomé, un glissement horizontal commencé alors que l'image était déjà au bord vers lequel il l'emmène tourne la page ; celui qui l'y amène ne la tourne pas
+      var end = e.changedTouches[0], dx = end.clientX - g.x, dy = end.clientY - g.y, side = dx < 0 ? 1 : -1;          // le doigt vers la gauche montre ce qui est à droite
+      if (g.pinch || !g.zoomed || Math.abs(dx) < 60 || Math.abs(dx) < 2 * Math.abs(dy)) return;
+      if (g.edge[side]) sideTurn(side);
     }
     function far(a, x, y, limit) { return Math.abs(a.x - x) + Math.abs(a.y - y) > limit; }
     function span(t) { return Math.sqrt(Math.pow(t[0].clientX - t[1].clientX, 2) + Math.pow(t[0].clientY - t[1].clientY, 2)) || 1; }
@@ -269,7 +277,7 @@
     function onTouchStart(e) {
       var t = e.touches;
       if (e.target.closest && e.target.closest('.btn')) { touch = null; return; }          // « Réessayer » garde son propre appui
-      if (!touch || t.length === 1) touch = { x: t[0].clientX, y: t[0].clientY, moved: false, pinch: null };
+      if (!touch || t.length === 1) touch = { x: t[0].clientX, y: t[0].clientY, moved: false, pinch: null, zoomed: zoom > 1, edge: { '-1': room(-1, 0) <= 1, '1': room(1, 0) <= 1 } };          // les bords où l'image était au départ
       if (t.length > 1) { touch.moved = true; touch.pinch = { d: span(t), z: zoom }; }          // un pincement n'est jamais un appui
     }
     function onTouchMove(e) {
@@ -286,7 +294,7 @@
       var g = touch, now = Date.now();
       touch = null;
       if (e.cancelable) e.preventDefault();
-      if (g.moved) return;
+      if (g.moved) { swiped(g, e); return; }
       clearTimeout(tapTimer);
       if (lastTap && !far(lastTap, g.x, g.y, 40) && now - lastTap.at < 350) { lastTap = null; zoomTo(zoom > 1 ? 1 : 2, g.x, g.y); return; }          // double appui : 200 % sous le doigt, ou retour à 100 %
       lastTap = { x: g.x, y: g.y, at: now };
