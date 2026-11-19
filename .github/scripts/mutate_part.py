@@ -4,6 +4,10 @@ Un passage par fichier, avec les seuls tests de ce fichier, et la couverture mes
 Un long fichier passe par tranches de lignes : mutator garde les résultats de chaque tranche, donc
 une partie arrêtée à la limite du job reprend à la nuit suivante, au lieu de tout perdre.
 
+Une partie trop longue pour un job (`hub/server` : `app.py` refait en entier dès qu'une ligne s'y ajoute,
+car mutator repère un mutant par sa position dans le fichier) se répartit sur N jobs avec `--share K/N` :
+chacun lance une unité sur N (un fichier, ou une tranche d'un long fichier).
+
 Un mutant survivant ne fait pas échouer ce script : il est signalé dans `survived` (sortie de
 l'étape), pour que la règle de saut distingue « traité, avec survivants » de « pas allé au bout ».
 """
@@ -54,20 +58,34 @@ def file_patterns(name: str, tests: str) -> str:
     return tests or OWN_TESTS.get(stem, f"tests/test_{stem}*.py")
 
 
+def parse_share(text: str) -> tuple[int, int] | None:
+    """« 3/10 » : la troisième part sur dix ; rien : tout."""
+    if not text:
+        return None
+    k, n = (int(value) for value in text.split("/"))     # ValueError si ce n'est pas « K/N »
+    if not 1 <= k <= n:
+        raise ValueError(f"part {text} : K doit aller de 1 à N")
+    return k, n
+
+
 def plan_part(root: Path, paths: list[str], tests: str, *, python: str, mutator: str,
-              workers: int | None = None, memory_mb: int | None = None) -> list[list[str]]:
+              workers: int | None = None, memory_mb: int | None = None,
+              share: tuple[int, int] | None = None) -> list[list[str]]:
+    units = [(name, lines) for name in python_files(root, paths)
+             for lines in line_batches(len((root / name).read_text(encoding="utf-8").splitlines()))]
+    if share:
+        k, n = share
+        units = units[k - 1::n]
     commands: list[list[str]] = []
-    for name in python_files(root, paths):
-        total = len((root / name).read_text(encoding="utf-8").splitlines())
-        for lines in line_batches(total):
-            command = [mutator, "--test-command", test_command(root, file_patterns(name, tests), python, memory_mb)]
-            if commands:
-                command.append("--reuse-coverage")     # la première mesure vaut pour tout hub/
-            if workers:
-                command += ["--max-workers", str(workers)]
-            if lines:
-                command += ["--lines", lines]
-            commands.append(command + [name])
+    for name, lines in units:
+        command = [mutator, "--test-command", test_command(root, file_patterns(name, tests), python, memory_mb)]
+        if commands:
+            command.append("--reuse-coverage")     # la première mesure vaut pour tout hub/
+        if workers:
+            command += ["--max-workers", str(workers)]
+        if lines:
+            command += ["--lines", lines]
+        commands.append(command + [name])
     return commands
 
 
@@ -99,13 +117,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tests", default="", help="motifs des modules de tests ; sinon, ceux de chaque fichier")
     parser.add_argument("--workers", type=lambda v: int(v) if v else None, help="mutants d'un fichier à la fois")
     parser.add_argument("--memory-mb", type=lambda v: int(v) if v else None, help="mémoire de chaque lancement de tests")
+    parser.add_argument("--share", type=parse_share, default=None, help="« K/N » : une unité sur N, à partir de la K-ième")
     parser.add_argument("--mutator", default="../mutator/mutator")
     parser.add_argument("paths", nargs="+")
     args = parser.parse_args(argv)
     # Chemin absolu sans résoudre le lien du .venv : mutator lance les mutants dans des copies qui n'en ont pas.
     python = os.path.abspath(".venv/bin/python")
     commands = plan_part(Path.cwd(), args.paths, args.tests, python=python, mutator=args.mutator,
-                         workers=args.workers, memory_mb=args.memory_mb)
+                         workers=args.workers, memory_mb=args.memory_mb, share=args.share)
     failure, survived = run_plan(commands, execute)
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
