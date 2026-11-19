@@ -1,3 +1,8 @@
+## 0.40.0 — 2026-11-19
+- Sur ordinateur et tablette, le lecteur vidéo a un bouton pour couper le son et un curseur de volume ; la touche M coupe ou remet le son. Ton réglage est gardé d'une vidéo à l'autre, sans toucher à celui de la musique.
+- Quand tu quittes un film ouvert par un lien direct, il s'arrête vraiment : plus de son derrière la fiche. Retour le rouvre en pause, là où tu en étais ; « Lecture » ou « Reprendre » le relancent.
+- Sur iPhone et iPad, où le volume se règle avec les boutons de l'appareil, le curseur n'apparaît plus, ni dans le lecteur ni dans la barre de musique.
+
 ## 0.39.1 — 2026-11-19
 - Corrections internes.
 

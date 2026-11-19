@@ -864,8 +864,8 @@ class TestVideoPlayer(UiCase):
         self.assertEqual(self.rate(), 2)
         self.press("Escape", wait=600)
         self.assertNotIn("#/play/", self.page.url)
-        self.page.evaluate(f"location.hash = '#/play/{entry}'")
-        self.page.wait_for_selector(".player video")
+        self.view(".actions .btn.primary").click()                                                  # « Lecture » sur la fiche : le lecteur gardé de côté revient et repart
+        self.shown("#/play/" + entry)
         self.wait_playing()
         self.assertEqual(self.rate(), 1)
         self.assertEqual(self.page.inner_text(".player .btn.spd"), "Vitesse")
@@ -912,11 +912,282 @@ class TestVideoPlayer(UiCase):
         self.page.wait_for_selector(".veil .opt")
         self.assertEqual(self.page.locator(".veil .opt .lbl").all_inner_texts(), ["0,75×", "1×", "1,25×", "1,5×"])
 
+    # --- Lecteur ouvert directement, puis quitté ------------------------------------------
+    def shown_time(self):
+        """La position affichée par le lecteur, en secondes (« 0:45 » -> 45)."""
+        return self.page.evaluate("(() => { var p = document.querySelector('.player .times span').textContent.split(':'); return +p[0] * 60 + +p[1]; })()")
+
+    def leave_a_player_opened_directly(self, title, mode):
+        """Ouvre `#/play/<id>` par son adresse (rien derrière le lecteur), saute au milieu du film, puis Retour : la fiche prend sa place et le lecteur est mis de côté, pas détruit.
+        Vérifie qu'il s'est tu et a lâché son flux, puis revient au lecteur par Retour."""
+        entry = self.begin("films", title)
+        self.addCleanup(self.run_.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (entry,))           # la position enregistrée ferait reprendre au milieu les tests suivants
+        self.wait_playing()
+        self.assertEqual(self.page.inner_text(".player .pill"), mode)
+        self.page.locator(".player .seekbar").click(position={"x": 960, "y": 5})                                  # au milieu : au-delà des 20 s sous lesquelles rien n'est enregistré
+        self.page.wait_for_function("(() => { var v = document.querySelector('.player video'); return !v.paused && !v.seeking && v.readyState >= 3; })()", timeout=15000)
+        self.until(lambda: self.shown_time() > 25)
+        sheet = "#/i/" + self.item("films", title)["id"]
+        asked = []
+        self.press("Escape")
+        self.shown(sheet)
+        left = self.shown_time()
+        self.page.wait_for_function("(() => { var v = document.querySelector('.player video'); return v.paused && !v.getAttribute('src') && v.networkState === HTMLMediaElement.NETWORK_EMPTY; })()", timeout=5000)
+        self.page.on("request", lambda r: asked.append(r.url) if f"/media/{entry}/" in r.url else None)
+        self.until(lambda: abs(self.entries("films", title)[0]["progress"]["position"] - left) < 2)               # la position est enregistrée en partant
+        expect(self.view(".actions .btn").first).to_be_visible()
+        self.assertEqual(asked, [])                                                                              # le lecteur de côté ne lit plus rien
+        # Retour depuis la fiche : le même lecteur revient, au même endroit, en pause.
+        self.press("Escape")
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("document.querySelector('.player video').readyState >= 2", timeout=15000)
+        self.assertAlmostEqual(self.shown_time(), left, delta=2)
+        self.assertTrue(self.page.evaluate("document.querySelector('.player video').paused"))
+        self.assertEqual(self.focused(), "Lecture / pause")
+        self.assertTrue(self.page.evaluate("Hub.current().el.querySelector('.btns .btn .ic').outerHTML === Hub.icon('play').outerHTML"))      # l'icône dit la pause
+        self.press("Enter")
+        self.wait_playing()
+
+    def test_a_player_opened_directly_then_left_goes_quiet_in_direct_play(self):
+        self.leave_a_player_opened_directly("Direct", "Lecture directe")
+
+    def test_a_player_opened_directly_then_left_goes_quiet_with_converted_sound(self):
+        self.leave_a_player_opened_directly("Long", "Son converti")
+
+    def park_in_the_middle(self, title):
+        """Ouvre `title` par son adresse, saute au milieu, puis Retour vers la fiche : le lecteur est mis de côté. Rend l'entrée et l'adresse de la fiche."""
+        entry = self.begin("films", title)
+        self.addCleanup(self.run_.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (entry,))
+        self.wait_playing()
+        self.page.locator(".player .seekbar").click(position={"x": 960, "y": 5})
+        self.until(lambda: self.shown_time() > 25)
+        sheet = "#/i/" + self.item("films", title)["id"]
+        self.press("Escape")
+        self.shown(sheet)
+        self.page.wait_for_function("document.querySelector('.player video').networkState === HTMLMediaElement.NETWORK_EMPTY", timeout=5000)
+        return entry, sheet
+
+    def test_the_resume_card_brings_back_a_parked_player_playing(self):
+        """Un lien vers le lecteur mis de côté (la carte « Reprendre » de l'accueil) est une demande de lecture, comme « Lecture » sur la fiche : seul Retour le rouvre en pause."""
+        entry, _ = self.park_in_the_middle("Direct")
+        self.page.evaluate("location.hash = '#/'")
+        self.shown("#/")
+        self.view(f"a.card[href='#/play/{entry}']").click()
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("(() => { var v = Hub.current().el.querySelector('video'); return v.currentTime > 20 && !v.paused; })()", timeout=15000)
+
+    def test_leaving_while_a_converted_stream_is_still_starting_keeps_the_resume_point(self):
+        """Son converti, reprise à 40 s : le serveur n'a pas encore dit de quelle image clé partir quand on quitte. La position gardée est celle visée, pas 0."""
+        entry = self.entries("films", "Long")[0]["id"]
+        self.addCleanup(self.run_.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (entry,))
+        self.api("/api/progress", {"entry": entry, "position": 40.3, "duration": 90, "done": False})
+        held, gate = [], {"closed": True}
+        self.page.route("**/api/play/*/start*", lambda route: held.append(route) if gate["closed"] else route.continue_())
+        self.open("#/play/" + entry)
+        self.until(lambda: held)                                                                 # le départ est demandé, sa réponse attend
+        sheet = "#/i/" + self.item("films", "Long")["id"]
+        self.press("Escape")
+        self.shown(sheet)
+        gate["closed"] = False
+        for route in held:
+            route.continue_()
+        self.view(".actions .btn.primary").click()
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("(() => { var m = /&start=([0-9.]+)/.exec(Hub.current().el.querySelector('video').src); return m && +m[1] > 30; })()", timeout=15000)
+
+    def test_a_player_brought_back_by_back_and_left_without_playing_writes_nothing(self):
+        """Rouvert par Retour, puis quitté sans avoir rejoué : sa position, déjà enregistrée en partant, peut être périmée (une autre lecture a avancé depuis). Il ne la réécrit pas."""
+        entry, sheet = self.park_in_the_middle("Direct")
+        self.api("/api/progress", {"entry": entry, "position": 50, "duration": 60, "done": False})          # une autre lecture est allée plus loin
+        self.press("Escape")
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("Hub.current().el.querySelector('video').readyState >= 2", timeout=15000)
+        sent = []
+        self.page.on("request", lambda r: sent.append(r.post_data_json) if r.url.endswith("/api/progress") else None)
+        self.page.evaluate("location.hash = '#/'")                                               # mis de côté une deuxième fois
+        self.shown("#/")
+        self.page.wait_for_function("document.querySelector('.player video').networkState === HTMLMediaElement.NETWORK_EMPTY", timeout=5000)
+        self.page.evaluate("Hub.dropParked()")                                                    # puis détruit
+        self.page.wait_for_function("!document.querySelector('.player')")
+        self.assertEqual([b for b in sent if b["entry"] == entry], [])
+        self.assertEqual(self.entries("films", "Direct")[0]["progress"]["position"], 50)
+
     def test_unplayable_file_shows_error_with_actions(self):
         broken = self.entries("films", "Sans Etiquette")[0]["id"]
         self.open("#/play/" + broken)
         self.page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
         self.assertIn("Lecture impossible", self.page.inner_text(".player .err"))
+
+    def test_a_typed_address_brings_back_a_parked_player_playing(self):
+        """L'adresse du lecteur mis de côté, tapée ou collée dans le navigateur, est une demande de lecture ; le bouton Retour du navigateur, lui, le rouvre en pause."""
+        entry, sheet = self.park_in_the_middle("Direct")
+        self.page.go_back()                                                                          # le Retour du navigateur, sans la touche de l'application
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("Hub.current().el.querySelector('video').readyState >= 2", timeout=15000)
+        self.assertTrue(self.page.evaluate("Hub.current().el.querySelector('video').paused"))
+        self.page.go_forward()
+        self.shown(sheet)
+        self.page.goto(self.base + "/#/play/" + entry)                                              # même document : seul le fragment change, comme une adresse tapée
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("(() => { var v = Hub.current().el.querySelector('video'); return v.currentTime > 20 && !v.paused; })()", timeout=15000)
+
+    def test_a_player_left_on_its_error_panel_comes_back_to_it_without_reloading(self):
+        """« Lecture impossible » : rien ne se lit. Quitté puis retrouvé par Retour, le lecteur montre le même panneau, sans relancer la source (« Réessayer » le fait)."""
+        broken = self.entries("films", "Sans Etiquette")[0]["id"]
+        self.open("#/play/" + broken)
+        self.page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
+        self.press("Escape")
+        self.page.wait_for_function("Hub.current().hash.indexOf('#/play/') < 0")
+        asked = []
+        self.page.on("request", lambda r: asked.append(r.url) if f"/media/{broken}/" in r.url or f"/api/play/{broken}" in r.url else None)
+        self.press("Escape")
+        self.shown("#/play/" + broken)
+        expect(self.page.locator(".player .err")).to_contain_text("Lecture impossible")
+        expect(self.page.locator(".player .err .btn", has_text="Réessayer")).to_be_visible()
+        self.page.evaluate("new Promise(function (done) { setTimeout(done, 0); })")                 # un tour de boucle : un rechargement serait déjà demandé
+        self.assertEqual(asked, [])
+
+
+class TestVideoVolume(UiCase):
+    """Le volume de la vidéo : un bouton muet et un curseur sur ordinateur et tablette, gardés dans `videoVolume` (pas dans `volume`, celle de la musique), rétablis à chaque ouverture."""
+
+    @classmethod
+    def add_media(cls, root):
+        film = root / "srv" / "Films" / "Deux Voix (2024)" / "Deux Voix (2024).mkv"
+        film.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([fixtures.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=24:duration=60",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=60", "-f", "lavfi", "-i", "sine=frequency=880:duration=60",
+                        "-map", "0:v", "-map", "1:a", "-map", "2:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "12", "-c:a", "aac", "-ac", "2",
+                        "-metadata:s:a:0", "language=fre", "-metadata:s:a:1", "language=eng", str(film)], check=True)
+
+    VOLUME = "(() => { var v = document.querySelector('.player video'); return [Math.round(v.volume * 100) / 100, v.muted]; })()"
+
+    def begin(self, title):
+        entry = self.entries("films", title)[0]["id"]
+        self.open("#/play/" + entry)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        return entry
+
+    def volume(self):
+        return self.page.evaluate(self.VOLUME)
+
+    def pref(self, key):
+        return self.page.evaluate(f"JSON.parse(localStorage.getItem('hub.{key}'))")
+
+    def new_source(self):
+        """Attend que la vidéo ait changé de source depuis `mark_source`, puis qu'elle joue."""
+        self.page.wait_for_function("document.querySelector('.player video').src !== window.src0", timeout=15000)
+        self.wait_playing()
+
+    def mark_source(self):
+        self.page.evaluate("window.src0 = document.querySelector('.player video').src")
+
+    def pick(self, button, option):
+        self.page.locator(".player .btn", has_text=button).click()
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt", has_text=option).click()
+        self.page.wait_for_selector(".veil", state="detached")
+
+    def test_the_slider_sets_the_volume_which_survives_a_new_audio_track_and_a_new_quality(self):
+        self.begin("Deux Voix")
+        self.page.evaluate("window.loads = 0; document.querySelector('.player video').addEventListener('loadstart', function () { window.loads++; })")
+        self.page.locator(".player .vol").fill("0.3")
+        self.assertEqual(self.volume(), [0.3, False])
+        self.assertEqual(self.page.evaluate("window.loads"), 0)                         # le film n'est pas relancé
+        self.mark_source()
+        self.page.locator(".player .btn", has_text="Audio").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt").nth(1).click()
+        self.new_source()
+        self.assertEqual(self.volume(), [0.3, False])
+        self.mark_source()
+        self.pick("Qualité", "720p")
+        self.new_source()
+        self.assertEqual(self.volume(), [0.3, False])
+        self.assertEqual(self.page.locator(".player .vol").input_value(), "0.3")
+
+    def test_with_converted_sound_the_volume_survives_a_jump(self):
+        self.begin("Long")
+        self.assertEqual(self.page.inner_text(".player .pill"), "Son converti")
+        self.page.locator(".player .vol").fill("0.4")
+        self.page.locator(".player .seekbar").click(position={"x": 960, "y": 5})         # le flux repart de là : une nouvelle source sur le même <video>
+        self.page.wait_for_function("(() => { var m = /&start=([0-9.]+)/.exec(document.querySelector('.player video').src); return m && +m[1] > 30; })()", timeout=15000)
+        self.wait_playing()
+        self.assertEqual(self.volume(), [0.4, False])
+
+    def test_the_setting_comes_back_with_the_next_video_and_leaves_the_music_alone(self):
+        self.page.add_init_script("if (!localStorage.getItem('hub.volume')) localStorage.setItem('hub.volume', JSON.stringify({ v: 0.8, m: false }))")
+        self.begin("Direct")
+        self.page.locator(".player .vol").fill("0.25")
+        self.page.locator(".player .btn[aria-label='Couper le son']").click()
+        self.assertEqual(self.volume(), [0.25, True])
+        self.until(lambda: self.pref("videoVolume") == {"v": 0.25, "m": True})                 # enregistrée à l'événement `volumechange`, qui suit de peu
+        self.assertEqual(self.pref("volume"), {"v": 0.8, "m": False})
+        entry = self.entries("films", "Deux Voix")[0]["id"]
+        self.page.evaluate(f"location.hash = '#/play/{entry}'")
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("window.Hub.current().el.querySelector('video').readyState >= 1", timeout=15000)
+        now = self.page.evaluate("(() => { var v = window.Hub.current().el.querySelector('video'); return [Math.round(v.volume * 100) / 100, v.muted]; })()")
+        self.assertEqual(now, [0.25, True])                                                   # rétabli à l'ouverture
+        self.assertEqual(self.page.evaluate("[document.getElementById('audio').volume, document.getElementById('audio').muted]"), [0.8, False])     # la musique garde le sien
+        self.assertEqual(self.page.evaluate("window.Hub.current().el.querySelector('.vl .btn').getAttribute('aria-label')"), "Remettre le son")
+
+    def test_m_mutes_and_brings_the_sound_back(self):
+        self.begin("Direct")
+        self.press("m")
+        self.assertEqual(self.volume()[1], True)
+        self.assertEqual(self.page.locator(".player .vl .btn").get_attribute("aria-label"), "Remettre le son")
+        self.press("M")
+        self.assertEqual(self.volume()[1], False)
+        self.assertEqual(self.page.locator(".player .vl .btn").get_attribute("aria-label"), "Couper le son")
+
+    def test_the_slider_is_reached_and_set_with_the_arrows_without_moving_in_the_film(self):
+        """Aux flèches : de « Avancer de 10 s » au bouton muet, puis au curseur ; gauche et droite y règlent le volume sans déplacer la lecture ; haut en sort, comme sur la barre de musique."""
+        self.begin("Direct")
+        self.page.locator(".player .vol").fill("0.5")
+        self.page.locator(".player .btn[aria-label='Avancer de 10 s']").focus()
+        self.press("ArrowRight")
+        self.assertEqual(self.focused(), "Couper le son")
+        self.press("ArrowRight")
+        self.assertEqual(self.focused(), "Volume")
+        before = self.video_time()
+        self.press("ArrowRight")
+        self.assertEqual(self.volume(), [0.55, False])
+        self.press("ArrowLeft", "ArrowLeft")
+        self.assertEqual(self.volume(), [0.45, False])
+        expect(self.page.locator(".player .osd")).to_be_hidden()                             # aucun saut annoncé
+        self.assertLess(self.video_time(), before + 3)
+        self.assertGreater(self.video_time(), before)
+        self.press("ArrowUp")
+        self.assertNotEqual(self.focused(), "Volume")                                      # haut et bas naviguent : le volume ne bouge pas
+        self.assertEqual(self.volume(), [0.45, False])
+
+    def test_nothing_on_a_phone_or_a_tv_and_both_on_a_tablet(self):
+        for device, shown in (("phone", False), ("tv", False), ("tablet", True)):
+            with self.subTest(device=device):
+                context = self.browser.new_context(viewport={"width": 1280, "height": 800})
+                self.addCleanup(context.close)
+                context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+                self.page = context.new_page()
+                self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                watch_requests(self, self.page)
+                self.begin("Direct")
+                self.assertEqual(self.page.locator(".player .vl").count(), 1 if shown else 0)
+                self.press("m")
+                self.assertEqual(self.volume()[1], shown)                                  # sans commande à l'écran, `m` ne coupe pas un son qu'on ne saurait plus remettre
+
+    def test_a_volume_the_browser_does_not_let_set_hides_the_slider_and_keeps_the_mute_button(self):
+        self.page.add_init_script("""(() => {          // iPhone, iPad : `volume` ne change pas, il reste à 1
+            Object.defineProperty(HTMLMediaElement.prototype, 'volume', { configurable: true, get: function () { return 1; }, set: function () {} });
+        })()""")
+        self.begin("Direct")
+        expect(self.page.locator(".player .vol")).to_be_hidden()
+        mute = self.page.locator(".player .vl .btn")
+        expect(mute).to_be_visible()
+        mute.click()
+        self.assertEqual(self.volume(), [1, True])
+        expect(mute).to_have_attribute("aria-label", "Remettre le son")
 
 
 class TestNextFilmOfASaga(UiCase):
@@ -1044,8 +1315,9 @@ class TestNextFilmOfASaga(UiCase):
         self.play(self.first)
         self.page.keyboard.press("Escape")
         self.shown(self.sheet)
-        self.page.evaluate("h => { location.hash = h; }", "#/play/" + self.first)
+        self.view(".actions .btn.primary").click()                                                  # « Lecture » sur la fiche
         self.shown("#/play/" + self.first)
+        self.wait_playing()
         self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.play(); v.currentTime = v.duration - 0.4; })()")
         expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
         self.back_to_the_panel()

@@ -90,22 +90,26 @@
     var bSpeed = H.button(H.t('Vitesse'), 'speed', { class: 'spd', 'aria-label': H.t('Vitesse de lecture : {rate}', { rate: H.speedLabel(1) }), onclick: pickSpeed });
     var bFull = H.button('', 'full', { 'aria-label': H.t('Plein écran'), onclick: fullscreen });
     var bBack = H.button('', 'back', { 'aria-label': H.t('Retour'), onclick: function () { H.back('#/'); } });
+    // Le volume sur ordinateur et tablette ; sur téléphone et télé, les boutons de l'appareil ou de la télécommande s'en chargent. Il tient d'une source à l'autre (piste, qualité, saut) : c'est l'élément qui le garde.
+    var volume = H.device === 'pc' || H.device === 'tablet' ? H.volume(video, 'videoVolume') : null;
     var ctl = h('div', { class: 'ctl' },
       h('div', { class: 'top' }, bBack, h('div', { class: 'txt' }, title, sub), pill),
       h('div', { class: 'bottom' }, h('div', { class: 'times' }, tCur, tEnd), seekbar,
-        h('div', { class: 'btns' }, playBtn, bRew, bFwd, h('span', { class: 'sp' }), bSpeed, bChapters, bAudio, bSubs, bQual, bNext, bFull)));
+        h('div', { class: 'btns' }, playBtn, bRew, bFwd, volume && volume.el, h('span', { class: 'sp' }), bSpeed, bChapters, bAudio, bSubs, bQual, bNext, bFull)));
     var err = h('div', { class: 'err', hidden: true });
     var el = h('section', { class: 'player idle' }, video, subPic, subBox, spin, osd, ctl, bSkip, err);
 
     var plan = null, base = 0, level = 0, firstPlan = true, closing = false, pending = null, pendingTimer = null, hideTimer = null, tickTimer = null, reportTimer = null, lastReport = 0;
     var steps = 0, stepsTimer = null, audioIdx = null, subs = { cues: [], sel: '', pgs: null, shown: null }, subText = '';
+    var asleep = false, kept = null, hold = false;          // mis de côté (voir `parked`) : la vidéo n'a plus de source, `kept` garde la position ; `hold` : la prochaine source s'ouvre en pause
+    var aimed = null, stale = false;          // `aimed` : la position qu'un départ encore en route doit atteindre ; `stale` : rouvert par Retour, il n'a pas rejoué, sa position n'est plus à écrire
     var speed = 1, offered = false;          // `offered` : le film est fini et le panneau propose le suivant de sa saga
     var skipNow = null, skipShown = '', skipped = {};          // le chapitre que le bouton propose, ce qu'il affiche, et les chapitres déjà passés (par début : un nouveau plan refait les objets)
     if (carried && carried.id === id) setSpeed(carried.rate);
     carried = null;
 
     function q() { return QUALITIES[H.pref('quality')] || QUALITIES.auto; }
-    function cur() { var t = video.currentTime || 0; return plan && !plan.seekable ? base + t : t; }
+    function cur() { if (kept !== null) return kept; var t = video.currentTime || 0; return plan && !plan.seekable ? base + t : t; }
     function dur() { return (plan && plan.duration) || video.duration || 0; }
     function here() { return pending !== null ? pending : cur(); }          // la position affichée : celle qu'on est en train de choisir, sinon celle du film
     function chapters() { return (plan && plan.chapters) || []; }
@@ -135,6 +139,7 @@
     var attaching = 0;
     function attach(at) {
       at = Math.max(0, Math.min(at || 0, Math.max(0, dur() - 2)));
+      aimed = at;
       var turn = ++attaching;
       if (plan.seekable || plan.mode !== 'remux' || at <= 0) { begin(at); return; }
       spin.hidden = false;
@@ -143,14 +148,16 @@
       });
     }
     function begin(at) {
+      if (asleep) { kept = at; return; }          // le plan est arrivé après le départ : on retient seulement où commencer
+      kept = null; aimed = null;
       base = plan.seekable ? 0 : at;
       video.src = plan.seekable ? plan.url : plan.url + '&start=' + at.toFixed(3);
       if (plan.seekable && at > 0) {
         var once = function () { video.removeEventListener('loadedmetadata', once); try { video.currentTime = at; } catch (e) { /* tant pis */ } };
         video.addEventListener('loadedmetadata', once);
       }
-      var p = video.play();
-      if (p && p.catch) p.catch(function () { show(true); H.focus.set(playBtn, true); });
+      if (hold) hold = false;
+      else { var p = video.play(); if (p && p.catch) p.catch(function () { show(true); H.focus.set(playBtn, true); }); }
       paintTime();
     }
     // Le panneau posé sur l'image : tant qu'il est là, les touches du lecteur ne répondent plus (voir onKey), le focus est sur `first`.
@@ -175,7 +182,7 @@
     }
     // Si le lecteur refuse ce que le serveur lui donne, on descend d'un cran : conteneur converti, puis image convertie.
     video.addEventListener('error', function () {
-      if (closing || !plan) return;
+      if (closing || !plan || asleep) return;
       var at = cur();
       if (level < 2 && plan.mode !== 'transcode') {
         level++;
@@ -189,7 +196,7 @@
       }, function () { showError(H.t('Le serveur ne répond plus.')); });
     });
     video.addEventListener('waiting', function () { spin.hidden = false; });
-    video.addEventListener('playing', function () { spin.hidden = true; paintPlay(); schedule(); });
+    video.addEventListener('playing', function () { stale = false; spin.hidden = true; paintPlay(); schedule(); });
     video.addEventListener('canplay', function () { spin.hidden = true; });
     video.addEventListener('pause', function () { paintPlay(); show(true); report(); });
     video.addEventListener('timeupdate', paintTime);
@@ -216,6 +223,7 @@
     function commit(t) {
       pending = null;
       t = Math.max(0, Math.min(t, Math.max(0, dur() - 1)));
+      stale = false;          // une position choisie, même en pause, est à retenir
       Object.keys(skipped).forEach(function (start) { if (t < +start) delete skipped[start]; });          // on demande à revenir avant un chapitre passé : il sera proposé de nouveau
       spin.hidden = false;
       if (plan.seekable) { try { video.currentTime = t; } catch (e) { /* tant pis */ } paintTime(); }
@@ -249,7 +257,7 @@
       clearTimeout(flash.t); flash.t = setTimeout(function () { osd.hidden = true; }, 1100);
     }
     function report(done) {
-      if (!plan) return;
+      if (!plan || stale) return;
       var t = cur();
       if (!done && t < 20) return;
       lastReport = Date.now();
@@ -392,6 +400,28 @@
       if (text !== subText) { subText = text; H.clear(subBox); if (text) subBox.appendChild(cueNodes(text)); }
     }, 200);
     reportTimer = setInterval(function () { if (!video.paused && Date.now() - lastReport > 9000) report(); }, 10000);
+    // Mis de côté (quitté vers la fiche quand rien n'était derrière lui, Retour y revient) : la position est enregistrée, la vidéo se tait et lâche sa source, ce qui ferme le flux converti côté serveur.
+    // Un film fini, ou un panneau posé sur l'image (le suivant d'une saga, « Lecture impossible ») : rien ne se lit, il est gardé tel quel et Retour y retrouve le panneau.
+    function parked() {
+      if (closing || asleep || !err.hidden || video.ended) return;
+      clearTimeout(pendingTimer);
+      if (plan) kept = pending !== null ? pending : aimed !== null ? aimed : cur();          // un départ en remux encore attendu : c'est sa cible qu'on garde, pas 0
+      pending = null; aimed = null; asleep = true; attaching++;          // `attaching` : ce départ-là ne s'ouvrira pas
+      report();
+      stale = true;          // c'est écrit ; rien d'autre ne s'écrira avant que le film rejoue (ou qu'on choisisse une position)
+      video.pause(); video.removeAttribute('src'); video.load();
+      paintPlay();          // `load()` a retiré l'événement `pause` encore en file : l'icône ne suivrait pas
+    }
+    // Rouvert par Retour : au même endroit, en pause, la lecture reprend quand on la demande. Rouvert par « Lecture » sur la fiche (`ahead`) : il repart de là, en lecture.
+    function wake(ahead) {
+      if (!asleep) return;
+      asleep = false;
+      H.audio.pause();
+      show(true); paintPlay();
+      if (!ahead) H.focus.set(playBtn, true);
+      hold = !ahead;          // aussi pour un plan encore attendu : il s'ouvrira de la même façon
+      if (kept !== null && plan) attach(kept);
+    }
     // Passer à l'épisode suivant vaut « vu » ; quitter un film pour le suivant de sa saga ne dit pas qu'on l'a fini : il reste à reprendre.
     function goNext() { if (plan && plan.next) { report(!plan.next.saga); carry(); H.go('#/play/' + plan.next.id, true); } }
 
@@ -404,6 +434,7 @@
       if (k === 'MediaPlayPause') { toggle(); eat(e); return; }
       if (k === 'MediaTrackNext') { goNext(); eat(e); return; }
       if (k === 'f' || k === 'F') { fullscreen(); eat(e); return; }
+      if ((k === 'm' || k === 'M') && volume) { volume.toggle(); show(); eat(e); return; }
       var inControls = !ctl.hidden && ctl.contains(document.activeElement), onSkip = document.activeElement === bSkip;
       if (!inControls) {                     // personne n'est sur une commande : les flèches pilotent directement la lecture, et haut ou bas va d'abord au bouton de saut s'il est affiché
         if (k === 'ArrowLeft' || k === 'ArrowRight') { seekBy(k === 'ArrowLeft' ? -1 : 1); eat(e); }
@@ -431,7 +462,8 @@
     return {
       el: el, full: true, nav: '#/play',
       lib: '',
-      shown: function (fresh) { if (!fresh) setSpeed(1); show(); },          // un lecteur laissé en réserve puis rouvert (Lecture depuis la fiche) : c'est une nouvelle ouverture, elle repart à 1×
+      shown: function (fresh, ahead) { if (!fresh) { setSpeed(1); wake(ahead); } show(); },          // un lecteur laissé en réserve puis rouvert (Lecture depuis la fiche) : c'est une nouvelle ouverture, elle repart à 1×
+      parked: parked,
       onBack: function () {
         if (offered) { toSheet(); return true; }
         if (H.routed <= 1 && plan) { location.hash = '#/i/' + plan.item; return true; }
