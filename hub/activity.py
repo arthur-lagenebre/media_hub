@@ -40,7 +40,7 @@ CAPS_LISTS = ("video", "audio", "containers")           # ce que lit `probe.plan
 CAPS_NUMBERS = {"channels": 32, "height": 8640}
 WORD_RE = re.compile(r"[\w.+:-]{1,%d}" % CAPS_WORD, re.ASCII)
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-BROWSERS = (("Edg", "Edge"), ("OPR", "Opera"), ("FxiOS", "Firefox"), ("Firefox", "Firefox"), ("CriOS", "Chrome"), ("Chrome", "Chrome"), ("Version", "Safari"))
+BROWSERS = (("Edg", "Edge"), ("OPR", "Opera"), ("FxiOS", "Firefox"), ("Firefox", "Firefox"), ("CriOS", "Chrome"), ("Chrome", "Chrome"), ("Version", "Safari"), ("VLC", "VLC"))
 SYSTEMS = (("Android", "Android"), ("iPhone", "iPhone"), ("iPad", "iPad"), ("CrKey", "Chromecast"), ("Tizen", "Tizen"), ("Web0S", "webOS"), ("Windows", "Windows"), ("Macintosh", "macOS"), ("Linux", "Linux"))
 
 

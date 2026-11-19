@@ -3646,5 +3646,193 @@ class TestRights(AccountsCase):
         self.assertTrue(all(r == {"view": True, "play": True, "download": True} for r in mine["rights"].values()))
 
 
+class TestVlcToken(AccountsCase):
+    """« Ouvrir dans VLC » : POST /api/play/<id>/vlc rend une URL relative dont le jeton ne vaut que pour ce fichier, en lecture, 24 h ; les droits du compte restent vérifiés à chaque requête."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice, self.bob = self.new_user("alice"), self.new_user("bob")
+        self.inception, self.film_files = entry_of(self.admin, "films", "Inception")
+        self.film = self.film_files[0]["id"]
+        self.naruto, self.volumes = entry_of(self.admin, "livres", "Naruto")
+        self.discovery, self.tracks = entry_of(self.admin, "musique", "Discovery")
+        self.dark, self.episodes = entry_of(self.admin, "series", "Dark")
+
+    def ask(self, client, entry):
+        status, body = client.json(f"/api/play/{entry}/vlc", {})
+        self.assertEqual(status, 200, body)
+        return body
+
+    def url(self, client, entry=None):
+        return self.ask(client, entry or self.film)["url"]
+
+    def token_of(self, url):
+        return url.split("?token=")[1]
+
+    def row(self, name):
+        return accounts.by_name(self.hub.db, name)
+
+    def vlc(self, name, entry=None, now=None):
+        """Un jeton VLC fabriqué à la main pour `name` (l'horloge se règle par `now`)."""
+        return accounts.vlc_token(self.hub.secret, self.row(name), entry or self.film, now)
+
+    def play(self, url, **kw):
+        return self.anon.get(url, **kw)[0]
+
+    def test_the_route_gives_a_relative_url_with_a_scoped_token_and_the_resume_position(self):
+        self.watch(self.alice, self.film, 600)
+        body = self.ask(self.alice, self.film)
+        self.assertEqual(sorted(body), ["resume", "title", "url"])
+        self.assertEqual((body["resume"], body["title"]), (600, self.film_files[0]["title"]))
+        self.assertRegex(body["url"], rf"^/media/{self.film}/file\?token=[a-z0-9]+\.{self.film}\.[0-9]{{10}}\.[0-9a-f]{{64}}$")
+        self.assertEqual(self.token_of(body["url"]).split(".")[0], self.alice.account["id"])
+        expires = int(self.token_of(body["url"]).split(".")[2])
+        self.assertAlmostEqual(expires, time.time() + accounts.VLC_SECONDS, delta=30)
+        self.assertEqual(accounts.VLC_SECONDS, 24 * 3600)
+        self.assertEqual(self.ask(self.bob, self.film)["resume"], 0)                    # la reprise est celle du compte qui demande
+        self.watch(self.bob, self.film, 3)
+        self.assertEqual(self.ask(self.bob, self.film)["resume"], 0)                    # trop près du début : on repart de zéro
+
+    def test_a_series_episode_is_titled_with_its_show(self):
+        episode = self.episodes[0]
+        self.assertEqual(self.ask(self.alice, episode["id"])["title"], f"Dark · {episode['title']}")
+
+    def test_the_token_plays_its_video_with_range_and_head(self):
+        url = self.url(self.alice)
+        self.assertEqual(self.play(url), 200)
+        status, headers, body = self.anon.get(url, headers={"Range": "bytes=0-9"})
+        self.assertEqual((status, len(body), headers["Accept-Ranges"]), (206, 10, "bytes"))
+        self.assertEqual(self.anon.request("HEAD", url)[0], 200)
+        self.assertEqual(self.anon.get(url, headers={"Range": "bytes=-5"})[0], 206)
+
+    def test_the_token_is_refused_on_another_entry_and_with_download(self):
+        token = self.token_of(self.url(self.alice))
+        other = self.episodes[0]["id"]
+        self.assertEqual(self.play(f"/media/{other}/file?token={token}"), 302)
+        self.assertEqual(self.play(f"/media/{self.film}/file?token={token}&download=1"), 302)
+        for key in ("download=", "%64ownload=1", "download=0"):
+            self.assertEqual(self.play(f"/media/{self.film}/file?token={token}&{key}"), 302, key)
+        self.assertEqual(self.anon.request("POST", f"/media/{self.film}/file?token={token}", body={})[0], 302)       # ni en écriture
+        self.assertEqual(self.play(f"/media/{self.film}/stream?token={token}"), 302)                    # ni sur le flux converti
+        self.assertEqual(self.play(f"/media/{self.film}/file/../{other}/file?token={token}"), 302)
+
+    def test_the_token_is_refused_on_every_other_route(self):
+        token = self.token_of(self.url(self.alice))
+        for path in (f"/img/item/{self.inception}", f"/img/entry/{self.film}", f"/book/{self.volumes[0]['id']}/page/0"):
+            self.assertEqual(self.play(f"{path}?token={token}"), 302, path)
+        for path in (f"/api/subs/{self.film}/e0.vtt", "/api/state", "/api/library/films", f"/api/item/{self.inception}", f"/api/play/{self.film}"):
+            self.assertEqual(self.play(f"{path}?token={token}"), 401, path)
+        self.assertEqual(self.anon.request("POST", f"/api/play/{self.film}/vlc?token={token}", body={})[0], 401)      # il ne sert pas à en fabriquer un autre
+        self.assertEqual(self.anon.request("POST", f"/api/cleanup?token={token}", body={"apply": True})[0], 401)
+        self.assertEqual(self.anon.get("/api/state", headers={"Authorization": f"Bearer {token}"})[0], 401)
+        self.assertEqual(Client(self.run_.port, f"hub={token}").get("/api/state")[0], 401)
+
+    def test_the_other_tokens_are_not_vlc_tokens_and_the_other_way_round(self):
+        db, secret, row = self.hub.db, self.hub.secret, self.row("alice")
+        vlc = self.vlc("alice")
+        media = self.alice.session["media_token"]
+        for other in (self.hub.session_token(row), media):
+            self.assertIsNone(accounts.user_for_vlc_token(db, secret, other, self.film), other)
+        self.assertIn(self.play(f"/media/{self.film}/file?token={media}"), (200, 206))                 # le jeton de média du compte garde son rôle
+        self.assertEqual(self.play(f"/media/{self.film}/file?token={self.hub.session_token(row)}"), 302)
+        self.assertIsNone(accounts.user_for_token(db, secret, vlc, "media"))
+        self.assertIsNone(accounts.user_for_token(db, secret, vlc, "session"))
+        self.assertEqual(accounts.user_for_vlc_token(db, secret, vlc, self.film)["id"], row["id"])
+        self.assertIsNone(accounts.user_for_vlc_token(db, secret, vlc, self.episodes[0]["id"]))
+
+    def test_the_token_expires_after_24_hours(self):
+        now = time.time()
+        db, secret = self.hub.db, self.hub.secret
+        token = self.vlc("alice", now=now)
+        self.assertEqual(accounts.user_for_vlc_token(db, secret, token, self.film, now + accounts.VLC_SECONDS - 1)["name"], "alice")
+        self.assertIsNone(accounts.user_for_vlc_token(db, secret, token, self.film, now + accounts.VLC_SECONDS + 1))
+        self.assertIsNone(accounts.user_for_vlc_token(db, secret, token, self.film, now + accounts.VLC_SECONDS))
+        self.assertEqual(self.play(f"/media/{self.film}/file?token={self.vlc('alice', now=now - 23 * 3600)}"), 200)
+        self.assertEqual(self.play(f"/media/{self.film}/file?token={self.vlc('alice', now=now - 25 * 3600)}"), 302)       # émis il y a 25 h : périmé
+
+    def test_a_token_changed_by_one_character_is_refused(self):
+        token = self.token_of(self.url(self.alice))
+        uid, entry, expires, mac = token.split(".")
+        flipped = lambda text, at: text[:at] + ("0" if text[at] != "0" else "1") + text[at + 1:]
+        changed = [f"{uid}.{entry}.{expires}.{flipped(mac, at)}" for at in (0, 31, 63)]
+        changed += [f"{uid}.{entry}.{int(expires) + 1}.{mac}", f"{uid}.{entry}.{int(expires) - 1}.{mac}", f"{self.bob.account['id']}.{entry}.{expires}.{mac}",
+                    f"{uid}.{entry}.{expires}.{mac}0", f"{uid}.{entry}.{expires}.{mac[:-1]}", f"{uid}.{entry}.{expires}.{mac.upper()}", f"{uid}.{entry}.{expires}", f"{uid}.{expires}.{mac}"]
+        for bad in changed:
+            self.assertEqual(self.play(f"/media/{self.film}/file?token={bad}"), 302, bad)
+        self.assertEqual(self.play(f"/media/{self.film}/file?token={token}"), 200)
+
+    def test_a_password_change_cancels_the_token(self):
+        url = self.url(self.alice)
+        self.assertEqual(self.play(url), 200)
+        self.assertEqual(self.admin.json(f"/api/user/{self.alice.account['id']}/password", {"password": "nouveau-mdp-1"})[0], 200)
+        self.assertEqual(self.play(url), 302)
+        self.assertEqual(self.play(self.url(self.bob)), 200)                  # les autres comptes ne bougent pas
+
+    def test_signing_out_the_other_devices_cancels_the_token(self):
+        url = self.url(self.bob)
+        self.assertEqual(self.play(url), 200)
+        self.assertEqual(self.bob.json("/api/me/signout-others", {"current": self.PASSWORD})[0], 200)
+        self.assertEqual(self.play(url), 302)
+
+    def test_deleting_the_account_cancels_the_token(self):
+        url = self.url(self.alice)
+        self.assertEqual(self.admin.json(f"/api/user/{self.alice.account['id']}/delete", {})[0], 200)
+        self.assertEqual(self.play(url), 302)
+
+    def test_taking_the_play_right_away_cuts_the_access_and_giving_it_back_restores_it(self):
+        url = self.url(self.alice)
+        rights = f"/api/user/{self.alice.account['id']}/rights"
+        self.assertEqual(self.play(url), 200)
+        self.assertEqual(self.admin.json(rights, {"rights": {"films": {"play": False}}})[0], 200)
+        self.assertEqual(self.anon.get(url)[0], 403)                          # le jeton est bon, le droit manque
+        self.assertEqual(self.anon.get(url, headers={"Range": "bytes=0-9"})[0], 403)
+        self.assertEqual(self.admin.json(rights, {"rights": {"films": {"play": True}}})[0], 200)
+        self.assertEqual(self.play(url), 200)
+        self.assertEqual(self.admin.json(rights, {"rights": {"films": {"view": False}}})[0], 200)
+        self.assertEqual(self.anon.get(url)[0], 403)
+
+    def test_an_account_without_the_play_right_gets_nothing(self):
+        self.assertEqual(self.admin.json(f"/api/user/{self.alice.account['id']}/rights", {"rights": {"films": {"play": False}}})[0], 200)
+        self.assertEqual(self.alice.json(f"/api/play/{self.film}/vlc", {}), (403, {"error": "lecture non autorisée"}))
+        self.assertEqual(self.alice.json(f"/api/play/{self.episodes[0]['id']}/vlc", {})[0], 200)          # les autres bibliothèques restent ouvertes
+        self.assertEqual(self.anon.json(f"/api/play/{self.film}/vlc", {})[0], 401)
+
+    def test_only_a_video_is_offered_to_vlc(self):
+        for entry in (self.tracks[0]["id"], self.volumes[0]["id"]):
+            self.assertEqual(self.alice.json(f"/api/play/{entry}/vlc", {}), (400, {"error": "ce fichier n'est pas une vidéo"}), entry)
+        self.assertEqual(self.alice.json("/api/play/inconnu/vlc", {})[0], 404)
+
+    def test_the_route_is_a_post_and_keeps_the_connection_usable(self):
+        self.assertEqual(self.alice.get(f"/api/play/{self.film}/vlc")[0], 404)
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        headers = {"Authorization": f"Bearer {self.alice.token}", "Content-Type": "application/json"}
+        for _ in range(2):                                                    # avec un corps, deux fois sur la même connexion
+            conn.request("POST", f"/api/play/{self.film}/vlc", body=json.dumps({"x": 1}), headers=headers)
+            response = conn.getresponse()
+            self.assertEqual((response.status, sorted(json.loads(response.read()))), (200, ["resume", "title", "url"]))
+
+    def test_the_token_is_masked_in_the_error_log(self):
+        url = self.url(self.alice)
+        token = self.token_of(url)
+        with mock.patch("hub.server.app.print") as printed, mock.patch.object(self.hub, "path_of", side_effect=RuntimeError("boum")):
+            self.anon.get(url)
+        logged = " ".join(str(c.args[0]) for c in printed.call_args_list)
+        self.assertIn("boum", logged)
+        self.assertIn("token=***", logged)
+        self.assertNotIn(token, logged)
+
+    def test_an_open_server_gives_an_url_without_a_token(self):
+        other = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, other, True)
+        run = Running(other, password="")
+        self.addCleanup(run.stop)
+        api = Client(run.port)
+        _, entries = entry_of(api, "films", "Inception")
+        status, body = api.json(f"/api/play/{entries[0]['id']}/vlc", {})
+        self.assertEqual((status, body["url"], body["resume"]), (200, f"/media/{entries[0]['id']}/file", 0))
+        self.assertEqual(api.get(body["url"])[0], 200)
+
+
 if __name__ == "__main__":
     unittest.main()

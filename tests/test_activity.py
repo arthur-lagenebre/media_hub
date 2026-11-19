@@ -263,6 +263,7 @@ class TestDecisions(unittest.TestCase):
         safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1"
         self.assertEqual([activity.short_agent(a) for a in (chrome, edge, phone, safari)], ["Chrome 120 · Windows", "Edge 120 · Windows", "Chrome 120 · Android", "Safari 17 · iPhone"])
         self.assertEqual(activity.short_agent("ExoPlayerLib/2.18.7"), "ExoPlayerLib/2.18.7")
+        self.assertEqual(activity.short_agent("VLC/3.0.20 LibVLC/3.0.20"), "VLC 3")
         self.assertEqual((activity.short_agent(""), activity.short_agent(None)), ("", ""))
 
 

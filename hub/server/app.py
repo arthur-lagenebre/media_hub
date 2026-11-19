@@ -157,6 +157,10 @@ class Hub:
         une URL de pochette qui fuit ne donne donc ni le nettoyage ni le scan. Il désigne le compte : ses droits (voir, télécharger) s'appliquent à la requête."""
         return accounts.media_token(self.secret, row)
 
+    def vlc_token(self, row, entry_id):
+        """Le jeton VLC du compte `row` pour ce seul fichier, 24 h : voir accounts.vlc_token. Il ne vaut que sur `/media/<entrée>/file` (voir Handler.vlc_user)."""
+        return accounts.vlc_token(self.secret, row, entry_id)
+
     def path_of(self, entry):
         lib = self.cfg.library(entry["lib"])
         if lib is None:
@@ -442,8 +446,17 @@ class Handler(BaseHTTPRequestHandler):
             return True
         if path.startswith(("/media/", "/img/", "/book/", "/api/subs/")) and "token" in query:
             row = accounts.user_for_token(self.hub.db, self.hub.secret, query["token"], "media")
-            self.user = accounts.public(row) if row is not None else None
+            self.user = accounts.public(row) if row is not None else self.vlc_user(path, query["token"])
         return self.user is not None
+
+    def vlc_user(self, path, token):
+        """Le compte d'un jeton VLC (`?token=`), seulement sur `/media/<son entrée>/file`, en GET ou HEAD et sans `download` ; None partout ailleurs. Ses droits restent ceux du compte : `entry_of` les vérifie à chaque requête."""
+        found = re.fullmatch(r"/media/(\w+)/file", path)
+        asked = {k for k, _ in parse_qsl(urlsplit(self.path).query, keep_blank_values=True)}         # même une clé `download` vide, ou encodée (`%64ownload`), est refusée
+        if found is None or self.command not in ("GET", "HEAD") or "download" in asked:
+            return None
+        row = accounts.user_for_vlc_token(self.hub.db, self.hub.secret, token, found.group(1))
+        return accounts.public(row) if row is not None else None
 
     def can(self, lib_id, perm="view"):
         """Le compte de la requête peut-il `view` (voir), `play` (lire en ligne) ou `download` (télécharger) cette bibliothèque ? Un administrateur le peut toujours ; sans rien dans `rights`, tout est permis."""
@@ -2510,6 +2523,19 @@ def api_play_start(h, m, q):
     at = max(0.0, query_number(q, "t", float, 0.0))
     lib, path = hub.path_of(entry)
     h.send_json({"start": prober.keyframe_at(hub.cfg.ffprobe, path, at)})
+
+
+@route("POST", r"/api/play/(\w+)/vlc")
+def api_play_vlc(h, m, q):
+    """Pour « Ouvrir dans VLC » : `{url, title, resume}`. `url` est relative (`/media/<id>/file?token=<jeton VLC>`, le navigateur y met son adresse), sans jeton quand le serveur est ouvert ; `resume`, la position à reprendre en secondes."""
+    h.body_json()
+    entry = entry_of(h, m.group(1), "play")
+    if entry["kind"] != "video":
+        raise HttpError(400, "ce fichier n'est pas une vidéo")
+    url = f"/media/{entry['id']}/file"
+    if h.hub.auth():
+        url += "?token=" + h.hub.vlc_token(accounts.by_id(h.hub.db, h.user["id"]), entry["id"])
+    h.send_json({"url": url, "title": entry_label(show_title(h.hub, entry), entry), "resume": resume_position(h.hub, h.user["id"], entry)})
 
 
 @route("GET", r"/media/(\w+)/file")
