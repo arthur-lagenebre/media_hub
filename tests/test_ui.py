@@ -1018,6 +1018,35 @@ class TestVideoPlayer(UiCase):
         self.page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
         self.assertIn("Lecture impossible", self.page.inner_text(".player .err"))
 
+    def test_a_typed_address_brings_back_a_parked_player_playing(self):
+        """L'adresse du lecteur mis de côté, tapée ou collée dans le navigateur, est une demande de lecture ; le bouton Retour du navigateur, lui, le rouvre en pause."""
+        entry, sheet = self.park_in_the_middle("Direct")
+        self.page.go_back()                                                                          # le Retour du navigateur, sans la touche de l'application
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("Hub.current().el.querySelector('video').readyState >= 2", timeout=15000)
+        self.assertTrue(self.page.evaluate("Hub.current().el.querySelector('video').paused"))
+        self.page.go_forward()
+        self.shown(sheet)
+        self.page.goto(self.base + "/#/play/" + entry)                                              # même document : seul le fragment change, comme une adresse tapée
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("(() => { var v = Hub.current().el.querySelector('video'); return v.currentTime > 20 && !v.paused; })()", timeout=15000)
+
+    def test_a_player_left_on_its_error_panel_comes_back_to_it_without_reloading(self):
+        """« Lecture impossible » : rien ne se lit. Quitté puis retrouvé par Retour, le lecteur montre le même panneau, sans relancer la source (« Réessayer » le fait)."""
+        broken = self.entries("films", "Sans Etiquette")[0]["id"]
+        self.open("#/play/" + broken)
+        self.page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
+        self.press("Escape")
+        self.page.wait_for_function("Hub.current().hash.indexOf('#/play/') < 0")
+        asked = []
+        self.page.on("request", lambda r: asked.append(r.url) if f"/media/{broken}/" in r.url or f"/api/play/{broken}" in r.url else None)
+        self.press("Escape")
+        self.shown("#/play/" + broken)
+        expect(self.page.locator(".player .err")).to_contain_text("Lecture impossible")
+        expect(self.page.locator(".player .err .btn", has_text="Réessayer")).to_be_visible()
+        self.page.evaluate("new Promise(function (done) { setTimeout(done, 0); })")                 # un tour de boucle : un rechargement serait déjà demandé
+        self.assertEqual(asked, [])
+
 
 class TestVideoVolume(UiCase):
     """Le volume de la vidéo : un bouton muet et un curseur sur ordinateur et tablette, gardés dans `videoVolume` (pas dans `volume`, celle de la musique), rétablis à chaque ouverture."""

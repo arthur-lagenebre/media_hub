@@ -660,7 +660,7 @@
     try { if (entry.view.destroy) entry.view.destroy(); } catch (e) { console.error(e); }
     if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el);
   }
-  // `ahead` : on y va par une action de l'application (H.go, comme « Lecture » sur une fiche, ou un lien de la page, comme la carte « Reprendre »), pas par Retour.
+  // `ahead` : on y arrive par une entrée neuve de l'historique (un lien, H.go, une adresse tapée), pas par Retour ou Suivant.
   // Une page gardée de côté peut ne pas reprendre de la même façon (le lecteur : en lecture, ou en pause).
   function present(entry, fresh, ahead) {
     entry.el.style.display = '';
@@ -677,15 +677,20 @@
     }
     if (entry.view.shown) entry.view.shown(fresh, ahead);
   }
-  // L'adresse vers laquelle l'application vient d'envoyer : elle ne compte que si c'est bien celle où l'on arrive (une demande sans suite ne fait pas passer le Retour suivant pour une action).
-  var aheadTo = null;
-  function sameHash(a, b) {
-    try { return decodeURIComponent(a) === decodeURIComponent(b); } catch (e) { return a === b; }
+  // Chaque entrée de l'historique où l'on arrive est marquée (`history.state`) : y revenir, par le Retour de l'application, du navigateur ou de la télécommande, se reconnaît à sa marque.
+  // Une entrée neuve n'en a pas (état nul), qu'on y vienne par un lien, H.go ou une adresse tapée. Les fenêtres (`{ ov }`) sont des entrées déjà marquées.
+  function freshEntry() {
+    var state = null;
+    try { state = history.state; } catch (e) { return false; }
+    if (state) return false;
+    try { history.replaceState({ hub: 1 }, ''); } catch (e) { /* tant pis : cette entrée passera encore pour neuve */ }
+    return true;
   }
+  var resumed = null;          // une navigation suspendue par `leave()` puis acceptée : elle garde ce qu'elle était
   function onRoute() {
     var hash = location.hash || '#/';
-    var ahead = aheadTo !== null && sameHash(aheadTo, hash);
-    aheadTo = null;
+    var ahead = freshEntry();
+    if (resumed !== null) { ahead = resumed; resumed = null; }
     H.overlay.closeAll();
     var top = stack[stack.length - 1];
     if (top && top.hash === hash) return;
@@ -696,7 +701,7 @@
     if (ask) {
       H.confirm({ title: ask.title, lead: ask.lead, ok: ask.ok, danger: true,
         submit: function () { if (ask.accept) ask.accept(); return Promise.resolve(); },
-        done: function () { leaving = true; aheadTo = ahead ? hash : null; onRoute(); },
+        done: function () { leaving = true; resumed = ahead; onRoute(); },
         cancel: function () { H.replaceNext = false; location.replace(top.hash); } });
       return;
     }
@@ -716,14 +721,7 @@
     present(entry, true);
   }
   H.start = function () { window.addEventListener('hashchange', onRoute); onRoute(); };
-  // Un lien de l'application suivi (clic, ou Entrée / OK dessus) : l'adresse où il mène est une action, pas un Retour.
-  document.addEventListener('click', function (e) {
-    for (var n = e.target; n && n !== document; n = n.parentNode) {
-      if (n.tagName === 'A') { var href = n.getAttribute('href'); if (href && href.charAt(0) === '#') aheadTo = href; return; }
-    }
-  }, true);
   H.go = function (hash, replace) {
-    aheadTo = hash;
     if (replace) { H.replaceNext = true; location.replace(hash); } else location.hash = hash;
   };
   H.current = function () { return stack[stack.length - 1] || null; };

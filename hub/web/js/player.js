@@ -401,9 +401,9 @@
     }, 200);
     reportTimer = setInterval(function () { if (!video.paused && Date.now() - lastReport > 9000) report(); }, 10000);
     // Mis de côté (quitté vers la fiche quand rien n'était derrière lui, Retour y revient) : la position est enregistrée, la vidéo se tait et lâche sa source, ce qui ferme le flux converti côté serveur.
-    // Un film fini (le panneau du suivant de sa saga) ne lit plus rien : il est gardé tel quel, Retour y retrouve le panneau.
+    // Un film fini, ou un panneau posé sur l'image (le suivant d'une saga, « Lecture impossible ») : rien ne se lit, il est gardé tel quel et Retour y retrouve le panneau.
     function parked() {
-      if (closing || asleep || offered || video.ended) return;
+      if (closing || asleep || !err.hidden || video.ended) return;
       clearTimeout(pendingTimer);
       if (plan) kept = pending !== null ? pending : aimed !== null ? aimed : cur();          // un départ en remux encore attendu : c'est sa cible qu'on garde, pas 0
       pending = null; aimed = null; asleep = true; attaching++;          // `attaching` : ce départ-là ne s'ouvrira pas
