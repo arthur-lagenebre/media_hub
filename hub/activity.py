@@ -62,19 +62,32 @@ def clean_caps(caps):
     caps = caps if isinstance(caps, dict) else {}
     out = {}
     for key in CAPS_LISTS:
-        if isinstance(caps.get(key), list):
-            words = [word for word in caps[key] if isinstance(word, str) and WORD_RE.fullmatch(word)][:CAPS_ITEMS]
-            if words:
-                out[key] = words
+        words = caps_words(caps.get(key))
+        if words:
+            out[key] = words
     for key, top in CAPS_NUMBERS.items():
-        number = caps.get(key)
-        if isinstance(number, float) and number.is_integer():
-            number = int(number)
-        if isinstance(number, int) and not isinstance(number, bool) and 0 <= number <= top:
+        number = caps_number(caps.get(key), top)
+        if number is not None:
             out[key] = number
     if isinstance(caps.get("hdr"), bool):
         out["hdr"] = caps["hdr"]
     return out
+
+
+def caps_words(words):
+    """Les mots courts d'une liste de `caps`, en nombre borné ; rien si ce n'est pas une liste."""
+    if not isinstance(words, list):
+        return []
+    return [word for word in words if isinstance(word, str) and WORD_RE.fullmatch(word)][:CAPS_ITEMS]
+
+
+def caps_number(number, top):
+    """Un entier de `caps` entre 0 et `top` (un flottant entier compte), sinon None ; un booléen n'est pas un nombre."""
+    if isinstance(number, float) and number.is_integer():
+        number = int(number)
+    if isinstance(number, int) and not isinstance(number, bool) and 0 <= number <= top:
+        return number
+    return None
 
 
 def clean_why(why):
