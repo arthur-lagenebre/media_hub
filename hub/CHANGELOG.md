@@ -1,3 +1,8 @@
+## 0.44.0 — 2026-11-19
+- Dans une BD ou un manga, le zoom reste quand tu tournes la page : la suivante s'ouvre en haut, du côté où l'on commence à lire, et la précédente là où tu l'avais finie.
+- Zoomé, au doigt : quand l'image est déjà au bord, un appui sur ce côté ou un glissement vers ce côté tourne la page, sans revenir à 100 %.
+- Le zoom revient à 100 % quand tu rouvres le tome ou que la fenêtre change de taille.
+
 ## 0.43.0 — 2026-11-19
 - Sur PC, un bouton « Ouvrir dans VLC » sur la fiche d'un film ou d'une série, et dans le menu d'un épisode : il télécharge un petit fichier qui lance la vidéo dans VLC, à l'endroit où tu t'étais arrêté.
 - VLC lit directement les vidéos que le lecteur du navigateur doit convertir (4K HDR, par exemple), et l'avance rapide y est instantanée.

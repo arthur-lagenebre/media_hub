@@ -3026,6 +3026,7 @@ class TestReaderZoom(ReaderCase):
     @classmethod
     def add_media(cls, root):
         write_sized_cbz(root / "srv" / "Livres" / "BD" / "Loupe" / "Tome 01.cbz", [TALL] * 6, Series="Loupe", Number="1")
+        write_sized_cbz(root / "srv" / "Livres" / "Manga" / "Envers" / "Tome 01.cbz", [TALL] * 6, Series="Envers", Number="1")          # rangé dans « Manga » : de droite à gauche
 
     def setUp(self):
         super().setUp()
@@ -3138,28 +3139,83 @@ class TestReaderZoom(ReaderCase):
                           bottom: z.box.b <= z.stage.t + z.stage.h + 1, right: z.box.r <= z.stage.l + z.stage.w + 1}; }""")
                 self.assertEqual(edges, {"wider": True, "taller": True, "top": True, "left": True, "bottom": True, "right": True})
 
-    def test_a_click_on_a_side_does_not_turn_a_zoomed_page(self):
-        self.read("Loupe", double=False)
-        self.keys(("+", 150))
+    def scroll_to(self, side):
+        """Amène l'image zoomée au bord gauche ou droit (comme si on l'y avait fait défiler)."""
+        self.page.evaluate("s => { var st = document.querySelector('.reader .stage'); st.scrollLeft = s === 'gauche' ? 0 : st.scrollWidth; }", side)
+        self.until(lambda: self.corner()[0] == side)
+
+    def test_a_click_on_a_side_turns_a_zoomed_page_only_at_the_edge(self):
+        """Zoomé, un appui sur un côté montre la barre tant que l'image peut encore aller de ce côté ; au bord, il tourne la page, comme la flèche."""
+        self.read("Loupe", double=False, page=1)
+        self.keys(("+", 150), ("+", 200), ("+", 300))          # centrée : l'image peut aller des deux côtés
         for x in (40, 960):
             self.bar_shows(lambda: self.page.locator(".reader .stage").click(position={"x": x, "y": 350}))
-            self.assertEqual(self.label(), "Page 1 / 6")
-            self.wait_zoom(150)
+            self.assertEqual(self.label(), "Page 2 / 6")
+            self.wait_zoom(300)
+        self.hide_bar()
+        self.scroll_to("droite")
+        self.page.locator(".reader .stage").click(position={"x": 960, "y": 350})
+        self.turned_to("Page 3 / 6", 300, ("gauche", "haut"))
+        self.page.locator(".reader .stage").click(position={"x": 40, "y": 350})          # la nouvelle page s'ouvre au bord gauche : le côté gauche recule
+        self.turned_to("Page 2 / 6", 300, ("droite", "bas"))
+
+    def corner(self):
+        """Où en est le défilement de la page zoomée : (« gauche » ou « droite », « haut » ou « bas »), ou None sur un axe qui n'est à aucun bord."""
+        stage = self.geometry()["stage"]
+        side = "gauche" if stage["x"] <= 1 else "droite" if stage["x"] >= stage["mx"] - 1 else None
+        height = "haut" if stage["y"] <= 1 else "bas" if stage["y"] >= stage["my"] - 1 else None
+        return side, height
+
+    def turned_to(self, label, percent, corner):
+        """La page tournée garde le zoom et s'ouvre à ce coin."""
+        expect(self.page.locator(".reader .pg")).to_have_text(label)
+        self.wait_zoom(percent)
+        self.until(lambda: self.corner() == corner)
 
     def test_the_arrows_move_a_zoomed_page_then_turn_it_at_the_edge(self):
         self.read("Loupe", double=False)
         self.keys(("+", 150), ("+", 200), ("+", 300))
         self.push_to_edge("ArrowRight", "x")
         self.assertEqual(self.label(), "Page 1 / 6")
-        self.page.keyboard.press("ArrowRight")                 # déjà au bord : la page tourne, et revient à 100 %
-        expect(self.page.locator(".reader .pg")).to_have_text("Page 2 / 6")
-        self.wait_pages([1])
-        self.wait_zoom(100)
-        self.keys(("+", 150))
+        self.page.keyboard.press("ArrowRight")                 # déjà au bord : la page tourne, zoomée, et s'ouvre en haut à gauche, où l'on commence à lire
+        self.turned_to("Page 2 / 6", 300, ("gauche", "haut"))
         self.push_to_edge("ArrowDown", "y")
         self.assertEqual(self.label(), "Page 2 / 6")
         self.page.keyboard.press("ArrowDown")
-        expect(self.page.locator(".reader .pg")).to_have_text("Page 3 / 6")
+        self.turned_to("Page 3 / 6", 300, ("gauche", "haut"))
+
+    def test_a_zoomed_page_turned_back_opens_at_its_end(self):
+        """En revenant en arrière, on reprend la page précédente là où l'on avait fini de la lire : en bas à droite."""
+        self.read("Loupe", double=False, page=2)
+        self.keys(("+", 150), ("+", 200), ("+", 300))          # à 300 %, la page déborde aussi en largeur
+        self.page.evaluate("document.querySelector('.reader .stage').scrollLeft = 0")
+        self.until(lambda: self.corner()[0] == "gauche")
+        self.page.keyboard.press("ArrowLeft")                  # au bord gauche : page précédente
+        self.turned_to("Page 2 / 6", 300, ("droite", "bas"))
+
+    def test_a_zoomed_manga_page_opens_at_the_top_right(self):
+        """Un manga se lit de droite à gauche : la page suivante s'ouvre en haut à droite, la précédente en bas à gauche."""
+        self.read("Envers", double=False, page=1)
+        self.keys(("+", 150), ("+", 200), ("+", 300))
+        self.page.evaluate("document.querySelector('.reader .stage').scrollLeft = 0")
+        self.until(lambda: self.corner()[0] == "gauche")
+        self.page.keyboard.press("ArrowLeft")                  # de droite à gauche, la flèche gauche avance
+        self.turned_to("Page 3 / 6", 300, ("droite", "haut"))
+        self.page.evaluate("var s = document.querySelector('.reader .stage'); s.scrollLeft = s.scrollWidth")
+        self.until(lambda: self.corner()[0] == "droite")
+        self.page.keyboard.press("ArrowRight")                 # et la flèche droite recule
+        self.turned_to("Page 2 / 6", 300, ("gauche", "bas"))
+
+    def test_the_zoom_goes_back_to_100_when_the_window_changes_or_the_book_reopens(self):
+        entry = self.read("Loupe", double=False)
+        self.keys(("+", 150))
+        self.page.set_viewport_size({"width": 900, "height": 700})
+        self.wait_zoom(100)
+        self.keys(("+", 150))
+        self.page.evaluate("location.hash = '#/'")
+        self.page.evaluate("e => { location.hash = '#/read/' + e; }", entry)
+        self.shown("#/read/" + entry)
+        self.wait_pages(None)
         self.wait_zoom(100)
 
     def test_a_held_arrow_stops_at_the_edge_of_a_zoomed_page(self):
@@ -3170,9 +3226,8 @@ class TestReaderZoom(ReaderCase):
         for _ in range(3):
             self.page.keyboard.down("ArrowRight")              # encore des répétitions, au bord
         self.page.keyboard.up("ArrowRight")
-        self.wait_zoom(300)                                    # la page n'a pas tourné (une page tournée revient à 100 %)
         self.assertEqual(self.label(), "Page 1 / 6")
-        self.page.keyboard.press("ArrowRight")
+        self.page.keyboard.press("ArrowRight")                 # si les répétitions avaient tourné des pages, celle-ci irait plus loin que la 2
         expect(self.page.locator(".reader .pg")).to_have_text("Page 2 / 6")
 
     def test_plus_and_minus_zoom_around_the_middle_of_the_screen(self):
@@ -3223,6 +3278,27 @@ class TestReaderZoom(ReaderCase):
         self.tap(200, 400)
         self.tap(200, 400)
         self.wait_zoom(100)
+
+    def test_a_swipe_turns_a_zoomed_page_only_when_it_starts_at_the_edge(self):
+        """Zoomé, un glissement fait défiler l'image ; commencé alors qu'elle est déjà au bord, il tourne la page. Le glissement qui l'amène au bord ne la tourne pas."""
+        self.phone()
+        self.read("Loupe", double=False, page=1)
+        self.tap(195, 400)
+        self.tap(195, 400)
+        self.wait_zoom(200)
+        x = self.geometry()["stage"]["x"]
+        self.swipe(300, 400, -150, 0)                          # au milieu de l'image : elle défile vers la droite
+        self.scrolled("x", x)
+        self.scroll_to("droite")
+        self.swipe(200, 600, 0, -200)                          # un glissement vertical au bord droit : rien que du défilement
+        self.swipe(300, 400, 150, 0)                           # vers la droite, au bord droit : l'image revient vers la gauche
+        self.until(lambda: self.corner()[0] != "droite")
+        self.assertEqual(self.label(), "Page 2 / 6")
+        self.scroll_to("droite")
+        self.swipe(300, 400, -150, 0)                          # vers la gauche, déjà au bord droit : page suivante
+        self.turned_to("Page 3 / 6", 200, ("gauche", "haut"))
+        self.swipe(100, 400, 150, 0)                           # vers la droite, au bord gauche où elle s'ouvre : page précédente
+        self.turned_to("Page 2 / 6", 200, ("droite", "bas"))
 
     def test_a_pinch_zooms_the_page_and_not_the_browser(self):
         self.phone()
