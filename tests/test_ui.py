@@ -864,8 +864,8 @@ class TestVideoPlayer(UiCase):
         self.assertEqual(self.rate(), 2)
         self.press("Escape", wait=600)
         self.assertNotIn("#/play/", self.page.url)
-        self.page.evaluate(f"location.hash = '#/play/{entry}'")
-        self.page.wait_for_selector(".player video")
+        self.view(".actions .btn.primary").click()                                                  # « Lecture » sur la fiche : le lecteur gardé de côté revient et repart
+        self.shown("#/play/" + entry)
         self.wait_playing()
         self.assertEqual(self.rate(), 1)
         self.assertEqual(self.page.inner_text(".player .btn.spd"), "Vitesse")
@@ -911,6 +911,47 @@ class TestVideoPlayer(UiCase):
         self.page.locator(".player .btn.spd").click()
         self.page.wait_for_selector(".veil .opt")
         self.assertEqual(self.page.locator(".veil .opt .lbl").all_inner_texts(), ["0,75×", "1×", "1,25×", "1,5×"])
+
+    # --- Lecteur ouvert directement, puis quitté ------------------------------------------
+    def shown_time(self):
+        """La position affichée par le lecteur, en secondes (« 0:45 » -> 45)."""
+        return self.page.evaluate("(() => { var p = document.querySelector('.player .times span').textContent.split(':'); return +p[0] * 60 + +p[1]; })()")
+
+    def leave_a_player_opened_directly(self, title, mode):
+        """Ouvre `#/play/<id>` par son adresse (rien derrière le lecteur), saute au milieu du film, puis Retour : la fiche prend sa place et le lecteur est mis de côté, pas détruit.
+        Vérifie qu'il s'est tu et a lâché son flux, puis revient au lecteur par Retour."""
+        entry = self.begin("films", title)
+        self.addCleanup(self.run_.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (entry,))           # la position enregistrée ferait reprendre au milieu les tests suivants
+        self.wait_playing()
+        self.assertEqual(self.page.inner_text(".player .pill"), mode)
+        self.page.locator(".player .seekbar").click(position={"x": 960, "y": 5})                                  # au milieu : au-delà des 20 s sous lesquelles rien n'est enregistré
+        self.page.wait_for_function("(() => { var v = document.querySelector('.player video'); return !v.paused && !v.seeking && v.readyState >= 3; })()", timeout=15000)
+        self.until(lambda: self.shown_time() > 25)
+        sheet = "#/i/" + self.item("films", title)["id"]
+        asked = []
+        self.press("Escape")
+        self.shown(sheet)
+        left = self.shown_time()
+        self.page.wait_for_function("(() => { var v = document.querySelector('.player video'); return v.paused && !v.getAttribute('src') && v.networkState === HTMLMediaElement.NETWORK_EMPTY; })()", timeout=5000)
+        self.page.on("request", lambda r: asked.append(r.url) if f"/media/{entry}/" in r.url else None)
+        self.until(lambda: abs(self.entries("films", title)[0]["progress"]["position"] - left) < 2)               # la position est enregistrée en partant
+        expect(self.view(".actions .btn").first).to_be_visible()
+        self.assertEqual(asked, [])                                                                              # le lecteur de côté ne lit plus rien
+        # Retour depuis la fiche : le même lecteur revient, au même endroit, en pause.
+        self.press("Escape")
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("document.querySelector('.player video').readyState >= 2", timeout=15000)
+        self.assertAlmostEqual(self.shown_time(), left, delta=2)
+        self.assertTrue(self.page.evaluate("document.querySelector('.player video').paused"))
+        self.assertEqual(self.focused(), "Lecture / pause")
+        self.press("Enter")
+        self.wait_playing()
+
+    def test_a_player_opened_directly_then_left_goes_quiet_in_direct_play(self):
+        self.leave_a_player_opened_directly("Direct", "Lecture directe")
+
+    def test_a_player_opened_directly_then_left_goes_quiet_with_converted_sound(self):
+        self.leave_a_player_opened_directly("Long", "Son converti")
 
     def test_unplayable_file_shows_error_with_actions(self):
         broken = self.entries("films", "Sans Etiquette")[0]["id"]
@@ -1044,8 +1085,9 @@ class TestNextFilmOfASaga(UiCase):
         self.play(self.first)
         self.page.keyboard.press("Escape")
         self.shown(self.sheet)
-        self.page.evaluate("h => { location.hash = h; }", "#/play/" + self.first)
+        self.view(".actions .btn.primary").click()                                                  # « Lecture » sur la fiche
         self.shown("#/play/" + self.first)
+        self.wait_playing()
         self.page.evaluate("(() => { var v = document.querySelector('.player video'); v.play(); v.currentTime = v.duration - 0.4; })()")
         expect(self.panel).to_contain_text("Film suivant de « Duo »", timeout=15000)
         self.back_to_the_panel()

@@ -616,16 +616,19 @@
     document.getElementById('views').appendChild(el);
     return { hash: hash, el: el, view: { el: el }, scroll: 0, focus: null };
   }
+  // Une page mise de côté reste dans le DOM ; celle qui fait encore quelque chose (le lecteur et sa vidéo) le suspend dans `parked()`, et le reprend dans `shown(false)`.
   function park(entry) {
     entry.scroll = window.scrollY;
     entry.focus = document.activeElement && entry.el.contains(document.activeElement) ? document.activeElement : null;
     entry.el.style.display = 'none';
+    try { if (entry.view.parked) entry.view.parked(); } catch (e) { console.error(e); }
   }
   function destroy(entry) {
     try { if (entry.view.destroy) entry.view.destroy(); } catch (e) { console.error(e); }
     if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el);
   }
-  function present(entry, fresh) {
+  // `ahead` : on y va par une action de l'application (H.go : « Lecture » sur une fiche), pas par Retour. Une page gardée de côté peut ne pas reprendre de la même façon.
+  function present(entry, fresh, ahead) {
     entry.el.style.display = '';
     document.body.classList.toggle('full', !!entry.view.full);
     document.body.setAttribute('data-lib', entry.view.lib || '');
@@ -638,9 +641,11 @@
       if (entry.focus && document.body.contains(entry.focus)) H.focus.set(entry.focus, true); else H.focus.first();
       if (entry.view.refresh) entry.view.refresh();
     }
-    if (entry.view.shown) entry.view.shown(fresh);
+    if (entry.view.shown) entry.view.shown(fresh, ahead);
   }
   function onRoute() {
+    var ahead = H.ahead;
+    H.ahead = false;
     H.overlay.closeAll();
     var hash = location.hash || '#/';
     var top = stack[stack.length - 1];
@@ -652,7 +657,7 @@
     if (ask) {
       H.confirm({ title: ask.title, lead: ask.lead, ok: ask.ok, danger: true,
         submit: function () { if (ask.accept) ask.accept(); return Promise.resolve(); },
-        done: function () { leaving = true; onRoute(); },
+        done: function () { leaving = true; H.ahead = ahead; onRoute(); },
         cancel: function () { H.replaceNext = false; location.replace(top.hash); } });
       return;
     }
@@ -661,7 +666,7 @@
     for (var i = stack.length - 2; i >= 0; i--) if (stack[i].hash === hash) { back = i; break; }
     if (back >= 0 && !H.replaceNext) {
       while (stack.length - 1 > back) destroy(stack.pop());
-      present(stack[back], false);
+      present(stack[back], false, ahead);
       return;
     }
     if (top) { if (H.replaceNext) destroy(stack.pop()); else park(top); }
@@ -672,7 +677,9 @@
     present(entry, true);
   }
   H.start = function () { window.addEventListener('hashchange', onRoute); onRoute(); };
+  H.ahead = false;
   H.go = function (hash, replace) {
+    if (location.hash !== hash) H.ahead = true;
     if (replace) { H.replaceNext = true; location.replace(hash); } else location.hash = hash;
   };
   H.current = function () { return stack[stack.length - 1] || null; };

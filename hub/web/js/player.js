@@ -99,13 +99,14 @@
 
     var plan = null, base = 0, level = 0, firstPlan = true, closing = false, pending = null, pendingTimer = null, hideTimer = null, tickTimer = null, reportTimer = null, lastReport = 0;
     var steps = 0, stepsTimer = null, audioIdx = null, subs = { cues: [], sel: '', pgs: null, shown: null }, subText = '';
+    var asleep = false, kept = null, hold = false;          // mis de côté (voir `parked`) : la vidéo n'a plus de source, `kept` garde la position ; `hold` : la prochaine source s'ouvre en pause
     var speed = 1, offered = false;          // `offered` : le film est fini et le panneau propose le suivant de sa saga
     var skipNow = null, skipShown = '', skipped = {};          // le chapitre que le bouton propose, ce qu'il affiche, et les chapitres déjà passés (par début : un nouveau plan refait les objets)
     if (carried && carried.id === id) setSpeed(carried.rate);
     carried = null;
 
     function q() { return QUALITIES[H.pref('quality')] || QUALITIES.auto; }
-    function cur() { var t = video.currentTime || 0; return plan && !plan.seekable ? base + t : t; }
+    function cur() { if (kept !== null) return kept; var t = video.currentTime || 0; return plan && !plan.seekable ? base + t : t; }
     function dur() { return (plan && plan.duration) || video.duration || 0; }
     function here() { return pending !== null ? pending : cur(); }          // la position affichée : celle qu'on est en train de choisir, sinon celle du film
     function chapters() { return (plan && plan.chapters) || []; }
@@ -143,14 +144,16 @@
       });
     }
     function begin(at) {
+      if (asleep) { kept = at; return; }          // le plan est arrivé après le départ : on retient seulement où commencer
+      kept = null;
       base = plan.seekable ? 0 : at;
       video.src = plan.seekable ? plan.url : plan.url + '&start=' + at.toFixed(3);
       if (plan.seekable && at > 0) {
         var once = function () { video.removeEventListener('loadedmetadata', once); try { video.currentTime = at; } catch (e) { /* tant pis */ } };
         video.addEventListener('loadedmetadata', once);
       }
-      var p = video.play();
-      if (p && p.catch) p.catch(function () { show(true); H.focus.set(playBtn, true); });
+      if (hold) hold = false;
+      else { var p = video.play(); if (p && p.catch) p.catch(function () { show(true); H.focus.set(playBtn, true); }); }
       paintTime();
     }
     // Le panneau posé sur l'image : tant qu'il est là, les touches du lecteur ne répondent plus (voir onKey), le focus est sur `first`.
@@ -175,7 +178,7 @@
     }
     // Si le lecteur refuse ce que le serveur lui donne, on descend d'un cran : conteneur converti, puis image convertie.
     video.addEventListener('error', function () {
-      if (closing || !plan) return;
+      if (closing || !plan || asleep) return;
       var at = cur();
       if (level < 2 && plan.mode !== 'transcode') {
         level++;
@@ -392,6 +395,25 @@
       if (text !== subText) { subText = text; H.clear(subBox); if (text) subBox.appendChild(cueNodes(text)); }
     }, 200);
     reportTimer = setInterval(function () { if (!video.paused && Date.now() - lastReport > 9000) report(); }, 10000);
+    // Mis de côté (quitté vers la fiche quand rien n'était derrière lui, Retour y revient) : la position est enregistrée, la vidéo se tait et lâche sa source, ce qui ferme le flux converti côté serveur.
+    // Un film fini (le panneau du suivant de sa saga) ne lit plus rien : il est gardé tel quel, Retour y retrouve le panneau.
+    function parked() {
+      if (closing || asleep || offered || video.ended) return;
+      clearTimeout(pendingTimer);
+      if (plan) kept = here();
+      pending = null; asleep = true; attaching++;          // `attaching` : un départ en remux encore attendu ne s'ouvrira pas
+      report();
+      video.pause(); video.removeAttribute('src'); video.load();
+    }
+    // Rouvert par Retour : au même endroit, en pause, la lecture reprend quand on la demande. Rouvert par « Lecture » sur la fiche (`ahead`) : il repart de là, en lecture.
+    function wake(ahead) {
+      if (!asleep) return;
+      asleep = false;
+      H.audio.pause();
+      show(true);
+      if (!ahead) H.focus.set(playBtn, true);
+      if (kept !== null && plan) { hold = !ahead; attach(kept); }
+    }
     // Passer à l'épisode suivant vaut « vu » ; quitter un film pour le suivant de sa saga ne dit pas qu'on l'a fini : il reste à reprendre.
     function goNext() { if (plan && plan.next) { report(!plan.next.saga); carry(); H.go('#/play/' + plan.next.id, true); } }
 
@@ -431,7 +453,8 @@
     return {
       el: el, full: true, nav: '#/play',
       lib: '',
-      shown: function (fresh) { if (!fresh) setSpeed(1); show(); },          // un lecteur laissé en réserve puis rouvert (Lecture depuis la fiche) : c'est une nouvelle ouverture, elle repart à 1×
+      shown: function (fresh, ahead) { if (!fresh) { setSpeed(1); wake(ahead); } show(); },          // un lecteur laissé en réserve puis rouvert (Lecture depuis la fiche) : c'est une nouvelle ouverture, elle repart à 1×
+      parked: parked,
       onBack: function () {
         if (offered) { toSheet(); return true; }
         if (H.routed <= 1 && plan) { location.hash = '#/i/' + plan.item; return true; }
