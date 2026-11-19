@@ -651,6 +651,24 @@ Droit : lire la bibliothèque. 400 : le fichier n'est pas une vidéo, ou `t` n'e
 
 Le fichier d'origine : `Range` (206, `Accept-Ranges: bytes`, 416 hors limites), `Content-Length`, `Content-Type` d'après l'extension (`.mkv` → `video/x-matroska`…). `?download=1` ajoute `Content-Disposition: attachment` et demande le droit de **télécharger** la bibliothèque (403 `téléchargement non autorisé` sinon) ; lire le fichier sans `download` (lecture directe, `Range`) demande celui de la **lire** (403 `lecture non autorisée`) : le droit de télécharger ne peut pas empêcher un lecteur qui reçoit le fichier de le garder. 404 si le fichier est introuvable. Sert aussi la musique et les livres.
 
+`&dl=<tentative>` (avec `?download=1` seulement) : un identifiant tiré au hasard par le client, **8 à 32 caractères `[A-Za-z0-9]`**, un par fichier à télécharger, gardé pour ses reprises. Le serveur suit alors cette tentative pour le compte, et `GET /api/downloads` dit où elle en est. Un `dl` absent, mal formé ou sans `download` est ignoré : le fichier part comme avant. Il ne donne aucun droit. Un `HEAD`, un 404 ou un 416 ne créent pas de tentative.
+
+### `GET /api/downloads?dl=<id>,<id>,…` — où en sont mes téléchargements
+
+Pour **le compte de la requête seulement** (tout compte connecté ; 401 sans session), l'état de chaque tentative nommée par `dl` sur `/media/<entry>/file?download=1` : de quoi lancer une file de téléchargements un par un, le suivant quand le précédent a fini.
+
+```json
+{"downloads": {"k3J9aQ2xLm": {"state": "done", "bytes": 734003200, "size": 734003200},
+               "Pz81rTw0Qe": {"state": "running", "bytes": 52428800, "size": 734003200},
+               "Uu7c0vXk2N": {"state": "unknown"}}}
+```
+
+- `state` : `running` (une requête de la tentative est en cours), `done` (une requête est allée **jusqu'au dernier octet du fichier sans erreur** ; définitif), `stopped` (la connexion s'est fermée avant et aucune autre n'est ouverte), `unknown` (jamais vue, oubliée, ou d'un **autre compte** : rien n'en est révélé ; pas de `bytes` ni de `size`).
+- `bytes` : jusqu'où le fichier est parti, toutes requêtes confondues ; `size` : sa taille. Une reprise par `Range` compte pour la même tentative : `stopped` repasse à `running`, puis `done` si elle va au bout.
+- La fin vue par le serveur est le dernier octet **envoyé** : le navigateur a peut-être encore quelques secondes d'écriture.
+- L'issue reste **30 minutes** après la dernière activité (un onglet en arrière-plan ne se réveille qu'une fois par minute), puis devient `unknown`. Tout est en mémoire : un redémarrage oublie tout. Au plus 200 tentatives par compte et 2 000 en tout : au-delà, la plus ancienne sans connexion ouverte est oubliée ; si toutes ont une connexion ouverte, la nouvelle n'est pas suivie (elle reste `unknown`, le téléchargement se fait quand même).
+- Au plus **50** identifiants par question (400 `trop de téléchargements demandés d'un coup (50 au plus)` au-delà). Un identifiant mal formé est écarté de la réponse ; sans `dl`, la réponse est `{"downloads": {}}`. Ni titre, ni chemin, ni adresse.
+
 ### `GET /media/<entry>/stream` — le flux converti
 
 Un MP4 fragmenté produit à la volée par ffmpeg.

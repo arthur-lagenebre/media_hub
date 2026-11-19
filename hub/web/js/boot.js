@@ -8,6 +8,7 @@
     H.syncAccount();      // avant que la barre audio ne relise la file enregistrée : elle appartient peut-être à un autre compte
     H.adoptSubLang();     // l'ancien choix de sous-titres de ce navigateur passe dans le compte
     H.audio.init();
+    H.downloads.init();   // la file des téléchargements d'avant le rechargement reprend (elle est rangée sous le compte)
     H.nav.build();
     H.start();
   }).catch(function (e) {

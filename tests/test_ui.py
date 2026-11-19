@@ -4691,7 +4691,7 @@ class TestDownloads(UiCase):
         return names
 
     def settled(self, names, expected):
-        self.until(lambda: len(names) >= expected, tries=120)
+        self.until(lambda: len(names) >= expected, tries=400)        # une file : chaque fichier attend que le serveur ait fini d'envoyer le précédent
         self.page.wait_for_timeout(1800)               # rien de plus que prévu n'arrive ensuite
         self.assertEqual(len(names), expected, names)
         return sorted(names)
@@ -4787,6 +4787,248 @@ class TestDownloads(UiCase):
         card.click(button="right")
         self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
         self.assertEqual(self.page.locator(".menu .opt", has_text="Télécharger").count(), 0)
+
+
+class TestDownloadQueue(UiCase):
+    """Plusieurs fichiers forment une file : un seul lien à la fois, le suivant quand le serveur a tout envoyé (`GET /api/downloads`).
+    Dans la plupart des tests, la réponse de `/api/downloads` est tenue par le test (`self.states`) et l'horloge de la page aussi (`page.clock`) : chaque étape s'attend par un état, sans délai."""
+
+    POLL = 3000                 # au-delà de l'intervalle d'interrogation de la page (2 à 3 s)
+
+    def setUp(self):
+        super().setUp()
+        self.states = {}                                                    # dl -> réponse voulue ; `unknown` sinon
+        self.launched = []                                                  # (page, entrée, dl), dans l'ordre des liens suivis
+        self.dark = self.entries("series", "Dark")
+
+    @staticmethod
+    def parse(url):
+        parts = urllib.parse.urlsplit(url)
+        return parts.path.split("/")[2], urllib.parse.parse_qs(parts.query).get("dl", [""])[0]
+
+    def answer(self, route):
+        ids = urllib.parse.parse_qs(urllib.parse.urlsplit(route.request.url).query).get("dl", [""])[0].split(",")
+        body = {"downloads": {dl: self.states.get(dl, {"state": "unknown"}) for dl in ids if dl}}
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+    def set(self, index, state):
+        self.states[self.launched[index][2]] = {"state": state, "bytes": 5, "size": 10}
+
+    def drive(self, page=None):
+        """L'horloge de la page à la main, ses téléchargements notés, /api/downloads tenu par le test."""
+        page = page or self.page
+        page.clock.install()
+        page.on("download", lambda d: self.launched.append((page, *self.parse(d.url))))
+        page.route("**/api/downloads?*", self.answer)
+        return page
+
+    def tick(self, page=None, times=1):
+        for _ in range(times):
+            (page or self.page).clock.run_for(self.POLL)
+
+    def wait_launched(self, n, page=None):
+        """Fait passer le temps de la page jusqu'au n-ième lien suivi, puis vérifie qu'il n'en est pas venu d'autre."""
+        for _ in range(60):
+            if len(self.launched) >= n:
+                break
+            self.tick(page)
+            (page or self.page).wait_for_timeout(50)
+        self.assertEqual(len(self.launched), n, [(e, dl) for _, e, dl in self.launched])
+
+    def whole_show(self, page=None):
+        page = page or self.page
+        page.goto(self.base + "/#/i/" + self.item("series", "Dark")["id"])
+        page.locator("#views > .view:visible .actions .btn", has_text="Télécharger").click()
+        page.locator(".menu .opt", has_text="Toute la série").click()
+
+    def bar(self, page=None):
+        return (page or self.page).locator("#dlbar")
+
+    def reload(self):
+        self.page.reload()
+        self.page.wait_for_selector("#nav .link", state="attached")
+
+    def test_the_second_file_starts_only_after_the_first_is_done(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.assertRegex(self.launched[0][2], r"^[A-Za-z0-9]{8,32}$")
+        expect(self.bar()).to_contain_text("Téléchargement 1 / 3 : " + self.dark[0]["title"])
+        self.set(0, "running")
+        self.tick(times=3)
+        self.assertEqual(len(self.launched), 1)                            # en cours : rien d'autre ne part
+        self.set(0, "done")
+        self.wait_launched(2)
+        expect(self.bar()).to_contain_text("Téléchargement 2 / 3 : " + self.dark[1]["title"])
+        self.assertNotEqual(self.launched[0][2], self.launched[1][2])      # une tentative par fichier
+        self.assertEqual([e for _, e, _ in self.launched], [self.dark[0]["id"], self.dark[1]["id"]])
+
+    def test_the_queue_stays_visible_while_browsing(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.page.goto(self.base + "/#/l/films")
+        self.view(".card").first.wait_for()
+        expect(self.bar()).to_contain_text("Téléchargement 1 / 3")
+
+    def test_an_interrupted_file_does_not_block_the_queue_and_is_in_the_summary(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.set(0, "stopped")
+        self.wait_launched(2)
+        self.set(1, "done")
+        self.wait_launched(3)
+        self.set(2, "done")
+        self.tick()
+        expect(self.bar()).to_contain_text("échoué")
+        expect(self.bar()).to_contain_text(self.dark[0]["title"])
+        self.bar().get_by_role("button", name="Réessayer ceux-là").click()
+        self.wait_launched(4)
+        self.assertEqual(self.launched[3][1], self.dark[0]["id"])
+        self.set(3, "done")
+        self.tick()
+        expect(self.bar()).to_contain_text("Téléchargements finis")
+        self.bar().get_by_role("button", name="Fermer").click()
+        expect(self.bar()).to_be_hidden()
+
+    def test_a_link_never_taken_pauses_the_queue_and_resume_launches_it_again(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.tick(times=11)                                                 # plus de 30 s sans que le serveur ait rien vu
+        expect(self.bar()).to_contain_text("autorise")
+        self.assertEqual(len(self.launched), 1)                            # la file ne continue pas à l'aveugle
+        self.bar().get_by_role("button", name="Reprendre").click()
+        self.wait_launched(2)
+        self.assertEqual(self.launched[1][1], self.dark[0]["id"])
+        self.assertNotEqual(self.launched[1][2], self.launched[0][2])
+        expect(self.bar()).to_contain_text("Téléchargement 1 / 3")
+
+    def test_a_paused_queue_goes_on_by_itself_once_the_server_sees_the_link(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.tick(times=11)
+        expect(self.bar()).to_contain_text("autorise")
+        self.set(0, "running")                                              # la personne a autorisé le téléchargement après coup : le fichier part
+        self.tick()
+        expect(self.bar()).to_contain_text("Téléchargement 1 / 3")
+        self.assertEqual(len(self.launched), 1)                            # « Reprendre » n'est plus à faire : le fichier ne part pas deux fois
+        self.set(0, "done")
+        self.wait_launched(2)
+
+    def test_a_reload_resumes_the_queue_without_launching_a_finished_file_again(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.set(0, "done")
+        self.wait_launched(2)
+        self.set(1, "running")
+        self.reload()
+        expect(self.bar()).to_contain_text("Téléchargement 2 / 3")
+        self.tick(times=3)
+        self.assertEqual(len(self.launched), 2)                            # le fichier en cours est suivi, pas relancé ; le fini ne repart pas
+        self.set(1, "done")
+        self.wait_launched(3)
+        self.assertEqual(self.launched[2][1], self.dark[2]["id"])
+
+    def test_after_a_reload_an_attempt_the_server_never_saw_is_launched_again(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.reload()
+        self.wait_launched(2)
+        self.assertEqual(self.launched[1][1], self.dark[0]["id"])
+
+    def test_two_tabs_do_not_launch_the_same_file_twice(self):
+        other = self.drive(self.context.new_page())
+        self.drive()
+        other.goto(self.base + "/#/")
+        self.whole_show()
+        self.wait_launched(1)
+        self.tick(other, times=2)
+        expect(self.bar(other)).to_contain_text("Téléchargement 1 / 3")      # l'autre onglet montre la file sans la mener
+        self.set(0, "done")
+        for _ in range(20):
+            if len(self.launched) >= 2:
+                break
+            self.tick(other)
+            self.tick()
+        for _ in range(3):
+            self.tick(other)
+            self.tick()
+        self.assertEqual([e for _, e, _ in self.launched], [self.dark[0]["id"], self.dark[1]["id"]])
+
+    def test_stopping_the_queue_stops_everything(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.bar().get_by_role("button", name="Arrêter la file").click()
+        expect(self.bar()).to_be_hidden()
+        self.set(0, "done")
+        self.tick(times=4)
+        self.assertEqual(len(self.launched), 1)
+        self.reload()
+        self.tick(times=4)
+        self.assertEqual(len(self.launched), 1)
+        expect(self.bar()).to_be_hidden()
+
+    def test_a_new_request_joins_the_end_of_the_queue_without_duplicates(self):
+        self.drive()
+        self.whole_show()
+        self.wait_launched(1)
+        self.page.locator("#views > .view:visible .actions .btn", has_text="Télécharger").click()
+        self.page.locator(".menu .opt", has_text="Saison 1").click()      # l'épisode 2 attend déjà : pas deux fois ; l'épisode 1, en cours, revient à la fin
+        expect(self.bar()).to_contain_text("Téléchargement 1 / 4")
+        for n in range(1, 4):
+            self.set(n - 1, "done")
+            self.wait_launched(n + 1)
+        self.assertEqual([e for _, e, _ in self.launched], [self.dark[0]["id"], self.dark[1]["id"], self.dark[2]["id"], self.dark[0]["id"]])
+
+    # --- Le vrai serveur ---------------------------------------------------
+    def events(self):
+        """Le journal des liens suivis et des fins que la page a apprises du vrai serveur, dans l'ordre."""
+        log = []
+        self.page.on("download", lambda d: log.append(("launch", self.parse(d.url)[1])))
+
+        def seen(response):
+            if "/api/downloads?" in response.url and response.ok:
+                slot = len(log)
+                log.append(("done", ""))                                    # la place de la réponse, prise avant de lire son corps : pendant la lecture, le lien suivant est déjà noté
+                done = [dl for dl, s in response.json()["downloads"].items() if s["state"] == "done"]
+                log[slot] = ("done", done[0] if done else "")
+        self.page.on("response", seen)
+        return log
+
+    def one_after_the_other(self, log, expected):
+        expect(self.bar()).to_contain_text("Téléchargements finis", timeout=90000)
+        launches = [dl for kind, dl in log if kind == "launch"]
+        self.assertEqual(len(launches), expected, log)
+        for previous, current in zip(launches, launches[1:]):
+            self.assertLess(log.index(("done", previous)), log.index(("launch", current)), log)
+
+    def test_a_show_of_three_episodes_goes_one_after_the_other_on_the_real_server(self):
+        log = self.events()
+        self.whole_show()
+        self.one_after_the_other(log, 3)
+
+    def test_an_album_goes_one_after_the_other_on_the_real_server(self):
+        log = self.events()
+        self.open("#/i/" + self.item("musique", "Discovery")["id"])
+        self.view(".trk").first.wait_for()
+        self.view(".actions .btn", has_text="Télécharger").click()
+        self.one_after_the_other(log, len(self.entries("musique", "Discovery")))
+
+    def test_a_single_episode_is_one_link_without_a_visible_queue(self):
+        log = self.events()
+        self.open("#/i/" + self.item("series", "Dark")["id"])
+        self.view(".epmore").first.click()
+        self.page.locator(".menu .opt", has_text="Télécharger").click()
+        expect(self.page.locator("#toast")).to_have_text("Téléchargement lancé")
+        self.until(lambda: ("done", next((dl for kind, dl in log if kind == "launch"), "")) in log, tries=300)      # le suivi silencieux a vu la fin
+        expect(self.bar()).to_be_hidden()
+        self.assertEqual(len([1 for kind, _ in log if kind == "launch"]), 1)
 
 
 class TestPosters(UiCase):

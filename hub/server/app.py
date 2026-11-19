@@ -53,7 +53,7 @@ from .. import requests as hub_requests
 from .. import request_search
 from .. import suggestions
 from .. import urls
-from ..activity import Activity
+from ..activity import Activity, attempt_id
 from .. import sagas as sagafile
 from ..sagas import Sagas
 from ..db import RATINGS, Database, make_id
@@ -69,6 +69,7 @@ from .jobs import Jobs
 
 API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
 CHUNK = 256 * 1024
+DOWNLOADS_ASKED = 50        # les tentatives de téléchargement que /api/downloads accepte en une question
 INBOX_DRAIN_SECONDS = 5    # un envoi refusé (POST /api/inbox) laisse au client ce temps, au plus, pour finir d'envoyer son corps avant que la connexion soit coupée
 INBOX_DRAIN_BYTES = 64 << 20    # ... et ce nombre d'octets, au plus : un client qui n'arrête jamais d'envoyer est coupé à la première borne atteinte
 WATCHED_AT = 0.92          # au-delà de cette part, le film est vu
@@ -357,9 +358,9 @@ class Handler(BaseHTTPRequestHandler):
         """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré."""
         return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty)
 
-    def send_file(self, path, mime=None, headers=None, track=None):
+    def send_file(self, path, mime=None, headers=None, track=None, attempt=None):
         """Le fichier, avec les requêtes Range (reprise, avance rapide, lecteur vidéo). `track` : de quoi inscrire l'envoi dans l'activité (une fonction sans argument qui rend `Handler.transfer(…)`), ouvert autour de l'envoi réel seulement :
-        ni un HEAD, ni un 404, ni un 416 n'y laissent de trace."""
+        ni un HEAD, ni un 404, ni un 416 n'y laissent de trace. `attempt` de même, pour une tentative de téléchargement : une fonction de (début, taille du fichier) qui rend `Activity.attempt(…)`."""
         try:
             size = path.stat().st_size
             handle = open(path, "rb")
@@ -374,8 +375,8 @@ class Handler(BaseHTTPRequestHandler):
             start, end, status = bounds
             self.send_file_headers(mime, status, start, end, size, headers)
             if self.command != "HEAD":
-                with (track or nullcontext)() as sent:
-                    self.copy_range(handle, start, end - start + 1, sent)
+                with (track or nullcontext)() as sent, (attempt or no_attempt)(start, size) as reached:
+                    self.copy_range(handle, start, end - start + 1, counters(sent, reached))
 
     def send_file_headers(self, mime, status, start, end, size, headers):
         self.send_response(status)
@@ -2518,7 +2519,26 @@ def media_file(h, m, q):
     extra = {"Cache-Control": "private, max-age=3600"}
     if q.get("download"):
         extra["Content-Disposition"] = "attachment; filename*=UTF-8''" + quote(path.name)
-    h.send_file(path, headers=extra, track=file_track(h, entry, bool(q.get("download"))))
+    h.send_file(path, headers=extra, track=file_track(h, entry, bool(q.get("download"))), attempt=download_attempt(h, q))
+
+
+def download_attempt(h, q):
+    """La tentative de téléchargement que nomme `dl` (voir Activity.attempt), ou None : sans `?download=1`, ou avec un `dl` absent ou mal formé, le fichier part comme avant.
+    `dl` ne donne aucun droit : `entry_of` a déjà vérifié celui de télécharger."""
+    dl = attempt_id(q.get("dl")) if q.get("download") else ""
+    return (lambda start, size: h.hub.activity.attempt(h.user["id"], dl, start, size)) if dl else None
+
+
+def no_attempt(start, size):
+    return nullcontext()
+
+
+def counters(*counts):
+    """Une seule fonction de comptage pour `copy_range`, qui appelle toutes celles qui sont là ; None s'il n'y en a aucune."""
+    present = [count for count in counts if count]
+    if not present:
+        return None
+    return lambda size: [count(size) for count in present]
 
 
 def file_track(h, entry, download):
@@ -3032,6 +3052,17 @@ def api_activity(h, m, q):
     require_admin(h)
     hub = h.hub
     h.send_json({"version": __version__, "uptime": int(max(0, time.time() - hub.started)), "busy": hub.jobs.busy(), "blocking": hub.jobs.blocking(), "streams": hub.active, "max_streams": hub.cfg.max_streams, **hub.activity.report()})
+
+
+@route("GET", r"/api/downloads")
+def api_downloads(h, m, q):
+    """Où en sont les tentatives de téléchargement demandées (`?dl=<id>,<id>,…`), pour le compte de la requête seulement : l'interface lance ainsi une file un fichier après l'autre.
+    Un identifiant mal formé est écarté ; une tentative inconnue, oubliée ou d'un autre compte est `unknown`. Ni chemin, ni titre, ni adresse."""
+    parts = [part for part in (q.get("dl") or "").split(",") if part]
+    if len(parts) > DOWNLOADS_ASKED:
+        raise HttpError(400, f"trop de téléchargements demandés d'un coup ({DOWNLOADS_ASKED} au plus)")
+    ids = [dl for dl in map(attempt_id, parts) if dl]
+    h.send_json({"downloads": h.hub.activity.attempts_of(h.user["id"], ids)})
 
 
 @route("POST", r"/api/scan")

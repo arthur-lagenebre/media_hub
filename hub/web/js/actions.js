@@ -91,7 +91,7 @@
       else if (v === 'down') A.rate(it, 'down').catch(fail);
       else if (v === 'saga') H.sagas.addTo(d, refresh);
       else if (v === 'tmdb') window.open(tmdb.url, '_blank', 'noopener');
-      else if (v === 'download') A.download(d.entries.map(function (e) { return e.id; }));
+      else if (v === 'download') A.download(A.files(d));
       else mark(it, !done).then(refresh).catch(fail);
     });
   }
@@ -128,8 +128,7 @@
 
   // --- Télécharger ----------------------------------------------------------------------
   // Toujours un fichier à la fois, jamais de zip : une coupure ne fait perdre qu'un fichier, et la reprise passe par `Range`.
-  // Plusieurs fichiers (une saison, une série, un album) : on les demande l'un après l'autre ; le navigateur peut demander d'autoriser les téléchargements multiples la première fois.
-  var GAP = 1200;
+  // Plusieurs fichiers (une saison, une série, un album) forment une file : le suivant part quand le serveur a fini d'envoyer le précédent (voir downloads.js).
   // Pas de téléchargement sur la télé (ses navigateurs téléchargent mal) ni dans une bibliothèque dont le compte n'a pas le droit (`download` de /api/state ; le serveur refuse de toute façon, 403).
   // Sans bibliothèque connue : permis si l'une au moins le permet.
   A.canDownload = function (libId) {
@@ -142,30 +141,26 @@
     var libs = H.libs.filter(function (l) { return l.kind === kind; });
     return !libs.length || libs.some(function (l) { return l.download !== false; });
   };
-  A.download = function (ids) {
-    ids.forEach(function (id, i) {
-      setTimeout(function () {
-        var link = document.createElement('a');
-        link.href = '/media/' + id + '/file?download=1';
-        link.setAttribute('download', '');
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }, i * GAP);
-    });
-    H.toast(ids.length > 1 ? H.t('Téléchargement de {n} fichiers, l’un après l’autre', { n: ids.length }) : H.t('Téléchargement lancé'), 4000);
+  // `files` : [{id, title}], le titre affiché par la file.
+  A.download = function (files) {
+    H.downloads.add(files);
+    H.toast(files.length > 1 ? H.t('Téléchargement de {n} fichiers, l’un après l’autre', { n: files.length }) : H.t('Téléchargement lancé'), 4000);
+  };
+  // Les fichiers d'une fiche (/api/item), ou ceux de `entries` : chacun avec son titre, celui de la fiche à défaut (un film n'a qu'un fichier).
+  A.files = function (d, entries) {
+    return (entries || d.entries).map(function (e) { return { id: e.id, title: e.title || d.title || '' }; });
   };
   // Le bouton de la fiche : une série à plusieurs saisons demande laquelle.
   A.downloadItem = function (d) {
-    function ids(entries) { return entries.map(function (e) { return e.id; }); }
+    function files(entries) { return A.files(d, entries); }
     var seasons = d.type === 'show' && d.seasons ? d.seasons.filter(function (s) { return d.entries.some(function (e) { return e.season === s; }); }) : [];
-    if (seasons.length < 2) { A.download(ids(d.entries)); return; }
+    if (seasons.length < 2) { A.download(files(d.entries)); return; }
     var options = [{ label: H.t('Toute la série'), detail: H.plural(d.entries.length, 'épisode'), value: 'all' }].concat(seasons.map(function (s) {
       var of = d.entries.filter(function (e) { return e.season === s; });
       return { label: s === 0 ? H.t('Spéciaux') : H.t('Saison {n}', { n: s }), detail: H.plural(of.length, 'épisode'), value: String(s) };
     }));
     H.menu(H.t('Télécharger'), options, null, function (v) {
-      A.download(ids(v === 'all' ? d.entries : d.entries.filter(function (e) { return String(e.season) === v; })));
+      A.download(files(v === 'all' ? d.entries : d.entries.filter(function (e) { return String(e.season) === v; })));
     });
   };
   // --- Changer l'affiche (administrateur) ---------------------------------------------------
@@ -224,7 +219,7 @@
     if (A.canDownload(libId)) options.push({ label: H.t('Télécharger'), value: 'download' });
     H.menu(e.title || H.t('Épisode'), options, null, function (v) {
       if (v === 'play') H.go(H.playHref(e, seen ? 0 : undefined));
-      else if (v === 'download') A.download([e.id]);
+      else if (v === 'download') A.download([{ id: e.id, title: e.title || '' }]);
       else H.api('/api/entry/' + e.id + '/seen', { done: !seen }).then(done).catch(fail);
     });
   };
