@@ -1,3 +1,8 @@
+## 0.42.0 — 2026-11-19
+- Dans une BD ou un manga, tu peux agrandir la page pour lire une bulle ou un détail : en pinçant ou en touchant deux fois l'écran, avec les touches + et −, ou avec le bouton « Zoom » de la barre (150, 200, 300 %), accessible à la télécommande.
+- Une fois zoomé, les flèches déplacent l'image ; arrivé au bord, un nouvel appui tourne la page, qui revient alors à 100 %.
+- Faire glisser ton doigt sur l'image ne tourne plus jamais la page par erreur.
+
 ## 0.41.0 — 2026-11-19
 - Quand tu télécharges une saison, une série ou un album, les fichiers partent vraiment l'un après l'autre : le suivant attend que le précédent soit arrivé.
 - Une barre en bas de l'écran te dit où en est la file, te laisse l'arrêter, et te dit à la fin si un fichier a échoué, avec de quoi le réessayer.
