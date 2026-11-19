@@ -162,8 +162,9 @@
       })();
     }
     function show(pages) {
+      var back = pages[0] < pos, kept = zoom;          // on revient en arrière ? le zoom de la vue quittée, que la nouvelle reprend
       pos = pages[0]; count = pages.length; busy = false;
-      unzoom();
+      unzoom();                                        // la nouvelle vue se mesure d'abord à 100 %
       var holder = h('div', { class: 'spread' + (count > 1 ? ' two' : '') + (rtl ? ' rtl' : '') });
       pages.forEach(function (k) { holder.appendChild(ready(k) ? h('img', { class: 'page ' + fit, alt: '', src: pageUrl(k) }) : missing(k)); });
       if (view) stage.replaceChild(holder, view); else stage.appendChild(holder);
@@ -171,6 +172,7 @@
       var retry = holder.querySelector('.missing .btn');
       if (retry && !(bar.contains(document.activeElement) && !bar.hidden)) H.focus.set(retry, true);          // Entrée réessaie ; les flèches tournent toujours les pages
       stage.scrollTop = 0; stage.scrollLeft = 0;
+      if (kept > 1) { zoomTo(kept); toCorner(back); }
       paint(); later();
       endArmed = false;
       if (queued) {          // les tours demandés pendant le chargement, un à un ; s'il n'en part aucun chargement (début ou fin du volume), le reste est caduc
@@ -196,7 +198,7 @@
     }
 
     // Le zoom agrandit réellement la vue (une taille en pixels pour chaque page), pas par `transform` : la zone de lecture la fait défiler au doigt, à la molette et au clavier comme n'importe quelle page.
-    // Il revient à 100 % à chaque vue montrée et quand la fenêtre change de taille. Il ne touche ni `pos` ni `count` : la page enregistrée reste la même.
+    // Il passe d'une vue à l'autre tant que la liseuse est ouverte, et revient à 100 % quand la fenêtre change de taille, quand l'ajustement change et à la réouverture. Il ne touche ni `pos` ni `count` : la page enregistrée reste la même.
     var LEVELS = [1, 1.5, 2, 3], SLOP = 12;          // les paliers du bouton et des touches (le pincement va de l'un à l'autre) ; au-delà de ce déplacement, en px, un appui devient un glissement
     var ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     function zoomText() { return H.t('Zoom : {n} %', { n: Math.round(zoom * 100) }); }
@@ -232,6 +234,11 @@
       if (bZoom) setLabel(bZoom, zoomText());
     }
     function unzoom() { zoom = 1; sizePages(); }
+    function toCorner(end) {              // zoomé, une vue s'ouvre où l'on commence à la lire (en haut, du côté où commence la lecture) ; en revenant en arrière, où l'on finit (en bas, de l'autre côté)
+      var right = end !== rtl;
+      stage.scrollLeft = right ? stage.scrollWidth : 0;
+      stage.scrollTop = end ? stage.scrollHeight : 0;
+    }
     function pan(d, repeat) {             // zoomé : la flèche déplace l'image ; déjà au bord, un nouvel appui tourne la page (pas la répétition d'une flèche maintenue pour y arriver)
       var x = d[0], y = d[1];
       var room = x > 0 ? stage.scrollWidth - stage.clientWidth - stage.scrollLeft : x < 0 ? stage.scrollLeft : y > 0 ? stage.scrollHeight - stage.clientHeight - stage.scrollTop : stage.scrollTop;
