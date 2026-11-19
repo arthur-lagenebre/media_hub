@@ -144,6 +144,17 @@
   }
   function sagaHref(libId, name) { return '#/saga/' + libId + '?g=' + encodeURIComponent(name); }
   function personHref(name) { return '#/person?n=' + encodeURIComponent(name); }
+  // La ligne des genres d'une fiche (élément ou artiste) : « a, b, c » comme avant, chaque genre ouvrant la bibliothèque `libId` filtrée sur lui (la valeur exacte du filtre du serveur), ou null sans genre.
+  H.genreLine = function (libId, genres) {
+    var list = (genres || []).filter(Boolean);
+    if (!list.length) return null;
+    var line = h('p', { class: 'genres' });
+    list.forEach(function (genre, i) {
+      if (i) line.appendChild(document.createTextNode(', '));
+      line.appendChild(h('a', { class: 'f who', href: '#/l/' + libId + '?genre=' + encodeURIComponent(genre), 'data-key': 'genre-' + genre }, genre));
+    });
+    return line;
+  };
   // Les couvertures empilées d'une carte : au plus STACK_MAX (le serveur n'en envoie pas davantage, voir scan/common.py).
   var STACK_MAX = 3;
   // Les affiches d'une saga ou d'une série, empilées en léger décalé : la première devant, les suivantes qui dépassent derrière.
@@ -985,10 +996,10 @@
 
     // Le texte à droite de l'image : titre, ligne grise, note TMDB, genres, crédits, résumé, doutes TMDB, boutons.
     function infoBlock(d, view) {
-      var genres = (d.genres || []).join(', ');
+      var genres = H.genreLine(d.library.id, d.genres);
       var info = h('div', { class: 'info' }, h('h1', null, d.title), h('p', { class: 'meta' }, metaLine(d)), movieTags(d));
       if (d.tmdb_rating) info.appendChild(scoreRow(d));
-      if (genres) info.appendChild(h('p', { class: 'genres' }, genres));
+      if (genres) info.appendChild(genres);
       credits(d).forEach(function (node) { info.appendChild(node); });
       if (d.summary) info.appendChild(h('p', { class: 'synopsis' }, d.summary));
       if (d.doubts && d.doubts.length && H.isAdmin()) info.appendChild(doubtNote(d));

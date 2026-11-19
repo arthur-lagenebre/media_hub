@@ -1,3 +1,7 @@
+## 0.45.0 — 2026-11-20
+- Sur la fiche d'un film, d'une série, d'un album ou d'un artiste, chaque genre se clique : il ouvre la bibliothèque avec seulement les titres de ce genre, et Retour te ramène à la fiche.
+- Un genre peu fréquent, absent du menu « Genre » jusqu'ici, y apparaît quand tu le choisis ainsi, et le filtre reste en place.
+
 ## 0.44.0 — 2026-11-19
 - Dans une BD ou un manga, le zoom reste quand tu tournes la page : la suivante s'ouvre en haut, du côté où l'on commence à lire, et la précédente là où tu l'avais finie.
 - Zoomé, au doigt : quand l'image est déjà au bord, un appui sur ce côté ou un glissement vers ce côté tourne la page, sans revenir à 100 %.

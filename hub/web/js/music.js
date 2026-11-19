@@ -332,8 +332,8 @@
       var facts = info && info.facts ? info.facts.split(' · ').map(function (part) { return H.tr(part); }) : [];
       if (info && info.disambiguation) facts.push(info.disambiguation);     // la description courte de MusicBrainz (« UK soul/jazz singer ») n'est pas un genre : elle va avec les faits
       if (facts.length) box.appendChild(h('p', { class: 'meta' }, facts.join(' · ')));
-      var tags = (d.genres || []).filter(Boolean).join(', ');
-      if (tags) box.appendChild(h('p', { class: 'genres' }, tags));
+      var tags = H.genreLine(lib, d.genres);
+      if (tags) box.appendChild(tags);
       box.appendChild(h('p', { class: facts.length ? 'credit' : 'meta' }, meta));
       if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, H.t('Wikipédia'))));
       box.appendChild(artistActions(d, list));
