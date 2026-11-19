@@ -1,3 +1,6 @@
+## 0.39.1 — 2026-11-19
+- Corrections internes.
+
 ## 0.39.0 — 2026-11-19
 - Le bouton pour passer l'introduction apparaît aussi sur les chapitres nommés « Main Titles », et celui pour passer le générique sur « End Titles ».
 - Cela vaut tout de suite pour les vidéos déjà analysées, sans attendre une nouvelle analyse.
