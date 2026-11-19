@@ -20,7 +20,7 @@ media_hub       le lecteur : lit ces étiquettes et sert la médiathèque (n'éc
 | Films | `.mkv` (titre, synopsis, casting, jaquette embarqués par `Metadata.py`), sagas regroupées en une vignette (bouton « Sagas ») | vidéo, sous-titres, reprise |
 | Séries | dossiers série / saison / épisode, affiche TMDB (avec `TMDB_KEY`) | vidéo, épisode suivant |
 | Musique | `.flac`, `.mp3`, … regroupés en albums, pochette = `cover.{ext}` du dossier ; une image `1997 - OK Computer.jpg` dans le dossier de l'artiste déclare un album manquant (grisé, sur sa fiche seulement) ; la photo de l'artiste est `artist.webp` dans son dossier (voir [Photos d'artistes](#photos-dartistes)) | barre audio qui continue pendant la navigation |
-| Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens de lecture par série, double page, thèmes |
+| Livres | `.cbz` (pages), `.epub` (chapitres) ; `.cbr`, `.mobi`, `.azw3` en téléchargement | liseuse, sens de lecture par série, double page, zoom dans une page de BD, thèmes |
 
 - **Accueil** : « Reprendre » (films, épisodes, livres, albums en cours) et les ajouts récents de chaque bibliothèque.
 - **Bibliothèque** : recherche, genres, tri (titre, ajout, année, note TMDB pour les films et les séries), liste « Statut » (Tous / À voir / En cours / Terminés, accordée selon le genre de la bibliothèque).

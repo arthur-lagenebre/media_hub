@@ -232,11 +232,11 @@
       if (bZoom) setLabel(bZoom, zoomText());
     }
     function unzoom() { zoom = 1; sizePages(); }
-    function pan(d) {                     // zoomé : la flèche déplace l'image ; déjà au bord, elle tourne la page
+    function pan(d, repeat) {             // zoomé : la flèche déplace l'image ; déjà au bord, un nouvel appui tourne la page (pas la répétition d'une flèche maintenue pour y arriver)
       var x = d[0], y = d[1];
       var room = x > 0 ? stage.scrollWidth - stage.clientWidth - stage.scrollLeft : x < 0 ? stage.scrollLeft : y > 0 ? stage.scrollHeight - stage.clientHeight - stage.scrollTop : stage.scrollTop;
       if (room > 1) stage.scrollBy(Math.round(x * stage.clientWidth * 0.25), Math.round(y * stage.clientHeight * 0.25));
-      else turn(x ? ((x > 0) !== rtl ? 1 : -1) : y);
+      else if (!repeat) turn(x ? ((x > 0) !== rtl ? 1 : -1) : y);
     }
 
     // Appuis et gestes sur la zone de lecture. Au doigt, l'appui se traite à la levée du doigt (le clic du navigateur est annulé) : il attend un instant un éventuel second appui, sinon un double appui tournerait d'abord la page.
@@ -269,6 +269,7 @@
       var t = e.touches;
       if (!touch) return;
       if (touch.pinch && t.length > 1) {
+        if (!e.cancelable) return;          // le navigateur défile déjà (un doigt posé avant l'autre) : le geste reste un défilement, qu'on ne modifie pas en même temps que lui
         e.preventDefault();
         zoomTo(touch.pinch.z * span(t) / touch.pinch.d, (t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2);
       } else if (far(touch, t[0].clientX, t[0].clientY, SLOP)) touch.moved = true;
@@ -448,7 +449,7 @@
       if (info.format === 'cbz') {
         if (k === '+' || k === '=') { zoomTo(level(1) || zoom); eat(); }
         else if (k === '-') { zoomTo(level(-1) || 1); eat(); }
-        else if (zoom > 1 && ARROWS[k]) { pan(ARROWS[k]); eat(); }
+        else if (zoom > 1 && ARROWS[k]) { pan(ARROWS[k], e.repeat); eat(); }
         else if (k === 'ArrowRight') { turn(rtl ? -1 : 1); eat(); }
         else if (k === 'ArrowLeft') { turn(rtl ? 1 : -1); eat(); }
         else if (k === ' ' || k === 'PageDown') { if (fit === 'width' && stage.scrollTop + stage.clientHeight < stage.scrollHeight - 4) stage.scrollBy(0, stage.clientHeight * 0.85); else turn(1); eat(); }

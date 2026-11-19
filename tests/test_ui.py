@@ -3063,22 +3063,38 @@ class TestReaderZoom(ReaderCase):
     def scrolled(self, axis, beyond):
         self.page.wait_for_function("a => document.querySelector('.reader .stage')[a.prop] > a.beyond", arg={"prop": "scrollLeft" if axis == "x" else "scrollTop", "beyond": beyond})
 
-    def push_to_edge(self, key, axis):
-        """Appuie sur la flèche jusqu'au bord (chaque appui doit déplacer l'image), sans aller plus loin."""
+    def push_to_edge(self, key, axis, held=False):
+        """Appuie sur la flèche jusqu'au bord (chaque appui doit déplacer l'image), sans aller plus loin ; `held` : la touche reste enfoncée, le navigateur envoie des répétitions."""
         for _ in range(30):
             stage = self.geometry()["stage"]
             if stage[axis] >= stage["m" + axis] - 1:
                 return
-            self.page.keyboard.press(key)
+            if held:
+                self.page.keyboard.down(key)
+            else:
+                self.page.keyboard.press(key)
             self.scrolled(axis, stage[axis])
         self.fail("le bord n'est jamais atteint")
 
-    def bar_toggles(self, act):
-        """`act` doit montrer ou masquer la barre : un appui au milieu, ou un appui sur un côté quand on est zoomé."""
-        bar = self.page.locator(".reader .rbar")
-        shown = bar.is_visible()
+    def hide_bar(self):
+        """Masque la barre d'un clic au milieu. Son minuteur peut l'avoir masquée juste avant le clic, qui la remontre : on recommence jusqu'à la voir masquée."""
+        bar, size = self.page.locator(".reader .rbar"), self.page.viewport_size
+        for _ in range(3):
+            if not bar.is_visible():
+                return
+            self.page.locator(".reader .stage").click(position={"x": size["width"] // 2, "y": size["height"] // 2})
+            try:
+                expect(bar).to_be_hidden(timeout=2000)
+                return
+            except AssertionError:
+                continue
+        self.fail("la barre ne se masque pas")
+
+    def bar_shows(self, act):
+        """`act` (un appui au milieu, ou sur un côté quand on est zoomé) doit faire apparaître la barre. Elle part masquée : masquée, elle n'a pas de minuteur qui la change toute seule."""
+        self.hide_bar()
         act()
-        (expect(bar).to_be_hidden if shown else expect(bar).to_be_visible)()
+        expect(self.page.locator(".reader .rbar")).to_be_visible()
 
     def phone(self):
         """Un téléphone tactile (390 × 800) ; les gestes passent par `touch`."""
@@ -3126,7 +3142,7 @@ class TestReaderZoom(ReaderCase):
         self.read("Loupe", double=False)
         self.keys(("+", 150))
         for x in (40, 960):
-            self.bar_toggles(lambda: self.page.locator(".reader .stage").click(position={"x": x, "y": 350}))
+            self.bar_shows(lambda: self.page.locator(".reader .stage").click(position={"x": x, "y": 350}))
             self.assertEqual(self.label(), "Page 1 / 6")
             self.wait_zoom(150)
 
@@ -3145,6 +3161,19 @@ class TestReaderZoom(ReaderCase):
         self.page.keyboard.press("ArrowDown")
         expect(self.page.locator(".reader .pg")).to_have_text("Page 3 / 6")
         self.wait_zoom(100)
+
+    def test_a_held_arrow_stops_at_the_edge_of_a_zoomed_page(self):
+        """À la télécommande, on garde la flèche enfoncée pour aller au bord : ses répétitions s'y arrêtent, seul un nouvel appui tourne la page."""
+        self.read("Loupe", double=False)
+        self.keys(("+", 150), ("+", 200), ("+", 300))
+        self.push_to_edge("ArrowRight", "x", held=True)
+        for _ in range(3):
+            self.page.keyboard.down("ArrowRight")              # encore des répétitions, au bord
+        self.page.keyboard.up("ArrowRight")
+        self.wait_zoom(300)                                    # la page n'a pas tourné (une page tournée revient à 100 %)
+        self.assertEqual(self.label(), "Page 1 / 6")
+        self.page.keyboard.press("ArrowRight")
+        expect(self.page.locator(".reader .pg")).to_have_text("Page 2 / 6")
 
     def test_plus_and_minus_zoom_around_the_middle_of_the_screen(self):
         self.read("Loupe", double=False)
@@ -3175,7 +3204,7 @@ class TestReaderZoom(ReaderCase):
         self.wait_pages([1])
         self.swipe(370, 400, -120, 0)                          # un glissement du même côté : rien
         self.swipe(20, 400, 120, 0)
-        self.bar_toggles(lambda: self.tap(195, 400))           # un appui au milieu passe, lui
+        self.bar_shows(lambda: self.tap(195, 400))             # un appui au milieu passe, lui
         self.assertEqual(self.label(), "Page 2 / 6")
 
     def test_a_double_tap_zooms_on_the_point_under_the_finger_and_one_finger_still_scrolls(self):
