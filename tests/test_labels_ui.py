@@ -14,7 +14,7 @@ import unittest
 import urllib.request
 
 from tests.test_server import Running
-from tests.test_ui import UiCase, expect, sync_playwright
+from tests.test_ui import UiCase, expect, sync_playwright, watch_requests
 
 IDS = ("films", "series", "musique", "livres")
 TRICKY = '<b>x</b> &amp; "q" \'a\''                 # du HTML, une entité, deux sortes de guillemets : tout doit s'afficher tel quel
@@ -473,6 +473,7 @@ class TestRenameOfAnOrdinaryAccount(unittest.TestCase):
         return json.load(urllib.request.urlopen(req))
 
     def sign_in(self, page, name, password):
+        watch_requests(self, page)
         page.goto(self.base + "/login")
         page.fill("input[name=user]", name)
         page.fill("input[type=password]", password)

@@ -16,6 +16,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import types
 import unittest
 import urllib.parse
 import urllib.request
@@ -78,6 +79,39 @@ def columns_of(grid):
     return grid.evaluate("g => getComputedStyle(g).gridTemplateColumns.split(' ').length")
 
 
+PORTS_HINT = ("ERR_NO_BUFFER_SPACE : Windows n'avait plus de port éphémère libre pour cette connexion (WSAENOBUFS, 10055). Journal Système, fournisseur Tcpip, événement 4231 :\n"
+              "  Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Tcpip'} -MaxEvents 5   (son heure doit être celle de la panne)\n")
+
+
+def watch_requests(case, page):
+    """Note dans `case.failed_requests` chaque requête que le navigateur n'a pas pu finir (heure, méthode, adresse, motif ; `ERR_ABORTED`, normal quand on quitte une page, est écarté).
+    Les notes ne font échouer aucun test : elles s'ajoutent au rapport d'un test déjà en échec, où elles disent quelle ressource a manqué (`net::ERR_NO_BUFFER_SPACE`, par exemple)."""
+    if not hasattr(case, "failed_requests"):
+        case.failed_requests = []
+        case.addCleanup(add_failed_requests_to_report, case)
+
+    def noted(request):
+        failure = request.failure
+        if "ERR_ABORTED" not in str(failure):
+            now = time.time()
+            case.failed_requests.append(f"{time.strftime('%H:%M:%S', time.localtime(now))}.{int(now * 1000) % 1000:03d} {request.method} {request.url} : {failure}")
+    page.on("requestfailed", noted)
+
+
+def add_failed_requests_to_report(case):
+    """Après `tearDown` : si le test a échoué, ses notes rejoignent son rapport (`result.failures` / `result.errors` ; une fois par échec, sous-tests compris)."""
+    result = getattr(getattr(case, "_outcome", None), "result", None)
+    if not case.failed_requests or result is None:
+        return
+    note = "\nRequêtes que le navigateur n'a pas pu finir :\n  " + "\n  ".join(case.failed_requests) + "\n"
+    if any("ERR_NO_BUFFER_SPACE" in line for line in case.failed_requests):
+        note += PORTS_HINT
+    for bucket in (result.failures, result.errors):
+        for index, (test, text) in enumerate(bucket):
+            if getattr(test, "test_case", test) is case:
+                bucket[index] = (test, text + note)
+
+
 @unittest.skipUnless(sync_playwright and fixtures.FFMPEG, "Playwright ou ffmpeg absent")
 class UiCase(unittest.TestCase):
     @classmethod
@@ -129,6 +163,7 @@ class UiCase(unittest.TestCase):
         self.errors = []
         self.page.on("pageerror", lambda e: self.errors.append(str(e)))
         self.page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and not any(code in m.text for code in ("404", "500", "503")) else None)
+        watch_requests(self, self.page)
 
     def tearDown(self):
         self.context.close()
@@ -271,6 +306,7 @@ class TestNavigation(UiCase):
         self.context = self.browser.new_context(viewport={"width": 390, "height": 800}, has_touch=True)
         self.page = self.context.new_page()
         self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+        watch_requests(self, self.page)
         for hash in ("", "#/l/films", "#/l/musique", "#/admin", "#/search"):
             self.open(hash)
             self.page.wait_for_timeout(600)
@@ -601,6 +637,7 @@ class TestQualityTags(UiCase):
                 context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
                 self.page = context.new_page()
                 self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                watch_requests(self, self.page)
                 self.open_item("films", "Direct")
                 self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), device)
                 box, column = self.view(".hero .tags").bounding_box(), self.view(".hero .info").bounding_box()
@@ -648,6 +685,7 @@ class TestQualityTags(UiCase):
                 context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
                 self.page = context.new_page()
                 self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                watch_requests(self, self.page)
                 self.open("#/l/films")
                 chip = self.card("films", "Direct").locator(".qual")
                 chip.wait_for()
@@ -4790,6 +4828,7 @@ class TestHeroOnANarrowPhone(UiCase):
                 context.add_init_script("localStorage.setItem('hub.device', JSON.stringify('phone'))")
                 self.page = context.new_page()
                 self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                watch_requests(self, self.page)
                 self.open("#/i/" + self.item("films", LONG_TITLE)["id"])
                 self.view(".hero .tags").wait_for()
                 self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), "phone")
@@ -6875,6 +6914,7 @@ class InboxUiCase(unittest.TestCase):
         page = context.new_page()
         page.on("pageerror", lambda e: self.errors.append(str(e)))
         page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text else None)
+        watch_requests(self, page)
         page.goto(self.base + "/login")
         page.fill("input[name=user]", name)
         page.fill("input[type=password]", "secret" if name == "admin" else self.PASSWORD)
@@ -8493,6 +8533,7 @@ class RequestsUiCase(unittest.TestCase):
         slow_down(page)
         page.on("pageerror", lambda e: self.errors.append(str(e)))
         page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text else None)
+        watch_requests(self, page)
         page.goto(self.base + "/login")
         page.fill("input[name=user]", name)
         page.fill("input[type=password]", "secret" if name == "admin" else self.PASSWORD)
@@ -9977,6 +10018,7 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         page = context.new_page()
         page.on("pageerror", lambda e: self.errors.append(str(e)))
         page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text else None)
+        watch_requests(self, page)
         if setup:
             setup(page)
         page.goto(self.base + "/login")
@@ -10391,6 +10433,96 @@ class TestRecommendationsInTheUi(unittest.TestCase):
         page.goto(self.base + "/#/settings?tab=preferences")
         self.view(page, ".panel .line b").filter(has_text=re.compile("^Because you liked…$")).wait_for()
         self.assertEqual(page.evaluate("Hub.missing"), [])
+
+
+class FakePage:
+    """Une page qui ne garde que ses écouteurs : de quoi simuler les événements du navigateur sans navigateur."""
+
+    def __init__(self):
+        self.handlers = {}
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+
+def refused(url, failure="net::ERR_NO_BUFFER_SPACE"):
+    return types.SimpleNamespace(url=url, method="GET", failure=failure)
+
+
+class TestFailedRequestsNote(unittest.TestCase):
+    """Les requêtes que le navigateur n'a pas pu finir sont notées, et rejoignent le rapport d'un test déjà en échec (elles n'en font échouer aucun)."""
+
+    def report_of(self, fails, failure="net::ERR_NO_BUFFER_SPACE"):
+        """Le rapport d'un test qui voit une page signaler une requête refusée et une annulée, puis échoue (ou non). Défini ici : la découverte ne doit pas le prendre pour un vrai test."""
+        class Probe(unittest.TestCase):
+            def runTest(case):
+                page = FakePage()
+                watch_requests(case, page)
+                page.handlers["requestfailed"](refused("http://127.0.0.1:1/i18n.js", failure))
+                page.handlers["requestfailed"](refused("http://127.0.0.1:1/vieille-page", "net::ERR_ABORTED"))
+                if fails:
+                    case.fail("exprès")
+        out = io.StringIO()
+        result = unittest.TextTestRunner(stream=out, verbosity=0).run(Probe())
+        return result, out.getvalue()
+
+    def test_a_failing_test_report_names_the_request_the_browser_could_not_finish(self):
+        result, text = self.report_of(True)
+        self.assertEqual((len(result.failures), len(result.errors)), (1, 0))
+        self.assertIn("http://127.0.0.1:1/i18n.js", text)
+        self.assertIn("net::ERR_NO_BUFFER_SPACE", text)
+        self.assertIn("exprès", text)                                          # la vraie cause reste dite
+
+    def test_a_port_exhaustion_is_explained_with_where_to_check_it(self):
+        """`ERR_NO_BUFFER_SPACE` est Windows à court de ports éphémères : le rapport le dit et nomme l'événement du journal Système qui confirme l'heure."""
+        _, text = self.report_of(True)
+        self.assertIn("Tcpip", text)
+        self.assertIn("4231", text)
+
+    def test_another_failure_gets_no_such_explanation(self):
+        _, text = self.report_of(True, "net::ERR_CONNECTION_REFUSED")
+        self.assertIn("net::ERR_CONNECTION_REFUSED", text)
+        self.assertNotIn("4231", text)
+
+    def test_a_cancelled_request_is_not_noted(self):
+        _, text = self.report_of(True)
+        self.assertNotIn("vieille-page", text)
+
+    def test_a_passing_test_is_left_alone(self):
+        result, text = self.report_of(False)
+        self.assertTrue(result.wasSuccessful())
+        self.assertNotIn("i18n.js", text)
+
+    @unittest.skipUnless(sync_playwright, "Playwright absent")
+    def test_the_browser_reports_a_refused_request_and_a_cancelled_one(self):
+        """Avec un vrai navigateur : une route qui refuse laisse une note (adresse et motif), une route qui annule n'en laisse pas."""
+        page_html = '<img src="/refusee.png"><img src="/annulee.png">'
+
+        def serve(route):
+            url = route.request.url
+            if url.endswith("/refusee.png"):
+                route.abort()
+            elif url.endswith("/annulee.png"):
+                route.abort("aborted")
+            else:
+                route.fulfill(body=page_html, content_type="text/html")
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            page = browser.new_page()
+            seen = []
+            page.on("requestfailed", lambda request: seen.append(request.url))      # tout ce que le navigateur signale, notes ou non
+            watch_requests(self, page)
+            page.route("http://faux.test/**", serve)
+            page.goto("http://faux.test/")
+            for _ in range(50):
+                if len(seen) >= 2:
+                    break
+                page.wait_for_timeout(100)
+            browser.close()
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(len(self.failed_requests), 1)
+        self.assertIn("http://faux.test/refusee.png", self.failed_requests[0])
+        self.assertIn("net::ERR_FAILED", self.failed_requests[0])
 
 
 if __name__ == "__main__":
