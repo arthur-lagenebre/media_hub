@@ -320,6 +320,38 @@ class TestSecurity(ServerCase):
         self.assertEqual(self.api.request("POST", "/api/play/xxxx", body={})[0], 404)
 
 
+class TestGenresOfASheet(ServerCase):
+    """Les genres d'une fiche et ceux du filtre viennent de la même source : chaque genre affiché sur une fiche, cliqué, donne une liste qui contient l'élément, et figure au menu."""
+
+    def listed(self, lib, genre, **query):
+        data = self.items(lib, genre=genre, **query)
+        self.assertIn(genre, [g[0] for g in data["genres"]], f"{genre!r} absent du menu de {lib}")
+        return [i["id"] for i in data["items"]]
+
+    def test_each_genre_of_a_sheet_filters_a_list_holding_that_item_in_every_kind_of_library(self):
+        dark = self.item_by_title("series", "Dark")["id"]
+        self.hub.db.update_item_meta(dark, genres=["Drame", "Science-Fiction"])          # comme l'enrichissement TMDB, seule source des genres d'une série
+        for lib in ("films", "series", "musique", "livres"):
+            checked = 0
+            for card in self.items(lib)["items"]:
+                for genre in self.detail(card["id"])["genres"]:
+                    with self.subTest(lib=lib, item=card["title"], genre=genre):
+                        self.assertIn(card["id"], self.listed(lib, genre))
+                        checked += 1
+            self.assertGreater(checked, 0, f"aucun genre vérifié dans {lib}")
+
+    def test_each_genre_of_an_artist_sheet_filters_the_artists_and_their_albums(self):
+        album = self.item_by_title("musique", "Discovery")
+        artist = self.detail(album["id"])["artist_id"]
+        status, sheet = self.api.json(f"/api/artist/musique/{artist}")
+        self.assertEqual(status, 200)
+        self.assertTrue(sheet["genres"])
+        for genre in sheet["genres"]:
+            with self.subTest(genre=genre):
+                self.assertIn(artist, self.listed("musique", genre, view="artists"))
+                self.assertIn(album["id"], self.listed("musique", genre))
+
+
 class TestBooks(ServerCase):
     def test_cbz_pages(self):
         entry = self.detail(self.item_by_title("livres", "Naruto")["id"])["entries"][0]["id"]

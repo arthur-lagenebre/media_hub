@@ -342,6 +342,31 @@ class TestLibraryRoute(RouteCase):
         self.assertEqual((genres[0], genres[1], genres[-1]), (["électro", 2], ["Genre 000", 1], ["Zèbre", 3]))          # « électro » vient avant « Genre » : l'accent et la casse ne comptent pas
         self.assertEqual([g[0] for g in genres[1:-1]], [f"Genre {n:03d}" for n in range(58)])                             # la coupure garde les plus fréquents, puis les premiers par nom : Genre 058 à 064 sont écartés
 
+    def test_a_rare_genre_asked_in_the_address_is_in_the_menu_with_its_count_in_its_alphabetical_place(self):
+        rows = [item(f"g{n}", title=f"Film {n}", genres=json.dumps([f"Genre {n:03d}", "Commun"] if n < 60 else [f"Genre {n:03d}"])) for n in range(64)]
+        rows += [item("rare", title="Rare", genres=json.dumps(["Ésotérique"]))]
+        self.fill(rows, [])
+        shown = [g[0] for g in self.get("/api/library/lib").json()["genres"]]
+        self.assertEqual((len(shown), "Genre 061" in shown, "Ésotérique" in shown), (60, False, False))                 # hors des 60 premiers sans demande
+        for asked, quoted, count, titles in (("Genre 061", "Genre%20061", 1, ["Film 61"]), ("Ésotérique", "%C3%89sot%C3%A9rique", 1, ["Rare"])):
+            with self.subTest(genre=asked):
+                out = self.get(f"/api/library/lib?genre={quoted}").json()
+                names = [g[0] for g in out["genres"]]
+                self.assertIn([asked, count], out["genres"])
+                self.assertEqual((len(names), names), (61, sorted(names, key=lambda g: (app.fold(g), g))))          # ajouté à sa place alphabétique, sans rien retirer
+                self.assertEqual([i["title"] for i in out["items"]], titles)
+
+    def test_two_genres_that_differ_only_by_case_are_two_entries_ordered_by_name_not_by_count(self):
+        self.fill([item("a", title="A", genres=json.dumps(["Rock"])), item("b", title="B", genres=json.dumps(["Rock"])), item("c", title="C", genres=json.dumps(["rock"]))], [])
+        self.assertEqual(self.get("/api/library/lib").json()["genres"], [["Rock", 2], ["rock", 1]])
+
+    def test_an_unknown_genre_adds_nothing_to_the_menu(self):
+        self.fill(self.films(), [])
+        menu = self.get("/api/library/lib").json()["genres"]
+        out = self.get("/api/library/lib?genre=Inconnu").json()
+        self.assertEqual((out["genres"], out["total"]), (menu, 0))
+        self.assertEqual(self.get("/api/library/lib?genre=commun").json()["genres"], menu)          # la casse compte : « commun » n'est pas « Commun »
+
     def test_a_filter_nobody_knows_is_refused_in_french_and_the_old_ones_still_work(self):
         self.fill(self.films(), [])
         reply = self.get("/api/library/lib?filter=autre")

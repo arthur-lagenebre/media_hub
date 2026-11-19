@@ -1641,10 +1641,13 @@ def music_counts(chosen, artists):
     return len({artist_key(row) for row in chosen}), len(chosen)
 
 
-def genre_menu(genres):
-    """Les 60 genres les plus fréquents (à égalité, par nom), rangés par ordre alphabétique sans accent ni casse : c'est l'ordre du menu de l'interface."""
-    top = sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:60]
-    return sorted(top, key=lambda kv: (fold(kv[0]), kv[0]))
+def genre_menu(genres, asked=""):
+    """Les 60 genres les plus fréquents (à égalité, par nom), rangés par ordre alphabétique sans accent ni casse : c'est l'ordre du menu de l'interface.
+    Le genre `asked` (celui du filtre, venu de l'adresse ou d'un clic sur une fiche) y est toujours, avec son nombre, même rare ; un genre que la bibliothèque n'a pas n'ajoute rien."""
+    top = dict(sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:60])
+    if asked in genres:
+        top[asked] = genres[asked]
+    return sorted(top.items(), key=lambda kv: (fold(kv[0]), kv[0]))
 
 
 def library_extras(out, kind, sections, absent, sagas, chosen, artists=False):
@@ -1689,7 +1692,7 @@ def api_library(h, m, q):
     page = chosen[offset:offset + limit]
     out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "total": len(chosen), "offset": offset,
            "items": [library_item(r, seen, card_quality(hub.db), ratings) for r in page],          # la table ne connaît que des films : une autre bibliothèque n'y trouve rien
-           "genres": genre_menu(genres)}
+           "genres": genre_menu(genres, q.get("genre", ""))}
     if group and sort == "part":
         number_films(out["items"], ranks, offset + 1)
     mark_requests(h, absent)
