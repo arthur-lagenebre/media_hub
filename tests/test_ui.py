@@ -4233,6 +4233,96 @@ class TestArtistPhotoCrop(UiCase):
         self.page.wait_for_selector(".menu.crop", state="detached")
 
 
+class TestClickableGenres(UiCase):
+    """Chaque genre d'une fiche (film, album, artiste) ouvre sa bibliothèque filtrée sur ce genre ; Retour revient à la fiche.
+    « Sans Etiquette » porte 62 genres : avec ceux d'Inception, la bibliothèque des films en a plus de 60, et « Zéro & Un » (un accent, une esperluette, le dernier par nom) n'est pas des 60 du menu."""
+
+    RARE = "Zéro & Un"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        db = cls.run_.hub.db
+        films = {row["title"]: row["id"] for row in db.query("SELECT id, title FROM items WHERE lib='films'")}
+        db.update_item_meta(films["Inception"], genres=["Science-Fiction", "Action", cls.RARE])
+        db.update_item_meta(films["Sans Etiquette"], genres=[f"Genre {n:03d}" for n in range(62)])
+
+    def genre_button(self):
+        return self.view(".tools .flt").first
+
+    def arrive(self, lib, genre):
+        """Attend la bibliothèque `lib` filtrée sur `genre` : l'adresse, le bouton « Genre » et les cartes."""
+        self.shown(f"#/l/{lib}?genre=" + urllib.parse.quote(genre, safe=""))
+        expect(self.genre_button()).to_contain_text(genre)
+        self.view(".grid .card").first.wait_for()
+        return self.view(".grid .card").evaluate_all("els => els.map(e => e.title)")
+
+    def film_sheet(self, title="Inception"):
+        self.open("#/i/" + self.item("films", title)["id"])
+        self.view(".info .genres a").first.wait_for()
+
+    def test_the_genres_of_a_film_are_links_on_the_same_line_and_one_opens_the_filtered_library(self):
+        self.film_sheet()
+        self.assertEqual(self.view(".info .genres").inner_text(), f"Science-Fiction, Action, {self.RARE}")       # la ligne garde son aspect, séparateurs compris
+        self.assertEqual(self.view(".info .genres a.f").all_inner_texts(), ["Science-Fiction", "Action", self.RARE])
+        self.view(".info .genres a", has_text="Action").click()
+        titles = self.arrive("films", "Action")
+        self.assertIn("Inception", titles)
+        self.assertNotIn("Sans Etiquette", titles)
+
+    def test_a_rare_genre_with_an_ampersand_and_an_accent_stays_filtered(self):
+        self.assertNotIn(self.RARE, [g[0] for g in self.api("/api/library/films")["genres"]])         # hors des 60 du menu sans demande
+        self.film_sheet()
+        self.view(".info .genres a", has_text=self.RARE).click()
+        self.assertEqual(self.arrive("films", self.RARE), ["Inception"])
+
+    def test_the_genre_of_an_album_opens_the_music_in_the_view_of_the_account(self):
+        for view, card in (("albums", "Discovery"), ("artists", "Daft Punk")):
+            with self.subTest(view=view):
+                self.api("/api/me/settings", {"music_view": view})
+                self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+                self.page.goto("about:blank")                       # une autre ancre de la même page ne la recharge pas : les réglages du compte seraient ceux d'avant
+                self.open("#/i/" + self.item("musique", "Discovery")["id"])
+                self.view(".info .genres a", has_text="Electronic").click()
+                self.assertIn(card, self.arrive("musique", "Electronic"))
+
+    def test_the_genre_of_an_artist_opens_the_music_filtered(self):
+        artist = self.api("/api/item/" + self.item("musique", "Discovery")["id"])["artist_id"]
+        self.open(f"#/artist/musique/{artist}")
+        self.view(".info .genres a", has_text="Electronic").click()
+        self.assertIn("Discovery", self.arrive("musique", "Electronic"))
+
+    def test_enter_on_a_genre_opens_it_and_back_returns_to_the_sheet(self):
+        self.film_sheet()
+        sheet = self.page.url
+        self.view(".info .genres a", has_text="Science-Fiction").focus()
+        self.page.keyboard.press("Enter")
+        self.assertEqual(self.arrive("films", "Science-Fiction"), ["Inception"])
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_url(sheet)
+        self.page.wait_for_function("document.activeElement && document.activeElement.getAttribute('data-key') === 'genre-Science-Fiction'")      # le focus retrouve le genre choisi
+
+    def test_on_a_tv_the_arrows_go_from_genre_to_genre_and_up_and_down_around_the_line(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.film_sheet()
+        focused = lambda: self.page.evaluate("document.activeElement.textContent.trim()")
+        self.page.wait_for_function("document.activeElement && document.activeElement.classList.contains('primary')")
+        self.press("ArrowUp")
+        self.assertEqual(focused(), "Christopher Nolan")
+        self.press("ArrowUp")
+        self.assertEqual(focused(), "Science-Fiction")
+        self.press("ArrowRight")
+        self.assertEqual(focused(), "Action")
+        self.press("ArrowRight")
+        self.assertEqual(focused(), self.RARE)
+        self.press("ArrowLeft", "ArrowLeft")
+        self.assertEqual(focused(), "Science-Fiction")
+        self.press("ArrowDown")
+        self.assertEqual(focused(), "Christopher Nolan")
+        self.press("ArrowDown")
+        self.assertTrue(self.page.evaluate("document.activeElement.classList.contains('primary')"))
+
+
 class TestArtistSheetGenres(UiCase):
     """La ligne des genres de la fiche d'un artiste ne porte que des genres : la description courte de MusicBrainz va avec les faits."""
 
