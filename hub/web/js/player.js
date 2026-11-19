@@ -90,10 +90,12 @@
     var bSpeed = H.button(H.t('Vitesse'), 'speed', { class: 'spd', 'aria-label': H.t('Vitesse de lecture : {rate}', { rate: H.speedLabel(1) }), onclick: pickSpeed });
     var bFull = H.button('', 'full', { 'aria-label': H.t('Plein écran'), onclick: fullscreen });
     var bBack = H.button('', 'back', { 'aria-label': H.t('Retour'), onclick: function () { H.back('#/'); } });
+    // Le volume sur ordinateur et tablette ; sur téléphone et télé, les boutons de l'appareil ou de la télécommande s'en chargent. Il tient d'une source à l'autre (piste, qualité, saut) : c'est l'élément qui le garde.
+    var volume = H.device === 'pc' || H.device === 'tablet' ? H.volume(video, 'videoVolume') : null;
     var ctl = h('div', { class: 'ctl' },
       h('div', { class: 'top' }, bBack, h('div', { class: 'txt' }, title, sub), pill),
       h('div', { class: 'bottom' }, h('div', { class: 'times' }, tCur, tEnd), seekbar,
-        h('div', { class: 'btns' }, playBtn, bRew, bFwd, h('span', { class: 'sp' }), bSpeed, bChapters, bAudio, bSubs, bQual, bNext, bFull)));
+        h('div', { class: 'btns' }, playBtn, bRew, bFwd, volume && volume.el, h('span', { class: 'sp' }), bSpeed, bChapters, bAudio, bSubs, bQual, bNext, bFull)));
     var err = h('div', { class: 'err', hidden: true });
     var el = h('section', { class: 'player idle' }, video, subPic, subBox, spin, osd, ctl, bSkip, err);
 
@@ -426,6 +428,7 @@
       if (k === 'MediaPlayPause') { toggle(); eat(e); return; }
       if (k === 'MediaTrackNext') { goNext(); eat(e); return; }
       if (k === 'f' || k === 'F') { fullscreen(); eat(e); return; }
+      if ((k === 'm' || k === 'M') && volume) { volume.toggle(); show(); eat(e); return; }
       var inControls = !ctl.hidden && ctl.contains(document.activeElement), onSkip = document.activeElement === bSkip;
       if (!inControls) {                     // personne n'est sur une commande : les flèches pilotent directement la lecture, et haut ou bas va d'abord au bouton de saut s'il est affiché
         if (k === 'ArrowLeft' || k === 'ArrowRight') { seekBy(k === 'ArrowLeft' ? -1 : 1); eat(e); }

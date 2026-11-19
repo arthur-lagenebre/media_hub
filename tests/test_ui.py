@@ -960,6 +960,148 @@ class TestVideoPlayer(UiCase):
         self.assertIn("Lecture impossible", self.page.inner_text(".player .err"))
 
 
+class TestVideoVolume(UiCase):
+    """Le volume de la vidéo : un bouton muet et un curseur sur ordinateur et tablette, gardés dans `videoVolume` (pas dans `volume`, celle de la musique), rétablis à chaque ouverture."""
+
+    @classmethod
+    def add_media(cls, root):
+        film = root / "srv" / "Films" / "Deux Voix (2024)" / "Deux Voix (2024).mkv"
+        film.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([fixtures.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=24:duration=60",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=60", "-f", "lavfi", "-i", "sine=frequency=880:duration=60",
+                        "-map", "0:v", "-map", "1:a", "-map", "2:a", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "12", "-c:a", "aac", "-ac", "2",
+                        "-metadata:s:a:0", "language=fre", "-metadata:s:a:1", "language=eng", str(film)], check=True)
+
+    VOLUME = "(() => { var v = document.querySelector('.player video'); return [Math.round(v.volume * 100) / 100, v.muted]; })()"
+
+    def begin(self, title):
+        entry = self.entries("films", title)[0]["id"]
+        self.open("#/play/" + entry)
+        self.page.wait_for_selector(".player video")
+        self.wait_playing()
+        return entry
+
+    def volume(self):
+        return self.page.evaluate(self.VOLUME)
+
+    def pref(self, key):
+        return self.page.evaluate(f"JSON.parse(localStorage.getItem('hub.{key}'))")
+
+    def new_source(self):
+        """Attend que la vidéo ait changé de source depuis `mark_source`, puis qu'elle joue."""
+        self.page.wait_for_function("document.querySelector('.player video').src !== window.src0", timeout=15000)
+        self.wait_playing()
+
+    def mark_source(self):
+        self.page.evaluate("window.src0 = document.querySelector('.player video').src")
+
+    def pick(self, button, option):
+        self.page.locator(".player .btn", has_text=button).click()
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt", has_text=option).click()
+        self.page.wait_for_selector(".veil", state="detached")
+
+    def test_the_slider_sets_the_volume_which_survives_a_new_audio_track_and_a_new_quality(self):
+        self.begin("Deux Voix")
+        self.page.evaluate("window.loads = 0; document.querySelector('.player video').addEventListener('loadstart', function () { window.loads++; })")
+        self.page.locator(".player .vol").fill("0.3")
+        self.assertEqual(self.volume(), [0.3, False])
+        self.assertEqual(self.page.evaluate("window.loads"), 0)                         # le film n'est pas relancé
+        self.mark_source()
+        self.page.locator(".player .btn", has_text="Audio").click()
+        self.page.wait_for_selector(".veil .opt")
+        self.page.locator(".veil .opt").nth(1).click()
+        self.new_source()
+        self.assertEqual(self.volume(), [0.3, False])
+        self.mark_source()
+        self.pick("Qualité", "720p")
+        self.new_source()
+        self.assertEqual(self.volume(), [0.3, False])
+        self.assertEqual(self.page.locator(".player .vol").input_value(), "0.3")
+
+    def test_with_converted_sound_the_volume_survives_a_jump(self):
+        self.begin("Long")
+        self.assertEqual(self.page.inner_text(".player .pill"), "Son converti")
+        self.page.locator(".player .vol").fill("0.4")
+        self.page.locator(".player .seekbar").click(position={"x": 960, "y": 5})         # le flux repart de là : une nouvelle source sur le même <video>
+        self.page.wait_for_function("(() => { var m = /&start=([0-9.]+)/.exec(document.querySelector('.player video').src); return m && +m[1] > 30; })()", timeout=15000)
+        self.wait_playing()
+        self.assertEqual(self.volume(), [0.4, False])
+
+    def test_the_setting_comes_back_with_the_next_video_and_leaves_the_music_alone(self):
+        self.page.add_init_script("if (!localStorage.getItem('hub.volume')) localStorage.setItem('hub.volume', JSON.stringify({ v: 0.8, m: false }))")
+        self.begin("Direct")
+        self.page.locator(".player .vol").fill("0.25")
+        self.page.locator(".player .btn[aria-label='Couper le son']").click()
+        self.assertEqual(self.volume(), [0.25, True])
+        self.until(lambda: self.pref("videoVolume") == {"v": 0.25, "m": True})                 # enregistrée à l'événement `volumechange`, qui suit de peu
+        self.assertEqual(self.pref("volume"), {"v": 0.8, "m": False})
+        entry = self.entries("films", "Deux Voix")[0]["id"]
+        self.page.evaluate(f"location.hash = '#/play/{entry}'")
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("window.Hub.current().el.querySelector('video').readyState >= 1", timeout=15000)
+        now = self.page.evaluate("(() => { var v = window.Hub.current().el.querySelector('video'); return [Math.round(v.volume * 100) / 100, v.muted]; })()")
+        self.assertEqual(now, [0.25, True])                                                   # rétabli à l'ouverture
+        self.assertEqual(self.page.evaluate("[document.getElementById('audio').volume, document.getElementById('audio').muted]"), [0.8, False])     # la musique garde le sien
+        self.assertEqual(self.page.evaluate("window.Hub.current().el.querySelector('.vl .btn').getAttribute('aria-label')"), "Remettre le son")
+
+    def test_m_mutes_and_brings_the_sound_back(self):
+        self.begin("Direct")
+        self.press("m")
+        self.assertEqual(self.volume()[1], True)
+        self.assertEqual(self.page.locator(".player .vl .btn").get_attribute("aria-label"), "Remettre le son")
+        self.press("M")
+        self.assertEqual(self.volume()[1], False)
+        self.assertEqual(self.page.locator(".player .vl .btn").get_attribute("aria-label"), "Couper le son")
+
+    def test_the_slider_is_reached_and_set_with_the_arrows_without_moving_in_the_film(self):
+        """Aux flèches : de « Avancer de 10 s » au bouton muet, puis au curseur ; gauche et droite y règlent le volume sans déplacer la lecture ; haut en sort, comme sur la barre de musique."""
+        self.begin("Direct")
+        self.page.locator(".player .vol").fill("0.5")
+        self.page.locator(".player .btn[aria-label='Avancer de 10 s']").focus()
+        self.press("ArrowRight")
+        self.assertEqual(self.focused(), "Couper le son")
+        self.press("ArrowRight")
+        self.assertEqual(self.focused(), "Volume")
+        before = self.video_time()
+        self.press("ArrowRight")
+        self.assertEqual(self.volume(), [0.55, False])
+        self.press("ArrowLeft", "ArrowLeft")
+        self.assertEqual(self.volume(), [0.45, False])
+        expect(self.page.locator(".player .osd")).to_be_hidden()                             # aucun saut annoncé
+        self.assertLess(self.video_time(), before + 3)
+        self.assertGreater(self.video_time(), before)
+        self.press("ArrowUp")
+        self.assertNotEqual(self.focused(), "Volume")                                      # haut et bas naviguent : le volume ne bouge pas
+        self.assertEqual(self.volume(), [0.45, False])
+
+    def test_nothing_on_a_phone_or_a_tv_and_both_on_a_tablet(self):
+        for device, shown in (("phone", False), ("tv", False), ("tablet", True)):
+            with self.subTest(device=device):
+                context = self.browser.new_context(viewport={"width": 1280, "height": 800})
+                self.addCleanup(context.close)
+                context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+                self.page = context.new_page()
+                self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                watch_requests(self, self.page)
+                self.begin("Direct")
+                self.assertEqual(self.page.locator(".player .vl").count(), 1 if shown else 0)
+                self.press("m")
+                self.assertEqual(self.volume()[1], shown)                                  # sans commande à l'écran, `m` ne coupe pas un son qu'on ne saurait plus remettre
+
+    def test_a_volume_the_browser_does_not_let_set_hides_the_slider_and_keeps_the_mute_button(self):
+        self.page.add_init_script("""(() => {          // iPhone, iPad : `volume` ne change pas, il reste à 1
+            Object.defineProperty(HTMLMediaElement.prototype, 'volume', { configurable: true, get: function () { return 1; }, set: function () {} });
+        })()""")
+        self.begin("Direct")
+        expect(self.page.locator(".player .vol")).to_be_hidden()
+        mute = self.page.locator(".player .vl .btn")
+        expect(mute).to_be_visible()
+        mute.click()
+        self.assertEqual(self.volume(), [1, True])
+        expect(mute).to_have_attribute("aria-label", "Remettre le son")
+
+
 class TestNextFilmOfASaga(UiCase):
     """À la fin d'un film de saga, le lecteur propose le film suivant sans le lancer ; « Suivant » y va, sans dire que le film quitté est vu."""
 

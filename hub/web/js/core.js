@@ -111,6 +111,39 @@
     (open || H.menu)(H.t('Vitesse'), options, current, onPick);
   };
 
+  // --- Volume : un bouton muet et un curseur, partagés par la barre de musique et le lecteur vidéo -------------------
+  // Le navigateur qui ne laisse pas régler le volume (iPhone, iPad : `volume` reste à 1) se reconnaît à l'essai, pas à son nom.
+  var volumeOk = null;
+  H.volumeAdjustable = function () {
+    if (volumeOk === null) {
+      try { var probe = document.createElement('audio'); probe.volume = 0.5; volumeOk = probe.volume === 0.5; } catch (e) { volumeOk = false; }
+    }
+    return volumeOk;
+  };
+  // Rend { el, mute, slider, toggle } pour `media`, réglé d'après la préférence `key` ({ v, m }) et qui l'enregistre à chaque changement.
+  // Le curseur est caché quand le volume ne se règle pas : le bouton muet, lui, marche partout. Gauche et droite règlent le curseur (le navigateur), haut et bas naviguent (H.focus).
+  H.volume = function (media, key) {
+    function toggle() { media.muted = !media.muted; if (!media.muted && !media.volume) media.volume = 0.5; }
+    var mute = H.button('', 'audio', { 'aria-label': H.t('Couper le son'), onclick: toggle });
+    var slider = h('input', { type: 'range', class: 'vol f', min: '0', max: '1', step: '0.05', 'aria-label': H.t('Volume'), hidden: !H.volumeAdjustable(), oninput: function () {
+      media.volume = Number(slider.value);
+      media.muted = media.volume === 0;
+    } });
+    function paint() {
+      var silent = media.muted || media.volume === 0;
+      var icon = mute.querySelector('.ic');
+      if (icon) mute.replaceChild(H.icon(silent ? 'mute' : 'audio'), icon);
+      mute.setAttribute('aria-label', silent ? H.t('Remettre le son') : H.t('Couper le son'));
+      slider.value = silent ? 0 : media.volume;
+      H.pref(key, { v: media.volume, m: media.muted });
+    }
+    var saved = H.pref(key);
+    if (saved && typeof saved.v === 'number') { media.volume = Math.min(1, Math.max(0, saved.v)); media.muted = !!saved.m; }
+    media.addEventListener('volumechange', paint);
+    paint();
+    return { el: h('div', { class: 'vl' }, mute, slider), mute: mute, slider: slider, toggle: toggle };
+  };
+
   // --- Serveur ----------------------------------------------------------------
   H.api = function (path, body, opts) {
     var init = { credentials: 'same-origin', headers: {} };
