@@ -392,6 +392,7 @@
     'Double page : oui': 'Two pages: on',
     'Double page : non': 'Two pages: off',
     'Décaler d’une page': 'Shift by one page',
+    'Zoom : {n} %': 'Zoom: {n}%',
     'Image indisponible': 'Image unavailable',
     'Fin du volume · encore une fois pour passer au suivant': 'End of volume · once more to go to the next',
     'Fin du volume': 'End of volume',

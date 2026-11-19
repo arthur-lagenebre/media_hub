@@ -157,10 +157,16 @@ class UiCase(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def setUp(self):
-        self.context = self.browser.new_context(viewport={"width": 1920, "height": 1080})
+        self.errors = []
+        self.use_context(viewport={"width": 1920, "height": 1080})
+
+    def use_context(self, **options):
+        """Ouvre une fenêtre de navigateur aux `options` de Playwright (un téléphone tactile, par exemple) ; celle d'avant se ferme. Les erreurs JavaScript y sont relevées comme partout."""
+        if getattr(self, "context", None):
+            self.context.close()
+        self.context = self.browser.new_context(**options)
         self.page = self.context.new_page()
         slow_down(self.page)
-        self.errors = []
         self.page.on("pageerror", lambda e: self.errors.append(str(e)))
         self.page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" and not any(code in m.text for code in ("404", "500", "503")) else None)
         watch_requests(self, self.page)
@@ -2473,18 +2479,9 @@ def write_sized_cbz(path, sizes, **info):
 PORTRAIT, LANDSCAPE = (200, 300), (400, 200)
 
 
-class TestReaderSpreads(UiCase):
-    """La liseuse en double page : le couplage des pages, le sens de lecture, la progression, la fenêtre en portrait."""
+class ReaderCase(UiCase):
+    """La liseuse de BD : ouvrir un tome avec des réglages donnés, voir ses pages, appuyer sur les boutons de sa barre (aides seulement, les tests sont dans les classes filles)."""
 
-    @classmethod
-    def add_media(cls, root):
-        books = root / "srv" / "Livres"
-        write_sized_cbz(books / "BD" / "Diptyque" / "Tome 01.cbz", [PORTRAIT] * 3 + [LANDSCAPE] + [PORTRAIT] * 3, Series="Diptyque", Number="1")   # pages 0 à 6, la 3 en paysage
-        write_sized_cbz(books / "Manga" / "Droite" / "Tome 01.cbz", [PORTRAIT] * 6, Series="Droite", Number="1")
-        write_sized_cbz(books / "Manga" / "Gauche" / "Tome 01.cbz", [PORTRAIT] * 5, Series="Gauche", Number="1", Manga="Yes")
-        write_sized_cbz(books / "BD" / "Inverse" / "Tome 01.cbz", [PORTRAIT] * 4, Series="Inverse", Number="1", Manga="YesAndRightToLeft")
-
-    # --- Aides ---------------------------------------------------------------
     def entry(self, title):
         return self.entries("livres", title)[0]["id"]
 
@@ -2544,7 +2541,8 @@ class TestReaderSpreads(UiCase):
 
     def tool(self, name):
         """Appuie sur le bouton de la barre (qu'on fait apparaître d'un clic au centre si elle est masquée), puis la masque : les flèches tournent de nouveau les pages."""
-        center = {"position": {"x": 960, "y": 500}}
+        size = self.page.viewport_size
+        center = {"position": {"x": size["width"] // 2, "y": size["height"] * 46 // 100}}
         if not self.page.locator(".reader .rbar").is_visible():
             self.page.locator(".reader .stage").click(**center)
         self.page.locator(".reader .rbar .btn", has_text=name).click()
@@ -2553,6 +2551,18 @@ class TestReaderSpreads(UiCase):
     def tool_hidden(self, name):
         """Le bouton est-il retiré de la barre ? (on regarde l'attribut : la barre elle-même se masque au bout de quelques secondes)"""
         return self.page.evaluate("name => Array.from(document.querySelectorAll('.reader .rbar .btn')).find(b => b.textContent.indexOf(name) >= 0).hidden", name)
+
+
+class TestReaderSpreads(ReaderCase):
+    """La liseuse en double page : le couplage des pages, le sens de lecture, la progression, la fenêtre en portrait."""
+
+    @classmethod
+    def add_media(cls, root):
+        books = root / "srv" / "Livres"
+        write_sized_cbz(books / "BD" / "Diptyque" / "Tome 01.cbz", [PORTRAIT] * 3 + [LANDSCAPE] + [PORTRAIT] * 3, Series="Diptyque", Number="1")   # pages 0 à 6, la 3 en paysage
+        write_sized_cbz(books / "Manga" / "Droite" / "Tome 01.cbz", [PORTRAIT] * 6, Series="Droite", Number="1")
+        write_sized_cbz(books / "Manga" / "Gauche" / "Tome 01.cbz", [PORTRAIT] * 5, Series="Gauche", Number="1", Manga="Yes")
+        write_sized_cbz(books / "BD" / "Inverse" / "Tome 01.cbz", [PORTRAIT] * 4, Series="Inverse", Number="1", Manga="YesAndRightToLeft")
 
     def test_a_late_answer_of_the_home_page_does_not_take_the_focus_off_the_reader(self):
         """L'accueil charge ses rayons en arrière-plan : si la réponse arrive quand on est déjà dans la liseuse, le focus ne doit pas aller sur sa barre (les flèches n'y tournent plus les pages)."""
@@ -3000,6 +3010,203 @@ class TestReaderSpreads(UiCase):
         self.assertIn("gauche → droite", self.buttons())
         self.turn("ArrowRight")
         self.wait_pages([1])
+
+
+TALL = (600, 900)
+
+# Les pages à l'écran (`box`, en coordonnées de la fenêtre) et la zone de lecture (`stage`), au moment de l'appel.
+READER_BOX = """() => { var s = document.querySelector('.reader .stage'), r = s.getBoundingClientRect(), b = Array.from(s.querySelectorAll('.page')).map(p => p.getBoundingClientRect());
+  return {box: {l: Math.min(...b.map(x => x.left)), t: Math.min(...b.map(x => x.top)), r: Math.max(...b.map(x => x.right)), b: Math.max(...b.map(x => x.bottom))},
+          stage: {l: r.left, t: r.top, w: s.clientWidth, h: s.clientHeight, x: s.scrollLeft, y: s.scrollTop, mx: s.scrollWidth - s.clientWidth, my: s.scrollHeight - s.clientHeight}}; }"""
+
+
+class TestReaderZoom(ReaderCase):
+    """Le zoom dans une page de BD : le bouton de la barre, + et −, le double appui et le pincement ; zoomé, tous les bords s'atteignent, les flèches déplacent l'image, un appui ne tourne pas la page."""
+
+    @classmethod
+    def add_media(cls, root):
+        write_sized_cbz(root / "srv" / "Livres" / "BD" / "Loupe" / "Tome 01.cbz", [TALL] * 6, Series="Loupe", Number="1")
+
+    def setUp(self):
+        super().setUp()
+        self.page.set_viewport_size({"width": 1000, "height": 700})          # assez large pour la double page, assez petit pour que la page zoomée déborde des deux côtés
+
+    # --- Aides ---------------------------------------------------------------
+    def zoom_button(self):
+        return self.page.locator(".reader .rbar .btn .lbl", has_text="Zoom")
+
+    def wait_zoom(self, percent):
+        expect(self.zoom_button()).to_have_text(f"Zoom : {percent} %")
+
+    def keys(self, *steps):
+        """Chaque touche, puis le zoom qu'elle doit donner."""
+        for key, percent in steps:
+            self.page.keyboard.press(key)
+            self.wait_zoom(percent)
+
+    def geometry(self):
+        return self.page.evaluate(READER_BOX)
+
+    def size(self):
+        box = self.geometry()["box"]
+        return box["r"] - box["l"], box["b"] - box["t"]
+
+    def under(self, x, y):
+        """Où tombe le point (x, y) de la fenêtre sur les pages, en fraction de leur largeur et de leur hauteur."""
+        box = self.geometry()["box"]
+        return (x - box["l"]) / (box["r"] - box["l"]), (y - box["t"]) / (box["b"] - box["t"])
+
+    def middle(self):
+        stage = self.geometry()["stage"]
+        return stage["l"] + stage["w"] / 2, stage["t"] + stage["h"] / 2
+
+    def scrolled(self, axis, beyond):
+        self.page.wait_for_function("a => document.querySelector('.reader .stage')[a.prop] > a.beyond", arg={"prop": "scrollLeft" if axis == "x" else "scrollTop", "beyond": beyond})
+
+    def push_to_edge(self, key, axis):
+        """Appuie sur la flèche jusqu'au bord (chaque appui doit déplacer l'image), sans aller plus loin."""
+        for _ in range(30):
+            stage = self.geometry()["stage"]
+            if stage[axis] >= stage["m" + axis] - 1:
+                return
+            self.page.keyboard.press(key)
+            self.scrolled(axis, stage[axis])
+        self.fail("le bord n'est jamais atteint")
+
+    def bar_toggles(self, act):
+        """`act` doit montrer ou masquer la barre : un appui au milieu, ou un appui sur un côté quand on est zoomé."""
+        bar = self.page.locator(".reader .rbar")
+        shown = bar.is_visible()
+        act()
+        (expect(bar).to_be_hidden if shown else expect(bar).to_be_visible)()
+
+    def phone(self):
+        """Un téléphone tactile (390 × 800) ; les gestes passent par `touch`."""
+        self.use_context(viewport={"width": 390, "height": 800}, has_touch=True)
+        self.cdp = self.context.new_cdp_session(self.page)
+
+    def touch(self, *steps):
+        """Envoie des événements tactiles : (type, [points]) ; `touchEnd` sans point lève tous les doigts."""
+        for kind, points in steps:
+            self.cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [{"x": x, "y": y, "id": i} for i, (x, y) in enumerate(points)]})
+
+    def tap(self, x, y):
+        self.touch(("touchStart", [(x, y)]), ("touchEnd", []))
+
+    def swipe(self, x, y, dx, dy):
+        self.touch(("touchStart", [(x, y)]), *[("touchMove", [(x + dx * k / 6, y + dy * k / 6)]) for k in range(1, 7)], ("touchEnd", []))
+
+    # --- Tests ---------------------------------------------------------------
+    def test_the_zoom_button_goes_through_150_200_300_then_back_to_100(self):
+        self.read("Loupe", double=False)
+        self.wait_zoom(100)
+        width, height = self.size()
+        for percent in (150, 200, 300, 100):
+            self.tool("Zoom")
+            self.wait_zoom(percent)
+            now = self.size()
+            self.assertAlmostEqual(now[0] / width, percent / 100, delta=0.02)
+            self.assertAlmostEqual(now[1] / height, percent / 100, delta=0.02)
+
+    def test_every_edge_of_a_zoomed_page_can_be_reached(self):
+        """En flex centré, ce qui dépasse en haut et à gauche d'une vue plus grande que l'écran est hors d'atteinte : zoomé, les quatre bords doivent l'être."""
+        for fit, double in (("height", False), ("width", False), ("height", True), ("width", True)):
+            with self.subTest(fit=fit, double=double):
+                self.read("Loupe", double=double, page=1, fit=fit)
+                self.wait_pages([1, 2] if double else [1])
+                self.keys(("+", 150), ("+", 200), ("+", 300))
+                edges = self.page.evaluate("""() => { var s = document.querySelector('.reader .stage'), get = """ + READER_BOX + """;
+                  s.scrollLeft = 0; s.scrollTop = 0; var a = get();
+                  s.scrollLeft = s.scrollWidth; s.scrollTop = s.scrollHeight; var z = get();
+                  return {wider: a.box.r - a.box.l > a.stage.w, taller: a.box.b - a.box.t > a.stage.h, top: a.box.t >= a.stage.t - 1, left: a.box.l >= a.stage.l - 1,
+                          bottom: z.box.b <= z.stage.t + z.stage.h + 1, right: z.box.r <= z.stage.l + z.stage.w + 1}; }""")
+                self.assertEqual(edges, {"wider": True, "taller": True, "top": True, "left": True, "bottom": True, "right": True})
+
+    def test_a_click_on_a_side_does_not_turn_a_zoomed_page(self):
+        self.read("Loupe", double=False)
+        self.keys(("+", 150))
+        for x in (40, 960):
+            self.bar_toggles(lambda: self.page.locator(".reader .stage").click(position={"x": x, "y": 350}))
+            self.assertEqual(self.label(), "Page 1 / 6")
+            self.wait_zoom(150)
+
+    def test_the_arrows_move_a_zoomed_page_then_turn_it_at_the_edge(self):
+        self.read("Loupe", double=False)
+        self.keys(("+", 150), ("+", 200), ("+", 300))
+        self.push_to_edge("ArrowRight", "x")
+        self.assertEqual(self.label(), "Page 1 / 6")
+        self.page.keyboard.press("ArrowRight")                 # déjà au bord : la page tourne, et revient à 100 %
+        expect(self.page.locator(".reader .pg")).to_have_text("Page 2 / 6")
+        self.wait_pages([1])
+        self.wait_zoom(100)
+        self.keys(("+", 150))
+        self.push_to_edge("ArrowDown", "y")
+        self.assertEqual(self.label(), "Page 2 / 6")
+        self.page.keyboard.press("ArrowDown")
+        expect(self.page.locator(".reader .pg")).to_have_text("Page 3 / 6")
+        self.wait_zoom(100)
+
+    def test_plus_and_minus_zoom_around_the_middle_of_the_screen(self):
+        self.read("Loupe", double=False)
+        width, _ = self.size()
+        for key, percent in (("+", 150), ("+", 200), ("-", 150), ("-", 100), ("-", 100), ("+", 150), ("=", 200)):
+            self.page.keyboard.press(key)
+            self.wait_zoom(percent)
+            self.assertAlmostEqual(self.size()[0] / width, percent / 100, delta=0.02)
+            for got in self.under(*self.middle()):
+                self.assertAlmostEqual(got, 0.5, delta=0.01)
+
+    def test_zooming_does_not_change_the_saved_page(self):
+        with self.saves(1):
+            entry = self.read("Loupe", double=False, page=1)
+        self.keys(("+", 150), ("+", 200))
+        y = self.geometry()["stage"]["y"]
+        self.page.keyboard.press("ArrowDown")
+        self.scrolled("y", y)
+        with self.saves(1):
+            self.leave()
+        self.assertEqual(self.api("/api/book/" + entry)["position"], 1)
+
+    def test_a_tap_turns_the_page_but_a_swipe_does_not(self):
+        self.phone()
+        self.read("Loupe", double=False)
+        self.tap(370, 400)                                     # un appui à droite : page suivante
+        expect(self.page.locator(".reader .pg")).to_have_text("Page 2 / 6")
+        self.wait_pages([1])
+        self.swipe(370, 400, -120, 0)                          # un glissement du même côté : rien
+        self.swipe(20, 400, 120, 0)
+        self.bar_toggles(lambda: self.tap(195, 400))           # un appui au milieu passe, lui
+        self.assertEqual(self.label(), "Page 2 / 6")
+
+    def test_a_double_tap_zooms_on_the_point_under_the_finger_and_one_finger_still_scrolls(self):
+        self.phone()
+        self.read("Loupe", double=False)
+        before = self.under(100, 300)
+        self.tap(100, 300)
+        self.tap(100, 300)
+        self.wait_zoom(200)
+        for got, want in zip(self.under(100, 300), before):
+            self.assertAlmostEqual(got, want, delta=0.01)
+        y = self.geometry()["stage"]["y"]
+        self.swipe(200, 600, 0, -250)                          # un doigt fait défiler la page agrandie
+        self.scrolled("y", y + 50)
+        self.assertEqual(self.label(), "Page 1 / 6")
+        self.tap(200, 400)
+        self.tap(200, 400)
+        self.wait_zoom(100)
+
+    def test_a_pinch_zooms_the_page_and_not_the_browser(self):
+        self.phone()
+        self.read("Loupe", double=False)
+        before = self.under(195, 400)
+        steps = [("touchStart", [(145, 400)]), ("touchStart", [(145, 400), (245, 400)])]
+        steps += [("touchMove", [(145 - 10 * k, 400), (245 + 10 * k, 400)]) for k in range(1, 6)]          # les doigts passent de 100 à 200 px d'écart
+        self.touch(*steps, ("touchEnd", []))
+        self.wait_zoom(200)
+        for got, want in zip(self.under(195, 400), before):
+            self.assertAlmostEqual(got, want, delta=0.01)
+        self.assertEqual(self.page.evaluate("visualViewport.scale"), 1)
+        self.assertEqual(self.label(), "Page 1 / 6")
 
 
 class TestSagasInLibrary(UiCase):

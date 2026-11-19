@@ -20,6 +20,8 @@
     var count = 1, cache = {}, token = 0, bSpread = null, bShift = null;      // BD : pages de la vue, pages préchargées, demande en cours
     var wide = {}, grid = null;                                               // BD : les pages qu'on sait en paysage, les couples du volume (à refaire quand l'une d'elles se révèle)
     var want = 0, wantDouble = false, busy = false, queued = 0;                       // BD : la page demandée et le mode de sa vue, si elle se charge encore, les tours demandés pendant ce temps
+    var zoom = 1, base = null, bZoom = null;                                          // BD : l'agrandissement de la vue, la taille de ses pages à 100 % (mesurée au premier agrandissement)
+    var touch = null, lastTap = null, tapTimer = null, press = null;                  // BD : le geste du doigt en cours, l'appui qui attend peut-être un double appui, l'appui de la souris
 
     function showBar(on) {
       bar.hidden = !on;
@@ -104,10 +106,7 @@
       rtl = saved === null ? !!info.rtl : !!saved;
       stage.classList.add('cbz');
       stage.classList.toggle('wide', fit === 'width');
-      stage.addEventListener('click', function (e) {
-        var r = stage.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
-        if (x < 0.3) turn(rtl ? 1 : -1); else if (x > 0.7) turn(rtl ? -1 : 1); else showBar(bar.hidden);
-      });
+      bindGestures();
       var start = query.p !== undefined ? parseInt(query.p, 10) : info.position;
       pos = Math.min(Math.max(0, Math.floor(start || 0)), info.pages - 1);          // la reprise tient avant même que la première vue soit chargée
       page(pos);
@@ -115,6 +114,7 @@
       function directionText() { return rtl ? H.t('Lecture : droite → gauche') : H.t('Lecture : gauche → droite'); }
       function spreadText() { return spread ? H.t('Double page : oui') : H.t('Double page : non'); }
       tool(fitText(), null, function (b) {
+        unzoom();
         fit = fit === 'height' ? 'width' : 'height'; H.pref('fit', fit);
         stage.classList.toggle('wide', fit === 'width'); stage.scrollTop = 0; setLabel(b, fitText());
         Array.prototype.forEach.call(stage.querySelectorAll('.page'), function (im) { im.classList.remove('height', 'width'); im.classList.add(fit); });
@@ -127,6 +127,7 @@
         spread = !spread; H.pref('spread', spread); setLabel(b, spreadText()); syncTools(); relayout();
       });
       bShift = tool(H.t('Décaler d’une page'), null, shift);
+      bZoom = tool(zoomText(), null, function () { zoomTo(level(1) || 1); });          // 150, 200, 300 %, puis de nouveau 100 % : l'accès à la télécommande
       if (info.next) tool(H.t('Volume suivant'), 'next', openNext);
       syncTools();
     }
@@ -134,6 +135,7 @@
     function relayout() { queued = 0; page(want); }          // la vue demandée, sous un autre mode
     function onResize() {
       if (!info || info.format !== 'cbz' || !bSpread) return;
+      unzoom();          // la taille des pages à 100 % a changé avec la fenêtre
       syncTools();
       if (double() !== wantDouble) relayout();
     }
@@ -161,13 +163,14 @@
     }
     function show(pages) {
       pos = pages[0]; count = pages.length; busy = false;
+      unzoom();
       var holder = h('div', { class: 'spread' + (count > 1 ? ' two' : '') + (rtl ? ' rtl' : '') });
       pages.forEach(function (k) { holder.appendChild(ready(k) ? h('img', { class: 'page ' + fit, alt: '', src: pageUrl(k) }) : missing(k)); });
       if (view) stage.replaceChild(holder, view); else stage.appendChild(holder);
       view = holder;
       var retry = holder.querySelector('.missing .btn');
       if (retry && !(bar.contains(document.activeElement) && !bar.hidden)) H.focus.set(retry, true);          // Entrée réessaie ; les flèches tournent toujours les pages
-      stage.scrollTop = 0;
+      stage.scrollTop = 0; stage.scrollLeft = 0;
       paint(); later();
       endArmed = false;
       if (queued) {          // les tours demandés pendant le chargement, un à un ; s'il n'en part aucun chargement (début ou fin du volume), le reste est caduc
@@ -190,6 +193,96 @@
       if (Math.abs(delta) > 1) { go(pos + 2 * delta); return; }
       if (delta < 0) { if (pos > 0) page(pos - 1, pos); return; }
       if (pos + count >= info.pages) go(pos + count); else page(pos + count, undefined, pos + count);
+    }
+
+    // Le zoom agrandit réellement la vue (une taille en pixels pour chaque page), pas par `transform` : la zone de lecture la fait défiler au doigt, à la molette et au clavier comme n'importe quelle page.
+    // Il revient à 100 % à chaque vue montrée et quand la fenêtre change de taille. Il ne touche ni `pos` ni `count` : la page enregistrée reste la même.
+    var LEVELS = [1, 1.5, 2, 3], SLOP = 12;          // les paliers du bouton et des touches (le pincement va de l'un à l'autre) ; au-delà de ce déplacement, en px, un appui devient un glissement
+    var ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    function zoomText() { return H.t('Zoom : {n} %', { n: Math.round(zoom * 100) }); }
+    function level(dir) {                 // le palier au-dessus (dir > 0) ou au-dessous (dir < 0) du zoom actuel ; 0 s'il n'y en a pas
+      var out = 0;
+      LEVELS.forEach(function (l) { if (dir > 0 ? !out && l > zoom + 0.01 : l < zoom - 0.01) out = l; });
+      return out;
+    }
+    function rects() { return Array.prototype.map.call(view.children, function (c) { return c.getBoundingClientRect(); }); }
+    function bounds() {                   // le rectangle des pages de la vue, dans la fenêtre (à 100 %, la vue elle-même est aussi large que l'écran)
+      var all = rects(), pick = function (side) { return all.map(function (r) { return r[side]; }); };
+      var left = Math.min.apply(null, pick('left')), top = Math.min.apply(null, pick('top'));
+      return { left: left, top: top, width: Math.max.apply(null, pick('right')) - left, height: Math.max.apply(null, pick('bottom')) - top };
+    }
+    function zoomTo(z, ax, ay) {          // autour du point (ax, ay) de la fenêtre, qui ne bouge pas ; par défaut le milieu de la zone de lecture
+      if (!view) return;
+      var s = stage.getBoundingClientRect();
+      if (ax === undefined) { ax = s.left + stage.clientWidth / 2; ay = s.top + stage.clientHeight / 2; }
+      var old = bounds(), fx = (ax - old.left) / old.width, fy = (ay - old.top) / old.height;
+      if (!base) base = rects().map(function (r) { return { w: r.width, h: r.height }; });
+      zoom = Math.min(LEVELS[LEVELS.length - 1], Math.max(1, z));
+      if (zoom < 1.02) zoom = 1;
+      sizePages();
+      var now = bounds();
+      stage.scrollLeft += now.left + fx * now.width - ax;
+      stage.scrollTop += now.top + fy * now.height - ay;
+    }
+    function sizePages() {                // la taille de chaque page de la vue au zoom actuel ; à 100 %, la feuille de style reprend la main
+      var on = zoom > 1;
+      stage.classList.toggle('zoomed', on);          // zoomé, la vue se centre par ses marges : centrée en flex, ce qui dépasse en haut et à gauche serait hors d'atteinte
+      if (view) Array.prototype.forEach.call(view.children, function (c, i) { c.style.width = on ? base[i].w * zoom + 'px' : ''; c.style.height = on ? base[i].h * zoom + 'px' : ''; });
+      if (!on) base = null;
+      if (bZoom) setLabel(bZoom, zoomText());
+    }
+    function unzoom() { zoom = 1; sizePages(); }
+    function pan(d) {                     // zoomé : la flèche déplace l'image ; déjà au bord, elle tourne la page
+      var x = d[0], y = d[1];
+      var room = x > 0 ? stage.scrollWidth - stage.clientWidth - stage.scrollLeft : x < 0 ? stage.scrollLeft : y > 0 ? stage.scrollHeight - stage.clientHeight - stage.scrollTop : stage.scrollTop;
+      if (room > 1) stage.scrollBy(Math.round(x * stage.clientWidth * 0.25), Math.round(y * stage.clientHeight * 0.25));
+      else turn(x ? ((x > 0) !== rtl ? 1 : -1) : y);
+    }
+
+    // Appuis et gestes sur la zone de lecture. Au doigt, l'appui se traite à la levée du doigt (le clic du navigateur est annulé) : il attend un instant un éventuel second appui, sinon un double appui tournerait d'abord la page.
+    function tap(cx) {                    // un appui : sur un côté, la page tourne, sauf zoomé (on regarde l'image) ; au milieu, la barre
+      var r = stage.getBoundingClientRect(), x = (cx - r.left) / r.width;
+      if (zoom > 1 || (x >= 0.3 && x <= 0.7)) showBar(bar.hidden);
+      else turn((x < 0.3) === !rtl ? -1 : 1);
+    }
+    function far(a, x, y, limit) { return Math.abs(a.x - x) + Math.abs(a.y - y) > limit; }
+    function span(t) { return Math.sqrt(Math.pow(t[0].clientX - t[1].clientX, 2) + Math.pow(t[0].clientY - t[1].clientY, 2)) || 1; }
+    function bindGestures() {
+      stage.addEventListener('mousedown', function (e) { press = { x: e.clientX, y: e.clientY }; });
+      stage.addEventListener('click', function (e) {          // la souris ; un glissement de la souris n'est pas un clic
+        var moved = press && far(press, e.clientX, e.clientY, SLOP);
+        press = null;
+        if (!moved) tap(e.clientX);
+      });
+      stage.addEventListener('touchstart', onTouchStart, { passive: true });
+      stage.addEventListener('touchmove', onTouchMove, { passive: false });          // le pincement retient le défilement ; un doigt seul défile comme d'habitude
+      stage.addEventListener('touchend', onTouchEnd);
+      stage.addEventListener('touchcancel', function () { touch = null; });
+    }
+    function onTouchStart(e) {
+      var t = e.touches;
+      if (e.target.closest && e.target.closest('.btn')) { touch = null; return; }          // « Réessayer » garde son propre appui
+      if (!touch || t.length === 1) touch = { x: t[0].clientX, y: t[0].clientY, moved: false, pinch: null };
+      if (t.length > 1) { touch.moved = true; touch.pinch = { d: span(t), z: zoom }; }          // un pincement n'est jamais un appui
+    }
+    function onTouchMove(e) {
+      var t = e.touches;
+      if (!touch) return;
+      if (touch.pinch && t.length > 1) {
+        e.preventDefault();
+        zoomTo(touch.pinch.z * span(t) / touch.pinch.d, (t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2);
+      } else if (far(touch, t[0].clientX, t[0].clientY, SLOP)) touch.moved = true;
+    }
+    function onTouchEnd(e) {
+      if (!touch || e.touches.length) return;          // un doigt reste posé : le geste continue
+      var g = touch, now = Date.now();
+      touch = null;
+      if (e.cancelable) e.preventDefault();
+      if (g.moved) return;
+      clearTimeout(tapTimer);
+      if (lastTap && !far(lastTap, g.x, g.y, 40) && now - lastTap.at < 350) { lastTap = null; zoomTo(zoom > 1 ? 1 : 2, g.x, g.y); return; }          // double appui : 200 % sous le doigt, ou retour à 100 %
+      lastTap = { x: g.x, y: g.y, at: now };
+      tapTimer = setTimeout(function () { lastTap = null; tap(g.x); }, 350);
     }
 
     // --- Roman ---------------------------------------------------------------------
@@ -353,7 +446,10 @@
       if (!bar.hidden && bar.contains(document.activeElement)) { showBar(true); return; }
       var eat = function () { e.preventDefault(); e.stopPropagation(); };
       if (info.format === 'cbz') {
-        if (k === 'ArrowRight') { turn(rtl ? -1 : 1); eat(); }
+        if (k === '+' || k === '=') { zoomTo(level(1) || zoom); eat(); }
+        else if (k === '-') { zoomTo(level(-1) || 1); eat(); }
+        else if (zoom > 1 && ARROWS[k]) { pan(ARROWS[k]); eat(); }
+        else if (k === 'ArrowRight') { turn(rtl ? -1 : 1); eat(); }
         else if (k === 'ArrowLeft') { turn(rtl ? 1 : -1); eat(); }
         else if (k === ' ' || k === 'PageDown') { if (fit === 'width' && stage.scrollTop + stage.clientHeight < stage.scrollHeight - 4) stage.scrollBy(0, stage.clientHeight * 0.85); else turn(1); eat(); }
         else if (k === 'PageUp') { turn(-1); eat(); }
@@ -398,7 +494,7 @@
       },
       destroy: function () {
         closing = true; token += 1;
-        clearTimeout(saveTimer); clearTimeout(hideTimer);
+        clearTimeout(saveTimer); clearTimeout(hideTimer); clearTimeout(tapTimer);
         save(true);
         window.removeEventListener('keydown', onKey, true);
         window.removeEventListener('resize', onResize);
