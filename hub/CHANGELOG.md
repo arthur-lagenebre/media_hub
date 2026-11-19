@@ -1,8 +1,13 @@
-## 0.40.0 — 2026-11-19
+## 0.41.0 — 2026-11-19
 - Quand tu télécharges une saison, une série ou un album, les fichiers partent vraiment l'un après l'autre : le suivant attend que le précédent soit arrivé.
 - Une barre en bas de l'écran te dit où en est la file, te laisse l'arrêter, et te dit à la fin si un fichier a échoué, avec de quoi le réessayer.
 - Si ton navigateur bloque la suite ou demande une autorisation, la file s'arrête et te dit quoi faire au lieu de continuer sans rien télécharger.
 - La file reprend où elle en était si tu recharges la page.
+
+## 0.40.0 — 2026-11-19
+- Sur ordinateur et tablette, le lecteur vidéo a un bouton pour couper le son et un curseur de volume ; la touche M coupe ou remet le son. Ton réglage est gardé d'une vidéo à l'autre, sans toucher à celui de la musique.
+- Quand tu quittes un film ouvert par un lien direct, il s'arrête vraiment : plus de son derrière la fiche. Retour le rouvre en pause, là où tu en étais ; « Lecture » ou « Reprendre » le relancent.
+- Sur iPhone et iPad, où le volume se règle avec les boutons de l'appareil, le curseur n'apparaît plus, ni dans le lecteur ni dans la barre de musique.
 
 ## 0.39.1 — 2026-11-19
 - Corrections internes.

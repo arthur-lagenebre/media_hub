@@ -378,8 +378,10 @@ body.full #abar { display: none; }
 #abar .seek { height: 0.45rem; background: var(--line); border-radius: 0.3rem; margin: 0.5rem 0 0.3rem; cursor: pointer; }
 #abar .seek i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 0.3rem; }
 #abar .tm { color: var(--mute); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
-#abar .vl { display: flex; align-items: center; margin-left: 0.5rem; }
-#abar .vol { width: 6rem; accent-color: var(--accent); cursor: pointer; }
+/* Le volume (H.volume) : la barre de musique et le lecteur vidéo */
+.vl { display: flex; align-items: center; }
+.vol { width: 6rem; accent-color: var(--accent); cursor: pointer; }
+#abar .vl { margin-left: 0.5rem; }
 @media (max-width: 760px) { #abar .pos, #abar .vol { display: none; } }
 /* La file des téléchargements (downloads.js) : une barre, comme celle de la musique, posée au-dessus d'elle quand elle joue ; le texte passe à la ligne plutôt que de couper un titre. */
 #dlbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 12; display: flex; align-items: center; gap: 1rem; padding: 0.55rem var(--gut); background: #12171c; border-top: 1px solid var(--line); }
@@ -432,6 +434,8 @@ body.has-audio #toast { bottom: 6rem; }
    la vitesse garde son libellé hors 1× (« 1,5× », bouton .on). Si même ainsi la place manque (téléphone en hauteur), la rangée passe à la ligne au lieu de déborder. */
 .player .btns { flex-wrap: wrap; margin-top: -0.2rem; }
 .player .btns .btn { margin-top: 0.5rem; }
+.player .btns .vl { margin-top: 0.5rem; }
+.player .btns .vol { margin: 0 0.6rem 0 0.2rem; }
 @media (max-width: 56rem) {
   .player .btns .btn:not(.on) .lbl { display: none; }
   .player .btns .btn { margin-right: 0.45rem; }

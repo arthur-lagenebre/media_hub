@@ -111,6 +111,39 @@
     (open || H.menu)(H.t('Vitesse'), options, current, onPick);
   };
 
+  // --- Volume : un bouton muet et un curseur, partagés par la barre de musique et le lecteur vidéo -------------------
+  // Le navigateur qui ne laisse pas régler le volume (iPhone, iPad : `volume` reste à 1) se reconnaît à l'essai, pas à son nom.
+  var volumeOk = null;
+  H.volumeAdjustable = function () {
+    if (volumeOk === null) {
+      try { var probe = document.createElement('audio'); probe.volume = 0.5; volumeOk = probe.volume === 0.5; } catch (e) { volumeOk = false; }
+    }
+    return volumeOk;
+  };
+  // Rend { el, mute, slider, toggle } pour `media`, réglé d'après la préférence `key` ({ v, m }) et qui l'enregistre à chaque changement.
+  // Le curseur est caché quand le volume ne se règle pas : le bouton muet, lui, marche partout. Gauche et droite règlent le curseur (le navigateur), haut et bas naviguent (H.focus).
+  H.volume = function (media, key) {
+    function toggle() { media.muted = !media.muted; if (!media.muted && !media.volume) media.volume = 0.5; }
+    var mute = H.button('', 'audio', { 'aria-label': H.t('Couper le son'), onclick: toggle });
+    var slider = h('input', { type: 'range', class: 'vol f', min: '0', max: '1', step: '0.05', 'aria-label': H.t('Volume'), hidden: !H.volumeAdjustable(), oninput: function () {
+      media.volume = Number(slider.value);
+      media.muted = media.volume === 0;
+    } });
+    function paint() {
+      var silent = media.muted || media.volume === 0;
+      var icon = mute.querySelector('.ic');
+      if (icon) mute.replaceChild(H.icon(silent ? 'mute' : 'audio'), icon);
+      mute.setAttribute('aria-label', silent ? H.t('Remettre le son') : H.t('Couper le son'));
+      slider.value = silent ? 0 : media.volume;
+      H.pref(key, { v: media.volume, m: media.muted });
+    }
+    var saved = H.pref(key);
+    if (saved && typeof saved.v === 'number') { media.volume = Math.min(1, Math.max(0, saved.v)); media.muted = !!saved.m; }
+    media.addEventListener('volumechange', paint);
+    paint();
+    return { el: h('div', { class: 'vl' }, mute, slider), mute: mute, slider: slider, toggle: toggle };
+  };
+
   // --- Serveur ----------------------------------------------------------------
   H.api = function (path, body, opts) {
     var init = { credentials: 'same-origin', headers: {} };
@@ -616,16 +649,20 @@
     document.getElementById('views').appendChild(el);
     return { hash: hash, el: el, view: { el: el }, scroll: 0, focus: null };
   }
+  // Une page mise de côté reste dans le DOM ; celle qui fait encore quelque chose (le lecteur et sa vidéo) le suspend dans `parked()`, et le reprend dans `shown(false)`.
   function park(entry) {
     entry.scroll = window.scrollY;
     entry.focus = document.activeElement && entry.el.contains(document.activeElement) ? document.activeElement : null;
     entry.el.style.display = 'none';
+    try { if (entry.view.parked) entry.view.parked(); } catch (e) { console.error(e); }
   }
   function destroy(entry) {
     try { if (entry.view.destroy) entry.view.destroy(); } catch (e) { console.error(e); }
     if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el);
   }
-  function present(entry, fresh) {
+  // `ahead` : on y arrive par une entrée neuve de l'historique (un lien, H.go, une adresse tapée), pas par Retour ou Suivant.
+  // Une page gardée de côté peut ne pas reprendre de la même façon (le lecteur : en lecture, ou en pause).
+  function present(entry, fresh, ahead) {
     entry.el.style.display = '';
     document.body.classList.toggle('full', !!entry.view.full);
     document.body.setAttribute('data-lib', entry.view.lib || '');
@@ -638,11 +675,23 @@
       if (entry.focus && document.body.contains(entry.focus)) H.focus.set(entry.focus, true); else H.focus.first();
       if (entry.view.refresh) entry.view.refresh();
     }
-    if (entry.view.shown) entry.view.shown(fresh);
+    if (entry.view.shown) entry.view.shown(fresh, ahead);
   }
+  // Chaque entrée de l'historique où l'on arrive est marquée (`history.state`) : y revenir, par le Retour de l'application, du navigateur ou de la télécommande, se reconnaît à sa marque.
+  // Une entrée neuve n'en a pas (état nul), qu'on y vienne par un lien, H.go ou une adresse tapée. Les fenêtres (`{ ov }`) sont des entrées déjà marquées.
+  function freshEntry() {
+    var state = null;
+    try { state = history.state; } catch (e) { return false; }
+    if (state) return false;
+    try { history.replaceState({ hub: 1 }, ''); } catch (e) { /* tant pis : cette entrée passera encore pour neuve */ }
+    return true;
+  }
+  var resumed = null;          // une navigation suspendue par `leave()` puis acceptée : elle garde ce qu'elle était
   function onRoute() {
-    H.overlay.closeAll();
     var hash = location.hash || '#/';
+    var ahead = freshEntry();
+    if (resumed !== null) { ahead = resumed; resumed = null; }
+    H.overlay.closeAll();
     var top = stack[stack.length - 1];
     if (top && top.hash === hash) return;
     // Une page qui ne doit pas être quittée sans l'accord de la personne (des envois en cours) le dit par `leave()` : {title, lead, ok, accept}, ou rien si elle peut partir.
@@ -652,7 +701,7 @@
     if (ask) {
       H.confirm({ title: ask.title, lead: ask.lead, ok: ask.ok, danger: true,
         submit: function () { if (ask.accept) ask.accept(); return Promise.resolve(); },
-        done: function () { leaving = true; onRoute(); },
+        done: function () { leaving = true; resumed = ahead; onRoute(); },
         cancel: function () { H.replaceNext = false; location.replace(top.hash); } });
       return;
     }
@@ -661,7 +710,7 @@
     for (var i = stack.length - 2; i >= 0; i--) if (stack[i].hash === hash) { back = i; break; }
     if (back >= 0 && !H.replaceNext) {
       while (stack.length - 1 > back) destroy(stack.pop());
-      present(stack[back], false);
+      present(stack[back], false, ahead);
       return;
     }
     if (top) { if (H.replaceNext) destroy(stack.pop()); else park(top); }
