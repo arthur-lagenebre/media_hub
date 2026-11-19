@@ -1,3 +1,9 @@
+## 0.40.0 — 2026-11-19
+- Quand tu télécharges une saison, une série ou un album, les fichiers partent vraiment l'un après l'autre : le suivant attend que le précédent soit arrivé.
+- Une barre en bas de l'écran te dit où en est la file, te laisse l'arrêter, et te dit à la fin si un fichier a échoué, avec de quoi le réessayer.
+- Si ton navigateur bloque la suite ou demande une autorisation, la file s'arrête et te dit quoi faire au lieu de continuer sans rien télécharger.
+- La file reprend où elle en était si tu recharges la page.
+
 ## 0.39.1 — 2026-11-19
 - Corrections internes.
 
