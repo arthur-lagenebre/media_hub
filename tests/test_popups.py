@@ -52,6 +52,15 @@ class TestPopupsInTheBrowser(UiCase):
         self.assertEqual(len(found), 1, names)
         return found[0]
 
+    def test_a_choice_with_details_keeps_its_labels_readable_on_a_phone(self):
+        self.page.set_viewport_size({"width": 390, "height": 800})
+        self.open()
+        self.page.evaluate("""() => window.Hub.menu('Sous-titres', [{ label: 'Forcés seulement', detail: 'Les passages dans une autre langue que celle du film', value: 'forced' },
+          { label: 'Si le son est étranger', detail: 'Complets quand le son n’est dans aucune de tes langues, sinon forcés', value: 'foreign' }], 'forced', function () {})""")
+        self.page.wait_for_selector(".veil .opt")
+        widths = self.page.evaluate("Array.prototype.map.call(document.querySelectorAll('.veil .opt .lbl'), function (l) { return l.getBoundingClientRect().width; })")
+        self.assertTrue(all(w > 40 for w in widths), widths)                        # le détail ne réduit pas le libellé à une colonne de lettres
+
     def test_a_choice_a_confirmation_a_form_and_a_wide_window(self):
         self.open("#/l/films")
         self.view(".tools .btn").first.click()

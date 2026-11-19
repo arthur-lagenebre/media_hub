@@ -386,6 +386,29 @@ class TestBookRoute(MediaCase):
         self.assertEqual(out["chapters"], ["/book/r1/epub/c1.xhtml", "/book/r1/epub/c2.xhtml", "/book/r1/epub/c3.xhtml"])
         self.assertNotIn("pages", out)
 
+    def test_an_epub_gives_its_table_of_contents(self):
+        nav = ('<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>'
+               '<li><a href="../c2.xhtml#milieu">Deux</a></li></ol></nav></body></html>')
+        fixtures.write_epub(self.lib.path / "r.epub", chapters=3, manifest_extra='<item id="nav" href="n/nav.xhtml" properties="nav"/>', files={"n/nav.xhtml": nav})
+        out = self.get("/api/book/r1").json()
+        self.assertEqual(out["toc"], [{"title": "Deux", "chapter": 1, "anchor": "milieu", "level": 0}])
+        self.assertEqual(out["chapters"][out["toc"][0]["chapter"]], "/book/r1/epub/c2.xhtml")
+
+    def test_an_epub_without_table_of_contents_gives_an_empty_one(self):
+        self.assertEqual(self.get("/api/book/r1").json()["toc"], [])
+
+    def test_a_broken_table_of_contents_does_not_prevent_reading_the_book(self):
+        fixtures.write_epub(self.lib.path / "r.epub", chapters=3, manifest_extra='<item id="nav" href="nav.xhtml" properties="nav"/>', files={"nav.xhtml": "<html><nav>"})
+        reply = self.get("/api/book/r1")
+        self.assertEqual((reply.status, reply.json()["toc"], len(reply.json()["chapters"])), (200, [], 3))
+
+    def test_an_epub_without_opf_is_still_a_422(self):
+        (self.lib.path / "r.epub").write_bytes(b"pas une archive")
+        self.assertEqual(self.get("/api/book/r1").status, 422)
+
+    def test_a_cbz_has_no_table_of_contents(self):
+        self.assertNotIn("toc", self.get("/api/book/k1").json())
+
     def test_another_format_is_not_readable(self):
         out = self.get("/api/book/p1").json()
         self.assertIs(out["readable"], False)

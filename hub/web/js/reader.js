@@ -24,7 +24,7 @@
     function showBar(on) {
       bar.hidden = !on;
       clearTimeout(hideTimer);
-      if (on) { hideTimer = setTimeout(function () { if (!H.overlay.isOpen()) showBar(false); }, 6000); }
+      if (on) { hideTimer = setTimeout(function () { showBar(H.overlay.isOpen()); }, 6000); }          // une fenêtre ouverte la garde, et le compte repart : elle se masquera après la fermeture
       else if (document.activeElement && bar.contains(document.activeElement)) document.activeElement.blur();
     }
     function total() { return info ? (info.format === 'cbz' ? info.pages : info.chapters.length) : 0; }
@@ -200,6 +200,7 @@
       frame.addEventListener('load', styleFrame);
       var start = info.position || 0;
       chapter(Math.min(Math.floor(start), info.chapters.length - 1), start - Math.floor(start));
+      if (info.toc && info.toc.length) tool(H.t('Sommaire'), null, openToc);
       tool(H.t('Texte −'), null, function () { setSize(size - 10); });
       tool(H.t('Texte +'), null, function () { setSize(size + 10); });
       function themeText() { return H.t('Thème : {theme}', { theme: THEMES[theme].label }); }
@@ -223,10 +224,42 @@
       return -1;
     }
     function here(doc) { return plain(new URL(doc.URL)) === plain(new URL(info.chapters[chap], location.href)); }          // `doc` est le chapitre demandé (et pas celui qu'on quitte)
+    function anchorIn(doc, name) { return name ? doc.getElementById(name) || doc.getElementsByName(name)[0] : null; }          // `id`, ou `<a name>` des livres EPUB 2
     function reach(doc, name) {          // l'élément d'ancre `name` du chapitre affiché
       try { name = decodeURIComponent(name); } catch (e) { /* ancre telle quelle */ }
-      var target = name && (doc.getElementById(name) || doc.getElementsByName(name)[0]);          // `id`, ou `<a name>` des livres EPUB 2
+      var target = anchorIn(doc, name);
       if (target) target.scrollIntoView();
+    }
+    function shownChapter() {            // le document du chapitre lu, s'il est arrivé
+      var doc;
+      try { doc = frame.contentDocument; } catch (e) { return null; }
+      return doc && doc.documentElement && here(doc) ? doc : null;
+    }
+    function passedLine(doc) {           // une ancre est passée quand elle est au-dessus de cette ligne ; en bas du chapitre, tout ce qui est à l'écran l'est : la fin ne peut plus remonter
+      var win = frame.contentWindow, atEnd = win.scrollY > 0 && win.scrollY + win.innerHeight >= doc.documentElement.scrollHeight - 4;
+      return win.innerHeight * (atEnd ? 1 : 0.25);
+    }
+    function tocCurrent() {              // l'entrée en cours : parmi celles du chapitre lu, la dernière passée (à défaut la première), sinon la dernière d'un chapitre précédent ; -1 s'il n'y en a pas
+      var doc = shownChapter(), line = doc ? passedLine(doc) : 0, before = -1, first = -1, passed = -1;
+      info.toc.forEach(function (e, i) {
+        if (e.chapter < chap) before = i;
+        if (e.chapter !== chap) return;
+        if (first < 0) first = i;
+        var target = doc && anchorIn(doc, e.anchor);
+        if (!e.anchor || (target && target.getBoundingClientRect().top <= line)) passed = i;
+      });
+      return passed >= 0 ? passed : first >= 0 ? first : before;
+    }
+    function tocJump(e) {                // la barre se retire avec le focus qu'elle a repris : les flèches tournent de nouveau les pages
+      var doc = shownChapter(), hash = encodeURIComponent(e.anchor);
+      showBar(false);
+      if (e.chapter !== chap || !doc) chapter(e.chapter, 0, hash);
+      else if (e.anchor) reach(doc, hash);
+      else frame.contentWindow.scrollTo(0, 0);
+    }
+    function openToc() {
+      var options = info.toc.map(function (e, i) { return { label: e.title, value: i, level: e.level }; });
+      H.menu(H.t('Sommaire'), options, tocCurrent(), function (i) { tocJump(info.toc[i]); });
     }
     function followLink(link, doc) {          // un lien du livre se suit dans la liseuse ; ni un site extérieur ni un fichier du livre ne fait quitter la page
       var to;
@@ -275,8 +308,8 @@
     function progressOf() {
       var win = frame && frame.contentWindow, doc = win && win.document;
       if (!doc || !doc.documentElement) return;
-      var max = Math.max(1, doc.documentElement.scrollHeight - win.innerHeight);
-      pos = chap + Math.min(1, Math.max(0, win.scrollY / max));
+      var max = Math.max(1, doc.documentElement.scrollHeight - win.innerHeight), last = chap === info.chapters.length - 1;
+      pos = chap + Math.min(last ? 1 : 0.999, Math.max(0, win.scrollY / max));          // le bas d'un chapitre reste ce chapitre à la reprise ; seul celui du dernier termine le livre
       paint(); later();
     }
     function scroll(dir) {

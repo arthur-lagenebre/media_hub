@@ -390,6 +390,7 @@
     'Texte −': 'Text −',
     'Texte +': 'Text +',
     'Thème : {theme}': 'Theme: {theme}',
+    'Sommaire': 'Contents',
     'Chapitre précédent': 'Previous chapter',
     'Chapitre suivant': 'Next chapter',
     'Texte à {size} %': 'Text at {size}%',

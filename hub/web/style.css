@@ -318,9 +318,12 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .opt:last-child { margin-bottom: 0; }
 .opt:focus, .opt:hover:not(:disabled) { background: #2a343e; border-color: var(--accent); }
 .opt .mark { width: 1.7rem; color: var(--accent); }
-.opt .lbl { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.opt .det { color: var(--mute); font-size: 0.85rem; margin-left: 1rem; }
+.opt .lbl { flex: 1; min-width: 0; overflow-wrap: anywhere; }          /* un long mot (titre de chapitre, de sommaire) passe à la ligne au lieu de déborder */
+.opt .det { max-width: 50%; color: var(--mute); font-size: 0.85rem; margin-left: 1rem; }          /* une longue explication ne prend pas plus de la moitié : le libellé garde sa place */
 .opt.on { font-weight: 700; }
+.opt[data-level="1"] { padding-left: 1.4rem; }      /* une liste hiérarchique (le sommaire d'un livre) : la ligne garde toute sa largeur, seul le texte se décale */
+.opt[data-level="2"] { padding-left: 2.2rem; }
+.opt[data-level="3"] { padding-left: 3rem; }
 .opt:disabled { opacity: 0.45; }
 /* Le pied de boutons, le même partout : une rangée de boutons égaux, l'action d'abord ; en colonne seulement pour plusieurs champs (la télécommande descend de champ en champ puis de bouton en bouton, sans sauter) */
 .menu .btns { margin-top: 0.8rem; padding: 0 0.6rem; flex-wrap: wrap; }

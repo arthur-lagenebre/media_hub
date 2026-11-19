@@ -361,13 +361,13 @@
     return box;
   };
 
-  // choice : un menu de choix : [{label, detail, value, disabled}] ; `current` est la valeur cochée.
+  // choice : un menu de choix : [{label, detail, value, disabled, level}] ; `current` est la valeur cochée ; `level` : le retrait d'une liste hiérarchique (borné : le titre garde sa place sur un téléphone).
   H.menu = function (title, options, current, onPick) {
     var list = h('div', { class: 'menu-list' });
     var box = H.box('choice', title, list);
     options.forEach(function (o) {
       var on = o.value === current;
-      var b = h('button', { class: 'opt f' + (on ? ' on' : ''), disabled: !!o.disabled, 'data-autofocus': on ? '1' : null,
+      var b = h('button', { class: 'opt f' + (on ? ' on' : ''), disabled: !!o.disabled, 'data-autofocus': on ? '1' : null, 'data-level': o.level ? Math.min(o.level, 3) : null,
         onclick: function () { H.overlay.close(function () { onPick(o.value); }); } },
         h('span', { class: 'mark' }, on ? H.icon('check') : null), h('span', { class: 'lbl' }, o.label), o.detail ? h('span', { class: 'det' }, o.detail) : null);
       list.appendChild(b);
