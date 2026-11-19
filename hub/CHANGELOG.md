@@ -1,3 +1,8 @@
+## 0.43.0 — 2026-11-19
+- Sur PC, un bouton « Ouvrir dans VLC » sur la fiche d'un film ou d'une série, et dans le menu d'un épisode : il télécharge un petit fichier qui lance la vidéo dans VLC, à l'endroit où tu t'étais arrêté.
+- VLC lit directement les vidéos que le lecteur du navigateur doit convertir (4K HDR, par exemple), et l'avance rapide y est instantanée.
+- Le lien ne vaut que pour cette vidéo et pendant 24 h ; ce que tu regardes dans VLC n'est pas compté comme vu.
+
 ## 0.42.0 — 2026-11-19
 - Dans une BD ou un manga, tu peux agrandir la page pour lire une bulle ou un détail : en pinçant ou en touchant deux fois l'écran, avec les touches + et −, ou avec le bouton « Zoom » de la barre (150, 200, 300 %), accessible à la télécommande.
 - Une fois zoomé, les flèches déplacent l'image ; arrivé au bord, un nouvel appui tourne la page, qui revient alors à 100 %.

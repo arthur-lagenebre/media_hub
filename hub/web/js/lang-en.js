@@ -175,6 +175,8 @@
     'Reprendre {what} à {at}': 'Resume {what} at {at}',
     'Reprendre à {at}': 'Resume at {at}',
     'Revoir': 'Watch again',
+    'Ouvrir dans VLC': 'Open in VLC',
+    'Ouvre le fichier téléchargé : VLC lit la vidéo directement.': 'Open the downloaded file: VLC plays the video directly.',
     'Voir': 'Watch',
     'Lire': 'Play',
     'Lire {what}': 'Play {what}',

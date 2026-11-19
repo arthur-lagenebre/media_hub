@@ -188,6 +188,16 @@
     return m ? m[1] : '';
   }
 
+  // Donne `blob` au navigateur comme un fichier téléchargé sous le nom `name` (un lien `download`), sans repasser par le serveur.
+  H.saveBlob = function (blob, name) {
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name; a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.parentNode.removeChild(a); }, 1000);          // le navigateur a pris le fichier : on libère la mémoire
+    return name;
+  };
+
   // Télécharge `path` (une pièce jointe du serveur) sans quitter la page : le fichier arrive sous le nom que donne le serveur. Rend une promesse de ce nom ;
   // une réponse refusée est rejetée comme par H.api (message du serveur), au lieu qu'un simple lien remplace la page par le JSON de l'erreur.
   H.download = function (path) {
@@ -195,14 +205,7 @@
       if (r.status === 401) { location.href = '/login'; throw new Error('connexion requise'); }
       if (!r.ok) return r.text().then(function (t) { throw failure(r, parsed(t)); });
       var name = attachmentName(r.headers.get('Content-Disposition')) || 'media_hub';
-      return r.blob().then(function (blob) {
-        var url = URL.createObjectURL(blob), a = document.createElement('a');
-        a.href = url; a.download = name; a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function () { URL.revokeObjectURL(url); a.parentNode.removeChild(a); }, 1000);          // le navigateur a pris le fichier : on libère la mémoire
-        return name;
-      });
+      return r.blob().then(function (blob) { return H.saveBlob(blob, name); });
     });
   };
 

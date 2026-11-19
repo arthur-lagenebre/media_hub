@@ -942,6 +942,7 @@
       } else main = d.type === 'movie' && view.allDone ? H.t('Revoir') : (what ? H.t('Lire {what}', { what: what }) : H.t('Lire'));
       var out = [H.button(main, 'play', { class: 'primary', 'data-autofocus': '1', onclick: function () { H.go(playHref(resume)); } })];
       if (prog) out.push(H.button(H.t('Depuis le début'), 'rew', { onclick: function () { H.go(playHref(resume, 0)); } }));
+      if (resume.kind !== 'book' && H.actions.canVlc(d.library && d.library.id)) out.push(H.button(H.t('Ouvrir dans VLC'), 'play', { 'data-key': 'vlc', onclick: function () { H.actions.openInVlc(resume.id); } }));      // PC seulement : ce que « Lire » ou « Reprendre » ouvrirait
       return out;
     }
     // Les autres boutons : vu / non vu, saga, télécharger, affiche, fiche TMDB, liens.

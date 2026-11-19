@@ -5025,6 +5025,141 @@ class TestDownloads(UiCase):
         self.assertEqual(self.page.locator(".menu .opt", has_text="Télécharger").count(), 0)
 
 
+class TestOpenInVlc(UiCase):
+    """« Ouvrir dans VLC » (PC seulement) : le navigateur fabrique un .m3u8 avec l'adresse absolue du fichier (`POST /api/play/<id>/vlc`), la reprise du compte et un titre sur une seule ligne, et le télécharge sans repasser par le serveur."""
+
+    def vlc_entry(self, lib="films", title="Direct", number=0):
+        return self.entries(lib, title)[number]["id"]
+
+    def progress(self, entry, position, duration=60):
+        self.api("/api/progress", {"entry": entry, "position": position, "duration": duration})
+        self.addCleanup(lambda: self.api("/api/entry/" + entry + "/seen", {"done": False}))
+
+    def film_page(self, title="Direct"):
+        self.open("#/i/" + self.item("films", title)["id"])
+        self.view(".actions .btn.primary").wait_for()
+
+    def vlc_button(self):
+        return self.view(".actions .btn", has_text="Ouvrir dans VLC")
+
+    def downloaded(self, click):
+        """Le fichier que `click` fait télécharger : (nom, lignes)."""
+        with self.page.expect_download() as info:
+            click()
+        return info.value.suggested_filename, Path(info.value.path()).read_bytes().decode("utf-8").splitlines()
+
+    def trapped(self, title, resume=0):
+        """Le serveur répond avec ce `title` (il ne le nettoie pas : c'est au navigateur de le faire)."""
+        body = {"url": "/media/abc123/file?token=u.abc123.9999999999." + "a" * 64, "title": title, "resume": resume}
+        self.page.route("**/api/play/*/vlc", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(body)))
+
+    def test_the_film_page_has_the_button_on_a_pc_and_on_no_other_device(self):
+        self.film_page()
+        expect(self.vlc_button()).to_have_count(1)
+        for device in ("phone", "tablet", "tv"):
+            self.page.evaluate(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+            self.page.reload()
+            self.view(".actions .btn.primary").wait_for()
+            self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), device)
+            expect(self.vlc_button()).to_have_count(0)
+
+    def test_the_button_downloads_a_playlist_of_the_whole_file_from_the_start(self):
+        entry = self.vlc_entry()
+        title = self.api(f"/api/play/{entry}/vlc", {})["title"]
+        self.film_page()
+        name, lines = self.downloaded(self.vlc_button().click)
+        self.assertEqual(name, f"{title}.m3u8")
+        self.assertEqual(lines, ["#EXTM3U", f"#EXTINF:-1,{title}", f"{self.base}/media/{entry}/file"])          # serveur ouvert : pas de jeton ; pas de reprise : pas de start-time
+
+    def test_a_saved_position_is_the_start_time(self):
+        entry = self.vlc_entry()
+        self.progress(entry, 40)
+        self.film_page()
+        title = self.api(f"/api/play/{entry}/vlc", {})["title"]
+        _, lines = self.downloaded(self.vlc_button().click)
+        self.assertEqual(lines, ["#EXTM3U", f"#EXTINF:-1,{title}", "#EXTVLCOPT:start-time=40", f"{self.base}/media/{entry}/file"])
+
+    def test_a_show_opens_the_file_that_play_would_open(self):
+        first, second = self.vlc_entry("series", "Vidéo Série", 0), self.vlc_entry("series", "Vidéo Série", 1)
+        self.api("/api/entry/" + first + "/seen", {"done": True})
+        self.addCleanup(lambda: self.api("/api/entry/" + first + "/seen", {"done": False}))
+        self.open("#/i/" + self.item("series", "Vidéo Série")["id"])
+        self.view(".actions .btn.primary", has_text="Lire").wait_for()
+        _, lines = self.downloaded(self.vlc_button().click)
+        self.assertEqual(lines[-1], f"{self.base}/media/{second}/file")            # le premier épisode est vu : « Lire » ouvre le deuxième
+        self.assertIn("Vidéo Série", lines[1])
+        self.assertEqual([line for line in lines if line.startswith("#EXTVLCOPT")], [])
+
+    def test_a_title_with_line_breaks_never_adds_a_line_to_the_file(self):
+        self.trapped("Film\n#EXTVLCOPT:start-time=999\r\n#EXTINF:-1,Autre\u0085\u2028fin\x00\x1b", resume=12)
+        self.film_page()
+        name, lines = self.downloaded(self.vlc_button().click)
+        self.assertEqual(len(lines), 4, lines)                                                                       # EXTM3U, EXTINF, start-time, adresse : rien de plus
+        self.assertTrue(lines[1].startswith("#EXTINF:-1,Film "), lines[1])
+        self.assertEqual([line for line in lines if line.startswith("#EXTVLCOPT")], ["#EXTVLCOPT:start-time=12"])
+        self.assertEqual(lines[3], f"{self.base}/media/abc123/file?token=u.abc123.9999999999." + "a" * 64)
+        self.assertFalse(re.search(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", lines[1]))
+        self.assertEqual(name, "Film #EXTVLCOPT start-time=999 #EXTINF -1,Autre fin.m3u8")
+
+    def test_the_file_name_has_no_character_windows_forbids_and_the_title_is_bounded(self):
+        self.trapped('A<B>:"C"/D\\E|F?G*' + "x" * 400)
+        self.film_page()
+        name, lines = self.downloaded(self.vlc_button().click)
+        self.assertTrue(name.endswith(".m3u8"))
+        self.assertFalse(re.search(r'[<>:"/\\|?*]', name), name)
+        self.assertLessEqual(len(lines[1]), len("#EXTINF:-1,") + 200)
+        self.assertLessEqual(len(name), 120)
+
+    def test_a_title_that_is_only_control_characters_still_gives_a_file(self):
+        self.trapped("\n\r\t")
+        self.film_page()
+        name, lines = self.downloaded(self.vlc_button().click)
+        self.assertEqual(name, "media_hub.m3u8")
+        self.assertEqual(lines[1], "#EXTINF:-1,")
+
+    def test_an_episode_menu_offers_it_on_a_pc_only(self):
+        second = self.vlc_entry("series", "Dark", 1)
+        self.progress(second, 30, 3000)
+        self.open("#/i/" + self.item("series", "Dark")["id"])
+        self.view(".epmore").nth(1).click()
+        _, lines = self.downloaded(self.page.locator(".menu .opt", has_text="Ouvrir dans VLC").click)
+        self.assertEqual(lines[-2:], ["#EXTVLCOPT:start-time=30", f"{self.base}/media/{second}/file"])
+        self.page.evaluate("localStorage.setItem('hub.device', JSON.stringify('tablet'))")
+        self.page.reload()
+        self.view(".epmore").first.click()
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        expect(self.page.locator(".menu .opt", has_text="Ouvrir dans VLC")).to_have_count(0)
+
+    def test_a_book_volume_is_not_offered_to_vlc(self):
+        self.open("#/i/" + self.item("livres", "Naruto")["id"])
+        self.view(".volumes .card .qbtn").first.click()
+        self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
+        expect(self.page.locator(".menu .opt", has_text="Ouvrir dans VLC")).to_have_count(0)
+
+    def test_the_first_download_says_what_to_do_and_the_next_ones_do_not(self):
+        self.film_page()
+        self.downloaded(self.vlc_button().click)
+        expect(self.page.locator("#toast")).to_have_text("Ouvre le fichier téléchargé : VLC lit la vidéo directement.")
+        self.page.evaluate("document.getElementById('toast').textContent = ''")
+        self.downloaded(self.vlc_button().click)
+        self.page.wait_for_timeout(300)
+        expect(self.page.locator("#toast")).to_have_text("")
+
+    def test_a_refusal_of_the_server_is_shown_and_nothing_is_downloaded(self):
+        self.page.route("**/api/play/*/vlc", lambda route: route.fulfill(status=403, content_type="application/json", body=json.dumps({"error": "lecture non autorisée"})))
+        names = []
+        self.page.on("download", lambda d: names.append(d.suggested_filename))
+        self.film_page()
+        self.vlc_button().click()
+        expect(self.page.locator("#toast")).to_have_text("lecture non autorisée")
+        self.page.wait_for_timeout(300)
+        self.assertEqual(names, [])
+        self.page.evaluate("document.getElementById('toast').textContent = ''")
+        self.vlc_button().click()                                      # le bouton reste utilisable après une erreur
+        expect(self.page.locator("#toast")).to_have_text("lecture non autorisée")
+        self.errors[:] = [e for e in self.errors if "403" not in e]      # le navigateur note les deux refus attendus
+
+
 class TestDownloadQueue(UiCase):
     """Plusieurs fichiers forment une file : un seul lien à la fois, le suivant quand le serveur a tout envoyé (`GET /api/downloads`).
     Dans la plupart des tests, la réponse de `/api/downloads` est tenue par le test (`self.states`) et l'horloge de la page aussi (`page.clock`) : chaque étape s'attend par un état, sans délai."""
@@ -9373,6 +9508,50 @@ class RequestsUiCase(unittest.TestCase):
 
     def key(self, page):
         return page.evaluate("document.activeElement && document.activeElement.getAttribute('data-key')")
+
+
+class TestOpenInVlcWithAccounts(RequestsUiCase):
+    """Avec des comptes : l'adresse du .m3u8 porte un jeton VLC qui ouvre ce fichier ; sans le droit de lire, ni bouton ni entrée de menu."""
+
+    def film(self):
+        item = next(i for i in self.call("admin", "/api/library/films")["items"] if i["title"] == "Inception")
+        return item["id"], self.call("admin", "/api/item/" + item["id"])["entries"][0]["id"]
+
+    def downloaded(self, page, click):
+        with page.expect_download() as info:
+            click()
+        return Path(info.value.path()).read_bytes().decode("utf-8").splitlines()
+
+    def close_films_to_play(self, who):
+        from hub import accounts
+        ids = [lib.id for lib in self.hub.cfg.libraries]
+        accounts.set_rights(self.hub.db, who["id"], set(ids), {i: {"view": True, "play": i != "films", "download": True} for i in ids})
+        self.addCleanup(lambda: accounts.set_rights(self.hub.db, who["id"], set(ids), {i: {"view": True, "play": True, "download": True} for i in ids}))
+
+    def test_the_address_carries_a_vlc_token_that_opens_that_file_only(self):
+        item, entry = self.film()
+        page = self.session("admin")
+        self.open(page, "#/i/" + item)
+        page.locator("#views > .view:visible .actions .btn.primary").wait_for()
+        lines = self.downloaded(page, page.locator("#views > .view:visible .actions .btn", has_text="Ouvrir dans VLC").click)
+        self.assertEqual(len(lines), 3, lines)
+        found = re.fullmatch(re.escape(f"{self.base}/media/{entry}/file?token=") + r"\w+\.%s\.\d+\.[0-9a-f]{64}" % entry, lines[2])
+        self.assertIsNotNone(found, lines[2])
+        reply = urllib.request.urlopen(urllib.request.Request(lines[2], headers={"Range": "bytes=0-9"}))
+        self.assertEqual(reply.status, 206)                                         # VLC lit le fichier avec ce seul jeton, sans cookie
+
+    def test_without_the_right_to_play_there_is_no_button_and_no_menu_entry(self):
+        self.close_films_to_play(self.alice)
+        page = self.session("alice")
+        item, _ = self.film()
+        self.open(page, "#/i/" + item)
+        page.locator("#views > .view:visible .actions .btn", has_text="Marquer comme vu").wait_for()
+        expect(page.locator("#views > .view:visible .actions .btn", has_text="Ouvrir dans VLC")).to_have_count(0)
+        dark = next(i for i in self.call("admin", "/api/library/series")["items"] if i["title"] == "Dark")["id"]
+        self.open(page, "#/i/" + dark)                                              # les séries restent lisibles pour ce compte
+        page.locator("#views > .view:visible .actions .btn", has_text="Ouvrir dans VLC").wait_for()
+        page.locator("#views > .view:visible .epmore").first.click()
+        page.locator(".menu .opt", has_text="Ouvrir dans VLC").wait_for()
 
 
 class TestRequestsInTheUi(RequestsUiCase):
