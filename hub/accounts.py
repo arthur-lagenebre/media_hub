@@ -7,6 +7,7 @@ Le jeton de session n'est pas gardé : c'est `HMAC(secret, "session:<identifiant
 Changer un mot de passe, ou demander de déconnecter les autres appareils, incrémente `token_version`, ce qui invalide d'un coup tous les jetons du compte.
 L'ancienne forme `<identifiant>.<mac>` (sans date, `HMAC(secret, "session:<identifiant>:<token_version>")`) vaut encore le temps d'une version, et `/api/state` la remplace aussitôt (`LEGACY_SESSIONS`).
 Le jeton de média (`?token=`) est propre au compte, sous la forme `<identifiant>.<mac>`, sans date : il désigne donc qui demande un fichier, et les droits s'appliquent à lui comme à la session. Il est révoqué avec les sessions (même `token_version`).
+Le jeton VLC (`?token=` sur `/media/<entrée>/file` seulement) est plus étroit encore : `<identifiant>.<entrée>.<expiration>.<mac>`, dans un domaine HMAC à part, limité à un fichier et à `VLC_SECONDS` (24 h), lié lui aussi à `token_version`. Il sert à ouvrir une vidéo dans VLC : le .m3u reste dans Téléchargements, l'adresse dans l'historique du lecteur.
 
 Les droits : pour chaque bibliothèque, un compte peut *voir* (liste, fiches, images), *lire* (la lecture en ligne : vidéo, musique, livres, sous-titres) et *télécharger*. Une bibliothèque sans ligne dans `rights` est ouverte (tout permis) : un compte d'avant les droits n'a rien perdu. Lire et télécharger supposent voir ; ils sont indépendants l'un de l'autre. Un administrateur a tous les droits, sans ligne.
 """
@@ -36,6 +37,8 @@ SCRYPT_MAXMEM = 64 << 20
 PBKDF2_ROUNDS = 600_000             # repli quand l'OpenSSL de Python n'a pas scrypt
 TOKEN_FORM = re.compile(r"(\w{1,64})\.([0-9a-f]{64})", re.ASCII)       # `<identifiant>.<mac>` : le jeton de média, et l'ancienne forme du jeton de session
 SESSION_FORM = re.compile(r"(\w{1,64})\.([0-9]{1,12})\.([0-9a-f]{64})", re.ASCII)       # `<identifiant>.<émis>.<mac>` : le jeton de session
+VLC_FORM = re.compile(r"(\w{1,64})\.(\w{1,64})\.([0-9]{1,12})\.([0-9a-f]{64})", re.ASCII)       # `<identifiant>.<entrée>.<expiration>.<mac>` : le jeton VLC
+VLC_SECONDS = 24 * 3600             # durée de vie d'un jeton VLC : le .m3u reste dans Téléchargements, l'adresse dans l'historique de VLC
 SESSION_DAYS = 180                  # durée de vie d'un jeton de session (et du cookie) ; renouvelé par /api/state passé la moitié
 LEGACY_SESSIONS = True              # accepter encore `<identifiant>.<mac>` en session, remplacé à la première visite de /api/state : à retirer à la version suivante
 
@@ -210,8 +213,9 @@ def authenticate(db, name, password):
 # ---------------------------------------------------------------------------
 # Jeton de session
 # ---------------------------------------------------------------------------
-def _mac(secret, uid, version, purpose="session", issued=None):
-    text = f"{purpose}:{uid}:{version}" if issued is None else f"{purpose}:{uid}:{version}:{issued}"
+def _mac(secret, uid, version, purpose="session", bound=None):
+    """Le MAC du compte dans le domaine `purpose` ; `bound` (l'heure d'émission, ou pour un jeton VLC « <entrée>:<expiration> ») est signé avec."""
+    text = f"{purpose}:{uid}:{version}" if bound is None else f"{purpose}:{uid}:{version}:{bound}"
     return hmac.new(secret.encode(), text.encode(), hashlib.sha256).hexdigest()
 
 
@@ -224,6 +228,26 @@ def session_token(secret, row, issued=None):
 def media_token(secret, row):
     """Le jeton de média du compte (`?token=` sur /media, /img, /book et /api/subs) : un autre domaine du même HMAC, donc un jeton de session n'y vaut rien, ni l'inverse. Il ne porte pas de date."""
     return f"{row['id']}.{_mac(secret, row['id'], row['token_version'], 'media')}"
+
+
+def vlc_token(secret, row, entry_id, now=None):
+    """Le jeton VLC du compte pour ce seul fichier, valable `VLC_SECONDS` : `<identifiant>.<entrée>.<expiration>.<mac>`, dans son propre domaine HMAC (`vlc`), lié à `token_version` : un jeton de session ou de média n'y vaut rien, ni l'inverse."""
+    expires = int(time.time() if now is None else now) + VLC_SECONDS
+    return f"{row['id']}.{entry_id}.{expires}.{_mac(secret, row['id'], row['token_version'], 'vlc', f'{entry_id}:{expires}')}"
+
+
+def user_for_vlc_token(db, secret, token, entry_id, now=None):
+    """Le compte qui porte ce jeton VLC pour le fichier `entry_id`, ou None : mal formé, d'un autre fichier, expiré, compte supprimé, mot de passe changé ou autres appareils déconnectés depuis."""
+    found = VLC_FORM.fullmatch(token)
+    if found is None:
+        return None
+    uid, entry, expires, mac = found.groups()
+    if entry != entry_id or (time.time() if now is None else now) >= int(expires):
+        return None
+    row = by_id(db, uid)
+    if row is None or not hmac.compare_digest(mac.encode(), _mac(secret, uid, row["token_version"], "vlc", f"{entry}:{expires}").encode()):
+        return None
+    return row
 
 
 def _token_parts(token, purpose):

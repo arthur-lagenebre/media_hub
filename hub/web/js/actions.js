@@ -163,6 +163,36 @@
       A.download(files(v === 'all' ? d.entries : d.entries.filter(function (e) { return String(e.season) === v; })));
     });
   };
+  // --- Ouvrir dans VLC (PC seulement) ----------------------------------------------------------
+  // Le navigateur fabrique un .m3u8 (`POST /api/play/<id>/vlc` : l'adresse relative du fichier, avec un jeton qui ne vaut que pour lui, le titre, la reprise) et le télécharge : un double-clic l'ouvre dans VLC,
+  // qui lit le fichier d'origine sans que le serveur le convertisse. L'adresse absolue est celle du navigateur (derrière un proxy ou Tailscale, le serveur ne la devine pas). La progression ne remonte pas au hub.
+  // Sur téléphone, tablette et télé : rien (pas de VLC à ouvrir de là). Une vidéo seulement : un tome de livre ne passe pas par là.
+  A.canVlc = function (libId) { return H.device === 'pc' && A.canPlay(libId); };
+  var CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, opening = false;
+  // Un titre sur une seule ligne, sans caractère de contrôle ni retour à la ligne (le titre vient des fichiers, le serveur ne le nettoie pas), borné à `max` caractères.
+  function oneLine(text, max) { return String(text == null ? '' : text).replace(CONTROLS, ' ').replace(/\s+/g, ' ').trim().slice(0, max).trim(); }
+  // Le nom du fichier : le titre sans caractère interdit sous Windows (ni point ou espace final, ni nom réservé), puis `.m3u8`.
+  function playlistName(title) {
+    var base = oneLine(title, 100).replace(/[<>:"\/\\|?*]/g, ' ').replace(/\s+/g, ' ').replace(/[. ]+$/, '').trim();
+    if (!base) base = 'media_hub';
+    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(base)) base = '_' + base;
+    return base + '.m3u8';
+  }
+  A.openInVlc = function (entryId) {
+    if (opening) return;
+    opening = true;
+    H.api('/api/play/' + entryId + '/vlc', {}).then(function (r) {
+      var title = oneLine(r.title, 200), lines = ['#EXTM3U', '#EXTINF:-1,' + title];
+      if (typeof r.resume === 'number' && r.resume > 0) lines.push('#EXTVLCOPT:start-time=' + r.resume);
+      lines.push(location.origin + String(r.url).replace(/[\u0000-\u0020\u007f-\u009f\u2028\u2029]/g, ''));
+      H.saveBlob(new Blob([lines.join('\n') + '\n'], { type: 'audio/x-mpegurl;charset=utf-8' }), playlistName(title));
+      if (!H.pref('vlcHint')) {          // la première fois seulement : ce qu'il faut faire du fichier
+        H.pref('vlcHint', true);
+        H.toast(H.t('Ouvre le fichier téléchargé : VLC lit la vidéo directement.'), 6000);
+      }
+    }).catch(fail).then(function () { opening = false; });
+  };
+
   // --- Changer l'affiche (administrateur) ---------------------------------------------------
   // L'image envoyée reste dans HUB_DATA : la médiathèque n'est pas touchée. Elle devient l'affiche, sans retour à l'ancienne. Le sélecteur de fichiers d'une télé se pilote mal : rien n'y est proposé.
   // `d` : la fiche (/api/item) ; `done` est appelé une fois l'affiche changée. Rend les éléments à poser parmi les boutons de la fiche.
@@ -216,9 +246,11 @@
   A.episodeMenu = function (e, done, libId) {
     var seen = !!(e.progress && e.progress.done);
     var options = (A.canPlay(libId) ? [{ label: seen ? H.t('Revoir') : H.t('Lire'), value: 'play' }] : []).concat([{ label: A.seenLabel('episode', seen), value: 'seen' }]);
+    if (e.kind !== 'book' && A.canVlc(libId)) options.splice(A.canPlay(libId) ? 1 : 0, 0, { label: H.t('Ouvrir dans VLC'), value: 'vlc' });      // juste après « Lire » ; pas pour un tome de livre
     if (A.canDownload(libId)) options.push({ label: H.t('Télécharger'), value: 'download' });
     H.menu(e.title || H.t('Épisode'), options, null, function (v) {
       if (v === 'play') H.go(H.playHref(e, seen ? 0 : undefined));
+      else if (v === 'vlc') A.openInVlc(e.id);
       else if (v === 'download') A.download([{ id: e.id, title: e.title || '' }]);
       else H.api('/api/entry/' + e.id + '/seen', { done: !seen }).then(done).catch(fail);
     });

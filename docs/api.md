@@ -56,7 +56,7 @@ Trois façons de se présenter :
 
 1. **Cookie** `hub=<jeton de session>` : posé par le formulaire `POST /api/login` (réponse 303). C'est le mode du navigateur.
 2. **`Authorization: Bearer <jeton de session>`** : valable sur toutes les routes. C'est le mode d'un client natif. Le jeton de média y est refusé (401).
-3. **`?token=<media_token>`** dans l'URL : **seulement** pour les chemins `/media/`, `/img/`, `/book/` et `/api/subs/` (les sous-titres, lecture seule), nulle part ailleurs sur `/api/`. Pour les balises `<img>`, `<video>`, `<track>` et le Cast, qui n'envoient pas toujours d'en-tête. **Le jeton de session y est refusé** (302 sur `/media/`, `/img/` et `/book/` ; 401 sur `/api/subs/`). Le serveur masque le jeton dans son journal ; un proxy placé devant ne le fait pas forcément.
+3. **`?token=<media_token>`** dans l'URL : **seulement** pour les chemins `/media/`, `/img/`, `/book/` et `/api/subs/` (les sous-titres, lecture seule), nulle part ailleurs sur `/api/`. Pour les balises `<img>`, `<video>`, `<track>` et le Cast, qui n'envoient pas toujours d'en-tête. **Le jeton de session y est refusé** (302 sur `/media/`, `/img/` et `/book/` ; 401 sur `/api/subs/`). Le **jeton VLC** (`POST /api/play/<entry>/vlc`) s'y présente aussi, mais ne vaut que sur `GET` ou `HEAD /media/<son entrée>/file`, sans `download` : partout ailleurs, et sur un autre fichier, il est refusé comme un jeton inconnu (302 hors de `/api/`, 401 sur `/api/`). Le serveur masque le jeton dans son journal ; un proxy placé devant ne le fait pas forcément.
 
 ### `POST /api/token`
 
@@ -638,6 +638,18 @@ L'ordre de préférence est toujours **direct, puis remux, puis transcode**.
 - **`transcode`** — `url` = `/media/<id>/stream?m=transcode&…` : l'image est ré-encodée en H.264 (logiciel, pas de carte vidéo) et le son en AAC. Choisi quand le codec / 10 bits / HDR n'est pas lisible, que l'image dépasse la hauteur voulue ou que le débit dépasse `max_kbps`. Une image de plus de 1080 p convertie sans `max_height` est réduite à 1080 p ; un 4K HEVC / AV1 produit un `warning`.
 
 Paramètres de `…/stream` (déjà dans `url`, ne pas les recalculer) : `m` (`remux` \| `transcode`), `a` (indice de piste audio), `ca` (`1` : recopier le son, seulement en remux), `k` (débit en kb/s), `h` (hauteur), `c` (voies audio, 1 à 6), `start` (secondes, décimal).
+
+### `POST /api/play/<entry>/vlc` — ouvrir une vidéo dans VLC
+
+Corps : `{}` (lu et ignoré). Réponse : `{"url": "/media/<id>/file?token=<jeton VLC>", "title": "Série · Épisode", "resume": 600}`.
+
+- `url` est **relative** : le navigateur y ajoute son adresse (`location.origin`), le serveur n'a pas à la deviner derrière un proxy ou Tailscale. C'est la lecture directe (`Range`) : aucun ffmpeg côté serveur. Sans compte (serveur ouvert), `url` n'a pas de `?token=`.
+- `title` : « Série · Épisode » ou le titre du film ; VLC affiche de préférence le titre des métadonnées du fichier.
+- `resume` : la position enregistrée du compte, en secondes (0 si le fichier est fini ou à peine commencé), à passer à `#EXTVLCOPT:start-time=`.
+- **Le jeton VLC** : `<identifiant>.<entrée>.<expiration>.<mac>` (expiration en secondes Unix, **24 h** après l'émission). Il porte le compte, l'entrée, l'expiration et la version des jetons du compte, dans un domaine HMAC à part : un jeton de session ou de média n'y vaut rien, ni l'inverse. Il ne vaut que sur `GET`/`HEAD /media/<cette entrée>/file`, sans `download`. Il tombe avec un changement de mot de passe, *Déconnecter les autres appareils* ou la suppression du compte ; le droit de lire est revérifié à chaque requête (403 une fois retiré).
+- Le serveur masque le jeton dans son journal. L'onglet État de l'administration affiche la lecture comme « VLC ».
+
+Droit : lire la bibliothèque (403 `lecture non autorisée`). 400 : le fichier n'est pas une vidéo ; 404 : fichier inconnu.
 
 ### `GET /api/play/<entry>/start` — où part vraiment un flux `remux`
 
