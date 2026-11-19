@@ -1,3 +1,7 @@
+## 0.39.0 — 2026-11-19
+- Le bouton pour passer l'introduction apparaît aussi sur les chapitres nommés « Main Titles », et celui pour passer le générique sur « End Titles ».
+- Cela vaut tout de suite pour les vidéos déjà analysées, sans attendre une nouvelle analyse.
+
 ## 0.38.0 — 2026-11-19
 - Dans un livre EPUB, le bouton Sommaire liste ses parties et t'emmène à celle que tu choisis ; celle que tu lis est cochée.
 - Quand tu t'arrêtes en bas d'un chapitre, le livre se rouvre à cet endroit, et non plus au début du chapitre suivant.

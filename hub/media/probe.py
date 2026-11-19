@@ -27,8 +27,8 @@ MAX_CHAPTER_TITLE = 120
 # Sur un titre sans casse ni accents (voir chapter_skip). Un mot entier, et un trait d'union le prolonge : « Pré-générique » et « Re-introduction » ne sont pas des génériques.
 # L'introduction d'abord : « Opening Credits » et « Générique de début » contiennent un mot du générique de fin.
 WHOLE_WORDS = r"(?<![\w-])(?:{})(?![\w-])"
-SKIP_TITLES = (("intro", re.compile(WHOLE_WORDS.format(r"intro|introduction|opening[ -]credits|generique[ -](?:d[eu][ -]debut|(?:d|de[ -]l)[ -]ouverture)"))),
-               ("credits", re.compile(WHOLE_WORDS.format(r"(?:end[ -])?credits|outro|generique(?:[ -]de[ -]fin)?"))))
+SKIP_TITLES = (("intro", re.compile(WHOLE_WORDS.format(r"intro|introduction|opening[ -]credits|main[ -]titles|generique[ -](?:d[eu][ -]debut|(?:d|de[ -]l)[ -]ouverture)"))),
+               ("credits", re.compile(WHOLE_WORDS.format(r"(?:end[ -])?credits|end[ -]titles|outro|generique(?:[ -]de[ -]fin)?"))))
 # Seulement quand ils sont tout le titre, éventuellement suivis d'un numéro : OP et ED sont trop courts, et « Opening Scene » ou « The Ending » sont de vraies scènes du film.
 ALONE_SKIP_TITLE = re.compile(r"(op|opening|ed|ending)(?:[ -]?\d+)?")
 ALONE_SKIPS = {"op": "intro", "opening": "intro", "ed": "credits", "ending": "credits"}
@@ -150,6 +150,12 @@ def chapter_skip(title):
     return next((skip for skip, pattern in SKIP_TITLES if pattern.search(words)), None)
 
 
+def with_skips(chapters):
+    """Les chapitres gardés, chacun avec ce qu'il permet de passer (`skip`, voir chapter_skip). Lu sur le titre à chaque plan de lecture, jamais gardé : un titre reconnu de plus vaut aussitôt pour les fichiers déjà sondés,
+    et le `skip` qu'y gardait la 0.37.0 est remplacé."""
+    return [{**c, "skip": chapter_skip(c.get("title") or "")} for c in chapters]
+
+
 def _chapter_end(chapter, start, following, duration):
     """La fin d'un chapitre : la sienne si elle vient après son début, sinon le début du suivant, sinon la fin du fichier ; jamais au-delà du fichier. None si rien ne la donne."""
     end = _seconds(chapter.get("end_time"))
@@ -162,7 +168,7 @@ def _chapter_end(chapter, start, following, duration):
 def _chapter(chapter, start, end):
     title = _tags(chapter).get("title")
     title = " ".join(title.split())[:MAX_CHAPTER_TITLE] if isinstance(title, str) else ""
-    return {"title": title, "start": start, "end": end, "skip": chapter_skip(title)}
+    return {"title": title, "start": start, "end": end}
 
 
 def _chapters(raw, duration):
