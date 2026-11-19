@@ -101,6 +101,36 @@ class TestBatches(ProjectCase):
         self.assertEqual(["--reuse-coverage" in c for c in commands], [False, True, True])
 
 
+class TestShares(ProjectCase):
+    def units(self, commands):
+        return [(c[-1], option(c, "--lines").split(",")[0] if "--lines" in c else None) for c in commands]
+
+    def test_a_share_takes_one_unit_in_n_and_measures_coverage_first(self):
+        self.write("hub/server/a.py", part.BATCH_LINES * 2 + 1)
+        self.write("hub/server/b.py")
+        commands = self.plan(["hub/server"], "tests/test_beta.py", share=(2, 2))
+        self.assertEqual(self.units(commands), [("hub/server/a.py", str(part.BATCH_LINES + 1)), ("hub/server/b.py", None)])
+        self.assertEqual(["--reuse-coverage" in c for c in commands], [False, True])
+
+    def test_the_shares_together_run_every_unit_once(self):
+        self.write("hub/server/a.py", part.BATCH_LINES * 3)
+        self.write("hub/server/b.py")
+        whole = self.units(self.plan(["hub/server"], "tests/test_beta.py"))
+        shared = [unit for k in (1, 2, 3) for unit in self.units(self.plan(["hub/server"], "tests/test_beta.py", share=(k, 3)))]
+        self.assertEqual(sorted(shared, key=whole.index), whole)
+
+    def test_a_share_beyond_the_units_has_nothing_to_run(self):
+        self.write("hub/server/a.py")
+        self.assertEqual(self.plan(["hub/server"], "tests/test_beta.py", share=(2, 2)), [])
+
+    def test_a_share_is_read_as_k_over_n(self):
+        self.assertEqual(part.parse_share("3/10"), (3, 10))
+        self.assertIsNone(part.parse_share(""))
+        for wrong in ("0/10", "11/10", "3", "a/b"):
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                part.parse_share(wrong)
+
+
 class TestOutcome(unittest.TestCase):
     def run_plan(self, codes):
         seen = []

@@ -2,7 +2,7 @@ name: Nuit
 
 # Les passes longues de « faire bien » (skill ub-mode), sur tout hub/, une fois par nuit plutôt qu'à chaque PR :
 #   crapper : aucune fonction de hub/ au-dessus de CRAP 10, avec l'interface dans Chromium (Playwright) pour la couverture ;
-#   mutator : la passe de mutation, en cinq parties parallèles, sans Playwright, chacune avec son cache différentiel
+#   mutator : la passe de mutation, en parties parallèles (hub/server sur dix jobs), sans Playwright, chacune avec son cache différentiel
 #             et ses seuls modules de tests (toute la suite par mutant ne tenait pas dans un job : voir « tests »).
 #             .github/scripts/mutate_part.py la lance fichier par fichier, et par tranches pour un long fichier :
 #             une partie arrêtée à la limite du job reprend à la passe suivante.
@@ -26,6 +26,8 @@ env:
   # Les deux outils ne sont pas versionnés : on les épingle, pour qu'une passe se rejoue à l'identique.
   # crapper l'est dans .github/actions/setup, au même commit que dans mutator.yml.
   MUTATOR_REF: a5a0cb803b66e0cdb8bf471b3b08af701d424a41
+  # Les modules de tests des dix parts de « serveur » (voir la matrice de mutator).
+  SERVEUR_TESTS: tests/test_server*.py tests/test_range.py tests/test_autoscan.py tests/test_jobs.py
 
 jobs:
   changes:
@@ -90,9 +92,20 @@ jobs:
       # Coût accepté : un mutant tué seulement par un test d'un autre module passe pour survivant.
       matrix:
         include:
-          - part: serveur
-            paths: hub/server
-            tests: tests/test_server*.py tests/test_range.py tests/test_autoscan.py tests/test_jobs.py
+          # hub/server sur dix jobs, une tranche de 400 lignes de app.py chacun (le premier : __init__.py et jobs.py).
+          # mutator repère un mutant par sa position dans le fichier : une ligne ajoutée en haut de app.py fait refaire
+          # tout le fichier, environ 15 h de calcul. En un seul job, il ne finissait jamais (runs 44282081246, 44504034976).
+          # Tests : SERVEUR_TESTS. Si app.py dépasse 3600 lignes, un job reçoit deux tranches : ajouter une part.
+          - {part: serveur-1, share: 1/10, paths: hub/server}
+          - {part: serveur-2, share: 2/10, paths: hub/server}
+          - {part: serveur-3, share: 3/10, paths: hub/server}
+          - {part: serveur-4, share: 4/10, paths: hub/server}
+          - {part: serveur-5, share: 5/10, paths: hub/server}
+          - {part: serveur-6, share: 6/10, paths: hub/server}
+          - {part: serveur-7, share: 7/10, paths: hub/server}
+          - {part: serveur-8, share: 8/10, paths: hub/server}
+          - {part: serveur-9, share: 9/10, paths: hub/server}
+          - {part: serveur-10, share: 10/10, paths: hub/server}
           # scan et media ont fait perdre leur machine deux fois quand ils étaient ensemble (cause non établie : mémoire ?).
           # Séparés pour savoir lequel, moins de mutants à la fois, et une limite de mémoire par lancement de tests.
           - part: scan
@@ -154,7 +167,8 @@ jobs:
         working-directory: media_hub
         env:
           PATHS: ${{ steps.paths.outputs.list }}
-          TESTS: ${{ matrix.tests }}
+          TESTS: ${{ matrix.share && env.SERVEUR_TESTS || matrix.tests }}
+          SHARE: ${{ matrix.share }}
           WORKERS: ${{ matrix.workers }}
           MEMORY_MB: ${{ matrix.memory_mb }}
           # Les tests importent aussi hub/scan, qui a besoin de `libraries` avant que les tests ne le rendent importable.
@@ -162,7 +176,8 @@ jobs:
         shell: bash               # pipefail : le code de sortie du lanceur passe malgré tee
         run: |
           # shellcheck disable=SC2086
-          python -u .github/scripts/mutate_part.py --tests "$TESTS" --workers "$WORKERS" --memory-mb "$MEMORY_MB" $PATHS 2>&1 | tee mutator.log
+          python -u .github/scripts/mutate_part.py --tests "$TESTS" --workers "$WORKERS" --memory-mb "$MEMORY_MB" --share "$SHARE" \
+            $PATHS 2>&1 | tee mutator.log
 
       # Même quand la partie échoue ou s'arrête à la limite du job, ses résultats sont justes : on les garde pour la suivante.
       # Sans .metrics/mutate (aucun fichier ni tranche terminés), il n'y a rien à garder.
