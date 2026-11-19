@@ -1,3 +1,8 @@
+## 0.37.0 — 2026-11-19
+- Pendant un film ou un épisode, le bouton Chapitres liste les chapitres du fichier et t'emmène à celui que tu choisis.
+- Quand un chapitre est une introduction ou un générique, un bouton te propose de le passer. Rien ne saute jamais tout seul.
+- Le hub relit tes vidéos en arrière-plan pour trouver leurs chapitres : cela peut prendre du temps la première fois, et tu peux continuer à regarder pendant ce temps.
+
 ## 0.36.0 — 2026-11-18
 - Dans Administration, un nouvel onglet État montre qui regarde, écoute, télécharge ou envoie en ce moment, et te dit quand tu peux relancer le serveur sans couper personne.
 - Le même onglet garde les dernières décisions de lecture : tu vois si un film a été lu tel quel ou converti, et pourquoi.

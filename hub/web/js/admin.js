@@ -22,10 +22,10 @@
     if (s < 60) return H.t('{n} s', { n: s });
     return s < 86400 ? H.dur(s) : H.t('{d} j {h} h', { d: Math.floor(s / 86400), h: Math.floor(s % 86400 / 3600) });
   }
-  // Le message est vrai ou absent : « on peut relancer » seulement quand plus aucune ligne n'est listée (même terminée) et qu'aucune tâche ne tourne ; une tâche seule se dit ; sinon la liste suffit.
+  // Le message est vrai ou absent : « on peut relancer » seulement quand plus aucune ligne n'est listée (même terminée) et qu'aucune tâche ne s'y oppose (l'analyse des vidéos reprend seule : `blocking` ne la compte pas) ; une tâche seule se dit ; sinon la liste suffit.
   function relaunchMessage(a) {
     if (a.transfers.length) return '';
-    return a.busy ? H.t('Personne ne lit ni ne télécharge, mais une tâche est en cours.') : H.t('Personne ne lit ni ne télécharge : le serveur peut être relancé.');
+    return a.blocking ? H.t('Personne ne lit ni ne télécharge, mais une tâche est en cours.') : H.t('Personne ne lit ni ne télécharge : le serveur peut être relancé.');
   }
   // Les chiffres du résumé, comptés sur `transfers` et seulement sur ce qui est en cours (`counts` du serveur compte aussi les lignes finies).
   function activityFacts(a, missing) {

@@ -50,6 +50,40 @@ PROBE = {"duration": 0, "audio": [{"index": 1, "lang": "fre", "title": "", "comm
          "video": {"codec": "h264", "width": 1920, "height": 1080, "hdr": False}}
 
 
+class TestPlayChapters(MediaCase):
+    """Les chapitres du plan de lecture viennent de la sonde gardée : la lecture ne lance jamais ffprobe pour les obtenir."""
+
+    CHAPTERS = [{"title": "Intro", "start": 0.0, "end": 30.0, "skip": "intro"}, {"title": "Suite", "start": 30.0, "end": 100.0, "skip": None}]
+
+    def setUp(self):
+        super().setUp()
+        self.fill([item("mv", title="Film")], [entry("f1", "mv")])
+        self.summary = app.prober.summarize({"format": {"format_name": "mp4", "duration": "100"}, "streams": [{"codec_type": "video", "codec_name": "h264", "width": 640, "height": 360}]})
+
+    def play(self):
+        reply = self.post("/api/play/f1", {"caps": {"video": ["h264"], "audio": ["aac"], "containers": ["mp4"]}})
+        self.assertEqual(reply.status, 200, reply.body)
+        return reply.json()
+
+    def test_an_old_summary_plays_without_chapters_and_without_ffprobe(self):
+        self.db.set_probe("f1", {k: v for k, v in self.summary.items() if k not in ("chapters", "probe_version")})
+        with mock.patch.object(app.prober, "run_ffprobe") as run:
+            self.assertEqual(self.play()["chapters"], [])
+        run.assert_not_called()
+
+    def test_the_chapters_of_the_summary_are_given_to_the_player(self):
+        self.db.set_probe("f1", {**self.summary, "chapters": self.CHAPTERS})
+        with mock.patch.object(app.prober, "run_ffprobe") as run:
+            self.assertEqual(self.play()["chapters"], self.CHAPTERS)
+        run.assert_not_called()
+
+    def test_a_file_never_probed_is_probed_once_and_gives_its_chapters(self):
+        with mock.patch.object(app.prober, "run_ffprobe", return_value={**self.summary, "chapters": self.CHAPTERS}) as run:
+            self.assertEqual(self.play()["chapters"], self.CHAPTERS)
+            self.assertEqual(self.play()["chapters"], self.CHAPTERS)
+        self.assertEqual(run.call_count, 1)
+
+
 class TestPlay(MediaCase):
     def setUp(self):
         super().setUp()

@@ -202,7 +202,7 @@ class Hub:
         def loop():
             while True:
                 time.sleep(hours * 3600)
-                if not self.jobs.busy():
+                if not self.jobs.blocking():
                     self.jobs.scan_all()
         threading.Thread(target=loop, name="autoscan", daemon=True).start()
 
@@ -2308,7 +2308,7 @@ def api_entry_seen(h, m, q):
 # Lecture vidéo
 # ---------------------------------------------------------------------------
 def probe_of(hub, entry):
-    """Le résumé ffprobe d'un fichier, lu une fois et gardé dans la base."""
+    """Le résumé ffprobe d'un fichier, lu une fois et gardé dans la base. Un résumé d'une version plus ancienne sert tel quel (sans chapitres) : c'est l'analyse en fond qui le refait, jamais la lecture."""
     cached = safe_json(entry["probe"], None)
     if cached:
         return cached
@@ -2495,6 +2495,7 @@ def api_play(h, m, q):
         "subs": subs,
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
         "next": play_next(hub, entry),
+        "chapters": probe.get("chapters", []),
     })
 
 
@@ -3029,7 +3030,7 @@ def api_activity(h, m, q):
     """Ce qui se passe en ce moment, pour savoir si le serveur peut être relancé sans couper quelqu'un : administrateur seulement. Ni chemin, ni adresse de client, ni secret (voir activity.py)."""
     require_admin(h)
     hub = h.hub
-    h.send_json({"version": __version__, "uptime": int(max(0, time.time() - hub.started)), "busy": hub.jobs.busy(), "streams": hub.active, "max_streams": hub.cfg.max_streams, **hub.activity.report()})
+    h.send_json({"version": __version__, "uptime": int(max(0, time.time() - hub.started)), "busy": hub.jobs.busy(), "blocking": hub.jobs.blocking(), "streams": hub.active, "max_streams": hub.cfg.max_streams, **hub.activity.report()})
 
 
 @route("POST", r"/api/scan")

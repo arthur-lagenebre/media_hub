@@ -48,7 +48,7 @@ class MiniHub(app.Hub):
         self.cfg = types.SimpleNamespace(data=data, libraries=list(libraries), web=root / "web", max_streams=2, ffmpeg="", ffprobe="", tmdb_key="", repo=None, admin="", **{**limits, **cfg})
         self.cfg.library = lambda ident: next((lib for lib in self.cfg.libraries if lib.id == ident), None)
         self.images, self.jobs = mock.MagicMock(), mock.MagicMock()
-        self.jobs.busy.return_value = False
+        self.jobs.busy.return_value = self.jobs.blocking.return_value = False
         self.sagas = Sagas(data / "sagas.json")
         self.throttle = accounts.Throttle()
         self.inbox = inbox.Inbox(self.cfg, self.db)

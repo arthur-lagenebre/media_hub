@@ -266,7 +266,7 @@ Un film, un épisode, une piste, un tome.
 | `audio` | liste de chaînes, optionnel | vidéo sondée : les langues du son, en codes ISO 639-1 minuscules (`["fr", "en"]`), une fois chacune, dans l'ordre des pistes, sans les pistes de commentaire. Une piste sans langue (ou `und`, ou d'une langue sans code à deux lettres) n'y est pas : la liste peut être vide. |
 | `subs` | liste de chaînes, optionnel | vidéo sondée : les langues des sous-titres, même forme, sans les pistes forcées ; celles du fichier d'abord, puis celles des fichiers posés à côté de la vidéo (`Film.en.srt`). |
 
-`quality`, `hdr`, `audio` et `subs` viennent ensemble ou pas du tout : ils sont **absents tant que le fichier n'a pas été sondé** par ffprobe (à sa première lecture, ou par la tâche « Analyse des vidéos » qui suit chaque mise à jour ; jamais sans ffprobe), et pour un fichier sans image. Un client les affiche en badges quand ils sont là et n'affiche rien sinon.
+`quality`, `hdr`, `audio` et `subs` viennent ensemble ou pas du tout : ils sont **absents tant que le fichier n'a pas été sondé** par ffprobe (à sa première lecture, ou par la tâche « Analyse des vidéos » qui suit chaque mise à jour et part aussi au démarrage s'il reste à sonder ; jamais sans ffprobe), et pour un fichier sans image. Un client les affiche en badges quand ils sont là et n'affiche rien sinon.
 
 ### Piste (artiste, playlist)
 
@@ -627,6 +627,7 @@ Réponse :
 | `subs` | liste | `{"id", "label", "lang", "forced", "default", "text", "image", "where", "url"}` ; `where` : `mkv` (dans le fichier) ou `fichier` (fichier voisin) ; `text` : piste de texte, `url` en WebVTT ; `image` : `"pgs"` pour un sous-titre en image de Blu-ray, dont `url` est le `.sup` brut (à dessiner côté client) ; `""` sinon. **`url` vaut `""` si `text` et `image` sont faux** (VobSub, DVD : non pris en charge). `selected` : vrai sur **au plus un** sous-titre, celui à afficher d'office d'après `sub_mode` et `sub_langs` du compte (`sub_langs` vide : la langue de la page, `fr` ou `en`) et la langue de la piste audio de ce plan ; jamais une piste en image ni une piste sans langue connue. Le client l'applique à l'ouverture ; quand il redemande le plan pour une autre piste audio, il garde le sous-titre en cours |
 | `video` | objet ou `null` | `{"codec", "width", "height", "hdr"}` |
 | `next` | objet ou `null` | `{"id", "title", "season", "number"}` : le fichier vidéo suivant du même élément (épisode, partie). Après la dernière partie d'un film, le premier film présent qui le suit dans sa saga, de la même bibliothèque : `title` est alors le titre du film et **`saga`**, présent dans ce seul cas, le nom de la saga. Les sagas de `sagas.json` passent d'abord, dans l'ordre du fichier, puis celle de l'étiquette ; un film manquant ou à venir est sauté, et les versions d'un même film ne se suivent pas. Un client propose ce film sans le lancer tout seul : seul un `next` sans `saga` s'enchaîne |
+| `chapters` | liste | `{"title", "start", "end", "skip"}`, par `start` croissant, `[]` s'il n'y en a pas. `start` et `end` : secondes (à la milliseconde), `end` toujours après `start` et jamais au-delà du fichier ; deux chapitres n'ont jamais le même `start`, mais ils peuvent se chevaucher si le fichier le dit. `title` : `""` si le fichier n'en donne pas. `skip` : `"intro"` ou `"credits"` si le titre désigne une introduction ou un générique, sinon `null` ; un client le **propose**, il ne saute jamais tout seul. Lus à la sonde, jamais à la lecture : un fichier sondé avant l'arrivée des chapitres rend `[]` jusqu'à ce que la tâche « Analyse des vidéos » soit passée |
 
 #### Les trois modes
 
@@ -686,7 +687,7 @@ Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, te
 `GET /api/activity` : **administrateur seulement** (403 `réservé à l'administrateur` sinon, 401 sans session). Ce que fait le hub en ce moment, pour savoir si on peut relancer le serveur sans couper quelqu'un, et la trace des dernières décisions de lecture pour comprendre « ça ne marche pas sur la télé du salon » sans l'appareil. Tout est **en mémoire** : rien n'est écrit dans la base, rien ne survit à un redémarrage.
 
 ```json
-{"version": "1.2.3", "uptime": 5400, "busy": false, "streams": 1, "max_streams": 2,
+{"version": "1.2.3", "uptime": 5400, "busy": false, "blocking": false, "streams": 1, "max_streams": 2,
  "counts": {"playing": 2, "downloads": 0, "uploads": 0, "remux": 0, "transcodes": 1, "backups": 0},
  "transfers": [{"user": "alice", "title": "Dark · Épisode 1", "library": "series", "kind": "transcode", "origin": "remote", "agent": "Chrome 120 · Android",
                 "started": 1731900000, "last": 1731900123, "bytes": 52428800, "connections": 1, "device": "phone"}],
@@ -698,6 +699,7 @@ Le sous-titre en WebVTT (`.vtt`, `text/vtt`) ou, pour une piste en image PGS, te
 | --- | --- |
 | `version`, `uptime` | version du hub ; secondes depuis son démarrage |
 | `busy` | une tâche de fond tourne ou attend (comme `busy` de `GET /api/state`) |
+| `blocking` | une tâche **autre que l'analyse des vidéos** tourne ou attend : l'analyse reprend d'elle-même au démarrage, elle n'empêche pas de relancer le serveur |
 | `streams`, `max_streams` | les flux ffmpeg en cours et leur plafond (`HUB_MAX_STREAMS`) : le même sens que dans `GET /api/state` |
 | `counts` | le nombre de lignes de `transfers` par genre : `playing` (lectures : `direct`, `audio`, `remux` et `transcode`), `downloads`, `uploads`, `remux`, `transcodes`, `backups` |
 | `transfers` | une ligne par (compte, fichier transféré, genre, client) : voir ci-dessous. Les tâches de fond et les bibliothèques ne sont pas recopiées ici : `GET /api/jobs` et `libraries` de `GET /api/state` |

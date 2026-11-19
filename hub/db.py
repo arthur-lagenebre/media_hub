@@ -21,7 +21,17 @@ from .suggestions import TABLES as SUGGESTION_TABLES
 
 ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "meta", "added", "count"}      # ce que update_item_meta peut changer
 RATINGS = ("up", "mid", "down")      # l'avis d'un compte sur un film ou une série : J'aime, Bof, Je n'aime pas. Pas de ligne = pas d'avis ; « Bof » n'est donc pas l'absence d'avis
-ORPHAN_PROGRESS_DAYS = 90      # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
+PROBE_NOT_DERIVED = ("chapters", "probe_version")      # ce qu'aucun résultat de `derived` ne lit dans une sonde : voir set_probe
+ORPHAN_PROGRESS_DAYS = 90     # une progression dont le fichier a disparu se garde ce temps : un volume démonté ou une bibliothèque momentanément vide ne doit pas effacer ce qu'on avait vu
+
+
+def _probe_facts(text):
+    """Ce qu'une sonde gardée apporte aux résultats de `derived` ; None si elle n'est pas lisible."""
+    try:
+        probe = json.loads(text) if text else None
+    except ValueError:
+        return None
+    return {k: v for k, v in probe.items() if k not in PROBE_NOT_DERIVED} if isinstance(probe, dict) else None
 
 
 def _add_column(conn, table, column, definition):
@@ -166,7 +176,7 @@ class Database:
         self._local = threading.local()
         self.write_lock = threading.Lock()
         self.items_version = 0                  # monte à chaque écriture de `items` (scan, enrichissement) : voir `derived`
-        self.probes_version = 0                 # monte à chaque sonde ffprobe gardée (set_probe) : seul ce qui lit les sondes en dépend
+        self.probes_version = 0                 # monte à chaque sonde ffprobe gardée qui change ce qu'on en dérive (set_probe) : seul ce qui lit les sondes en dépend
         self._derived, self._derived_lock = {}, threading.Lock()
         with self.write_lock:
             conn = self.connection()
@@ -291,9 +301,14 @@ class Database:
             self.items_changed()
 
     def set_probe(self, entry_id, probe):
-        self.execute("UPDATE entries SET probe=? WHERE id=?", (json.dumps(probe), entry_id))
-        with self._derived_lock:
-            self.probes_version += 1
+        """Garde la sonde d'un fichier. Ce qui en dérive n'est renouvelé que si elle change autre chose que PROBE_NOT_DERIVED : pendant une ré-analyse de toute la médiathèque, chaque page recalculerait sinon la qualité de tous les films."""
+        text = json.dumps(probe)
+        row = self.one("SELECT probe FROM entries WHERE id=?", (entry_id,))
+        unchanged = row is not None and _probe_facts(row["probe"]) == _probe_facts(text)
+        self.execute("UPDATE entries SET probe=? WHERE id=?", (text, entry_id))
+        if not unchanged:
+            with self._derived_lock:
+                self.probes_version += 1
 
     def update_item_meta(self, item_id, **fields):
         """Complète un item (enrichissement TMDB) : `meta` est fusionné, le reste remplace. Seules les colonnes de ITEM_COLUMNS : leur nom entre dans la requête, il ne vient jamais d'ailleurs."""

@@ -257,6 +257,9 @@ class TestMain(unittest.TestCase):
     def test_it_scans_then_serves_and_closes_the_socket_on_ctrl_c(self):
         server, hub, out = self.serve([], mock.Mock(side_effect=KeyboardInterrupt))
         hub.first_scan.assert_called_once_with()
+        hub.jobs.probe_pending.assert_called_once_with()
+        started = [name for name, *_ in hub.method_calls]
+        self.assertLess(started.index("first_scan"), started.index("jobs.probe_pending"))    # l'analyse passe derrière les premiers scans
         hub.autoscan.assert_called_once_with()
         hub.inbox.keep_clean.assert_called_once_with()
         hub.inbox.migrate.assert_called_once_with()

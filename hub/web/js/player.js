@@ -6,6 +6,7 @@
 
   var QUALITIES = { auto: { k: 0, h: 0, label: H.t('Qualité d’origine') }, '1080': { k: 8000, h: 1080, label: '1080p · 8 Mb/s' }, '720': { k: 4000, h: 720, label: '720p · 4 Mb/s' }, '480': { k: 1500, h: 480, label: H.t('480p · 1,5 Mb/s') } };
   var MODES = { direct: H.t('Lecture directe'), remux: H.t('Son converti'), transcode: H.t('Image convertie') };
+  var SKIPS = { intro: H.t('Passer l’introduction'), credits: H.t('Passer le générique') };          // ce que le bouton propose, selon le `skip` du chapitre en cours
   // La vitesse passe à l'épisode que « Suivant » (ou la fin de l'épisode) enchaîne, et à lui seul : toute autre ouverture du lecteur, le film suivant d'une saga compris, repart à 1×.
   var carried = null;
 
@@ -82,7 +83,9 @@
     var playBtn = H.button('', 'pause', { 'aria-label': H.t('Lecture / pause'), onclick: toggle });
     // Sur un écran étroit, ces boutons n'affichent que leur icône (style.css) : leur nom passe par aria-label.
     var bAudio = H.button(H.t('Audio'), 'audio', { 'aria-label': H.t('Audio'), onclick: pickAudio }), bSubs = H.button(H.t('Sous-titres'), 'subs', { 'aria-label': H.t('Sous-titres'), onclick: pickSubs }), bQual = H.button(H.t('Qualité'), 'quality', { 'aria-label': H.t('Qualité'), onclick: pickQuality });
+    var bChapters = H.button(H.t('Chapitres'), 'chapters', { 'aria-label': H.t('Chapitres'), onclick: pickChapter, hidden: true });
     var bNext = H.button(H.t('Suivant'), 'next', { 'aria-label': H.t('Suivant'), onclick: goNext, hidden: true });
+    var bSkip = H.button(SKIPS.intro, 'next', { class: 'skip', onclick: skipChapter, hidden: true });          // hors de `ctl` : il reste là quand les commandes s'effacent
     var bRew = H.button('10 s', 'rew', { 'aria-label': H.t('Reculer de 10 s'), onclick: function () { nudge(-1, 10); } }), bFwd = H.button('10 s', 'fwd', { 'aria-label': H.t('Avancer de 10 s'), onclick: function () { nudge(1, 10); } });
     var bSpeed = H.button(H.t('Vitesse'), 'speed', { class: 'spd', 'aria-label': H.t('Vitesse de lecture : {rate}', { rate: H.speedLabel(1) }), onclick: pickSpeed });
     var bFull = H.button('', 'full', { 'aria-label': H.t('Plein écran'), onclick: fullscreen });
@@ -90,19 +93,22 @@
     var ctl = h('div', { class: 'ctl' },
       h('div', { class: 'top' }, bBack, h('div', { class: 'txt' }, title, sub), pill),
       h('div', { class: 'bottom' }, h('div', { class: 'times' }, tCur, tEnd), seekbar,
-        h('div', { class: 'btns' }, playBtn, bRew, bFwd, h('span', { class: 'sp' }), bSpeed, bAudio, bSubs, bQual, bNext, bFull)));
+        h('div', { class: 'btns' }, playBtn, bRew, bFwd, h('span', { class: 'sp' }), bSpeed, bChapters, bAudio, bSubs, bQual, bNext, bFull)));
     var err = h('div', { class: 'err', hidden: true });
-    var el = h('section', { class: 'player idle' }, video, subPic, subBox, spin, osd, ctl, err);
+    var el = h('section', { class: 'player idle' }, video, subPic, subBox, spin, osd, ctl, bSkip, err);
 
     var plan = null, base = 0, level = 0, firstPlan = true, closing = false, pending = null, pendingTimer = null, hideTimer = null, tickTimer = null, reportTimer = null, lastReport = 0;
     var steps = 0, stepsTimer = null, audioIdx = null, subs = { cues: [], sel: '', pgs: null, shown: null }, subText = '';
     var speed = 1, offered = false;          // `offered` : le film est fini et le panneau propose le suivant de sa saga
+    var skipNow = null, skipShown = '', skipped = {};          // le chapitre que le bouton propose, ce qu'il affiche, et les chapitres déjà passés (par début : un nouveau plan refait les objets)
     if (carried && carried.id === id) setSpeed(carried.rate);
     carried = null;
 
     function q() { return QUALITIES[H.pref('quality')] || QUALITIES.auto; }
     function cur() { var t = video.currentTime || 0; return plan && !plan.seekable ? base + t : t; }
     function dur() { return (plan && plan.duration) || video.duration || 0; }
+    function here() { return pending !== null ? pending : cur(); }          // la position affichée : celle qu'on est en train de choisir, sinon celle du film
+    function chapters() { return (plan && plan.chapters) || []; }
 
     // --- Ouverture -----------------------------------------------------------
     function open(at) {
@@ -118,6 +124,7 @@
         bNext.hidden = !p.next;
         bAudio.hidden = p.audio.length < 2;
         bSubs.hidden = !p.subs.length;
+        bChapters.hidden = !chapters().length;
         if (p.warning) H.toast(H.tr(p.warning), 7000);
         var start = at !== undefined ? at : (query.t !== undefined ? parseFloat(query.t) || 0 : p.resume);
         if (firstPlan) { firstPlan = false; chooseDefaultSub(); if (start >= 20 && query.t === undefined) H.toast(H.t('Reprise à {time}', { time: H.time(start) })); }
@@ -196,7 +203,7 @@
 
     // --- Position ------------------------------------------------------------------
     function paintTime() {
-      var t = pending !== null ? pending : cur(), d = dur();
+      var t = here(), d = dur();
       fill.style.width = d ? Math.min(100, t / d * 100) + '%' : '0%';
       thumb.style.left = d ? Math.min(100, t / d * 100) + '%' : '0%';
       tCur.textContent = H.time(t); tEnd.textContent = d ? '-' + H.time(Math.max(0, d - t)) : '';
@@ -209,6 +216,7 @@
     function commit(t) {
       pending = null;
       t = Math.max(0, Math.min(t, Math.max(0, dur() - 1)));
+      Object.keys(skipped).forEach(function (start) { if (t < +start) delete skipped[start]; });          // on demande à revenir avant un chapitre passé : il sera proposé de nouveau
       spin.hidden = false;
       if (plan.seekable) { try { video.currentTime = t; } catch (e) { /* tant pis */ } paintTime(); }
       else attach(t);
@@ -278,7 +286,7 @@
       if (wanted) { wanted = show; return; }
       var top = H.overlay.top(), box = top && top.querySelector('.menu.choice');
       var label = box && box.getAttribute('aria-label');
-      if (label !== H.t('Audio') && label !== H.t('Sous-titres') && label !== H.t('Qualité') && label !== H.t('Vitesse')) { show(); return; }
+      if (label !== H.t('Audio') && label !== H.t('Sous-titres') && label !== H.t('Qualité') && label !== H.t('Vitesse') && label !== H.t('Chapitres')) { show(); return; }
       wanted = show;
       H.overlay.close(function () { var next = wanted; wanted = null; if (next && document.body.contains(el)) next(); });
     }
@@ -305,6 +313,49 @@
       H.speedMenu(speed, function (v) { if (v === speed) return; setSpeed(v); flash(H.speedLabel(speed)); }, trackMenu);
     }
     function carry() { if (plan && plan.next && !plan.next.saga && speed !== 1) carried = { id: plan.next.id, rate: speed }; }
+
+    // --- Chapitres ------------------------------------------------------------------
+    // L'indice du chapitre à l'instant `t`, -1 hors de tout chapitre. S'ils se chevauchent, celui qui a commencé le dernier.
+    function chapterAt(t) {
+      var list = chapters(), found = -1;
+      for (var i = 0; i < list.length && list[i].start <= t; i++) if (t < list[i].end) found = i;
+      return found;
+    }
+    function pickChapter() {
+      var list = chapters();
+      var opts = list.map(function (c, i) { return { label: c.title || H.t('Chapitre {n}', { n: i + 1 }), detail: H.time(c.start), value: i }; });
+      trackMenu(H.t('Chapitres'), opts, chapterAt(here()), function (i) {
+        delete skipped[list[i].start];          // choisi dans la liste : on veut le revoir, son bouton revient avec lui
+        commit(list[i].start);
+      });
+    }
+    // Le bouton ne saute jamais tout seul. Le chapitre passé est retenu : en remux, le flux repart d'une image clé, parfois avant sa fin, voire avant son début, et le bouton reviendrait.
+    function skipChapter() {
+      var c = skipNow;
+      if (!c) return;
+      commit(c.end);
+      skipped[c.start] = true;          // après `commit` : tout près de la fin du film, il ramène `end` avant le début du chapitre
+      offerSkip(null);
+    }
+    // Propose `c` (null : rien). Le DOM n'est touché que si l'affichage change. Le bouton qui part avec le focus le rend aux commandes si elles sont là, sinon le lâche : Entrée remet alors en pause.
+    function offerSkip(c) {
+      skipNow = c;
+      var key = c ? c.skip + '@' + c.start : '';
+      if (key === skipShown) return;
+      skipShown = key;
+      el.classList.toggle('skipping', !!c);          // les sous-titres montent au-dessus du bouton (style.css)
+      if (c) { bSkip.querySelector('.lbl').textContent = SKIPS[c.skip]; bSkip.hidden = false; return; }
+      var focused = document.activeElement === bSkip;
+      if (focused) bSkip.blur();
+      bSkip.hidden = true;
+      if (focused && !ctl.hidden) H.focus.set(playBtn, true);
+    }
+    function paintSkip() {
+      if (!plan || !err.hidden) { offerSkip(null); return; }          // un panneau occupe l'écran
+      if (video.readyState < 1 || video.seeking) return;              // le film se place : `currentTime` ne dit pas encore où il sera (0 à l'ouverture d'une reprise), on attend
+      var c = chapters()[chapterAt(here())];
+      offerSkip(c && SKIPS[c.skip] && !skipped[c.start] ? c : null);
+    }
     // Le sous-titre du premier plan : celui que le serveur a choisi d'après les langues du compte (au plus un `selected` ; jamais une piste image, dont l'extraction peut durer).
     // Les plans suivants (autre piste audio, autre qualité) gardent le sous-titre en cours : c'est peut-être celui que l'utilisateur vient de choisir.
     function chooseDefaultSub() {
@@ -328,6 +379,7 @@
       }).catch(function (e) { H.toast(e.message); });
     }
     tickTimer = setInterval(function () {
+      paintSkip();          // avant tout : la suite s'arrête tôt selon les sous-titres
       if (subs.pgs) {
         var set = H.pgs.at(subs.pgs, cur());
         if (set !== subs.shown) { subs.shown = set; H.pgs.draw(subPic, subs.pgs, set); }
@@ -352,10 +404,12 @@
       if (k === 'MediaPlayPause') { toggle(); eat(e); return; }
       if (k === 'MediaTrackNext') { goNext(); eat(e); return; }
       if (k === 'f' || k === 'F') { fullscreen(); eat(e); return; }
-      var inControls = !ctl.hidden && ctl.contains(document.activeElement);
-      if (!inControls) {                     // personne n'est sur un bouton : les flèches pilotent directement la lecture
+      var inControls = !ctl.hidden && ctl.contains(document.activeElement), onSkip = document.activeElement === bSkip;
+      if (!inControls) {                     // personne n'est sur une commande : les flèches pilotent directement la lecture, et haut ou bas va d'abord au bouton de saut s'il est affiché
         if (k === 'ArrowLeft' || k === 'ArrowRight') { seekBy(k === 'ArrowLeft' ? -1 : 1); eat(e); }
+        else if ((k === 'ArrowUp' || k === 'ArrowDown') && !bSkip.hidden && !onSkip) { H.focus.set(bSkip, true); eat(e); }
         else if (k === 'ArrowUp' || k === 'ArrowDown') { show(); H.focus.set(k === 'ArrowUp' ? seekbar : playBtn, true); eat(e); }
+        else if ((k === 'Enter' || k === ' ') && onSkip) return;          // le bouton s'active lui-même
         else if (k === 'Enter' || k === ' ') { toggle(); show(); eat(e); }
         else if (k !== 'Escape' && k !== 'Backspace' && k !== 'BrowserBack' && k !== 'GoBack') show();
       } else {
