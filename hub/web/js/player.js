@@ -102,6 +102,7 @@
     var plan = null, base = 0, level = 0, firstPlan = true, closing = false, pending = null, pendingTimer = null, hideTimer = null, tickTimer = null, reportTimer = null, lastReport = 0;
     var steps = 0, stepsTimer = null, audioIdx = null, subs = { cues: [], sel: '', pgs: null, shown: null }, subText = '';
     var asleep = false, kept = null, hold = false;          // mis de côté (voir `parked`) : la vidéo n'a plus de source, `kept` garde la position ; `hold` : la prochaine source s'ouvre en pause
+    var aimed = null, stale = false;          // `aimed` : la position qu'un départ encore en route doit atteindre ; `stale` : rouvert par Retour, il n'a pas rejoué, sa position n'est plus à écrire
     var speed = 1, offered = false;          // `offered` : le film est fini et le panneau propose le suivant de sa saga
     var skipNow = null, skipShown = '', skipped = {};          // le chapitre que le bouton propose, ce qu'il affiche, et les chapitres déjà passés (par début : un nouveau plan refait les objets)
     if (carried && carried.id === id) setSpeed(carried.rate);
@@ -138,6 +139,7 @@
     var attaching = 0;
     function attach(at) {
       at = Math.max(0, Math.min(at || 0, Math.max(0, dur() - 2)));
+      aimed = at;
       var turn = ++attaching;
       if (plan.seekable || plan.mode !== 'remux' || at <= 0) { begin(at); return; }
       spin.hidden = false;
@@ -147,7 +149,7 @@
     }
     function begin(at) {
       if (asleep) { kept = at; return; }          // le plan est arrivé après le départ : on retient seulement où commencer
-      kept = null;
+      kept = null; aimed = null;
       base = plan.seekable ? 0 : at;
       video.src = plan.seekable ? plan.url : plan.url + '&start=' + at.toFixed(3);
       if (plan.seekable && at > 0) {
@@ -194,7 +196,7 @@
       }, function () { showError(H.t('Le serveur ne répond plus.')); });
     });
     video.addEventListener('waiting', function () { spin.hidden = false; });
-    video.addEventListener('playing', function () { spin.hidden = true; paintPlay(); schedule(); });
+    video.addEventListener('playing', function () { stale = false; spin.hidden = true; paintPlay(); schedule(); });
     video.addEventListener('canplay', function () { spin.hidden = true; });
     video.addEventListener('pause', function () { paintPlay(); show(true); report(); });
     video.addEventListener('timeupdate', paintTime);
@@ -221,6 +223,7 @@
     function commit(t) {
       pending = null;
       t = Math.max(0, Math.min(t, Math.max(0, dur() - 1)));
+      stale = false;          // une position choisie, même en pause, est à retenir
       Object.keys(skipped).forEach(function (start) { if (t < +start) delete skipped[start]; });          // on demande à revenir avant un chapitre passé : il sera proposé de nouveau
       spin.hidden = false;
       if (plan.seekable) { try { video.currentTime = t; } catch (e) { /* tant pis */ } paintTime(); }
@@ -254,7 +257,7 @@
       clearTimeout(flash.t); flash.t = setTimeout(function () { osd.hidden = true; }, 1100);
     }
     function report(done) {
-      if (!plan) return;
+      if (!plan || stale) return;
       var t = cur();
       if (!done && t < 20) return;
       lastReport = Date.now();
@@ -402,19 +405,22 @@
     function parked() {
       if (closing || asleep || offered || video.ended) return;
       clearTimeout(pendingTimer);
-      if (plan) kept = here();
-      pending = null; asleep = true; attaching++;          // `attaching` : un départ en remux encore attendu ne s'ouvrira pas
+      if (plan) kept = pending !== null ? pending : aimed !== null ? aimed : cur();          // un départ en remux encore attendu : c'est sa cible qu'on garde, pas 0
+      pending = null; aimed = null; asleep = true; attaching++;          // `attaching` : ce départ-là ne s'ouvrira pas
       report();
+      stale = true;          // c'est écrit ; rien d'autre ne s'écrira avant que le film rejoue (ou qu'on choisisse une position)
       video.pause(); video.removeAttribute('src'); video.load();
+      paintPlay();          // `load()` a retiré l'événement `pause` encore en file : l'icône ne suivrait pas
     }
     // Rouvert par Retour : au même endroit, en pause, la lecture reprend quand on la demande. Rouvert par « Lecture » sur la fiche (`ahead`) : il repart de là, en lecture.
     function wake(ahead) {
       if (!asleep) return;
       asleep = false;
       H.audio.pause();
-      show(true);
+      show(true); paintPlay();
       if (!ahead) H.focus.set(playBtn, true);
-      if (kept !== null && plan) { hold = !ahead; attach(kept); }
+      hold = !ahead;          // aussi pour un plan encore attendu : il s'ouvrira de la même façon
+      if (kept !== null && plan) attach(kept);
     }
     // Passer à l'épisode suivant vaut « vu » ; quitter un film pour le suivant de sa saga ne dit pas qu'on l'a fini : il reste à reprendre.
     function goNext() { if (plan && plan.next) { report(!plan.next.saga); carry(); H.go('#/play/' + plan.next.id, true); } }

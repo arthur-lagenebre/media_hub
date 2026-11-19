@@ -944,6 +944,7 @@ class TestVideoPlayer(UiCase):
         self.assertAlmostEqual(self.shown_time(), left, delta=2)
         self.assertTrue(self.page.evaluate("document.querySelector('.player video').paused"))
         self.assertEqual(self.focused(), "Lecture / pause")
+        self.assertTrue(self.page.evaluate("Hub.current().el.querySelector('.btns .btn .ic').outerHTML === Hub.icon('play').outerHTML"))      # l'icône dit la pause
         self.press("Enter")
         self.wait_playing()
 
@@ -952,6 +953,64 @@ class TestVideoPlayer(UiCase):
 
     def test_a_player_opened_directly_then_left_goes_quiet_with_converted_sound(self):
         self.leave_a_player_opened_directly("Long", "Son converti")
+
+    def park_in_the_middle(self, title):
+        """Ouvre `title` par son adresse, saute au milieu, puis Retour vers la fiche : le lecteur est mis de côté. Rend l'entrée et l'adresse de la fiche."""
+        entry = self.begin("films", title)
+        self.addCleanup(self.run_.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (entry,))
+        self.wait_playing()
+        self.page.locator(".player .seekbar").click(position={"x": 960, "y": 5})
+        self.until(lambda: self.shown_time() > 25)
+        sheet = "#/i/" + self.item("films", title)["id"]
+        self.press("Escape")
+        self.shown(sheet)
+        self.page.wait_for_function("document.querySelector('.player video').networkState === HTMLMediaElement.NETWORK_EMPTY", timeout=5000)
+        return entry, sheet
+
+    def test_the_resume_card_brings_back_a_parked_player_playing(self):
+        """Un lien vers le lecteur mis de côté (la carte « Reprendre » de l'accueil) est une demande de lecture, comme « Lecture » sur la fiche : seul Retour le rouvre en pause."""
+        entry, _ = self.park_in_the_middle("Direct")
+        self.page.evaluate("location.hash = '#/'")
+        self.shown("#/")
+        self.view(f"a.card[href='#/play/{entry}']").click()
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("(() => { var v = Hub.current().el.querySelector('video'); return v.currentTime > 20 && !v.paused; })()", timeout=15000)
+
+    def test_leaving_while_a_converted_stream_is_still_starting_keeps_the_resume_point(self):
+        """Son converti, reprise à 40 s : le serveur n'a pas encore dit de quelle image clé partir quand on quitte. La position gardée est celle visée, pas 0."""
+        entry = self.entries("films", "Long")[0]["id"]
+        self.addCleanup(self.run_.hub.db.execute, "DELETE FROM progress WHERE entry_id=?", (entry,))
+        self.api("/api/progress", {"entry": entry, "position": 40.3, "duration": 90, "done": False})
+        held, gate = [], {"closed": True}
+        self.page.route("**/api/play/*/start*", lambda route: held.append(route) if gate["closed"] else route.continue_())
+        self.open("#/play/" + entry)
+        self.until(lambda: held)                                                                 # le départ est demandé, sa réponse attend
+        sheet = "#/i/" + self.item("films", "Long")["id"]
+        self.press("Escape")
+        self.shown(sheet)
+        gate["closed"] = False
+        for route in held:
+            route.continue_()
+        self.view(".actions .btn.primary").click()
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("(() => { var m = /&start=([0-9.]+)/.exec(Hub.current().el.querySelector('video').src); return m && +m[1] > 30; })()", timeout=15000)
+
+    def test_a_player_brought_back_by_back_and_left_without_playing_writes_nothing(self):
+        """Rouvert par Retour, puis quitté sans avoir rejoué : sa position, déjà enregistrée en partant, peut être périmée (une autre lecture a avancé depuis). Il ne la réécrit pas."""
+        entry, sheet = self.park_in_the_middle("Direct")
+        self.api("/api/progress", {"entry": entry, "position": 50, "duration": 60, "done": False})          # une autre lecture est allée plus loin
+        self.press("Escape")
+        self.shown("#/play/" + entry)
+        self.page.wait_for_function("Hub.current().el.querySelector('video').readyState >= 2", timeout=15000)
+        sent = []
+        self.page.on("request", lambda r: sent.append(r.post_data_json) if r.url.endswith("/api/progress") else None)
+        self.page.evaluate("location.hash = '#/'")                                               # mis de côté une deuxième fois
+        self.shown("#/")
+        self.page.wait_for_function("document.querySelector('.player video').networkState === HTMLMediaElement.NETWORK_EMPTY", timeout=5000)
+        self.page.evaluate("Hub.dropParked()")                                                    # puis détruit
+        self.page.wait_for_function("!document.querySelector('.player')")
+        self.assertEqual([b for b in sent if b["entry"] == entry], [])
+        self.assertEqual(self.entries("films", "Direct")[0]["progress"]["position"], 50)
 
     def test_unplayable_file_shows_error_with_actions(self):
         broken = self.entries("films", "Sans Etiquette")[0]["id"]

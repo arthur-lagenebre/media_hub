@@ -660,7 +660,8 @@
     try { if (entry.view.destroy) entry.view.destroy(); } catch (e) { console.error(e); }
     if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el);
   }
-  // `ahead` : on y va par une action de l'application (H.go : « Lecture » sur une fiche), pas par Retour. Une page gardée de côté peut ne pas reprendre de la même façon.
+  // `ahead` : on y va par une action de l'application (H.go, comme « Lecture » sur une fiche, ou un lien de la page, comme la carte « Reprendre »), pas par Retour.
+  // Une page gardée de côté peut ne pas reprendre de la même façon (le lecteur : en lecture, ou en pause).
   function present(entry, fresh, ahead) {
     entry.el.style.display = '';
     document.body.classList.toggle('full', !!entry.view.full);
@@ -676,11 +677,16 @@
     }
     if (entry.view.shown) entry.view.shown(fresh, ahead);
   }
+  // L'adresse vers laquelle l'application vient d'envoyer : elle ne compte que si c'est bien celle où l'on arrive (une demande sans suite ne fait pas passer le Retour suivant pour une action).
+  var aheadTo = null;
+  function sameHash(a, b) {
+    try { return decodeURIComponent(a) === decodeURIComponent(b); } catch (e) { return a === b; }
+  }
   function onRoute() {
-    var ahead = H.ahead;
-    H.ahead = false;
-    H.overlay.closeAll();
     var hash = location.hash || '#/';
+    var ahead = aheadTo !== null && sameHash(aheadTo, hash);
+    aheadTo = null;
+    H.overlay.closeAll();
     var top = stack[stack.length - 1];
     if (top && top.hash === hash) return;
     // Une page qui ne doit pas être quittée sans l'accord de la personne (des envois en cours) le dit par `leave()` : {title, lead, ok, accept}, ou rien si elle peut partir.
@@ -690,7 +696,7 @@
     if (ask) {
       H.confirm({ title: ask.title, lead: ask.lead, ok: ask.ok, danger: true,
         submit: function () { if (ask.accept) ask.accept(); return Promise.resolve(); },
-        done: function () { leaving = true; H.ahead = ahead; onRoute(); },
+        done: function () { leaving = true; aheadTo = ahead ? hash : null; onRoute(); },
         cancel: function () { H.replaceNext = false; location.replace(top.hash); } });
       return;
     }
@@ -710,9 +716,14 @@
     present(entry, true);
   }
   H.start = function () { window.addEventListener('hashchange', onRoute); onRoute(); };
-  H.ahead = false;
+  // Un lien de l'application suivi (clic, ou Entrée / OK dessus) : l'adresse où il mène est une action, pas un Retour.
+  document.addEventListener('click', function (e) {
+    for (var n = e.target; n && n !== document; n = n.parentNode) {
+      if (n.tagName === 'A') { var href = n.getAttribute('href'); if (href && href.charAt(0) === '#') aheadTo = href; return; }
+    }
+  }, true);
   H.go = function (hash, replace) {
-    if (location.hash !== hash) H.ahead = true;
+    aheadTo = hash;
     if (replace) { H.replaceNext = true; location.replace(hash); } else location.hash = hash;
   };
   H.current = function () { return stack[stack.length - 1] || null; };
