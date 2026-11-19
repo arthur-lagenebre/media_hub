@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import time
 import tracemalloc
 import unittest
 import zipfile
@@ -229,6 +230,25 @@ class TestEpubTocTitles(TocCase):
         self.assertEqual(self.toc(nav_file(toc_nav(li("../c1.xhtml", " ", child)))), [mark("Deux", 1)])
 
 
+class TestEpubTocEntities(TocCase):
+    """Les entités HTML que le fichier emploie sans les déclarer (`&eacute;`, `&nbsp;`) : décodées, jamais perdues."""
+
+    def test_an_ncx_with_an_external_doctype_keeps_its_accents(self):
+        dtd = '<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">'
+        self.assertEqual(self.toc(ncx=dtd + ncx_file(point("c1.xhtml", "Pr&eacute;face"))), [mark("Préface", 0)])
+
+    def test_an_xhtml_nav_keeps_its_accents_and_spaces(self):
+        dtd = '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">'
+        self.assertEqual(self.toc(dtd + nav_file(toc_nav(li("../c1.xhtml", "Caf&eacute;&nbsp;noir")))), [mark("Café noir", 0)])
+
+    def test_a_nav_with_an_html5_doctype_or_none_decodes_them_too(self):
+        for head in ("<!DOCTYPE html>", ""):
+            self.assertEqual(self.toc(head + nav_file(toc_nav(li("../c1.xhtml", "&Eacute;t&eacute; &amp; &#233;")))), [mark("Été & é", 0)], head)
+
+    def test_an_unknown_entity_stays_as_written(self):
+        self.assertEqual(self.toc(nav_file(toc_nav(li("../c1.xhtml", "A &inconnue; B")))), [mark("A &inconnue; B", 0)])
+
+
 class TestEpubTocHostile(TocCase):
     NCX = ncx_file(point("c2.xhtml", "Secours"))
     LAUGHS = ('<?xml version="1.0"?><!DOCTYPE html [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]>'
@@ -291,6 +311,28 @@ class TestEpubTocHostile(TocCase):
         found = self.toc(nav)
         self.assertEqual(len(found), books.MAX_TOC_DEPTH + 1)
         self.assertEqual(found[-1], mark("Suite", 1))
+
+    def test_a_list_inside_a_link_belongs_to_its_title(self):
+        nav = nav_file(toc_nav('<li><a href="../c1.xhtml">Un<ol>' + li("../c2.xhtml", "Deux") + "</ol></a></li>"))
+        self.assertEqual(self.toc(nav), [mark("UnDeux", 0)])
+
+    def test_points_inside_a_label_belong_to_its_title(self):
+        ncx = ncx_file('<navPoint><navLabel><text>Un</text>' + point("c2.xhtml", "Deux") + '</navLabel><content src="c1.xhtml"/></navPoint>')
+        self.assertEqual(self.toc(ncx=ncx), [mark("Un", 0)])
+
+    def test_a_long_chain_of_lists_inside_links_is_read_in_linear_time(self):
+        depth = 16000                                                              # 7 s quand chaque titre relisait toute la suite du fichier
+        nav = nav_file(toc_nav('<li><a href="../c1.xhtml">t' * depth + "</a></li>" * depth))
+        start = time.perf_counter()
+        self.assertEqual(len(self.toc(nav)), 1)
+        self.assertLess(time.perf_counter() - start, 2)
+
+    def test_too_many_elements_make_the_file_unreadable(self):
+        nav = nav_file(toc_nav(li("../c1.xhtml", "Un") + li("../c3.xhtml", "Trois")))    # html, body, nav, ol, 2 × (li, a) : 8 éléments ; le NCX de secours en a 6
+        with mock.patch.object(books, "MAX_TOC_ELEMENTS", 7):
+            self.assertEqual(self.toc(nav, self.NCX), [mark("Secours", 1)])
+        with mock.patch.object(books, "MAX_TOC_ELEMENTS", 8):
+            self.assertEqual(self.toc(nav, self.NCX), [mark("Un", 0), mark("Trois", 2)])
 
     def test_the_number_of_entries_is_bounded(self):
         nav = nav_file(toc_nav(li("../c1.xhtml", "N") * (books.MAX_TOC_ENTRIES + 10)))

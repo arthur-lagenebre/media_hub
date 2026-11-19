@@ -8,6 +8,7 @@ from __future__ import annotations
 import mimetypes
 import posixpath
 import re
+from html import unescape
 from urllib.parse import unquote
 from xml.etree import ElementTree
 from xml.parsers import expat
@@ -20,6 +21,7 @@ OPS_TYPE = "{http://www.idpf.org/2007/ops}type"
 NCX_MEDIA_TYPE = "application/x-dtbncx+xml"
 EXTERNAL_LINK_RE = re.compile(r"[a-z][a-z0-9+.-]*:|//", re.IGNORECASE)
 MAX_TOC_BYTES = 8 * 1024 * 1024
+MAX_TOC_ELEMENTS = 200_000            # la taille seule ne borne pas la mémoire : 8 Mio de <a/> font 2 millions d'éléments
 MAX_TOC_ENTRIES = 5000
 MAX_TOC_DEPTH = 10
 MAX_TOC_TITLE = 200
@@ -127,11 +129,23 @@ def qualified(name):
 
 
 def parse_toc(data):
-    """L'arbre d'un fichier de sommaire. Passe par expat pour refuser toute déclaration d'entité : aucun sommaire n'en a besoin, et elles servent aux bombes XML."""
+    """L'arbre d'un fichier de sommaire. Passe par expat pour refuser toute déclaration d'entité (aucun sommaire n'en a besoin, et elles servent aux bombes XML)
+    et pour décoder les entités HTML employées sans être déclarées (`&eacute;`, `&nbsp;`), qu'il y ait un DOCTYPE ou non ; au-delà de MAX_TOC_ELEMENTS, le fichier est illisible."""
     builder = ElementTree.TreeBuilder()
     parser = expat.ParserCreate(namespace_separator="}")
+    parser.UseForeignDTD(True)                  # comme si une DTD externe existait : une entité inconnue est passée au gestionnaire au lieu d'être une erreur
     parser.EntityDeclHandler = refuse_entity
-    parser.StartElementHandler = lambda tag, attrs: builder.start(qualified(tag), {qualified(k): v for k, v in attrs.items()})
+    parser.SkippedEntityHandler = lambda name, is_parameter: None if is_parameter else builder.data(unescape(f"&{name};"))
+    elements = 0
+
+    def start(tag, attrs):
+        nonlocal elements
+        elements += 1
+        if elements > MAX_TOC_ELEMENTS:
+            raise BookError("sommaire démesuré")
+        builder.start(qualified(tag), {qualified(k): v for k, v in attrs.items()})
+
+    parser.StartElementHandler = start
     parser.EndElementHandler = lambda tag: builder.end(qualified(tag))
     parser.CharacterDataHandler = builder.data
     parser.Parse(data, True)
@@ -153,15 +167,17 @@ def toc_title(element):
     return " ".join("".join(element.itertext()).split())[:MAX_TOC_TITLE]
 
 
-def outline_of(root, item_name, label):
-    """(profondeur, titre, lien) de chaque élément `item_name`, dans l'ordre du fichier. Une pile plutôt que la récursion : l'imbrication vient du fichier."""
+def outline_of(root, item_name, label_name, label):
+    """(profondeur, titre, lien) de chaque élément `item_name`, dans l'ordre du fichier. Une pile plutôt que la récursion : l'imbrication vient du fichier.
+
+    Le parcours ne descend pas dans un intitulé (`label_name`) : ce qui s'y trouve appartient à son titre. Sinon une liste glissée dans chaque lien ferait relire tout le reste du fichier à chaque titre."""
     stack = [(root, 0)]
     while stack:
         node, depth = stack.pop()
         if local_name(node) == item_name:
             yield (depth, *label(node))
             depth += 1
-        stack.extend((c, depth) for c in reversed(list(node)))
+        stack.extend((c, depth) for c in reversed(list(node)) if local_name(c) != label_name)
 
 
 def nav_label(item):
@@ -180,12 +196,12 @@ def nav_outline(root):
     typed = [n for n in navs if "toc" in (n.get(OPS_TYPE) or "").split()]
     untyped = [n for n in navs if n.get(OPS_TYPE) is None]
     chosen = typed[:1] or (untyped if len(untyped) == 1 else [])
-    return outline_of(chosen[0], "li", nav_label) if chosen else ()
+    return outline_of(chosen[0], "li", "a", nav_label) if chosen else ()
 
 
 def ncx_outline(root):
     nav_map = child(root, "navMap")
-    return outline_of(nav_map, "navPoint", ncx_label) if nav_map is not None else ()
+    return outline_of(nav_map, "navPoint", "navLabel", ncx_label) if nav_map is not None else ()
 
 
 def toc_target(href, toc_path, chapters):
