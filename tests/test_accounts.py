@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,7 +16,9 @@ from hub.accounts import AccountError
 from hub.db import Database
 
 
-class TestCreate(unittest.TestCase):
+class AccountsDb(unittest.TestCase):
+    """Une base neuve par test, et `refused` : l'appel doit lever une AccountError de ce statut, dont le message est rendu."""
+
     def setUp(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, True)
@@ -25,6 +29,9 @@ class TestCreate(unittest.TestCase):
             call()
         self.assertEqual(caught.exception.status, status)
         return caught.exception.message
+
+
+class TestCreate(AccountsDb):
 
     def test_revoking_the_sessions_of_an_account_keeps_its_password_and_spares_the_others(self):
         alice = accounts.create(self.db, "alice", "un-mot-de-passe")
@@ -338,6 +345,117 @@ class TestRights(unittest.TestCase):
         self.assertIsNone(accounts.user_for_token(self.db, "s", session, "media"))
         accounts.revoke_sessions(self.db, self.alice["id"])
         self.assertIsNone(accounts.user_for_token(self.db, "s", media, "media"))              # révoqué avec les sessions
+
+
+class TestLimitsAndLogin(AccountsDb):
+    """Les bornes d'un nom et d'un mot de passe, et la connexion sans nom quand il n'y a qu'un compte."""
+
+    def test_a_name_and_a_password_of_exactly_the_longest_size_are_accepted_one_more_is_not(self):
+        name = "n" * accounts.MAX_NAME
+        alice = accounts.create(self.db, name, "p" * accounts.MAX_PASSWORD)
+        self.assertEqual(alice["name"], name)
+        self.assertEqual(accounts.authenticate(self.db, name, "p" * accounts.MAX_PASSWORD)["id"], alice["id"])
+        self.assertIn("de 1 à 40 caractères", self.refused(lambda: accounts.create(self.db, "n" * (accounts.MAX_NAME + 1), "p" * 12)))
+        self.assertIn("doit faire de 12 à 200", self.refused(lambda: accounts.create(self.db, "bob", "p" * (accounts.MAX_PASSWORD + 1))))
+
+    def test_the_only_account_opens_without_a_name_but_two_accounts_need_one(self):
+        alice = accounts.create(self.db, "alice", "un-mot-de-passe")
+        for nameless in (None, ""):
+            self.assertEqual(accounts.authenticate(self.db, nameless, "un-mot-de-passe")["id"], alice["id"])
+            self.assertEqual(self.refused(lambda: accounts.authenticate(self.db, nameless, "autre-mot-de-passe"), 401), "mot de passe incorrect")
+        accounts.create(self.db, "bob", "un-mot-de-passe")
+        for nameless in (None, ""):
+            self.assertEqual(self.refused(lambda: accounts.authenticate(self.db, nameless, "un-mot-de-passe"), 401), "nom d'utilisateur requis")
+        self.assertEqual(accounts.authenticate(self.db, "bob", "un-mot-de-passe")["name"], "bob")
+
+
+class TestVerifyPassword(unittest.TestCase):
+    """Les deux formes de haché que le hub sait relire, et tout le reste refusé."""
+
+    def pbkdf2(self, password, rounds=1000):
+        salt = b"sel-de-test-1234"
+        return f"pbkdf2${rounds}${salt.hex()}${hashlib.pbkdf2_hmac('sha256', password.encode(), salt, rounds, 32).hex()}"
+
+    def test_a_pbkdf2_hash_opens_for_its_password_and_for_no_other(self):
+        stored = self.pbkdf2("le-bon-mot-de-passe")
+        self.assertTrue(accounts.verify_password("le-bon-mot-de-passe", stored))
+        self.assertFalse(accounts.verify_password("un-autre-mot-de-passe", stored))
+        rounds, salt, digest = stored.split("$")[1:]
+        self.assertFalse(accounts.verify_password("le-bon-mot-de-passe", f"pbkdf2${int(rounds) + 1}${salt}${digest}"))       # le nombre de tours compte
+
+    def test_a_hash_that_is_not_readable_never_opens(self):
+        for stored in ("", "inconnu", "bcrypt$10$sel$hach", "scrypt$16384$8$1$zz$zz", "scrypt$16384", "pbkdf2$abc$00$00", "pbkdf2$1000$00", "pbkdf2$1000$00$00", None):
+            self.assertFalse(accounts.verify_password("le-bon-mot-de-passe", stored), repr(stored))
+
+
+class TestVlcToken(unittest.TestCase):
+    """Le jeton VLC : un compte, un seul fichier, `VLC_SECONDS` de vie."""
+    NOW = 1_800_000_000
+
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        self.db = Database(root / "hub.db")
+        self.alice = accounts.create(self.db, "alice", "un-mot-de-passe")
+        self.token = accounts.vlc_token("s", self.alice, "e1", now=self.NOW)
+
+    def opened(self, token=None, entry="e1", at=None):
+        return accounts.user_for_vlc_token(self.db, "s", token or self.token, entry, now=self.NOW if at is None else at)
+
+    def test_it_expires_after_vlc_seconds_to_the_second(self):
+        uid, entry, expires, mac = self.token.split(".")
+        self.assertEqual((uid, entry, expires), (self.alice["id"], "e1", str(self.NOW + accounts.VLC_SECONDS)))
+        self.assertEqual(self.opened()["id"], self.alice["id"])
+        self.assertEqual(self.opened(at=self.NOW + accounts.VLC_SECONDS - 1)["id"], self.alice["id"])
+        self.assertIsNone(self.opened(at=self.NOW + accounts.VLC_SECONDS))
+
+    def test_it_opens_its_own_file_only(self):
+        self.assertIsNone(self.opened(entry="e2"))
+
+    def test_a_forged_mac_an_unknown_account_and_a_deleted_one_open_nothing(self):
+        uid, entry, expires, mac = self.token.split(".")
+        forged = f"{uid}.{entry}.{expires}.{'0' * 64}"
+        self.assertIsNone(self.opened(forged))
+        self.assertIsNone(self.opened(f"{uid}.{entry}.{int(expires) + 1}.{mac}"))                    # repousser l'expiration
+        self.assertIsNone(self.opened(f"inconnu.{entry}.{expires}.{mac}"))
+        self.assertIsNone(self.opened("pas-un-jeton"))
+        bob = accounts.create(self.db, "bob", "un-mot-de-passe")
+        self.assertIsNone(self.opened(self.token.replace(uid, bob["id"], 1)))                       # le jeton d'un autre compte
+        accounts.delete(self.db, bob["id"])
+        self.assertIsNone(self.opened(accounts.vlc_token("s", bob, "e1", now=self.NOW)))
+        accounts.revoke_sessions(self.db, self.alice["id"])
+        self.assertIsNone(self.opened())
+
+
+class TestAdministrators(AccountsDb):
+    def test_an_administrator_can_be_deleted_while_another_remains_but_never_the_last(self):
+        first = accounts.create(self.db, "chef", "un-mot-de-passe")
+        second = accounts.create(self.db, "adjoint", "un-mot-de-passe", "admin")
+        accounts.delete(self.db, first["id"])
+        self.assertEqual([r["name"] for r in accounts.rows(self.db)], ["adjoint"])
+        self.assertEqual(self.refused(lambda: accounts.delete(self.db, second["id"])), "impossible de supprimer le dernier administrateur")
+        self.assertEqual([r["name"] for r in accounts.rows(self.db)], ["adjoint"])
+
+
+class TestSeed(AccountsDb):
+    """Au démarrage, `HUB_PASSWORD` crée l'administrateur d'un hub sans compte, et plus rien ensuite."""
+
+    def cfg(self, password, admin="chef"):
+        return types.SimpleNamespace(password=password, admin=admin)
+
+    def test_the_password_of_the_settings_creates_the_administrator_even_when_it_is_short(self):
+        accounts.seed(self.db, self.cfg("court"))
+        chef, = accounts.rows(self.db)
+        self.assertEqual((chef["name"], chef["role"]), ("chef", "admin"))
+        self.assertEqual(accounts.authenticate(self.db, "chef", "court")["id"], chef["id"])
+
+    def test_without_a_password_or_with_accounts_already_there_nothing_is_created(self):
+        accounts.seed(self.db, self.cfg(""))
+        self.assertEqual(accounts.rows(self.db), [])
+        accounts.seed(self.db, self.cfg("premier-mot-de-passe"))
+        accounts.seed(self.db, self.cfg("second-mot-de-passe", admin="autre"))
+        self.assertEqual([r["name"] for r in accounts.rows(self.db)], ["chef"])
+        self.assertEqual(accounts.authenticate(self.db, "chef", "premier-mot-de-passe")["name"], "chef")
 
 
 if __name__ == "__main__":
