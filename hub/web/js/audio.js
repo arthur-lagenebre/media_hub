@@ -1,12 +1,31 @@
 /* Le lecteur de musique : une file d'attente et une barre en bas de page, qui continue pendant qu'on feuillette.
-   La file se retrouve au rechargement de la page (pas la position dans la piste). */
+   La file se retrouve au rechargement de la page (pas la position dans la piste).
+   Deux éléments <audio>, jamais plus : celui qui joue (`el`, toujours `id="audio"`) et `spare` (`id="audio-next"`), qui charge la piste suivante pendant les dernières
+   secondes de la piste en cours, sans la jouer ; à la fin, les deux s'échangent. Les écouteurs sont posés sur les deux mais n'écoutent que celui qui joue. */
 (function () {
   'use strict';
   var H = window.Hub, h = H.h;
-  var el, bar, queue = [], idx = -1, ui = {}, reported = null;
+  var el, spare, bar, queue = [], idx = -1, ui = {}, reported = null;
+  var PRELOAD_SECONDS = 15;          // la piste suivante se charge quand il reste ce temps à la piste en cours
+  var nextId = null;                 // la piste que `spare` charge, ou null
+
+  // Un écouteur qui ne réagit qu'à l'élément qui joue : celui qui précharge ne doit ni peindre la barre, ni finir une piste, ni signaler une erreur.
+  function mine(fn) { return function (e) { if (e.target === el) fn(e); }; }
+  // Ce que règle le volume (voir H.volume) : il lit l'élément qui joue et écrit dans les deux, si bien que l'échange ne change pas le son.
+  function sound() {
+    var both = {
+      addEventListener: function (type, fn) { [el, spare].forEach(function (a) { a.addEventListener(type, mine(fn)); }); }
+    };
+    ['volume', 'muted'].forEach(function (key) {
+      Object.defineProperty(both, key, { get: function () { return el[key]; }, set: function (v) { el[key] = v; spare[key] = v; } });
+    });
+    return both;
+  }
 
   function build() {
     el = document.getElementById('audio');
+    spare = h('audio', { id: 'audio-next', preload: 'none' });
+    el.parentNode.insertBefore(spare, el.nextSibling);
     bar = document.getElementById('abar');
     ui.cover = h('div', { class: 'cov' });
     ui.title = h('div', { class: 'ti' });
@@ -29,7 +48,7 @@
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { el.currentTime = Math.max(0, el.currentTime + (e.key === 'ArrowLeft' ? -10 : 10)); e.preventDefault(); }
     } }, ui.fill);
     ui.time = h('div', { class: 'tm' });
-    var volume = H.volume(el, 'volume');
+    var volume = H.volume(sound(), 'volume');
     bar.appendChild(ui.cover);
     bar.appendChild(h('div', { class: 'txt' }, ui.title, ui.sub));
     bar.appendChild(h('div', { class: 'ctl' }, ui.prev, ui.play, ui.next));
@@ -38,13 +57,15 @@
     bar.appendChild(ui.speed);
     bar.appendChild(ui.queue);
     bar.appendChild(ui.stop);
-    el.addEventListener('timeupdate', paintTime);
-    el.addEventListener('play', paintPlay);
-    el.addEventListener('pause', paintPlay);
-    el.addEventListener('ended', function () { finish(); step(1, true); });
-    el.addEventListener('error', function () {
-      H.toast(H.t('Cette piste ne se lit pas : {title}', { title: queue[idx] ? queue[idx].title : '' }), 4500);
-      step(1, true);
+    [el, spare].forEach(function (a) {
+      a.addEventListener('timeupdate', mine(function () { paintTime(); ahead(); }));
+      a.addEventListener('play', mine(paintPlay));
+      a.addEventListener('pause', mine(paintPlay));
+      a.addEventListener('ended', mine(function () { finish(); step(1, true); }));
+      a.addEventListener('error', mine(function () {
+        H.toast(H.t('Cette piste ne se lit pas : {title}', { title: queue[idx] ? queue[idx].title : '' }), 4500);
+        step(1, true);
+      }));
     });
     restore();
     if ('mediaSession' in navigator) {
@@ -66,7 +87,7 @@
     ui.time.textContent = H.time(el.currentTime) + ' / ' + H.time(d);
   }
   // La vitesse vaut pour la barre tant qu'elle reste ouverte (d'une piste à l'autre : `defaultPlaybackRate`) ; la fermer la remet à 1×. Rien n'est retenu.
-  function setSpeed(rate) { H.setSpeed(el, rate, ui.speed); }
+  function setSpeed(rate) { H.setSpeed(el, rate, ui.speed); spare.defaultPlaybackRate = spare.playbackRate = el.playbackRate; }
   function show() {
     var t = queue[idx];
     if (!t) return;
@@ -87,6 +108,7 @@
     Array.prototype.forEach.call(document.querySelectorAll('.trk'), function (row) { row.classList.toggle('now', (row.getAttribute('data-track') || row.getAttribute('data-key')) === current); });
   }
   function save() {
+    if (nextId && !(queue[idx + 1] && queue[idx + 1].id === nextId)) cancel();        // la file a changé (retrait, ajout juste après, déplacement, arrêt) : la piste préchargée n'est plus la suivante
     H.pref('queue', queue.length ? { q: queue.slice(0, 2000), i: idx } : null);
   }
   function restore() {
@@ -97,11 +119,36 @@
     if (queue.length) show();
     else { queue = []; idx = -1; }
   }
+  function url(t) { return '/media/' + t.id + '/file'; }
+  // Les dernières secondes : `spare` charge la piste suivante (une fois), sans la jouer.
+  function ahead() {
+    var next = queue[idx + 1];
+    if (!next || nextId === next.id || !el.duration || el.duration - el.currentTime > PRELOAD_SECONDS) return;
+    nextId = next.id;
+    spare.volume = el.volume; spare.muted = el.muted; spare.defaultPlaybackRate = el.playbackRate;
+    spare.preload = 'auto';
+    spare.src = url(next);
+  }
+  // Plus de préchargement : `spare` lâche son fichier (la requête s'arrête), comme `stop` pour l'élément qui joue.
+  function cancel() {
+    nextId = null;
+    spare.preload = 'none';
+    if (spare.getAttribute('src')) { spare.removeAttribute('src'); spare.load(); }
+  }
+  // La piste préchargée devient celle qui joue ; l'ancien élément se vide et servira au prochain préchargement.
+  function swap() {
+    var old = el;
+    el = spare; spare = old;
+    old.id = 'audio-next'; el.id = 'audio';
+    old.pause();
+    cancel();
+  }
   function load(i) {
     idx = i;
     var t = queue[idx];
     reported = null;
-    el.src = '/media/' + t.id + '/file';
+    if (nextId === t.id && !spare.error) swap();
+    else { cancel(); el.src = url(t); }
     save();
     var p = el.play();
     if (p && p.catch) p.catch(function () { paintPlay(); });
