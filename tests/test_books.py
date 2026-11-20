@@ -10,6 +10,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest import mock
+from xml.etree import ElementTree
 
 from tests import fixtures
 from hub import config
@@ -363,6 +364,24 @@ class TestEpubMember(TempCase):
         with zipfile.ZipFile(self.path, "a") as z:
             z.writestr("donnees.zzz", b"abc")
         self.assertEqual(books.epub_member(self.path, "donnees.zzz"), (b"abc", "application/octet-stream"))
+
+
+class TestReadsRightToLeft(unittest.TestCase):
+    def test_the_manga_field_of_the_sheet_decides(self):
+        for field, section, expected in (("YesAndRightToLeft", "Comics", True), (" yesandrighttoleft ", "Comics", True), ("Yes", "Manga", False), ("No", "Manga", False)):
+            self.assertIs(books.reads_right_to_left({"Manga": field}, section), expected, (field, section))
+
+    def test_without_a_usable_field_the_manga_section_decides(self):
+        for info in (None, {}, {"Manga": ""}, {"Manga": "Unknown"}):
+            self.assertIs(books.reads_right_to_left(info, "Manga"), True, info)
+            self.assertIs(books.reads_right_to_left(info, "Comics"), False, info)
+
+
+class TestOutlineOf(unittest.TestCase):
+    def test_the_depth_of_a_first_level_item_is_zero(self):
+        root = ElementTree.fromstring("<ol><li><a>Un</a><ol><li><a>Deux</a></li></ol></li><li><a>Trois</a></li></ol>")
+        found = list(books.outline_of(root, "li", "a", lambda item: (item.find("a").text, None)))
+        self.assertEqual(found, [(0, "Un", None), (1, "Deux", None), (0, "Trois", None)])
 
 
 class TestValidXml(unittest.TestCase):
