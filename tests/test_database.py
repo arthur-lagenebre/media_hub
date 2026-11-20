@@ -139,8 +139,8 @@ class TestUploadMigration(TempCase):
                 database._add_column(conn, table, column, "INTEGER")
         self.assertIsNotNone(self.db.one("SELECT name FROM sqlite_master WHERE name='users'"))
 
-    def test_a_new_base_has_the_columns_too_and_the_version_is_9(self):
-        self.assertEqual(database.SCHEMA_VERSION, 9)
+    def test_a_new_base_has_the_columns_too_and_the_version_is_10(self):
+        self.assertEqual(database.SCHEMA_VERSION, 10)
         self.db.execute("INSERT INTO users(id, name, pass_hash, created) VALUES('x', 'x', 'h', 1)")
         self.assertEqual(tuple(self.db.one("SELECT can_upload, inbox_dir, can_request FROM users WHERE id='x'")), (0, None, 1))
 
