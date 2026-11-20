@@ -186,9 +186,14 @@ def can_request(row):
     return row["role"] == "admin" or bool(row["can_request"])
 
 
+def can_download_remotely(row):
+    """Le compte peut-il télécharger quand la connexion n'est pas locale (voir origin.py) ? Un administrateur toujours, un autre compte tant que l'administrateur ne lui a pas retiré ce droit (donné par défaut)."""
+    return row["role"] == "admin" or bool(row["remote_download"])
+
+
 def public(row):
     """Ce que l'API dit d'un compte (jamais le haché ni la version du jeton)."""
-    return {"id": row["id"], "name": row["name"], "role": row["role"], "can_upload": can_upload(row), "can_request": can_request(row)}
+    return {"id": row["id"], "name": row["name"], "role": row["role"], "can_upload": can_upload(row), "can_request": can_request(row), "remote_download": can_download_remotely(row)}
 
 
 def listing(row):
@@ -349,11 +354,12 @@ def _store_right(conn, uid, lib, view, play, download):
 
 
 FLAGS = {"can_upload": ("« upload » vaut vrai ou faux", "un administrateur peut toujours envoyer"),     # colonne de `users` -> (refus d'une valeur qui n'est pas un booléen, refus pour un administrateur)
-         "can_request": ("« request » vaut vrai ou faux", "un administrateur peut toujours demander")}   # en toutes lettres : test_i18n cherche chaque message traduit tel quel dans le code
+         "can_request": ("« request » vaut vrai ou faux", "un administrateur peut toujours demander"),
+         "remote_download": ("« remote_download » vaut vrai ou faux", "un administrateur peut toujours télécharger")}   # en toutes lettres : test_i18n cherche chaque message traduit tel quel dans le code
 
 
 def set_flag(db, uid, allowed, column):
-    """Donne ou retire à un compte un droit global de FLAGS : `can_upload` (envoyer dans la boîte de réception) ou `can_request` (demander des films et des séries). `allowed` : un booléen, rien d'autre.
+    """Donne ou retire à un compte un droit global de FLAGS : `can_upload` (envoyer dans la boîte de réception) `can_request` (demander des films et des séries) ou `remote_download` (télécharger hors du réseau local). `allowed` : un booléen, rien d'autre.
     Refuse 400 un administrateur (il a toujours ces droits), 404 un compte inconnu. Renvoie le compte à jour ; la session ne change pas, et les envois ou demandes déjà faits restent."""
     not_bool, refused = FLAGS[column]
     if not isinstance(allowed, bool):
@@ -369,6 +375,7 @@ def set_flag(db, uid, allowed, column):
 
 set_can_upload = partial(set_flag, column="can_upload")        # set_can_upload(db, uid, allowed)
 set_can_request = partial(set_flag, column="can_request")      # set_can_request(db, uid, allowed)
+set_remote_download = partial(set_flag, column="remote_download")      # set_remote_download(db, uid, allowed)
 
 
 # ---------------------------------------------------------------------------

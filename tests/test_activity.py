@@ -123,9 +123,9 @@ class TestRegistry(unittest.TestCase):
 
     def test_the_origin_follows_the_address(self):
         for address, origin in (("127.0.0.1", "local"), ("::1", "local"), ("192.168.1.20", "local"), ("10.0.0.2", "local"), ("172.16.5.5", "local"), ("::ffff:192.168.1.5", "local"),
-                                ("fe80::1%eth0", "local"), ("fd12:3456:789a::/64", "local"), ("8.8.8.8", "remote"), ("::ffff:8.8.8.8", "remote"), ("2606:4700:4700::/64", "remote"),
-                                ("100.101.102.103", "local"), ("100.64.0.0", "local"), ("100.127.255.255", "local"), ("::ffff:100.101.102.103", "local"), ("100.63.255.255", "remote"), ("100.128.0.0", "remote"),
-                                ("fd7a:115c:a1e0::1", "local"), ("n'importe quoi", "remote"), ("", "remote")):
+                                ("fe80::1%eth0", "local"), ("fd12:3456:789a::/64", "local"), ("8.8.8.8", "internet"), ("::ffff:8.8.8.8", "internet"), ("2606:4700:4700::/64", "internet"),
+                                ("100.101.102.103", "tailscale"), ("100.64.0.0", "tailscale"), ("100.127.255.255", "tailscale"), ("::ffff:100.101.102.103", "tailscale"), ("100.63.255.255", "internet"), ("100.128.0.0", "internet"),
+                                ("fd7a:115c:a1e0::1", "tailscale"), ("n'importe quoi", "internet"), ("", "internet")):
             self.assertEqual(activity.origin_of(address), origin, address)
 
     def test_a_progress_report_prolongs_an_existing_line_and_never_creates_one(self):
@@ -600,9 +600,10 @@ class TestRoute(ActivityCase):
     def test_a_transfer_shows_with_its_origin_behind_the_proxy_and_never_its_address(self):
         call(self.hub, "GET", "/media/f1/file", headers={**self.cookie(self.bob), "Range": "bytes=0-3", "X-Forwarded-For": "8.8.8.8", "User-Agent": "Mozilla/5.0 (Windows NT 10.0) Firefox/120.0"})
         call(self.hub, "GET", "/media/f1/file", headers={**self.cookie(self.bob), "Range": "bytes=0-3"})
+        call(self.hub, "GET", "/media/f1/file", headers={**self.cookie(self.bob), "Range": "bytes=0-3", "X-Forwarded-For": "100.101.102.103"})
         body = self.read().body.decode()
         lines = json.loads(body)["transfers"]
-        self.assertEqual(sorted((t["user"], t["origin"], t["kind"]) for t in lines), [("bob", "local", "direct"), ("bob", "remote", "direct")])
+        self.assertEqual(sorted((t["user"], t["origin"], t["kind"]) for t in lines), [("bob", "internet", "direct"), ("bob", "local", "direct"), ("bob", "tailscale", "direct")])
         for text in ("8.8.8.8", "127.0.0.1", str(self.root), "Film (2020)", "token"):
             self.assertNotIn(text, body)
 
@@ -679,7 +680,7 @@ class TestLiveReading(Live):
         for rng in ("bytes=0-9", "bytes=10-19"):
             self.assertEqual(self.api.get(f"/media/{track}/file", headers={"Range": rng, "X-Forwarded-For": "8.8.8.8"})[0], 206)
         line, = self.activity()["transfers"]
-        self.assertEqual((line["kind"], line["origin"], line["bytes"], line["connections"]), ("audio", "remote", 20, 0))
+        self.assertEqual((line["kind"], line["origin"], line["bytes"], line["connections"]), ("audio", "internet", 20, 0))
         self.clock.now += ACTIVE_SECONDS + 1
         self.assertEqual(self.activity()["transfers"], [])
 
@@ -778,7 +779,7 @@ class TestLiveRights(AccountsCase):
         status, _, body = self.admin.request("GET", "/api/activity")
         self.assertEqual(status, 200)
         text = body.decode()
-        self.assertEqual([(t["user"], t["origin"], t["kind"]) for t in json.loads(text)["transfers"]], [("alice", "remote", "audio")])
+        self.assertEqual([(t["user"], t["origin"], t["kind"]) for t in json.loads(text)["transfers"]], [("alice", "internet", "audio")])
         for secret in ("8.8.8.8", "127.0.0.1", str(self.run_.root), self.admin.token, alice.token, self.hub.secret):
             self.assertNotIn(secret, text)
 
