@@ -134,6 +134,11 @@ class TestCreate(BackupCase):
         with zipfile.ZipFile(self.archive) as z:
             self.assertIn("épée.jpg".encode("utf-8"), z.read("manifest.json"))          # lisible tel quel, pas « épée »
 
+    def test_the_manifest_is_indented_so_that_a_person_can_read_it(self):
+        self.make()
+        with zipfile.ZipFile(self.archive) as z:
+            self.assertTrue(z.read("manifest.json").decode("utf-8").startswith('{\n "format": 1,\n'))
+
     def test_a_working_folder_that_cannot_be_removed_does_not_fail_a_finished_backup(self):
         with undeletable(".sauvegarde-"):
             manifest = self.make()
