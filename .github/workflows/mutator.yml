@@ -55,8 +55,7 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: ffmpeg (fichiers de test réels)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: ./media_hub/.github/actions/ffmpeg     # fichiers de test réels
 
       # Le .venv de media_hub est celui que mutator choisit pour lancer les tests
       # (voir bugs/python-tests-run-with-mutators-virtualenv.md dans mutator).
