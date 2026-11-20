@@ -529,6 +529,7 @@ class TestEnrichPersonRoute(PersonCase):
 
     def test_an_unknown_name_is_a_404_and_a_bad_body_a_400(self):
         self.assertEqual(self.enrich("Personne Du Tout")[0], 404)
+        self.assertEqual(self.enrich("x" * 200)[0], 404)                  # 200 caractères : la limite, un nom comme un autre
         for name in ("", "   ", None, 5, ["x"], "x" * 201):
             self.assertEqual(self.enrich(name)[0], 400, name)
         self.queue.assert_not_called()

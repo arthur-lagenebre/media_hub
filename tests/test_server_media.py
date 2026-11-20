@@ -321,6 +321,11 @@ class TestSubtitles(MediaCase):
         self.get("/api/subs/f1/e3.vtt")
         self.assertEqual(self.get("/api/subs/f1/e4.vtt").status, 200)
 
+    def test_the_folder_of_the_cache_is_made_with_its_parents(self):
+        self.hub.cfg.data = self.root / "volume" / "data"
+        self.assertEqual(self.get("/api/subs/f1/e3.vtt").status, 200)
+        self.assertEqual((self.hub.cfg.data / "subs" / "f1-77-e3.vtt").read_bytes(), b"WEBVTT\n\nmkv")
+
 
 class TestPgsRoute(MediaCase):
     PGS = {"subs": [{"index": 0, "lang": "fre", "title": "", "forced": False, "default": False, "text": False, "codec": "hdmv_pgs_subtitle"},

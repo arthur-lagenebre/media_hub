@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import types
 import unittest
+from collections import Counter
 from pathlib import Path
 
 from tests import fixtures
@@ -284,6 +285,11 @@ class TestTaggedAndCollapsed(unittest.TestCase):
         self.assertEqual((json.loads(saga["genres"]), [m["id"] for m in saga["members"]]), (["Action", "Épopée", "SF"], ["b", "a"]))
         self.assertIn("Épopée", saga["genres"])                      # les accents restent des accents dans le texte JSON
 
+    def test_the_years_of_a_saga_are_its_first_and_its_last(self):
+        rows = [self.film("a", "Alpha", "2003"), self.film("b", "Alpha", "2001"), self.film("c", "Alpha", "2002"), self.film("d", "Alpha", "")]
+        saga, = app.collapse_sagas(rows, {})
+        self.assertEqual((saga["year"], saga["years"], saga["count"]), ("2001", ["2001", "2003"], 4))
+
     def test_films_without_year_give_a_saga_without_years(self):
         rows = [self.film("a", "Alpha", year=""), self.film("b", "Alpha", year="")]
         saga, = app.collapse_sagas(rows, {})
@@ -307,6 +313,41 @@ class TestTaggedAndCollapsed(unittest.TestCase):
         self.assertEqual(sorted(r["id"] for r in out if r["type"] == "movie"), ["a"])
 
 
+class TestMusicCards(unittest.TestCase):
+    def album(self, ident, grp, artist="", added=0, genres=(), year="2000"):
+        return item(ident, "album", title=f"Album {ident}", grp=grp, year=year, added=added, genres=json.dumps(list(genres), ensure_ascii=False), meta={"artist_id": artist} if artist else {})
+
+    def test_the_genres_of_an_artist_are_those_of_its_albums_with_their_accents(self):
+        artist, = app.artist_rows([self.album("a", "Air", "ar1", genres=["Électro", "Pop"]), self.album("b", "Air", "ar1", genres=["Électro", "Ambient"])])
+        self.assertEqual(json.loads(artist["genres"]), ["Ambient", "Pop", "Électro"])
+        self.assertIn("Électro", artist["genres"])
+
+    def test_an_artist_that_arrived_in_the_week_is_one_card_and_a_new_album_of_an_old_artist_stays_an_album(self):
+        day = 24 * 3600
+        rows = [self.album("a", "Air", "ar1", added=10 * day), self.album("b", "Air", "ar1", added=10 * day + 3 * day), self.album("c", "Daft Punk", "ar2", added=2 * day), self.album("d", "Daft Punk", "ar2", added=12 * day)]
+        recent = app.recent_music(rows, {}, 10)
+        self.assertEqual([(r["type"], r["id"]) for r in recent], [("artist", "ar1"), ("album", "d"), ("album", "c")])
+
+    def test_the_card_of_an_artist_is_made_from_its_oldest_album(self):
+        artist, = app.artist_rows([self.album("b", "Air", "ar1", added=5, year="2004"), self.album("a", "Air", "ar1", added=9, year="1998")])
+        self.assertEqual((artist["id"], artist["lib"], artist["title"], artist["added"], artist["count"], artist["albums"], json.loads(artist["meta"])), ("ar1", "lib", "Air", 9, 2, ["Album a", "Album b"], {"album": "a"}))
+
+    def test_one_album_or_two_a_week_apart_exactly_are_not_told_alike(self):
+        week = app.ARTIST_ARRIVAL
+        alone = app.recent_music([self.album("a", "Air", "ar1", added=100)], {}, 10)
+        self.assertEqual([(r["type"], r["id"]) for r in alone], [("album", "a")])
+        exactly = app.recent_music([self.album("a", "Air", "ar1", added=100), self.album("b", "Air", "ar1", added=100 + week)], {}, 10)
+        self.assertEqual([(r["type"], r["id"]) for r in exactly], [("artist", "ar1")])
+        later = app.recent_music([self.album("a", "Air", "ar1", added=100), self.album("b", "Air", "ar1", added=101 + week)], {}, 10)
+        self.assertEqual([(r["type"], r["id"]) for r in later], [("album", "b"), ("album", "a")])
+
+    def test_an_artist_known_by_no_name_never_arrives_as_an_artist(self):
+        rows = [self.album("a", "Various Artists", "ar1", added=100), self.album("b", "Daft Punk", "ar1", added=100)]
+        self.assertEqual({r["type"] for r in app.recent_music(rows, {}, 10)}, {"album"})
+        rows = [self.album("a", "Daft Punk", "ar1", added=100), self.album("b", "Various Artists", "ar1", added=100)]
+        self.assertEqual({r["type"] for r in app.recent_music(rows, {}, 10)}, {"artist"})
+
+
 class TestLibraryOrder(unittest.TestCase):
     rows = [{"id": "x", "sort": "b", "added": 1, "year": "2001", "grp": "Zed", "meta": "{}"}, {"id": "y", "sort": "a", "added": 2, "year": "", "grp": "Abe", "meta": "{}"}]
 
@@ -327,6 +368,13 @@ class TestLibraryOrder(unittest.TestCase):
         self.assertEqual(self.order("music", sort="added"), ("title", ["y", "x"]))
         self.assertEqual(self.order("books"), ("title", ["y", "x"]))
         self.assertEqual(self.order("books", sort="added"), ("added", ["y", "x"]))
+
+    def test_the_list_of_artists_goes_by_their_own_sort_and_the_albums_by_artist(self):
+        rows = [{"id": "x", "sort": "a", "added": 1, "year": "", "grp": "Zed", "meta": "{}"}, {"id": "y", "sort": "b", "added": 2, "year": "", "grp": "Abe", "meta": "{}"}]
+        for kind in ("music", "books"):
+            for args in ((), (False,), (True,)):
+                _, key, _ = app.library_order(kind, {}, None, *args)
+                self.assertEqual([r["id"] for r in sorted(rows, key=key)], ["x", "y"] if args == (True,) else ["y", "x"], (kind, args))
 
     def test_the_order_of_a_saga_follows_the_ranks_when_there_are_some(self):
         sort, key, reverse = app.library_order("movies", {"sort": "part"}, {"x": 1, "y": 2})
@@ -366,6 +414,24 @@ class TestRatingOrder(unittest.TestCase):
         self.assertEqual(app.row_rating(saga), (8.6, 1200))
         unrated = {**saga, "id": "vide", "members": [self.film("c", "c")]}
         self.assertEqual(self.order([unrated, self.film("bas", "y", 6.9, 100)]), ["bas", "vide"])
+
+    def test_a_saga_takes_the_best_rating_then_the_most_votes_whatever_the_order_of_its_films(self):
+        def saga(*members):
+            return {"id": "s", "sort": "s", "meta": "{}", "members": list(members)}
+        few, many, high, none = self.film("a", "a", 8.0, 30), self.film("b", "b", 8.0, 900), self.film("c", "c", 9.0, 30), self.film("d", "d")
+        for members in ((few, many), (many, few), (none, few, many), (many, none, few)):
+            self.assertEqual(app.row_rating(saga(*members)), (8.0, 900))
+        for members in ((many, high), (high, many), (none, high, many), (many, high, none)):
+            self.assertEqual(app.row_rating(saga(*members)), (9.0, 30))
+        self.assertEqual(app.row_rating(saga(none, none)), (None, 0))
+
+    def test_nothing_to_show_is_no_rating_and_no_vote(self):
+        self.assertEqual(app.row_rating(self.film("sans", "a")), (None, 0))
+        self.assertEqual(app.row_rating(self.film("peu", "a", 9.9, app.MIN_VOTES - 1)), (None, 0))
+        self.assertEqual(app.row_rating({"id": "s", "meta": "{}", "members": []}), (None, 0))
+        self.assertEqual(app.row_rating({"id": "s", "meta": "{}", "members": [self.film("sans", "a")]}), (None, 0))
+        self.assertEqual(app.rating_key(self.film("sans", "b"))[0], True)
+        self.assertEqual(app.rating_key(self.film("note", "b", 8.0, 100))[0], False)
 
 
 class TestUnseenRowOrder(unittest.TestCase):
@@ -491,6 +557,23 @@ class TestLibraryExtras(unittest.TestCase):
         out = {}
         app.library_extras(out, "movies", {}, [{"tmdb": 1}], False, [])
         self.assertEqual(out, {"missing": [{"tmdb": 1}]})
+
+    def test_the_music_counts_are_those_of_the_albums_unless_the_artists_are_listed(self):
+        def row(artist_id, kind):
+            return {"id": artist_id + kind, "meta": json.dumps({"artist_id": artist_id, "release_types": [kind]}), "grp": "Nom", "kinds": Counter({"albums": 2, "eps": 1})}
+        chosen = [row("a", "album"), row("a", "ep"), row("b", "single")]
+        for args in ((), (False,)):
+            out = {}
+            app.library_extras(out, "music", {}, [], False, chosen, *args)
+            self.assertEqual(out, {"artists": 2, "albums": 1, "eps": 1, "singles": 1}, args)
+        out = {}
+        app.library_extras(out, "music", {}, [], False, chosen, True)
+        self.assertEqual(out, {"artists": 3, "albums": 6, "eps": 3, "singles": 0})
+
+    def test_an_album_is_told_to_an_artist_by_the_identifier_of_its_sheet_or_else_by_its_name(self):
+        self.assertEqual(app.artist_key({"meta": json.dumps({"artist_id": "mb-1"}), "grp": "Daft Punk"}), "mb-1")
+        self.assertEqual(app.artist_key({"meta": "{}", "grp": "Daft Punk"}), "daft punk")
+        self.assertEqual(app.artist_key({"meta": json.dumps({"artist_id": ""}), "grp": "Daft Punk"}), "daft punk")
 
     def test_a_film_in_two_sagas_counts_once_in_the_total(self):
         a, b, c = ({"id": i, "type": "movie"} for i in "abc")

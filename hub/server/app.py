@@ -365,8 +365,8 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, obj, status=200, headers=None):
         self.send_body(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), "application/json; charset=utf-8", status, {"Cache-Control": "no-store", **(headers or {})}, self.command == "HEAD")
 
-    def transfer(self, kind, ref, title, library="", leave_empty=True):
-        """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré."""
+    def transfer(self, kind, ref, title, library="", leave_empty=False):
+        """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré. Sans le moindre octet envoyé, il ne laisse pas de ligne (`leave_empty` : voir Activity.transfer)."""
         return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty, origin=origin(self))
 
     def send_file(self, path, mime=None, headers=None, track=None, attempt=None):
@@ -406,7 +406,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             handle.seek(start)
             remaining = length
-            while remaining > 0:
+            while remaining:               # `length` est au moins 1 et chaque morceau en retire au plus `remaining` : jamais négatif
                 chunk = handle.read(min(CHUNK, remaining))
                 if not chunk:
                     break
@@ -762,7 +762,7 @@ def cookie_flags(secure):
     return "; HttpOnly; SameSite=Lax" + ("; Secure" if secure else "")
 
 
-def session_cookie(hub, row, secure=False, token=None):
+def session_cookie(hub, row, secure, token=None):
     """Le cookie de session du compte `row` : `token` s'il est donné (le même que celui que la réponse rend), sinon un jeton émis maintenant."""
     return f"hub={token or hub.session_token(row)}; Path=/; Max-Age={accounts.SESSION_DAYS * 86400}{cookie_flags(secure)}"
 
@@ -780,7 +780,7 @@ def refreshed_session(h):
     return None, {"token": h.hub.session_token(row)}
 
 
-def ended_session_cookie(secure=False):
+def ended_session_cookie(secure):
     """Le cookie qui efface la session : les mêmes attributs que celui qui l'a posée, sinon le navigateur peut le garder."""
     return f"hub=; Path=/; Max-Age=0{cookie_flags(secure)}"
 
@@ -1374,7 +1374,7 @@ TITLE_SORTS = {
 def row_rating(row):
     """(note, votes) d'une ligne : sa note TMDB montrée (voir shown_rating), ou pour une vignette de saga celle de son meilleur film (à égalité, le plus voté) : une saga vaut ce qu'elle a de mieux, Terminator vaut Terminator 2 ; (None, 0) sans note montrée."""
     if isinstance(row, dict) and "members" in row:
-        return max(map(row_rating, row["members"]), key=lambda found: (found[0] is not None, found[0] or 0, found[1]), default=(None, 0))
+        return max(map(row_rating, row["members"]), key=lambda found: (found[0] is not None, found[0], found[1]), default=(None, 0))
     rating = shown_rating(meta_json(row["meta"]).get("tmdb_rating"))
     return (rating["vote"], rating["votes"]) if rating else (None, 0)
 
@@ -1382,7 +1382,7 @@ def row_rating(row):
 def rating_key(row):
     """Le tri « Mieux notés », sans inversion : d'abord ce qui a une note montrée, de la meilleure à la moins bonne, puis le plus de votes ; ensuite le reste ; à égalité, par titre, puis par identifiant : deux films de même titre, de même note et de même nombre de votes gardent le même rang, quel que soit l'ordre dans lequel la base les rend."""
     vote, votes = row_rating(row)
-    return (vote is None, -(vote or 0), -votes, row["sort"], row["id"])
+    return (vote is None, () if vote is None else (-vote, -votes), row["sort"], row["id"])          # sans note montrée, rien à comparer : le titre et l'identifiant seuls rangent ce qui reste
 
 
 def my_rating_key(ratings):
@@ -1467,11 +1467,12 @@ def collapse_sagas(rows, custom):
         members = [film for film, _ in films]
         if not any(home.get(m["id"]) == name for m in members):
             continue
+        first, *_ = members
         years = sorted(m["year"] for m in members if m["year"])
         genres = []
         for m in members:
             genres += [g for g in safe_json(m["genres"], []) if g not in genres]
-        out.append({"id": make_id(members[0]["lib"], "saga:" + name), "lib": members[0]["lib"], "type": "saga", "title": name, "sort": fold(name), "letter": initial(name),
+        out.append({"id": make_id(first["lib"], "saga:" + name), "lib": first["lib"], "type": "saga", "title": name, "sort": fold(name), "letter": initial(name),
                     "year": years[0] if years else "", "years": [years[0], years[-1]] if years else [], "summary": "", "genres": json.dumps(genres, ensure_ascii=False), "grp": "",
                     "meta": "{}", "added": max(m["added"] for m in members), "count": len(members), "members": members})
     return out
@@ -1974,7 +1975,7 @@ def artist_link_url(value):
         web = parts.scheme in ("http", "https") and bool(parts.hostname)
     except ValueError:
         web = False
-    if not web or any(c.isspace() or ord(c) < 32 for c in url):
+    if not web or any(c.isspace() or ord(c) < 33 for c in url):
         raise HttpError(400, "l'adresse doit être un lien web (http:// ou https://)")
     return url
 
@@ -2440,10 +2441,14 @@ def play_url(entry, decision, caps, kbps, height):
     return f"{base}/stream?" + "&".join(f"{k}={v}" for k, v in args.items())
 
 
+FULL_HD = 1080              # la hauteur à laquelle on ramène un 4K à convertir ; une vidéo dont on ne connaît pas la hauteur n'est pas au-dessus
+UHD_FROM = 2000             # à partir de cette hauteur, une image est du 4K
+
+
 def default_height(decision, video, height):
     """La hauteur demandée ; à défaut, 1080 p pour un 4K à convertir (en pleine taille, il ferait ramer le processeur pour rien)."""
-    if decision["mode"] == "transcode" and not height and video.get("height", 0) > 1080:
-        return 1080
+    if decision["mode"] == "transcode" and not height and video.get("height", FULL_HD) > FULL_HD:
+        return FULL_HD
     return height
 
 
@@ -2459,7 +2464,7 @@ def entry_label(show, entry):
 
 
 def play_warning(decision, video):
-    if decision["mode"] == "transcode" and video.get("height", 0) >= 2000 and video.get("codec") in ("hevc", "av1"):
+    if decision["mode"] == "transcode" and video.get("height", UHD_FROM - 1) >= UHD_FROM and video.get("codec") in ("hevc", "av1"):
         return "Image 4K à convertir : le serveur n'a pas de carte vidéo pour cela, la lecture risque de saccader. Le débit demandé peut être baissé."
     return ""
 
@@ -2705,7 +2710,7 @@ def media_stream(h, m, q):
     proc = None
     try:
         kind = "transcode" if q.get("m") == "transcode" else "remux"
-        with h.transfer(kind, entry["id"], entry_label(show_title(hub, entry), entry), entry["lib"], leave_empty=False) as sent:          # dès le lancement : ffmpeg peut mettre des secondes à produire son premier bloc, et relancer le serveur couperait déjà cette lecture
+        with h.transfer(kind, entry["id"], entry_label(show_title(hub, entry), entry), entry["lib"]) as sent:          # dès le lancement : ffmpeg peut mettre des secondes à produire son premier bloc, et relancer le serveur couperait déjà cette lecture
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
             errors = []
             threading.Thread(target=lambda: errors.append(proc.stderr.read().decode("utf-8", "replace")), daemon=True).start()
@@ -2984,14 +2989,14 @@ def saga_film(ident, row, info=None):
         film = (info or {"films": {}})["films"].get(str(ident))
         out = {"tmdb": ident, "date": (film or {}).get("date") or "", "item": None}
         if film:
-            out.update({k: v for k, v in missing.entry(ident, 0, info).items() if k in ("title", "year", "cover")})
+            out.update({k: v for k, v in missing.entry(ident, None, info).items() if k in ("title", "year", "cover")})
         return out
     return {"tmdb": ident, "date": meta_json(row["meta"]).get("date") or row["year"], "item": summary(row)}
 
 
 def sagas_json(hub):
     owned, info = sagafile.by_tmdb(movie_rows(hub)), missing.load(hub.db)
-    ignored = [{k: v for k, v in missing.entry(i, 0, info).items() if k in ("tmdb", "title", "year")} if str(i) in info["films"] else {"tmdb": i} for i in hub.sagas.ignored()]
+    ignored = [{k: v for k, v in missing.entry(i, None, info).items() if k in ("tmdb", "title", "year")} if str(i) in info["films"] else {"tmdb": i} for i in hub.sagas.ignored()]
     out = {"version": hub.sagas.version(), "ignored": ignored,
            "sagas": [{"name": name, "films": [saga_film(i, owned.get(i), info) for i in films]} for name, films in hub.sagas.all()]}
     if hub.sagas.damaged():
@@ -3295,7 +3300,7 @@ def api_backup(h, m, q):
     work = Path(tempfile.mkdtemp(prefix=".sauvegarde-", dir=h.hub.cfg.data))
     try:
         name = backup.archive_name()
-        with h.transfer("backup", "backup", name, leave_empty=False) as sent:          # dès la construction de l'archive : relancer le serveur l'interromprait
+        with h.transfer("backup", "backup", name) as sent:          # dès la construction de l'archive : relancer le serveur l'interromprait
             try:
                 backup.create(h.hub.db.path, h.hub.cfg.data, work / name)
             except (backup.BackupError, OSError) as e:
