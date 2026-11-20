@@ -215,6 +215,14 @@ class TestAsking(RequestCase):
         self.assertEqual(self.stored(), [])
         self.assertEqual(self.ask(self.alice, 2, note="x" * 200).status, 201)            # 200 caractères passent
 
+    def test_a_tmdb_number_goes_from_one_to_two_to_the_fifty_third_excluded(self):
+        for bad in (0, 1 << 53, (1 << 53) + 1):
+            reply = self.ask(self.alice, bad)
+            self.assertEqual((reply.status, reply.json()), (400, {"error": "identifiant TMDB attendu : un entier positif"}), bad)
+        self.assertEqual(self.stored(), [])
+        for good in ((1 << 53) - 1, 5):
+            self.assertEqual(self.ask(self.alice, good, title="Un titre").status, 201, good)
+
     def test_the_body_is_limited_like_the_others(self):
         _, reply = call(self.hub, "POST", "/api/requests", b"", {**self.headers(self.alice), "Content-Length": str((1 << 20) + 1)})
         self.assertEqual(reply.status, 413)
@@ -292,6 +300,63 @@ class TestLimits(RequestCase):
         self.assertEqual(self.set_status(rid, "declined", "x" * 201).json(), {"error": "motif trop long (200 caractères au plus)"})
         self.assertEqual(self.set_status(999, "added").status, 404)
         self.assertEqual(self.mine(self.alice)[0]["status"], "pending")
+
+
+class TestWhatTheServerKnows(RequestCase):
+    """Ce que la médiathèque a (`owned`), ce qu'on sait d'un film (`known_film`), la description demandée à TMDB (`create`) et les marques de la recherche : appelés comme le font les routes."""
+
+    def trace(self, call):
+        """(ce que `call()` rend, les requêtes SQL qu'il a passées)."""
+        statements, conn = [], self.db.connection()
+        conn.set_trace_callback(statements.append)
+        try:
+            return call(), statements
+        finally:
+            conn.set_trace_callback(None)
+
+    def test_each_element_is_listed_once_and_one_without_a_tmdb_number_is_left_out(self):
+        self.fill("films", [item("m1", lib="films", title="Un", meta={"tmdb": "movie/1"}), item("m9", lib="films", title="Sans numéro")], [entry("v1", "m1", lib="films")])
+        self.fill("series", [item("s1", "show", lib="series", title="Série", meta={"tmdb": 5})],
+                  [entry(name, "s1", lib="series", meta={"info": {"tmdb": "movie/7"}}) for name in ("e1", "e2")])           # deux fichiers du même long-métrage
+        found = hub_requests.owned(self.db, self.libs)
+        self.assertEqual(found, {("movie", 1): [("m1", "films")], ("show", 5): [("s1", "series")], ("movie", 7): [("s1", "series")]})
+
+    def test_without_a_video_library_nothing_is_read_and_with_only_one_kind_that_kind_is(self):
+        music = config.Library("musique", "Musique", "music", self.root / "musique")
+        self.fill("series", [item("s1", "show", lib="series", title="Série", meta={"tmdb": 5})])
+        found, statements = self.trace(lambda: hub_requests.owned(self.db, [music]))
+        self.assertEqual((found, statements), ({}, []))
+        self.assertEqual(hub_requests.owned(self.db, [lib for lib in self.libs if lib.kind == "movies"]), {("movie", 1): [("m1", "films")]})
+        self.assertEqual(hub_requests.owned(self.db, [lib for lib in self.libs if lib.kind == "shows"]), {("show", 5): [("s1", "series")]})
+
+    def test_the_marks_of_a_search_without_a_result_read_nothing_and_with_results_say_what_is_asked_and_what_is_there(self):
+        asked = self.ask(self.alice, 2).json()
+        (marks, found), statements = self.trace(lambda: hub_requests.search_marks(self.db, self.hub.cfg, self.alice["id"], set()))
+        self.assertEqual(((marks, found), statements), (({}, {}), []))
+        marks, found = hub_requests.search_marks(self.db, self.hub.cfg, self.alice["id"], {("movie", 2), ("movie", 1), ("show", 2)})
+        self.assertEqual(marks, {("movie", 2): {"status": "pending", "mine": True, "id": asked["id"]}})
+        self.assertIn(("movie", 1), found)
+
+    def test_the_film_of_a_person_is_found_by_its_own_number_among_the_others_and_the_entries_that_are_not_films(self):
+        self.db.kv_set("personinfo:90", {"at": 0, "films": ["texte", {"tmdb": 7, "title": "Sept", "year": "1990"}, {"tmdb": 5, "title": "Cinq", "year": "1999"}]})
+        self.assertEqual(hub_requests.known_film(self.db, 5), ("Cinq", "1999"))
+
+    def test_the_description_is_asked_for_a_new_element_the_server_does_not_know_and_only_then(self):
+        asked = []
+
+        def describe(kind, tmdb):
+            asked.append((kind, tmdb))
+            return "Décrit", "1999"
+        for tmdb in (3, 50):
+            hub_requests.create(self.db, self.hub.cfg, self.alice["id"], {"kind": "movie", "tmdb": tmdb, "title": "Du corps", "year": "1950"}, None, None, describe)
+        self.assertEqual(asked, [("movie", 50)])
+        self.assertEqual({r["tmdb"]: (r["title"], r["year"]) for r in self.mine(self.alice)}, {3: ("Film 3", "2001"), 50: ("Décrit", "1999")})
+
+    def test_the_description_is_not_asked_again_for_a_request_that_already_exists(self):
+        self.ask(self.alice, 50, title="Du corps")
+        asked = []
+        hub_requests.create(self.db, self.hub.cfg, self.bob["id"], {"kind": "movie", "tmdb": 50}, None, None, lambda kind, tmdb: asked.append(tmdb))
+        self.assertEqual(asked, [])
 
 
 class TestStatusRace(RequestCase):

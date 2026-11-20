@@ -373,6 +373,37 @@ class TestRecommendCommand(RecommendCase):
         short = self.parsed(said := self.report("alice", "--limit", "2"))
         self.assertEqual({a: [c[0] for c in cards] for a, cards in short.items()}, {a: [c[0] for c in cards][:2] for a, cards in full.items()})
         self.assertIn(f"… et {len(full['a1']) - 2} autres", said)
+        left = sorted(line.strip() for line in said.splitlines() if line.strip().startswith("… et"))
+        self.assertEqual(left, sorted(f"… et {len(cards) - 2} autres" for cards in full.values()))           # chaque rayon dit ses propres cartes restantes
+
+    def test_a_limit_that_shows_the_whole_shelf_says_nothing_is_left(self):
+        self.rate(self.alice, "a1", "a2")
+        full = self.parsed(self.report("alice"))
+        for limit in (min(len(cards) for cards in full.values()), 100):
+            said = self.report("alice", "--limit", str(limit))
+            self.assertNotIn("et 0 autres", said)
+            self.assertEqual({a: len(cards) for a, cards in self.parsed(said).items()}, {a: min(limit, len(cards)) for a, cards in full.items()})
+
+    def test_a_limit_of_one_is_accepted_and_none_or_zero_is_not(self):
+        self.rate(self.alice, "a1", "a2")
+        self.assertEqual({len(cards) for cards in self.parsed(self.report("alice", "--limit", "1")).values()}, {1})
+        for bad in ("0", "-3"):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                self.report("alice", "--limit", bad)
+
+    def test_the_cards_of_a_shelf_are_numbered_from_one(self):
+        self.rate(self.alice, "a1", "a2")
+        lines = self.report("alice").splitlines()
+        for n, line in enumerate(lines):
+            if ANCHOR.match(line):
+                self.assertTrue(lines[n + 1].startswith("   1. "), lines[n + 1])
+                self.assertTrue(lines[n + 3].startswith("   2. "), lines[n + 3])
+
+    def test_the_first_line_gives_the_day_asked_and_how_many_anchors_were_liked_or_only_finished(self):
+        self.rate(self.alice, "a1")
+        self.watch(self.alice, "a2")
+        first = self.report("alice").splitlines()[0]
+        self.assertEqual(first, f"alice, le {DAY} : 2 ancre(s) possible(s) (1 aimée(s), 1 terminée(s)) ; bibliothèques lisibles : films, prive, series")
 
     def test_nothing_from_a_library_the_account_cannot_play(self):
         self.rate(self.bob, "a1", "a2")

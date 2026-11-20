@@ -273,6 +273,14 @@ class TestKeyframeAt(unittest.TestCase):
     def test_the_keyframe_is_given_to_the_millisecond(self):
         self.assertEqual(self.lands(stdout=b"29.919958,K__\n")[0], 29.92)
 
+    def test_the_output_of_ffprobe_is_captured(self):
+        self.assertTrue(self.lands()[1].call_args.kwargs["capture_output"])
+
+    def test_a_start_under_a_second_is_still_asked(self):
+        start, run = self.lands(stdout=b"0.040000,K__\n", at=0.5)
+        self.assertEqual(start, 0.04)
+        run.assert_called_once()
+
     def test_a_start_at_the_beginning_asks_nothing(self):
         start, run = self.lands(at=0)
         self.assertEqual(start, 0.0)
@@ -452,6 +460,9 @@ class TestFfmpegCommand(unittest.TestCase):
     def test_a_start_at_zero_is_no_start(self):
         self.assertNotIn("-ss", self.command(start=0))
         self.assertEqual(self.after(self.command(decision=self.TRANSCODE, start=0.5), "-ss"), "0.500")
+
+    def test_a_copied_image_is_asked_after_its_keyframe_even_within_the_first_second(self):
+        self.assertEqual(self.after(self.command(start=0.5), "-ss"), "0.750")
 
     def test_a_probe_without_video_height_is_not_scaled(self):
         probe = info()

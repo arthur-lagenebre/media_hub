@@ -134,7 +134,7 @@ def _allowed(name):
     parts = PurePosixPath(name).parts
     if name in (BASE, *FILES):
         return True
-    return len(parts) == 2 and parts[0] in FOLDERS and parts[1] not in ("", ".", "..") and not parts[1].startswith(".")
+    return len(parts) == 2 and parts[0] in FOLDERS and not parts[1].startswith(".")
 
 
 def _open(archive):
@@ -166,6 +166,9 @@ def _check_manifest(manifest):
     files = manifest.get("files")
     if not isinstance(files, list) or not all(isinstance(f, dict) for f in files):
         raise BackupError("manifest.json sans liste de fichiers : archive abîmée")
+    odd = [f.get("path") for f in files if not isinstance(f.get("path"), str)]
+    if odd:                                                        # avant tout dictionnaire : une liste ou un objet comme chemin ne sert pas de clé
+        raise BackupError(f"chemin refusé dans l'archive : {odd[0]!r}")
     return manifest
 
 
@@ -195,7 +198,7 @@ def _extract(z, name, entry, stage):
     if info.file_size != entry.get("size"):
         raise BackupError(f"{name} : taille différente de celle du manifeste (archive abîmée)")
     target = stage / name
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(exist_ok=True)
     digest = hashlib.sha256()
     with z.open(info) as src, open(target, "wb") as dst:
         for chunk in iter(lambda: src.read(CHUNK), b""):

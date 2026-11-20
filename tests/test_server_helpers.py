@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import re
 import shutil
+import socket
 import tempfile
 import types
 import unittest
@@ -20,7 +22,7 @@ config.use_media_library(fixtures.REPO)
 
 from libraries.books import shelf  # noqa: E402
 
-from hub import urls  # noqa: E402
+from hub import enrich, urls  # noqa: E402
 from hub.db import Database  # noqa: E402
 from hub.server import app  # noqa: E402
 from hub.server.app import HttpError  # noqa: E402
@@ -170,6 +172,14 @@ class TestShownRating(unittest.TestCase):
             with self.subTest(rating=rating):
                 self.assertIsNone(app.shown_rating(rating))
 
+    def test_a_vote_that_is_not_a_finite_non_zero_number_shows_nothing(self):
+        for vote in (True, False, "8.4", [8.4], float("nan"), float("inf"), float("-inf"), 0, 0.0):
+            with self.subTest(vote=vote):
+                self.assertIsNone(app.shown_rating({"vote": vote, "votes": 900}))
+        for vote in (8, 0.1):
+            with self.subTest(vote=vote):
+                self.assertIsNotNone(app.shown_rating({"vote": vote, "votes": 900}))
+
     def test_a_card_carries_the_rating_and_its_votes_only_when_shown(self):
         def card(rating):
             return app.summary({"id": "f", "type": "movie", "title": "F", "year": "", "grp": "", "count": 1, "letter": "F", "added": 0, "genres": "[]",
@@ -294,6 +304,7 @@ class TestPlayWarning(unittest.TestCase):
         self.assertEqual(self.warning(codec="h264"), "")
         self.assertEqual(app.play_warning({"mode": "transcode"}, {}), "")
         self.assertEqual(app.play_warning({"mode": "transcode"}, {"height": 2160}), "")
+        self.assertEqual(app.play_warning({"mode": "transcode"}, {"codec": "hevc"}), "")                 # hauteur inconnue : pas du 4K
 
 
 class TestTrackLabel(unittest.TestCase):
@@ -411,6 +422,226 @@ class TestLoginCredentials(unittest.TestCase):
         self.assertEqual((len(found[1]), request.close_connection), (4096 - len("user=alice&password="), False))
 
 
+def inbox_request(length="10", consumed=0, command="POST", path="/api/inbox", **more):
+    """Une requête sans connexion, comme `dispatch` la voit : `length` est le `Content-Length` annoncé (None : aucun), `consumed` ce que la route en a déjà lu."""
+    request = FakeRequest()
+    request.command, request.path, request.body_consumed = command, path, consumed
+    request.headers = http.client.HTTPMessage()
+    for key, value in ({} if length is None else {"Content-Length": length}).items() | more.items():
+        request.headers[key] = value
+    return request
+
+
+class TestInboxUnread(unittest.TestCase):
+    def test_what_the_client_may_still_send_is_the_announced_size_less_what_was_read(self):
+        self.assertEqual(inbox_request("10").inbox_unread(), 10)
+        self.assertEqual(inbox_request("10", consumed=3).inbox_unread(), 7)
+        self.assertEqual(inbox_request("10", path="/api/inbox?name=a.mkv").inbox_unread(), 10)
+        self.assertEqual(inbox_request(" 10 ").inbox_unread(), 10)
+
+    def test_never_less_than_nothing(self):
+        self.assertEqual(inbox_request("10", consumed=10).inbox_unread(), 0)
+        self.assertEqual(inbox_request("10", consumed=25).inbox_unread(), 0)
+
+    def test_only_an_upload_to_the_inbox_has_a_body_to_wait_for(self):
+        for command, path in (("GET", "/api/inbox"), ("POST", "/api/progress"), ("DELETE", "/api/inbox"), ("GET", "/api/other"), ("POST", "/api/inbox/alice/a.mkv")):
+            self.assertEqual(inbox_request("10", command=command, path=path).inbox_unread(), 0, (command, path))
+
+    def test_a_size_that_is_not_announced_properly_leaves_nothing_to_wait_for(self):
+        self.assertEqual(inbox_request(None).inbox_unread(), 0)
+        for length in ("abc", "-5", "1_0", "+10", "", "1.5"):
+            self.assertEqual(inbox_request(length).inbox_unread(), 0, length)
+        self.assertEqual(inbox_request("10", **{"Transfer-Encoding": "chunked"}).inbox_unread(), 0)
+        twice = inbox_request("10")
+        twice.headers["Content-Length"] = "10"
+        self.assertEqual(twice.inbox_unread(), 0)
+
+
+class TestLetTheReplyArrive(unittest.TestCase):
+    def request(self, unread, chunks=()):
+        request = inbox_request(str(unread))
+        request.connection, request.wfile = mock.Mock(), mock.Mock()
+        request.rfile = mock.Mock(read1=mock.Mock(side_effect=list(chunks) + [b""]))
+        return request
+
+    def test_with_nothing_left_to_read_the_connection_is_left_alone(self):
+        request = self.request(0)
+        request.let_the_reply_arrive()
+        request.connection.shutdown.assert_not_called()
+        request.rfile.read1.assert_not_called()
+
+    def test_what_is_left_is_read_and_thrown_away_once_the_writing_side_is_closed(self):
+        request = self.request(10, [b"abcd", b"efghij"])
+        request.let_the_reply_arrive()
+        request.wfile.flush.assert_called_once_with()
+        request.connection.shutdown.assert_called_once_with(socket.SHUT_WR)
+        self.assertEqual([call.args for call in request.rfile.read1.call_args_list], [(10,), (6,)])
+
+    def test_the_body_is_read_up_to_the_announced_size_and_no_further(self):
+        request = self.request(4, [b"abcd", b"zz"])
+        request.let_the_reply_arrive()
+        self.assertEqual(request.rfile.read1.call_count, 1)
+
+    def test_the_last_byte_is_read_too(self):
+        one = self.request(1, [b"a"])
+        one.let_the_reply_arrive()
+        one.connection.shutdown.assert_called_once_with(socket.SHUT_WR)
+        self.assertEqual(one.rfile.read1.call_count, 1)
+        five = self.request(5, [b"abcd", b"e"])
+        five.let_the_reply_arrive()
+        self.assertEqual([call.args for call in five.rfile.read1.call_args_list], [(5,), (1,)])
+
+    def test_a_last_second_is_enough_to_read(self):
+        request = self.request(10, [b"abcd", b"efghij"])
+        with mock.patch.object(app.time, "monotonic", side_effect=[100.0, 100.0 + app.INBOX_DRAIN_SECONDS - 1, 100.0 + app.INBOX_DRAIN_SECONDS - 1]):
+            request.let_the_reply_arrive()
+        self.assertEqual(request.rfile.read1.call_count, 2)
+        request.connection.settimeout.assert_called_with(1.0)
+
+    def test_a_client_that_goes_on_sending_is_cut_at_the_byte_limit(self):
+        request = self.request(app.INBOX_DRAIN_BYTES * 2, [b"x" * app.INBOX_DRAIN_BYTES])
+        request.let_the_reply_arrive()
+        self.assertEqual(request.rfile.read1.call_count, 1)
+
+    def test_nothing_more_is_read_once_the_time_is_up(self):
+        request = self.request(10, [b"abcd"])
+        with mock.patch.object(app.time, "monotonic", side_effect=[100.0, 100.0 + app.INBOX_DRAIN_SECONDS]):
+            request.let_the_reply_arrive()
+        request.connection.shutdown.assert_called_once_with(socket.SHUT_WR)
+        request.rfile.read1.assert_not_called()
+
+    def test_a_client_that_left_is_not_an_error(self):
+        request = self.request(10)
+        request.connection.shutdown.side_effect = OSError("parti")
+        request.let_the_reply_arrive()
+
+
+class TestFailure(unittest.TestCase):
+    """`_fail` : la réponse d'erreur, puis ce qui reste du corps de la requête."""
+
+    def failing(self, command="POST", taken=False, close=False, send=None):
+        request = inbox_request("10", command=command)
+        request.hub = types.SimpleNamespace(scrub=lambda message: message)
+        request.body_taken, request.close_connection = taken, close
+        request.send_json, request.drop_body, request.let_the_reply_arrive = mock.Mock(side_effect=send), mock.Mock(), mock.Mock()
+        request._fail(403, "refusé")
+        return request
+
+    def test_the_error_is_sent_as_json_with_its_status(self):
+        self.failing().send_json.assert_called_once_with({"error": "refusé"}, 403)
+
+    def test_a_body_that_was_not_read_is_thrown_away_whatever_the_answer(self):
+        self.failing().drop_body.assert_called_once_with()
+        self.failing("DELETE").drop_body.assert_called_once_with()
+        self.failing("GET").drop_body.assert_not_called()
+        self.failing(taken=True).drop_body.assert_not_called()
+
+    def test_the_client_gets_time_to_read_the_reply_only_when_the_connection_is_cut(self):
+        self.failing(close=True).let_the_reply_arrive.assert_called_once_with()
+        self.failing(close=False).let_the_reply_arrive.assert_not_called()
+
+    def test_an_answer_that_cannot_be_sent_cuts_the_connection_without_waiting_for_anyone(self):
+        request = self.failing(send=OSError("parti"))
+        self.assertTrue(request.close_connection)
+        request.let_the_reply_arrive.assert_not_called()
+
+
+class TestDispatchBookkeeping(unittest.TestCase):
+    def test_each_request_starts_with_nothing_read_of_its_body(self):
+        request = inbox_request("10", consumed=99)
+        request.authorized, request._fail = mock.Mock(return_value=False), mock.Mock()
+        request.dispatch()
+        self.assertEqual((request.body_consumed, request.body_taken), (0, False))
+        self.assertEqual(request.inbox_unread(), 10)
+
+
+class TestStrictBody(unittest.TestCase):
+    def test_a_refused_body_was_read_all_the_same(self):
+        for body in (b"[1]", b"{", b""):
+            request = FakeRequest(body)
+            with self.assertRaises(HttpError) as caught:
+                app.strict_body_dict(request)
+            self.assertEqual(caught.exception.status, 400, body)
+            self.assertTrue(request.body_taken, body)
+
+
+class TestGrantsOfTheAccount(unittest.TestCase):
+    def request(self, role):
+        request = FakeRequest()
+        request.hub, request.user, request.granted = types.SimpleNamespace(db="base"), {"id": "u1", "role": role}, None
+        return request
+
+    def test_the_rights_of_an_account_are_read_once_per_request(self):
+        request = self.request("user")
+        with mock.patch.object(app.accounts, "grants", return_value={"lib": (True, False, False)}) as grants:
+            self.assertTrue(request.granted_to_account("lib", "view"))
+            self.assertFalse(request.granted_to_account("lib", "play"))
+        grants.assert_called_once_with("base", "u1")
+
+    def test_an_administrator_has_no_rights_to_read(self):
+        request = self.request("admin")
+        with mock.patch.object(app.accounts, "grants") as grants:
+            self.assertTrue(request.granted_to_account("lib", "view"))
+        grants.assert_not_called()
+
+
+class TestArtistLinks(unittest.TestCase):
+    def refused(self, call, *args):
+        with self.assertRaises(HttpError) as caught:
+            call(*args)
+        self.assertEqual(caught.exception.status, 400, args)
+        return caught.exception.message
+
+    def test_a_web_address_is_kept_trimmed(self):
+        self.assertEqual(app.artist_link_url("  https://exemple.fr/a?b=1#c  "), "https://exemple.fr/a?b=1#c")
+        self.assertEqual(app.artist_link_url("http://exemple.fr/a!b"), "http://exemple.fr/a!b")
+
+    def test_an_address_may_have_up_to_the_limit_and_not_one_more(self):
+        base = "https://exemple.fr/"
+        self.assertEqual(app.artist_link_url(base + "x" * (app.LINK_URL_MAX - len(base))), base + "x" * (app.LINK_URL_MAX - len(base)))
+        self.assertIn("trop longue", self.refused(app.artist_link_url, base + "x" * (app.LINK_URL_MAX - len(base) + 1)))
+
+    def test_what_is_not_a_web_address_is_refused(self):
+        for value in (None, 5, "", "   ", "javascript:alert(1)", "data:text/html,x", "ftp://exemple.fr/", "https://", "exemple.fr", "https://exemple.fr/a b", "https://exemple.fr/a\x00b", "https://exemple.fr/a\x01b", "https://exemple.fr/a\x1bb", "https://exemple.fr/a\nb", "http://[::1"):
+            with self.subTest(value=value):
+                self.refused(app.artist_link_url, value)
+
+    def test_a_label_is_tidied_or_made_from_the_site_and_has_a_limit(self):
+        self.assertEqual(app.artist_link_label("  Mon   site  ", "https://exemple.fr/"), "Mon site")
+        self.assertEqual(app.artist_link_label(None, "https://www.exemple.fr/a"), app.artistinfo.host_label("https://www.exemple.fr/a"))
+        self.assertEqual(app.artist_link_label("   ", "https://www.exemple.fr/a"), app.artistinfo.host_label("https://www.exemple.fr/a"))
+        self.assertEqual(app.artist_link_label("x" * app.LINK_LABEL_MAX, "https://exemple.fr/"), "x" * app.LINK_LABEL_MAX)
+        self.assertIn("trop long", self.refused(app.artist_link_label, "x" * (app.LINK_LABEL_MAX + 1), "https://exemple.fr/"))
+        self.refused(app.artist_link_label, 5, "https://exemple.fr/")
+
+    def test_what_is_kept_for_an_artist_is_read_with_care(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        db = Database(root / "hub.db")
+        hub = types.SimpleNamespace(db=db)
+        self.assertEqual(app.artist_link_edits(hub, "mb1"), {"removed": [], "added": []})
+        db.kv_set(enrich.links_key("mb1"), {"removed": ["https://a.fr/", 5, None], "added": [{"label": "A", "url": "https://b.fr/"}, {"url": "https://c.fr/"}, {"label": "D", "url": 5}, {"label": "E"}, "https://f.fr/", 7, None]})
+        self.assertEqual(app.artist_link_edits(hub, "mb1"), {"removed": ["https://a.fr/"], "added": [{"label": "A", "url": "https://b.fr/"}, {"label": "", "url": "https://c.fr/"}]})
+        db.kv_set(enrich.links_key("mb1"), ["abîmé"])
+        self.assertEqual(app.artist_link_edits(hub, "mb1"), {"removed": [], "added": []})
+
+
+class TestArtistSheet(unittest.TestCase):
+    def test_the_country_is_in_french_for_a_french_page_and_as_musicbrainz_says_it_otherwise(self):
+        info = {"type": "Group", "area": "Sweden", "begin": "1998", "end": "2016"}
+        self.assertEqual(app.artist_sheet(info)["facts"], "Groupe · Suède · 1998 – 2016")
+        self.assertEqual(app.artist_sheet(info, "", "fr")["facts"], "Groupe · Suède · 1998 – 2016")
+        self.assertEqual(app.artist_sheet(info, "", "en")["facts"], "Groupe · Sweden · 1998 – 2016")
+
+
+class TestSideLabel(unittest.TestCase):
+    def test_the_words_of_the_hub_follow_the_language_of_the_page_and_nothing_else_does(self):
+        self.assertEqual(app.side_label("Français · Forcé · SDH"), "Français · Forcé · SDH")
+        self.assertEqual(app.side_label("Français · Forcé · SDH", "fr"), "Français · Forcé · SDH")
+        self.assertEqual(app.side_label("Français · Forcé · SDH", "en"), "Français · Forced · SDH")
+        self.assertEqual(app.side_label("Sous-titres", "en"), "Subtitles")
+
+
 class TestFirstChunk(unittest.TestCase):
     def process(self, data):
         return types.SimpleNamespace(stdout=types.SimpleNamespace(read1=lambda n: data), wait=mock.Mock())
@@ -457,3 +688,16 @@ class TestArtistTracks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHandlerTransfer(unittest.TestCase):
+    """`Handler.transfer` : un téléchargement ou une lecture sans erreur laisse sa ligne d'activité, même sans octet (ffmpeg et la sauvegarde le refusent eux-mêmes)."""
+
+    def test_a_transfer_leaves_its_line_even_empty_unless_told_otherwise(self):
+        seen = []
+        activity = types.SimpleNamespace(transfer=lambda *args, **kwargs: seen.append(args[8]))
+        h = types.SimpleNamespace(hub=types.SimpleNamespace(activity=activity), user={"id": "u1", "name": "alice"},
+                                  client_address=("192.168.1.5", 4000), headers=http.client.HTTPMessage())
+        app.Handler.transfer(h, "download", "ref", "Titre")
+        app.Handler.transfer(h, "backup", "backup", "Archive", leave_empty=False)
+        self.assertEqual(seen, [True, False])

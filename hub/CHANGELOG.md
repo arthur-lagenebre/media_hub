@@ -1,3 +1,7 @@
+## 0.50.2 — 2026-11-20
+- Une sauvegarde abîmée est refusée avec un message clair au moment de la restaurer, au lieu de s'arrêter sur une erreur incompréhensible.
+- Corrections internes.
+
 ## 0.50.1 — 2026-11-20
 - Quand une lecture est impossible, « Signaler un problème » ne vise plus un autre titre que celui que tu regardais : le bouton n'apparaît que si la fiche ouverte derrière le lecteur est bien la sienne.
 

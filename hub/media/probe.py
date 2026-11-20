@@ -177,7 +177,7 @@ def _chapters(raw, duration):
     by_start = {}
     for chapter in raw if isinstance(raw, list) else ():
         start = _seconds(chapter.get("start_time")) if isinstance(chapter, dict) else None
-        if start is not None and (not duration or start < duration):
+        if start is not None:
             by_start.setdefault(start, chapter)
     starts = sorted(by_start)[:MAX_CHAPTERS + 1]                 # un de plus : le dernier gardé peut finir au début du suivant
     ends = [_chapter_end(by_start[start], start, following, duration) for start, following in zip(starts, starts[1:] + [None])]
@@ -287,9 +287,9 @@ def _video_args(probe, decision, max_kbps, max_height, preset):
 
 
 def _x264_args(video, max_kbps, max_height, preset):
-    source = video.get("height") or 0
+    source = video.get("height")
     wanted = max_height or source
-    filters = [f"scale=-2:{wanted}"] if source > wanted else []
+    filters = [f"scale=-2:{wanted}"] if source and source > wanted else []
     args = ["-c:v", "libx264", "-preset", preset, "-crf", "21", "-profile:v", "high", "-level", "4.1", "-g", "48", "-sc_threshold", "0", "-vf", ",".join(filters + ["format=yuv420p"])]
     return args + (["-maxrate", f"{int(max_kbps * 0.92)}k", "-bufsize", f"{int(max_kbps * 2)}k"] if max_kbps else [])
 

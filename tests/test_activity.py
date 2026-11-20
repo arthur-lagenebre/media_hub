@@ -20,12 +20,14 @@ from tests.rig import MiniHub, Rig, call
 from tests.test_server import AccountsCase, Client, Running
 from tests.test_server_views import entry, item
 from hub import accounts, activity, config
-from hub.activity import ACTIVE_SECONDS, Activity
+from hub.activity import ACTIVE_SECONDS, ATTEMPTS_MAX, ATTEMPTS_PER_USER, KEEP_SECONDS, Activity, attempt_id
 from hub.origin import origin_of
 from hub.server import app
 
 FFMPEG = fixtures.FFMPEG
 PASSWORD = "un-mot-de-passe-ok"
+DL = "Abc123def456"                 # les identifiants de tentative (voir test_downloads)
+OTHER = "Zyx987wvu654"
 
 
 class Clock:
@@ -83,6 +85,14 @@ class TestRegistry(unittest.TestCase):
         self.clock.now += ACTIVE_SECONDS - 1
         self.assertEqual(len(self.lines()), 1)
         self.clock.now += 2
+        self.assertEqual(self.lines(), [])
+
+    def test_a_line_is_dropped_exactly_when_its_minute_is_over(self):
+        manager, _ = self.open()
+        manager.__exit__(None, None, None)
+        self.clock.now += ACTIVE_SECONDS - 1
+        self.assertEqual(len(self.lines()), 1)
+        self.clock.now += 1
         self.assertEqual(self.lines(), [])
 
     def test_the_line_says_who_what_where_and_how(self):
@@ -242,6 +252,23 @@ class TestDecisions(unittest.TestCase):
         self.assertEqual(activity.clean_caps({"channels": 10 ** 9, "height": -3}), {})
         self.assertEqual(activity.clean_caps({"channels": 2.0, "height": 1080.5}), {"channels": 2})
 
+    def test_a_number_of_the_caps_may_be_zero_or_the_top_but_nothing_beyond(self):
+        top = activity.CAPS_NUMBERS
+        self.assertEqual(activity.clean_caps({"channels": 0, "height": 0}), {"channels": 0, "height": 0})
+        self.assertEqual(activity.clean_caps({"channels": top["channels"], "height": top["height"]}), {"channels": top["channels"], "height": top["height"]})
+        self.assertEqual(activity.clean_caps({"channels": top["channels"] + 1, "height": top["height"] + 1}), {})
+
+    def test_the_context_of_a_report_is_the_latest_decision_of_that_account_for_one_of_the_files(self):
+        self.decide(1, mode="remux", why=["premier"], device="pc")
+        self.clock.now += 5
+        self.decide(2, mode="transcode", why=["second"], device="tv")
+        self.decide(1, user="u2", mode="direct", why=["d'un autre compte"])
+        self.assertEqual(self.registry.last_context("u1", ["e1"]), {"at": 1000, "mode": "remux", "why": ["premier"], "device": "pc", "caps": {}})
+        self.assertEqual(self.registry.last_context("u1", ["e0", "e2", "e1"])["mode"], "transcode")           # la plus récente des deux fichiers
+        self.assertEqual(self.registry.last_context("u2", ["e1"])["why"], ["d'un autre compte"])
+        self.assertIsNone(self.registry.last_context("u1", ["e3"]))
+        self.assertIsNone(self.registry.last_context("u3", ["e1"]))
+
     def test_the_words_of_the_caps_are_ascii(self):
         self.assertEqual(activity.clean_caps({"video": ["hévc", "٣", "h264"]}), {"video": ["h264"]})
 
@@ -266,6 +293,150 @@ class TestDecisions(unittest.TestCase):
         self.assertEqual(activity.short_agent("ExoPlayerLib/2.18.7"), "ExoPlayerLib/2.18.7")
         self.assertEqual(activity.short_agent("VLC/3.0.20 LibVLC/3.0.20"), "VLC 3")
         self.assertEqual((activity.short_agent(""), activity.short_agent(None)), ("", ""))
+
+
+# ---------------------------------------------------------------------------
+# Les tentatives de téléchargement
+# ---------------------------------------------------------------------------
+class TestAttemptRegistry(unittest.TestCase):
+    def setUp(self):
+        self.clock = Clock()
+        self.registry = Activity(self.clock)
+
+    def send(self, dl=DL, user="u1", start=0, size=10, count=None, fail=False):
+        """Une requête de la tentative : `count` octets envoyés à partir de `start` (tout le reste par défaut), puis une coupure si `fail`."""
+        count = size - start if count is None else count
+        try:
+            with self.registry.attempt(user, dl, start, size) as sent:
+                sent(count)
+                if fail:
+                    raise BrokenPipeError("le client est parti")
+        except BrokenPipeError:
+            pass
+
+    def state(self, dl=DL, user="u1"):
+        return self.registry.attempts_of(user, [dl])[dl]
+
+    def test_an_unseen_attempt_is_unknown(self):
+        self.assertEqual(self.state(), {"state": "unknown"})
+
+    def test_an_open_request_is_running_with_its_bytes_and_size(self):
+        with self.registry.attempt("u1", DL, 0, 10) as sent:
+            sent(4)
+            self.assertEqual(self.state(), {"state": "running", "bytes": 4, "size": 10})
+
+    def test_a_request_that_reaches_the_last_byte_is_done(self):
+        self.send()
+        self.assertEqual(self.state(), {"state": "done", "bytes": 10, "size": 10})
+
+    def test_a_request_that_ends_early_without_error_is_not_done(self):
+        self.send(count=6)                                                  # le fichier a raccourci en route : le dernier octet n'est jamais parti
+        self.assertEqual(self.state(), {"state": "stopped", "bytes": 6, "size": 10})
+
+    def test_a_cut_request_is_stopped(self):
+        self.send(count=4, fail=True)
+        self.assertEqual(self.state(), {"state": "stopped", "bytes": 4, "size": 10})
+
+    def test_a_request_that_fails_after_the_last_byte_is_not_done(self):
+        self.send(fail=True)
+        self.assertEqual(self.state()["state"], "stopped")
+
+    def test_a_resume_by_range_goes_back_to_running_then_done(self):
+        self.send(count=4, fail=True)
+        with self.registry.attempt("u1", DL, 4, 10) as sent:
+            sent(3)
+            self.assertEqual(self.state(), {"state": "running", "bytes": 7, "size": 10})
+            sent(3)
+        self.assertEqual(self.state(), {"state": "done", "bytes": 10, "size": 10})
+
+    def test_a_partial_range_that_does_not_reach_the_end_is_not_done(self):
+        self.send(start=0, count=5)
+        self.assertEqual(self.state()["state"], "stopped")
+
+    def test_running_while_one_request_is_still_open(self):
+        with self.registry.attempt("u1", DL, 0, 10) as sent:
+            self.send(start=5, count=2, fail=True)
+            sent(1)
+            self.assertEqual(self.state()["state"], "running")
+        self.assertEqual(self.state()["state"], "stopped")
+
+    def test_done_stays_done(self):
+        self.send()
+        self.send(count=2, fail=True)
+        self.assertEqual(self.state()["state"], "done")
+
+    def test_two_attempts_are_distinct(self):
+        self.send(DL)
+        self.send(OTHER, count=3, fail=True)
+        self.assertEqual(self.registry.attempts_of("u1", [DL, OTHER]), {DL: {"state": "done", "bytes": 10, "size": 10}, OTHER: {"state": "stopped", "bytes": 3, "size": 10}})
+
+    def test_another_account_sees_unknown(self):
+        self.send()
+        self.assertEqual(self.state(user="u2"), {"state": "unknown"})
+
+    def test_the_outcome_is_kept_ten_minutes_and_dropped_after_the_delay(self):
+        self.send()
+        self.clock.now += 600
+        self.assertEqual(self.state()["state"], "done")
+        self.clock.now += KEEP_SECONDS
+        self.assertEqual(self.state(), {"state": "unknown"})
+
+    def test_the_outcome_is_dropped_exactly_at_the_delay(self):
+        self.send()
+        self.clock.now += KEEP_SECONDS - 1
+        self.assertEqual(self.state()["state"], "done")
+        self.clock.now += 1
+        self.assertEqual(self.state(), {"state": "unknown"})
+
+    def test_an_account_at_its_limit_when_the_registry_is_full_too(self):
+        users = ATTEMPTS_MAX // ATTEMPTS_PER_USER
+        for n in range(ATTEMPTS_MAX):
+            self.clock.now += 0.1
+            self.send(f"attempt{n:05d}", user=f"user{n % users}")
+        self.send("attemptnew", user="user0")
+        self.assertEqual(len(self.registry.attempts), ATTEMPTS_MAX)
+        self.assertEqual(self.state("attemptnew", "user0")["state"], "done")
+        self.assertEqual(self.state("attempt00000", "user0"), {"state": "unknown"})
+        self.assertEqual(self.state("attempt00001", "user1")["state"], "done")       # la place libérée par le compte suffit : personne d'autre ne perd la sienne
+
+    def test_an_open_attempt_is_never_dropped_for_age(self):
+        with self.registry.attempt("u1", DL, 0, 10) as sent:
+            self.clock.now += KEEP_SECONDS * 2
+            sent(1)
+            self.assertEqual(self.state()["state"], "running")
+
+    def test_an_account_keeps_a_bounded_number_of_attempts_the_oldest_go_first(self):
+        for n in range(ATTEMPTS_PER_USER + 1):
+            self.clock.now += 1
+            self.send(f"attempt{n:05d}")
+        self.assertEqual(self.state("attempt00000"), {"state": "unknown"})
+        self.assertEqual(self.state("attempt00001")["state"], "done")
+        self.assertEqual(self.state(f"attempt{ATTEMPTS_PER_USER:05d}")["state"], "done")
+        self.assertEqual(len(self.registry.attempts), ATTEMPTS_PER_USER)
+
+    def test_the_whole_registry_is_bounded(self):
+        for n in range(ATTEMPTS_MAX + 1):
+            self.clock.now += 0.1                                           # toutes dans le délai : c'est le plafond qui retire, pas l'âge
+            self.send(f"attempt{n:05d}", user=f"user{n % 50}")
+        self.assertEqual(len(self.registry.attempts), ATTEMPTS_MAX)
+        self.assertEqual(self.state("attempt00000", "user0"), {"state": "unknown"})
+        self.assertEqual(self.state(f"attempt{ATTEMPTS_MAX:05d}", f"user{ATTEMPTS_MAX % 50}")["state"], "done")
+
+    def test_open_attempts_are_never_dropped_for_the_limit_the_new_one_is_not_followed(self):
+        managers = [self.registry.attempt("u1", f"attempt{n:05d}", 0, 10) for n in range(ATTEMPTS_PER_USER)]
+        for manager in managers:
+            manager.__enter__()
+        self.send("attempt99999")
+        self.assertEqual(self.state("attempt99999"), {"state": "unknown"})
+        self.assertEqual(self.state("attempt00000")["state"], "running")
+        for manager in managers:
+            manager.__exit__(None, None, None)
+
+    def test_the_identifier_is_8_to_32_ascii_letters_or_digits(self):
+        for good in ("abcdEFGH", "a" * 32, "0123456789"):
+            self.assertEqual(attempt_id(good), good)
+        for bad in (None, 3, "", "abc", "a" * 33, "abcdefg!", "../../etc/passwd", "abcdéfgh", "abcd efgh", "١٢٣٤٥٦٧٨٩", "abcdefgh\n"):
+            self.assertEqual(attempt_id(bad), "", bad)
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +604,11 @@ class TestInboxAndBackup(ActivityCase):
         after, = self.transfers()
         self.assertEqual((after["connections"], after["bytes"]), (0, 10))
 
+    def test_an_upload_is_told_from_another_by_its_folder_and_its_name(self):
+        for target in ("/api/inbox?name=Film.mkv", "/api/inbox?name=Film.mkv&dir=Saga", "/api/inbox?name=Autre.mkv&dir=Saga"):
+            self.assertEqual(call(self.hub, "POST", target, b"0123456789", self.cookie(self.alice))[1].status, 201, target)
+        self.assertEqual(sorted(ref for _, ref, _, _ in self.hub.activity.lines), ["upload:/Film.mkv", "upload:Saga/Autre.mkv", "upload:Saga/Film.mkv"])
+
     def test_a_refused_upload_leaves_nothing(self):
         bob = accounts.create(self.hub.db, "bob", PASSWORD)
         self.hub.activity = Activity(self.clock)
@@ -468,6 +644,17 @@ class TestInboxAndBackup(ActivityCase):
             self.assertEqual(call(self.hub, "GET", "/api/backup", headers=self.cookie(self.boss))[1].status, 200)
         self.assertEqual(seen, [("backup", "boss", 1)])
         self.assertEqual([(t["bytes"], t["connections"]) for t in self.transfers()], [(3, 0)])
+
+    def test_the_folder_a_backup_was_built_in_goes_away_without_a_word_even_when_it_is_gone_already(self):
+        def make(db_path, data, out):
+            Path(out).write_bytes(b"zip")
+
+        def sent(handler, path, *args, **kwargs):
+            shutil.rmtree(path.parent)
+        with mock.patch.object(app.backup, "create", make), mock.patch.object(app.Handler, "send_file", sent):
+            handler, reply = call(self.hub, "GET", "/api/backup", headers=self.cookie(self.boss))
+        self.assertEqual((handler.stderr, reply), ("", None))
+        self.assertEqual([p.name for p in self.hub.cfg.data.glob(".sauvegarde-*")], [])
 
     def test_a_backup_that_sends_nothing_leaves_no_line(self):
         def fails(db_path, data, out):
@@ -557,6 +744,18 @@ class TestStreams(ActivityCase):
         self.assertEqual((self.hub.active, self.free()), (0, True))
         self.assertEqual([t["connections"] for t in self.transfers()], [0])
 
+    def test_the_thread_that_reads_what_ffmpeg_says_never_keeps_the_server_alive(self):
+        started = []
+
+        class Recorded(threading.Thread):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                started.append(self)
+        with mock.patch.object(app.threading, "Thread", Recorded):
+            self.assertEqual(self.stream("m=remux")[3].status, 200)
+        self.assertTrue(started)
+        self.assertTrue(all(thread.daemon for thread in started))
+
     def test_a_head_or_an_ffmpeg_that_produces_nothing_leaves_no_line(self):
         proc, _, _, reply = self.stream("m=remux", chunks=[])
         self.assertEqual(reply.status, 500)
@@ -586,6 +785,10 @@ class TestRoute(ActivityCase):
     def test_a_plain_account_gets_a_403_and_nobody_a_401(self):
         self.assertEqual((self.read(self.bob).status, self.read(self.bob).json()), (403, {"error": "réservé à l'administrateur"}))
         self.assertEqual(call(self.hub, "GET", "/api/activity")[1].status, 401)
+
+    def test_a_clock_that_went_back_never_gives_a_negative_uptime(self):
+        self.hub.started = time.time() + 1000
+        self.assertEqual(self.read().json()["uptime"], 0)
 
     def test_the_shape_of_the_answer(self):
         self.hub.jobs.busy.return_value = True
