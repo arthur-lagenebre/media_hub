@@ -24,20 +24,23 @@ runs:
         key: ${{ steps.image.outputs.key }}
         restore-keys: ${{ steps.image.outputs.prefix }}
 
-    # Avec le cache : les .deb gardés s'installent sans réseau. S'ils ne suffisent pas (paquet manquant, version dépassée),
-    # on retombe sur l'installation en ligne, qui remplit le dossier pour la prochaine fois.
+    # Avec le cache : les .deb gardés s'installent par dpkg, sans réseau. Pas par `apt-get install *.deb` : sur l'image
+    # Ubuntu 26.04, apt préférait les paquets amd64v3 du miroir et retéléchargeait les 66 Mo malgré le cache (runs
+    # 44760114777 et 44775156957 : 25 min et plus quand le miroir rame). S'ils ne suffisent pas (paquet manquant, version
+    # dépassée), on retombe sur l'installation en ligne (-f répare ce que dpkg a laissé à moitié), qui remplit le dossier
+    # pour la prochaine fois.
     - name: Installer ffmpeg
       shell: bash
       run: |
         debs="$HOME/ffmpeg-debs"
         if compgen -G "$debs/*.deb" > /dev/null \
-          && sudo apt-get install -y --no-install-recommends "$debs"/*.deb; then
-          echo "ffmpeg installé depuis le cache ($(ls "$debs"/*.deb | wc -l) paquets)"
+          && sudo dpkg -i "$debs"/*.deb > /dev/null; then
+          echo "ffmpeg installé depuis le cache ($(ls "$debs"/*.deb | wc -l) paquets, sans réseau)"
         else
           rm -rf "$debs"
           mkdir -p "$debs"
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends -o Dir::Cache::Archives="$debs" ffmpeg
+          sudo apt-get install -y -f --no-install-recommends -o Dir::Cache::Archives="$debs" ffmpeg
           # apt laisse là son verrou et un dossier partial/ réservé à _apt : le cache ne pourrait pas les lire.
           sudo rm -rf "$debs/partial" "$debs/lock"
           sudo chown -R "$(id -u):$(id -g)" "$debs"
