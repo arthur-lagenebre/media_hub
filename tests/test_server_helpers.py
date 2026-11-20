@@ -688,3 +688,16 @@ class TestArtistTracks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHandlerTransfer(unittest.TestCase):
+    """`Handler.transfer` : un téléchargement ou une lecture sans erreur laisse sa ligne d'activité, même sans octet (ffmpeg et la sauvegarde le refusent eux-mêmes)."""
+
+    def test_a_transfer_leaves_its_line_even_empty_unless_told_otherwise(self):
+        seen = []
+        activity = types.SimpleNamespace(transfer=lambda *args, **kwargs: seen.append(args[8]))
+        h = types.SimpleNamespace(hub=types.SimpleNamespace(activity=activity), user={"id": "u1", "name": "alice"},
+                                  client_address=("192.168.1.5", 4000), headers=http.client.HTTPMessage())
+        app.Handler.transfer(h, "download", "ref", "Titre")
+        app.Handler.transfer(h, "backup", "backup", "Archive", leave_empty=False)
+        self.assertEqual(seen, [True, False])

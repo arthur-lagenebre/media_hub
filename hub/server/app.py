@@ -365,8 +365,8 @@ class Handler(BaseHTTPRequestHandler):
     def send_json(self, obj, status=200, headers=None):
         self.send_body(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), "application/json; charset=utf-8", status, {"Cache-Control": "no-store", **(headers or {})}, self.command == "HEAD")
 
-    def transfer(self, kind, ref, title, library="", leave_empty=False):
-        """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré. Sans le moindre octet envoyé, il ne laisse pas de ligne (`leave_empty` : voir Activity.transfer)."""
+    def transfer(self, kind, ref, title, library="", leave_empty=True):
+        """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré (`leave_empty` : voir Activity.transfer)."""
         return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty, origin=origin(self))
 
     def send_file(self, path, mime=None, headers=None, track=None, attempt=None):
@@ -2710,7 +2710,7 @@ def media_stream(h, m, q):
     proc = None
     try:
         kind = "transcode" if q.get("m") == "transcode" else "remux"
-        with h.transfer(kind, entry["id"], entry_label(show_title(hub, entry), entry), entry["lib"]) as sent:          # dès le lancement : ffmpeg peut mettre des secondes à produire son premier bloc, et relancer le serveur couperait déjà cette lecture
+        with h.transfer(kind, entry["id"], entry_label(show_title(hub, entry), entry), entry["lib"], leave_empty=False) as sent:          # dès le lancement : ffmpeg peut mettre des secondes à produire son premier bloc, et relancer le serveur couperait déjà cette lecture
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
             errors = []
             threading.Thread(target=lambda: errors.append(proc.stderr.read().decode("utf-8", "replace")), daemon=True).start()
@@ -3300,7 +3300,7 @@ def api_backup(h, m, q):
     work = Path(tempfile.mkdtemp(prefix=".sauvegarde-", dir=h.hub.cfg.data))
     try:
         name = backup.archive_name()
-        with h.transfer("backup", "backup", name) as sent:          # dès la construction de l'archive : relancer le serveur l'interromprait
+        with h.transfer("backup", "backup", name, leave_empty=False) as sent:          # dès la construction de l'archive : relancer le serveur l'interromprait
             try:
                 backup.create(h.hub.db.path, h.hub.cfg.data, work / name)
             except (backup.BackupError, OSError) as e:
