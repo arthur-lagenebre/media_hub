@@ -484,7 +484,7 @@ body.has-audio #toast { bottom: 6rem; }
 .rbar { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), transparent 22%, transparent 70%, rgba(0, 0, 0, 0.88)); }
 .rbar[hidden] { display: none; }
 .rbar > * { pointer-events: auto; }
-.rbar .pg { color: #c9d0d6; font-variant-numeric: tabular-nums; }
+.rbar .pg { color: #c9d0d6; font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: 0.8rem; }
 .rbar .btns { flex-wrap: wrap; }
 
 @media (prefers-reduced-motion: reduce) {

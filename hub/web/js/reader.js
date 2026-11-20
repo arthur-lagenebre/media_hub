@@ -316,12 +316,17 @@
       tool(themeText(), null, function (b) {
         var names = Object.keys(THEMES); theme = names[(names.indexOf(theme) + 1) % names.length]; H.pref('theme', theme); setLabel(b, themeText()); styleFrame();
       });
+      function layoutText() { return paged() ? H.t('Affichage : pages') : H.t('Affichage : défilement'); }
+      tool(layoutText(), null, function (b) { switchLayout(); setLabel(b, layoutText()); });
       tool(H.t('Chapitre précédent'), 'prev', function () { skipChapter(-1); });
       tool(H.t('Chapitre suivant'), 'next', function () { skipChapter(1); });
     }
-    var chap = 0, wanted = 0, anchor = '';
+    // Deux affichages : les pages (par défaut) ou le défilement. En pages, le chapitre est mis en colonnes de la hauteur de la vue, une ou deux par écran ; tourner la page décale d'un écran.
+    // La position est toujours « chapitre + fraction » : `frac` (la page lue sur le nombre de pages) ne change que quand le lecteur avance ; une nouvelle mise en page (taille, thème, fenêtre, image arrivée) la garde.
+    var chap = 0, wanted = 0, anchor = '', layout = H.pref('bookLayout') === 'scroll' ? 'scroll' : 'pages', pg = 0, pages = 1, frac = 0;
+    function paged() { return layout === 'pages'; }
     function chapter(n, fraction, hash) {          // `fraction` : où reprendre dans le chapitre ; `hash` : l'ancre à rejoindre (lien du livre)
-      chap = n; wanted = fraction || 0; anchor = hash || ''; pos = n + wanted;
+      chap = n; wanted = frac = fraction || 0; anchor = hash || ''; pos = n + wanted; pg = 0; pages = 1;
       var win = frame.contentWindow;
       if (win) win.location.replace(info.chapters[n]); else frame.src = info.chapters[n];          // `replace` : un chapitre n'ajoute rien à l'historique, Retour quitte le livre
       paint();
@@ -336,8 +341,11 @@
     function anchorIn(doc, name) { return name ? doc.getElementById(name) || doc.getElementsByName(name)[0] : null; }          // `id`, ou `<a name>` des livres EPUB 2
     function reach(doc, name) {          // l'élément d'ancre `name` du chapitre affiché
       try { name = decodeURIComponent(name); } catch (e) { /* ancre telle quelle */ }
-      var target = anchorIn(doc, name);
-      if (target) target.scrollIntoView();
+      var target = anchorIn(doc, name), win = frame.contentWindow;
+      if (!target) return;
+      if (!paged()) { target.scrollIntoView(); return; }
+      showPage(Math.floor((target.getBoundingClientRect().left + win.scrollX) / win.innerWidth));          // la page qui le contient
+      frac = pg / pages; progressOf();
     }
     function shownChapter() {            // le document du chapitre lu, s'il est arrivé
       var doc;
@@ -349,21 +357,26 @@
       return win.innerHeight * (atEnd ? 1 : 0.25);
     }
     function tocCurrent() {              // l'entrée en cours : parmi celles du chapitre lu, la dernière passée (à défaut la première), sinon la dernière d'un chapitre précédent ; -1 s'il n'y en a pas
-      var doc = shownChapter(), line = doc ? passedLine(doc) : 0, before = -1, first = -1, passed = -1;
+      var doc = shownChapter(), line = doc && !paged() ? passedLine(doc) : 0, before = -1, first = -1, passed = -1;
       info.toc.forEach(function (e, i) {
         if (e.chapter < chap) before = i;
         if (e.chapter !== chap) return;
         if (first < 0) first = i;
         var target = doc && anchorIn(doc, e.anchor);
-        if (!e.anchor || (target && target.getBoundingClientRect().top <= line)) passed = i;
+        if (!e.anchor || (target && passedAnchor(target, line))) passed = i;
       });
       return passed >= 0 ? passed : first >= 0 ? first : before;
+    }
+    function passedAnchor(target, line) {          // en pages, une ancre est passée quand elle est sur l'écran lu ou avant ; en défilement, au-dessus de la ligne
+      var r = target.getBoundingClientRect();
+      return paged() ? r.left < frame.contentWindow.innerWidth : r.top <= line;
     }
     function tocJump(e) {                // la barre se retire avec le focus qu'elle a repris : les flèches tournent de nouveau les pages
       var doc = shownChapter(), hash = encodeURIComponent(e.anchor);
       showBar(false);
       if (e.chapter !== chap || !doc) chapter(e.chapter, 0, hash);
       else if (e.anchor) reach(doc, hash);
+      else if (paged()) { showPage(0); frac = 0; progressOf(); }
       else frame.contentWindow.scrollTo(0, 0);
     }
     function openToc() {
@@ -397,29 +410,87 @@
         'body *{color:inherit !important;background-color:transparent !important}img,svg{max-width:100% !important;height:auto !important}a{text-decoration:underline}';
       (doc.head || doc.documentElement).appendChild(css);
       var win = frame.contentWindow;
-      if (!doc.hubBound) {
-        doc.hubBound = true;
-        doc.addEventListener('keydown', function (e) { onKey(e); }, true);
-        doc.addEventListener('click', function (e) {
-          var link = e.target.closest && e.target.closest('a');
-          if (link && (link.hasAttribute('href') || link.hasAttribute('xlink:href'))) {          // une ancre nommée (`<a id>`) n'est pas un lien : le clic compte comme ailleurs sur le texte
-            e.preventDefault(); followLink(link, doc); return;
-          }
-          var r = frame.getBoundingClientRect(), x = e.clientX / r.width; if (x < 0.25) scroll(-1); else if (x > 0.75) scroll(1); else showBar(bar.hidden); });
-        win.addEventListener('scroll', progressOf, { passive: true });
-      }
-      if (here(doc)) {          // sinon le chapitre demandé n'est pas encore arrivé (le thème a changé en route) : l'ancre et la reprise l'attendent
-        if (anchor) { reach(doc, anchor); anchor = ''; }
-        else if (wanted > 0) { var max = doc.documentElement.scrollHeight - win.innerHeight; win.scrollTo(0, Math.max(0, max * wanted)); wanted = 0; }
-      }
+      bindFrame(doc, win);
+      if (paged() && !win.innerWidth) return;          // la liseuse est masquée : la mise en page attend son retour (l'iframe reçoit alors `resize`)
+      if (paged() && doc.body) css.textContent += pageCss(doc, win);
+      var n = fitPages(doc, win);
+      if (here(doc)) { pages = n; place(doc, win); }          // sinon le chapitre demandé n'est pas encore arrivé (le thème a changé en route) : l'ancre et la reprise l'attendent
       progressOf();
     }
+    function bindFrame(doc, win) {
+      if (doc.hubBound) return;
+      doc.hubBound = true;
+      doc.addEventListener('keydown', function (e) { onKey(e); }, true);
+      doc.addEventListener('click', function (e) {
+        var link = e.target.closest && e.target.closest('a');
+        if (link && (link.hasAttribute('href') || link.hasAttribute('xlink:href'))) {          // une ancre nommée (`<a id>`) n'est pas un lien : le clic compte comme ailleurs sur le texte
+          e.preventDefault(); followLink(link, doc); return;
+        }
+        var r = frame.getBoundingClientRect(), x = e.clientX / r.width; if (x < 0.25) turnPage(-1); else if (x > 0.75) turnPage(1); else showBar(bar.hidden); });
+      win.addEventListener('scroll', progressOf, { passive: true });
+      var again = function () { if (paged()) styleFrame(); };          // les pages ne sont justes qu'à la vraie taille de la vue, des images et des polices
+      win.addEventListener('resize', again);
+      doc.addEventListener('load', function (e) { if (e.target && e.target.localName === 'img') again(); }, true);
+      if (doc.fonts && doc.fonts.addEventListener) doc.fonts.addEventListener('loadingdone', again);
+      var swipe = null;          // au doigt, en pages : un glissement horizontal tourne la page
+      doc.addEventListener('touchstart', function (e) { swipe = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null; }, { passive: true });
+      doc.addEventListener('touchend', function (e) {
+        var t = e.changedTouches[0], dx = swipe ? t.clientX - swipe.x : 0, dy = swipe ? t.clientY - swipe.y : 0;
+        swipe = null;
+        if (paged() && Math.abs(dx) > 50 && Math.abs(dx) > 2 * Math.abs(dy)) turnPage(dx < 0 ? 1 : -1);          // le doigt vers la gauche montre la page suivante
+      });
+    }
+    function pageCss(doc, win) {          // pages : des colonnes de la hauteur de la vue, deux par écran en paysage large (comme la double page des BD), une sinon ; un écran fait exactement la largeur de la vue
+      var w = win.innerWidth, ht = win.innerHeight, em = parseFloat(win.getComputedStyle(doc.body).fontSize) || 16;
+      var cols = !portrait() && w / 2 >= 20 * em ? 2 : 1;
+      var side = Math.max(Math.round(w * 0.03), Math.floor((w / cols - 38 * em) / 2)), pad = Math.round(ht * 0.06);          // la marge de chaque côté d'une colonne : une ligne garde au plus 38em
+      return 'html{height:100% !important;overflow:hidden !important;scroll-behavior:auto !important}' +
+        'body{box-sizing:border-box !important;width:' + w + 'px !important;max-width:none !important;height:' + ht + 'px !important;margin:0 !important;padding:' + pad + 'px ' + side + 'px !important;overflow-wrap:break-word;' +
+        'column-width:' + (w / cols - 2 * side) + 'px !important;column-count:' + cols + ' !important;column-gap:' + 2 * side + 'px !important;column-fill:auto !important}' +
+        'img,svg,video{max-height:' + (ht - 2 * pad) + 'px !important;object-fit:contain;break-inside:avoid}pre{white-space:pre-wrap !important}';
+    }
+    function fitPages(doc, win) {          // pages : le nombre d'écrans du chapitre ; un repère au bout du dernier permet d'y défiler en entier (la dernière colonne s'arrête avant le bord)
+      var end = doc.getElementById('hub-end');
+      if (!paged() || !doc.body) { if (end && end.parentNode) end.parentNode.removeChild(end); return 1; }
+      if (!end) { end = doc.createElement('div'); end.id = 'hub-end'; end.setAttribute('style', 'position:absolute;top:0;width:1px;height:1px'); doc.documentElement.appendChild(end); }
+      end.style.left = '0';
+      var w = win.innerWidth, n = Math.max(1, Math.ceil((doc.documentElement.scrollWidth - 2) / w));
+      end.style.left = (n * w - 1) + 'px';
+      return n;
+    }
+    function place(doc, win) {          // le chapitre arrivé ou remis en page : l'ancre demandée, sinon la fraction gardée
+      if (anchor) { reach(doc, anchor); anchor = ''; }
+      else if (paged()) showPage(Math.floor(frac * pages + 1e-6));
+      else if (wanted > 0) win.scrollTo(0, Math.max(0, (doc.documentElement.scrollHeight - win.innerHeight) * wanted));
+      wanted = 0;
+    }
+    function showPage(p) { var win = frame.contentWindow; pg = Math.max(0, Math.min(pages - 1, p)); win.scrollTo(pg * win.innerWidth, 0); }
+    function switchLayout() {          // pages ↔ défilement, à la même fraction du chapitre
+      wanted = frac = Math.min(0.999, Math.max(0, pos - chap));
+      layout = paged() ? 'scroll' : 'pages'; H.pref('bookLayout', layout);
+      if (frame.contentWindow) frame.contentWindow.scrollTo(0, 0);
+      styleFrame();
+    }
     function progressOf() {
-      var win = frame && frame.contentWindow, doc = win && win.document;
-      if (!doc || !doc.documentElement) return;
-      var max = Math.max(1, doc.documentElement.scrollHeight - win.innerHeight), last = chap === info.chapters.length - 1;
-      pos = chap + Math.min(last ? 1 : 0.999, Math.max(0, win.scrollY / max));          // le bas d'un chapitre reste ce chapitre à la reprise ; seul celui du dernier termine le livre
+      var win = frame && frame.contentWindow, doc = shownChapter();
+      if (!doc || (paged() && !win.innerWidth)) return;
+      var last = chap === info.chapters.length - 1, at = paged() ? pageShown(win, last) : win.scrollY / Math.max(1, doc.documentElement.scrollHeight - win.innerHeight);
+      pos = chap + Math.min(last ? 1 : 0.999, Math.max(0, at));          // le bas d'un chapitre reste ce chapitre à la reprise ; seul celui du dernier termine le livre
       paint(); later();
+    }
+    function pageShown(win, last) {          // pages : la page à l'écran, recalée sur son bord si autre chose a fait défiler le chapitre (le focus d'un lien, la recherche du navigateur)
+      var w = win.innerWidth, p = Math.max(0, Math.min(pages - 1, Math.round(win.scrollX / w)));
+      if (Math.abs(win.scrollX - p * w) > 1) win.scrollTo(p * w, 0);
+      if (p !== pg) { pg = p; frac = p / pages; }
+      return last && pg === pages - 1 ? 1 : frac;
+    }
+    function turnPage(dir) {          // un écran plus loin ou plus près ; au bout du chapitre, le suivant à sa première page, ou le précédent à sa dernière
+      if (!paged()) { scroll(dir); return; }
+      var doc = shownChapter();
+      if (!doc || !doc.getElementById('hub-style')) return;          // le chapitre n'est pas encore mis en page
+      if (pg + dir >= pages) skipChapter(1);
+      else if (pg + dir < 0) { if (chap > 0) chapter(chap - 1, 0.999); }
+      else { showPage(pg + dir); frac = pg / pages; progressOf(); }
     }
     function scroll(dir) {
       var win = frame.contentWindow, doc = win.document;
@@ -439,7 +510,7 @@
     function setLabel(b, text) { var l = b.querySelector('.lbl'); if (l) l.textContent = text; }
     function paint() {
       var n = total(), last = pos + count;          // BD : `last` est le rang (à partir de 1) de la dernière page de la vue
-      if (info.format !== 'cbz') label.textContent = H.t('Chapitre {n} / {total}', { n: Math.min(Math.floor(pos), chap) + 1, total: n });
+      if (info.format !== 'cbz') label.textContent = paged() ? H.t('Chapitre {n} / {total} · page {p}/{pages}', { n: Math.min(Math.floor(pos), chap) + 1, total: n, p: pg + 1, pages: pages }) : H.t('Chapitre {n} / {total}', { n: Math.min(Math.floor(pos), chap) + 1, total: n });
       else label.textContent = count > 1 ? H.t('Pages {a}–{b} / {total}', { a: pos + 1, b: last, total: n }) : H.t('Page {n} / {total}', { n: pos + 1, total: n });
       var ratio = n ? (info.format === 'cbz' ? last / n : pos / n) : 0;
       slider.querySelector('i').style.width = Math.min(100, ratio * 100) + '%';
@@ -473,10 +544,10 @@
         else if (k === 'ArrowUp') { if (fit === 'width' && stage.scrollTop > 0) stage.scrollBy(0, -120); else { showBar(true); H.focus.set(slider, true); } eat(); }
         else if (k === 'Enter') { if (stage.contains(document.activeElement)) return; showBar(true); H.focus.set(slider, true); eat(); }          // sur « Réessayer », Entrée l'active
       } else {
-        if (k === 'ArrowRight' || k === ' ' || k === 'PageDown') { scroll(1); eat(); }
-        else if (k === 'ArrowLeft' || k === 'PageUp') { scroll(-1); eat(); }
-        else if (k === 'ArrowDown') { frame.contentWindow.scrollBy(0, 90); eat(); }
-        else if (k === 'ArrowUp') { frame.contentWindow.scrollBy(0, -90); eat(); }
+        if (k === 'ArrowRight' || k === ' ' || k === 'PageDown') { turnPage(1); eat(); }
+        else if (k === 'ArrowLeft' || k === 'PageUp') { turnPage(-1); eat(); }
+        else if (k === 'ArrowDown') { if (paged()) turnPage(1); else frame.contentWindow.scrollBy(0, 90); eat(); }
+        else if (k === 'ArrowUp') { if (paged()) turnPage(-1); else frame.contentWindow.scrollBy(0, -90); eat(); }
         else if (k === 'Enter') { if (!onLink()) { showBar(true); H.focus.set(slider, true); eat(); } }          // sur un lien (Tab), Entrée le suit : le navigateur envoie le clic
       }
     }
