@@ -21,6 +21,7 @@ from tests.test_server import AccountsCase, Client, Running
 from tests.test_server_views import entry, item
 from hub import accounts, activity, config
 from hub.activity import ACTIVE_SECONDS, Activity
+from hub.origin import origin_of
 from hub.server import app
 
 FFMPEG = fixtures.FFMPEG
@@ -44,17 +45,17 @@ class TestRegistry(unittest.TestCase):
     def lines(self):
         return self.registry.report()["transfers"]
 
-    def open(self, user="u1", ref="e1", kind="direct", address="192.168.1.5", name="alice", title="Film", library="films", agent="Mozilla/5.0 Firefox/120.0"):
+    def open(self, user="u1", ref="e1", kind="direct", address="192.168.1.5", name="alice", title="Film", library="films", agent="Mozilla/5.0 Firefox/120.0", origin="local"):
         """Ouvre un transfert sans le fermer : (gestionnaire de contexte, fonction de comptage). Le gestionnaire reste tenu, sinon son ramasse-miettes fermerait le transfert."""
-        manager = self.registry.transfer(user, name, ref, kind, address, title, library, agent)
+        manager = self.registry.transfer(user, name, ref, kind, address, title, library, agent, origin=origin)
         self.held.append(manager)
         return manager, manager.__enter__()
 
     def test_work_begun_before_sending_is_listed_and_leaves_nothing_if_nothing_was_sent(self):
-        with self.registry.transfer("u1", "alice", "e1", "backup", "192.168.1.5", "Archive", leave_empty=False):
+        with self.registry.transfer("u1", "alice", "e1", "backup", "192.168.1.5", "Archive", leave_empty=False, origin="local"):
             self.assertEqual([(t["kind"], t["connections"]) for t in self.lines()], [("backup", 1)])
         self.assertEqual(self.lines(), [])
-        with self.registry.transfer("u1", "alice", "e1", "backup", "192.168.1.5", "Archive", leave_empty=False) as sent:
+        with self.registry.transfer("u1", "alice", "e1", "backup", "192.168.1.5", "Archive", leave_empty=False, origin="local") as sent:
             sent(3)
         self.assertEqual([(t["bytes"], t["connections"]) for t in self.lines()], [(3, 0)])
 
@@ -63,7 +64,7 @@ class TestRegistry(unittest.TestCase):
             self.open(title="ouvert")
             for n in range(5):
                 self.clock.now += 1
-                with self.registry.transfer("u1", "alice", f"f{n}", "direct", "192.168.1.5", f"fini {n}"):
+                with self.registry.transfer("u1", "alice", f"f{n}", "direct", "192.168.1.5", f"fini {n}", origin="local"):
                     pass
             self.assertEqual([t["title"] for t in self.lines()], ["ouvert", "fini 3", "fini 4"])
 
@@ -95,7 +96,7 @@ class TestRegistry(unittest.TestCase):
 
     def test_the_requests_of_one_device_share_a_line(self):
         for _ in range(3):
-            with self.registry.transfer("u1", "alice", "e1", "direct", "192.168.1.5", "Film", "films", "") as count:
+            with self.registry.transfer("u1", "alice", "e1", "direct", "192.168.1.5", "Film", "films", "", origin="local") as count:
                 count(10)
             self.clock.now += 2
         line, = self.lines()
@@ -121,15 +122,15 @@ class TestRegistry(unittest.TestCase):
         self.assertNotIn("192.168.1.5", text)
         self.assertNotIn("203.0.113.77", text)
 
-    def test_the_origin_follows_the_address(self):
+    def test_the_origin_of_an_address_alone(self):
         for address, origin in (("127.0.0.1", "local"), ("::1", "local"), ("192.168.1.20", "local"), ("10.0.0.2", "local"), ("172.16.5.5", "local"), ("::ffff:192.168.1.5", "local"),
                                 ("fe80::1%eth0", "local"), ("fd12:3456:789a::/64", "local"), ("8.8.8.8", "internet"), ("::ffff:8.8.8.8", "internet"), ("2606:4700:4700::/64", "internet"),
                                 ("100.101.102.103", "tailscale"), ("100.64.0.0", "tailscale"), ("100.127.255.255", "tailscale"), ("::ffff:100.101.102.103", "tailscale"), ("100.63.255.255", "internet"), ("100.128.0.0", "internet"),
                                 ("fd7a:115c:a1e0::1", "tailscale"), ("n'importe quoi", "internet"), ("", "internet")):
-            self.assertEqual(activity.origin_of(address), origin, address)
+            self.assertEqual(origin_of(address), origin, address)
 
     def test_a_progress_report_prolongs_an_existing_line_and_never_creates_one(self):
-        with self.registry.transfer("u1", "alice", "e1", "direct", "192.168.1.5", "Film", "films", "") as count:
+        with self.registry.transfer("u1", "alice", "e1", "direct", "192.168.1.5", "Film", "films", "", origin="local") as count:
             count(1)
         self.clock.now += 50
         self.registry.touch("u1", "e1")                                   # le navigateur lit depuis sa mémoire tampon : il n'envoie plus de Range
@@ -143,7 +144,7 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(self.registry.lines, {})
 
     def test_a_progress_report_of_another_account_or_file_prolongs_nothing(self):
-        with self.registry.transfer("u1", "alice", "e1", "direct", "192.168.1.5", "Film", "films", ""):
+        with self.registry.transfer("u1", "alice", "e1", "direct", "192.168.1.5", "Film", "films", "", origin="local"):
             pass
         self.clock.now += 50
         self.registry.touch("u2", "e1")
@@ -153,21 +154,21 @@ class TestRegistry(unittest.TestCase):
 
     def test_the_expired_lines_are_dropped_so_the_registry_does_not_grow(self):
         for n in range(50):
-            with self.registry.transfer("u1", "alice", f"e{n}", "direct", "192.168.1.5", "Film", "films", ""):
+            with self.registry.transfer("u1", "alice", f"e{n}", "direct", "192.168.1.5", "Film", "films", "", origin="local"):
                 pass
         self.assertEqual(len(self.registry.lines), 50)
         self.clock.now += ACTIVE_SECONDS + 1
-        with self.registry.transfer("u1", "alice", "neuf", "direct", "192.168.1.5", "Film", "films", ""):      # une écriture suffit, sans lecture
+        with self.registry.transfer("u1", "alice", "neuf", "direct", "192.168.1.5", "Film", "films", "", origin="local"):      # une écriture suffit, sans lecture
             pass
         self.assertEqual(len(self.registry.lines), 1)
 
     def test_a_transfer_that_fails_before_sending_anything_leaves_nothing(self):
         with self.assertRaises(RuntimeError):
-            with self.registry.transfer("u1", "alice", "e1", "upload", "192.168.1.5", "a.mkv", "", ""):
+            with self.registry.transfer("u1", "alice", "e1", "upload", "192.168.1.5", "a.mkv", "", "", origin="local"):
                 raise RuntimeError("refusé")
         self.assertEqual(self.lines(), [])
         with self.assertRaises(BrokenPipeError):                          # un client coupé après des octets reste visible : il vient de lire
-            with self.registry.transfer("u1", "alice", "e2", "direct", "192.168.1.5", "Film", "films", "") as count:
+            with self.registry.transfer("u1", "alice", "e2", "direct", "192.168.1.5", "Film", "films", "", origin="local") as count:
                 count(5)
                 raise BrokenPipeError()
         self.assertEqual([(t["bytes"], t["connections"]) for t in self.lines()], [(5, 0)])

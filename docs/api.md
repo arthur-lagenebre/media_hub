@@ -393,9 +393,11 @@ Une seule fonction (`hub/origin.py`) dit d'où vient une connexion, pour le droi
 | `tailscale` | l'adresse réelle du client est dans `100.64.0.0/10` ou `fd7a:115c:a1e0::/48`, qu'elle arrive en direct ou par le proxy de la boucle locale (`tailscale serve`) |
 | `internet` | tout le reste, adresse illisible comprise (Funnel) |
 
-`X-Forwarded-For` (sa dernière entrée, celle du proxy) n'est crue que d'une connexion de la boucle locale : un appareil du réseau local ou du tailnet qui l'envoie ne change pas son origine. Derrière le proxy, rien n'est `local`, quelle que soit l'adresse annoncée.
+`X-Forwarded-For` (sa dernière entrée, celle du proxy) n'est crue que d'une connexion de la boucle locale : un appareil du réseau local ou du tailnet qui l'envoie ne change pas son origine. Derrière le proxy, rien n'est `local`, quelle que soit l'adresse annoncée. Un en-tête **présent** mais vide, ou dont la dernière entrée est vide ou illisible (`""`, `"8.8.8.8,"`), donne `internet` : seule l'**absence** de l'en-tête sur la boucle locale donne `local`.
 
 Le droit **Télécharger à distance** (`remote_download` du compte, donné par défaut, toujours `true` pour un administrateur) s'applique à tout ce qui n'est pas `local`, et au seul droit de **télécharger** une bibliothèque (`?download=1`) : sans lui, 403 `téléchargement non autorisé à distance`, et `GET /api/state` rend `download: false` pour chaque bibliothèque. La lecture (flux direct, remux, transcodage, liste VLC) et la boîte de réception ne dépendent pas de l'origine. Valable à la requête suivante.
+
+Ce que le droit ne protège pas : un compte qui garde « lire » peut toujours récupérer le fichier entier à distance (`/media/<id>/file` sans `download`, remux, liste VLC, pages d'un livre). Le droit retire le bouton et le téléchargement ; il n'empêche pas de copier ce qu'un lecteur reçoit. Pour cela, retirer aussi « lire ».
 
 ## Boîte de réception
 

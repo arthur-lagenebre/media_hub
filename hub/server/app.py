@@ -361,7 +361,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def transfer(self, kind, ref, title, library="", leave_empty=True):
         """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré."""
-        return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty, origin(self))
+        return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty, origin=origin(self))
 
     def send_file(self, path, mime=None, headers=None, track=None, attempt=None):
         """Le fichier, avec les requêtes Range (reprise, avance rapide, lecteur vidéo). `track` : de quoi inscrire l'envoi dans l'activité (une fonction sans argument qui rend `Handler.transfer(…)`), ouvert autour de l'envoi réel seulement :
@@ -719,12 +719,13 @@ def from_loopback(h):
 
 
 def forwarded(h, name):
-    """La dernière valeur de l'en-tête `name` (`X-Forwarded-For`, `X-Forwarded-Proto`) quand la connexion vient de la boucle locale ; None sinon, ou s'il est absent.
+    """La dernière valeur de l'en-tête `name` (`X-Forwarded-For`, `X-Forwarded-Proto`) quand la connexion vient de la boucle locale ; None si elle n'en vient pas ou si l'en-tête est ABSENT.
+    Un en-tête présent mais vide (`""`, `"8.8.8.8,"`) rend `""`, pas None : l'appelant ne doit pas le prendre pour une absence (`origin` en fait `internet`).
     La dernière, jamais la première : le proxy ajoute la sienne à la fin de ce que le client a pu écrire (plusieurs lignes d'en-tête comprises)."""
     if not from_loopback(h):
         return None
-    last = ",".join(h.headers.get_all(name, [])).rpartition(",")[2].strip()
-    return last or None
+    lines = h.headers.get_all(name, [])
+    return ",".join(lines).rpartition(",")[2].strip() if lines else None
 
 
 def origin(h):

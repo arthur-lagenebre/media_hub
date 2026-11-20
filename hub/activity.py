@@ -18,7 +18,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 
-from .origin import origin_of
 
 ACTIVE_SECONDS = 60             # une ligne reste tant qu'une connexion est ouverte, puis ce temps après sa dernière activité (le navigateur lit un moment depuis sa mémoire tampon sans rien demander)
 MAX_LINES = 500                 # au-delà, une nouvelle ligne remplace la ligne sans connexion la plus ancienne : demander un octet de milliers de fichiers ne gonfle pas le registre
@@ -169,9 +168,9 @@ class Activity:
 
     # --- Les transferts ---------------------------------------------------
     @contextmanager
-    def transfer(self, user, name, ref, kind, address, title="", library="", agent="", leave_empty=True, origin=None):
+    def transfer(self, user, name, ref, kind, address, title="", library="", agent="", leave_empty=True, *, origin):
         """Un transfert ouvert le temps du bloc, qui rend la fonction où compter les octets envoyés ; il se referme sur toute sortie, une coupure du client comprise.
-        Un transfert qui échoue avant le moindre octet ne laisse pas de ligne (un envoi refusé n'a rien envoyé). `origin` : celle de la requête (`origin_of` avec son `X-Forwarded-For`) ; absente, on la tire de `address` seule. `leave_empty=False` : un travail ouvert avant l'envoi (ffmpeg qui démarre, archive à construire) est listé pendant qu'il dure, mais ne laisse rien s'il n'a rien envoyé, même sans erreur (un HEAD, un 416)."""
+        Un transfert qui échoue avant le moindre octet ne laisse pas de ligne (un envoi refusé n'a rien envoyé). `origin` (obligatoire) : celle de la requête (`origin_of` avec son `X-Forwarded-For`) ; elle ne se déduit pas de `address`, qui peut venir de cet en-tête. `leave_empty=False` : un travail ouvert avant l'envoi (ffmpeg qui démarre, archive à construire) est listé pendant qu'il dure, mais ne laisse rien s'il n'a rien envoyé, même sans erreur (un HEAD, un 416)."""
         key = (user, ref, kind, address)
         with self.lock:
             now = self.clock()
@@ -179,7 +178,7 @@ class Activity:
             line = self.lines.get(key)
             if line is None:
                 self._make_room()
-                line = self.lines[key] = Line(user, name, ref, address, kind, clean_text(title, TITLE_MAX), clean_text(library, TITLE_MAX), origin or origin_of(address), short_agent(agent), now, now)
+                line = self.lines[key] = Line(user, name, ref, address, kind, clean_text(title, TITLE_MAX), clean_text(library, TITLE_MAX), origin, short_agent(agent), now, now)
             line.name, line.connections, line.last = name, line.connections + 1, now
         failed = False
         try:

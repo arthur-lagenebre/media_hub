@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+from email.message import Message
 from pathlib import Path
 
 from tests.rig import MiniHub
@@ -93,6 +94,20 @@ class TestHandlerOrigin(unittest.TestCase):
     def test_the_last_entry_of_the_header_is_the_one_the_proxy_wrote(self):
         self.assertEqual(app.origin(self.rig(PROXY, "192.168.0.5, 8.8.8.8")), "internet")       # la première, le client l'a choisie
         self.assertEqual(app.origin(self.rig(PROXY, "8.8.8.8, 100.101.102.103")), "tailscale")
+
+    def test_a_header_present_but_empty_or_unreadable_is_internet_and_only_its_absence_is_local(self):
+        for forwarded in ("", " ", "8.8.8.8,", "8.8.8.8, ", "pas-une-adresse"):
+            self.assertEqual(app.origin(self.rig(PROXY, forwarded)), "internet", repr(forwarded))
+        two_lines = coming_from(PROXY)(self.hub)
+        two_lines.headers = Message()
+        two_lines.headers["X-Forwarded-For"] = "8.8.8.8"
+        two_lines.headers["X-Forwarded-For"] = ""
+        self.assertEqual(app.origin(two_lines), "internet")
+        self.assertEqual(app.origin(self.rig(PROXY)), "local")
+
+    def test_an_empty_header_does_not_break_the_address_kept_against_brute_force(self):
+        for forwarded in ("", " ", "8.8.8.8,"):
+            self.assertEqual(app.client_ip(self.rig(PROXY, forwarded)), PROXY, repr(forwarded))        # repli sur la connexion, comme avant
 
     def user(self, remote_download):
         accounts.set_remote_download(self.hub.db, self.row["id"], remote_download)
@@ -256,9 +271,13 @@ class TestActivityOrigin(unittest.TestCase):
     def test_the_registry_gives_the_three_values(self):
         registry = Activity()
         for address, origin in (("192.168.1.5", "local"), ("100.101.102.103", "tailscale"), ("8.8.8.8", "internet")):
-            with registry.transfer("u1", "alice", f"e-{origin}", "direct", address) as count:
+            with registry.transfer("u1", "alice", f"e-{origin}", "direct", address, origin=origin) as count:
                 count(1)
         self.assertEqual(sorted(line["origin"] for line in registry.report()["transfers"]), ["internet", "local", "tailscale"])
+
+    def test_the_origin_is_never_guessed_from_the_address(self):
+        with self.assertRaises(TypeError):
+            Activity().transfer("u1", "alice", "e1", "direct", "192.168.1.5")
 
     def test_the_origin_of_the_request_wins_over_the_address_the_registry_keeps(self):
         registry = Activity()
