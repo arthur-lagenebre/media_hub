@@ -670,6 +670,19 @@
 
   // --- Bibliothèque ----------------------------------------------------------------
   // « Genre : Tous » : le nom d'un bouton de filtre en gras, sa valeur en poids normal ; la largeur du bouton est fixée par le CSS (.flt), la valeur trop longue est coupée
+  // Les compteurs d'une bibliothèque, séparés par « · » : chacun dans son `span` (insécable, voir style.css), la ligne ne se coupe qu'entre deux.
+  function paintCount(count, parts) {
+    H.clear(count);
+    parts.forEach(function (text, i) { if (i) count.appendChild(document.createTextNode(' · ')); count.appendChild(h('span', null, text)); });
+  }
+  // « 2 artistes · 1 album · 2 EP · 1 single » : EP et singles ne s'affichent que s'il y en a ; artistes et albums, toujours. Un ancien serveur (sans `eps` ni `singles`) garde « artistes · albums ».
+  // « EP » est invariable en français (« 2 EP ») mais pas en anglais (« 2 EPs ») : H.plural ne sait pas dire un pluriel identique au singulier dans une langue seulement.
+  function musicCounts(f) {
+    var parts = [H.plural(f.artists, 'artiste'), H.plural(f.albums, 'album')];
+    if (f.eps) parts.push(H.lang === 'fr' ? f.eps + ' EP' : H.plural(f.eps, 'EP', 'EPs'));
+    if (f.singles) parts.push(H.plural(f.singles, 'single'));
+    return parts;
+  }
   function filterLabel(btn, name, value) { btn.title = H.t('{name} :', { name: name }) + ' ' + value; H.clear(btn).appendChild(h('span', { class: 'lbl' }, [h('b', null, H.t('{name} :', { name: name })), ' ', h('span', { class: 'val' }, value)])); }
   var SORTS = {
     movies: [['title', H.t('Titre')], ['added', H.t('Ajouts récents')], ['year', H.t('Plus récents')], ['year-asc', H.t('Plus anciens')], ['rating', H.t('Mieux notés')], ['my-rating', H.t('Mon avis')]],      // films et séries ; « Mieux notés » : la note TMDB ; « Mon avis » : celui du compte (J'aime, Bof, sans avis, Je n'aime pas)
@@ -713,7 +726,7 @@
       bGenre.hidden = !facets.genres.length;
       var word = { movies: 'film', shows: 'série', music: artistMode() ? 'artiste' : 'album', books: 'série' }[kind] || 'élément';
       var music = kind === 'music' && typeof facets.albums === 'number';          // la musique compte toujours les artistes et les albums de ce que les filtres laissent, quelle que soit la vue
-      count.textContent = !total ? '' : music ? H.plural(facets.artists, 'artiste') + ' · ' + H.plural(facets.albums, 'album') : sagaMode() && facets.sagas ? H.plural(facets.films, 'film') + ' · ' + H.plural(facets.sagas, 'saga') : H.plural(total, word);
+      paintCount(count, !total ? [] : music ? musicCounts(facets) : sagaMode() && facets.sagas ? [H.plural(facets.films, 'film'), H.plural(facets.sagas, 'saga')] : [H.plural(total, word)]);
     }
     // Les accès rapides des livres : une pastille par section (Manga, BD, Comics, Artbook…), avec ce qu'elle contient.
     function paintQuick() {

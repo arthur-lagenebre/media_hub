@@ -6591,6 +6591,74 @@ class TestLibraryToolbar(UiCase):
         self.assertEqual(self.view(".count").inner_text(), f"{total} série" + ("s" if total > 1 else ""))
 
 
+class TestMusicReleaseCounters(UiCase):
+    """La ligne de compteurs de la musique sépare albums, EP et singles (« Discovery » de Daft Punk est un album sans type ; Air a deux EP et deux singles) ; un compteur d'EP ou de singles à zéro ne s'affiche pas."""
+
+    @classmethod
+    def add_media(cls, root):
+        for year, title, kind in (("2000", "Maxi", "ep"), ("2001", "Court", "EP"), ("2002", "Face A", "single"), ("2003", "Face B", "single")):
+            path = fixtures.write_flac(root / "srv" / "Musique" / "Air" / f"{year} - {title}" / "01 - Piste.flac", "Piste", title, "Air", 1, 1, year=year, genre="Pop")
+            fixtures.add_tags(path, ("RELEASETYPE", kind))
+
+    def choose(self, view):
+        self.api("/api/me/settings", {"music_view": view})
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+
+    def counter(self):
+        self.view(".grid .card").first.wait_for()
+        return self.view(".count")
+
+    def test_the_line_gives_the_albums_the_eps_and_the_singles_in_both_views(self):
+        for view in ("albums", "artists"):
+            with self.subTest(view=view):
+                self.choose(view)
+                self.open("#/l/musique")
+                expect(self.counter()).to_have_text("2 artistes · 1 album · 2 EP · 2 singles")         # « EP » ne prend pas de s
+
+    def test_a_count_at_zero_hides_the_eps_and_the_singles_but_never_the_albums(self):
+        for view in ("albums", "artists"):
+            with self.subTest(view=view):
+                self.choose(view)
+                self.open("#/l/musique?genre=Electronic")
+                expect(self.counter()).to_have_text("1 artiste · 1 album")
+                self.open("#/l/musique")
+                self.counter()
+                self.view(".tools input").fill("face a")
+                expect(self.view(".count")).to_have_text("1 artiste · 0 album · 1 single")
+
+    def test_without_the_new_fields_the_line_stays_the_old_one(self):
+        def old(route):
+            response = route.fetch()
+            out = response.json()
+            out.pop("eps", None), out.pop("singles", None)
+            route.fulfill(response=response, json=out)
+        self.page.route("**/api/library/musique*", old)
+        self.open("#/l/musique")
+        expect(self.counter()).to_have_text("2 artistes · 1 album")
+
+    def test_the_line_breaks_between_two_counters_never_inside_one(self):
+        self.use_context(viewport={"width": 390, "height": 800}, has_touch=True)
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('phone'))")
+        self.open("#/l/musique")
+        count = self.counter()
+        expect(count).to_have_text("2 artistes · 1 album · 2 EP · 2 singles")
+        self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        count.evaluate("el => { el.style.width = '7em'; }")                                        # trop étroit pour deux compteurs : chacun va à la ligne en entier
+        lines = count.locator("span").evaluate_all("els => els.map(e => e.getClientRects().length)")
+        self.assertEqual(lines, [1, 1, 1, 1])
+        self.assertGreater(count.evaluate("el => el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight || 20)"), 1.5)
+
+    def test_the_line_is_in_english(self):
+        self.context.add_cookies([{"name": "hub_lang", "value": "en", "url": self.base}])
+        self.page.add_init_script("localStorage.setItem('hub.lang', JSON.stringify('en'))")
+        self.open("#/l/musique")
+        expect(self.counter()).to_have_text("2 artists · 1 album · 2 EPs · 2 singles")
+        self.view(".tools input").fill("face a")
+        expect(self.view(".count")).to_have_text("1 artist · 0 albums · 1 single")
+        self.view(".tools input").fill("maxi")
+        expect(self.view(".count")).to_have_text("1 artist · 0 albums · 1 EP")
+
+
 class TestArtistsView(UiCase):
     """La bibliothèque de musique par artiste : un artiste par carte, sans ses albums, quand le compte l'a choisi dans ses paramètres."""
 
