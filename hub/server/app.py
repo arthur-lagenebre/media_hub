@@ -67,7 +67,7 @@ from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, t
 from ..scan.common import STACK_MAX
 from .jobs import Jobs
 
-API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
+API_VERSION = 2             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
 CHUNK = 256 * 1024
 DOWNLOADS_ASKED = 50        # les tentatives de téléchargement que /api/downloads accepte en une question
 INBOX_DRAIN_SECONDS = 5    # un envoi refusé (POST /api/inbox) laisse au client ce temps, au plus, pour finir d'envoyer son corps avant que la connexion soit coupée
@@ -1484,7 +1484,8 @@ def artist_rows(rows):
         name = artist_name(albums[0]["grp"])
         out.append({"id": key, "lib": albums[0]["lib"], "type": "artist", "title": name, "grp": name, "letter": initial(name), "year": "", "summary": "",
                     "sort": ("~" if fold(name) in UNKNOWN_ARTISTS else "") + fold(name), "genres": json.dumps(sorted({g for a in albums for g in safe_json(a["genres"], [])}), ensure_ascii=False),
-                    "meta": json.dumps({"album": albums[0]["id"]}), "added": max(a["added"] for a in albums), "count": len(albums), "albums": [a["title"] for a in albums]})
+                    "meta": json.dumps({"album": albums[0]["id"]}), "added": max(a["added"] for a in albums), "count": len(albums), "albums": [a["title"] for a in albums],
+                    "kinds": Counter(release_kind(a) for a in albums)})
     return out
 
 
@@ -1634,11 +1635,23 @@ def artist_key(row):
     return meta_json(row["meta"]).get("artist_id") or fold(row["grp"])
 
 
+RELEASE_KINDS = {"ep": "eps", "single": "singles"}        # le compteur d'un type principal de sortie ; tout autre type (album, compilation, live, bande originale, aucun) compte comme album
+
+
+def release_kind(row):
+    """Le compteur où va une sortie : `eps`, `singles` ou `albums`, d'après son type principal (le premier de `release_types`, voir scan/music.py)."""
+    types = meta_json(row["meta"]).get("release_types") or [""]
+    return RELEASE_KINDS.get(str(types[0]).lower(), "albums")
+
+
 def music_counts(chosen, artists):
-    """(artistes, albums) de ce que la musique montre : en mode artistes, une carte par artiste portant son nombre d'albums ; en mode albums, une carte par album, et les artistes sont ceux de ces albums."""
-    if artists:
-        return len(chosen), sum(row["count"] for row in chosen)
-    return len({artist_key(row) for row in chosen}), len(chosen)
+    """{artists, albums, eps, singles} de ce que la musique montre : en mode artistes, une carte par artiste portant le décompte de ses sorties par type ; en mode albums, une carte par sortie,
+    et les artistes sont ceux de ces sorties. Les albums manquants (`wanted:`) ne sont pas des items : ils ne comptent pas."""
+    kinds = Counter()
+    for row in chosen:
+        kinds.update(row["kinds"] if artists else [release_kind(row)])
+    count = len(chosen) if artists else len({artist_key(row) for row in chosen})
+    return {"artists": count, "albums": kinds["albums"], "eps": kinds["eps"], "singles": kinds["singles"]}
 
 
 def genre_menu(genres, asked=""):
@@ -1652,11 +1665,11 @@ def genre_menu(genres, asked=""):
 
 def library_extras(out, kind, sections, absent, sagas, chosen, artists=False):
     """Les champs que la réponse n'a que dans certains cas : les sections des livres, les films qui manquent à une saga, le décompte des sagas d'une grille de sagas (un film de deux sagas ne compte qu'une fois),
-    le nombre d'artistes et d'albums de la musique (de tout ce que filtrent les critères, pas seulement de la page)."""
+    le nombre d'artistes, d'albums, d'EP et de singles de la musique (de tout ce que filtrent les critères, pas seulement de la page)."""
     if kind == "books":
         out["sections"] = sections_json(sections)
     if kind == "music":
-        out["artists"], out["albums"] = music_counts(chosen, artists)
+        out.update(music_counts(chosen, artists))
     if absent:
         out["missing"] = absent
     if sagas:
