@@ -177,6 +177,12 @@ class TestLoad(TempCase):
         self.assertEqual(self.load(HUB_MAX_STREAMS="0").max_streams, 1)
         self.assertEqual(self.load(HUB_MAX_STREAMS="-3").max_streams, 1)
 
+    def test_the_number_of_requests_per_account_defaults_to_twenty_and_is_at_least_one(self):
+        self.assertEqual(self.load().request_max, 20)
+        self.assertEqual(self.load(HUB_REQUEST_MAX="5").request_max, 5)
+        for value in ("1", "0", "-3"):
+            self.assertEqual(self.load(HUB_REQUEST_MAX=value).request_max, 1)
+
     def test_the_inbox_limits_default_to_safe_values_in_bytes(self):
         cfg = self.load()
         self.assertEqual((cfg.inbox_keep_free, cfg.inbox_max_uploads), (10240 << 20, 2))
