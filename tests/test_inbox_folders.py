@@ -393,6 +393,16 @@ class TestMigration(FolderCase):
         self.assertEqual(self.recorded("ABC"), "abc")
         self.assertEqual(self.dirs(), ["abc"])
 
+    def test_a_folder_that_differs_only_by_case_but_is_another_one_is_not_overwritten(self):
+        self.legacy("ABC", "abc", files=("film.mkv",), parts=())
+        real = os.path.lexists
+        with mock.patch.object(inbox.os.path, "lexists", lambda path: Path(path).name == "abc" or real(path)), mock.patch.object(inbox.os.path, "samefile", return_value=False):
+            with self.assertRaises(InboxError) as caught:
+                self.inbox._rename_folder("ABC", "abc")
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(self.dirs(), ["ABC"])
+        self.assertIsNone(self.recorded("ABC"))
+
     def test_a_new_inbox_is_not_a_migration(self):
         add_user(self.db, "default", "Arthur")
         self.assertEqual(self.inbox.migrate(), 0)
