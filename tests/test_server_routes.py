@@ -496,6 +496,48 @@ class TestMusicCounts(ArtistCase):
         self.assertEqual(self.counts("view=artists"), (3, 4, 3))
 
 
+class TestMusicReleaseKinds(RouteCase):
+    """Les compteurs de la musique séparent albums, EP et singles d'après le type principal (le premier de `release_types`) ; tout ce qui n'est ni `ep` ni `single` est un album."""
+    kind = "music"
+
+    def setUp(self):
+        super().setUp()
+        rows = [("a1", "Album", "Daft Punk", "ar1", ["album"], ["Rock"]), ("a2", "Maxi", "Daft Punk", "ar1", ["ep"], ["Rock"]), ("a3", "Face A", "Daft Punk", "ar1", ["single"], []),
+                ("a4", "Compil", "Daft Punk", "ar1", ["compilation"], []), ("b1", "Concert", "Air", "ar2", ["live"], []), ("b2", "Sans type", "Air", "ar2", None, []),
+                ("b3", "Court", "Air", "ar2", ["EP"], []), ("b4", "Tube", "Air", "ar2", ["single", "live"], [])]
+        self.fill([item(ident, "album", title=title, grp=grp, genres=json.dumps(genres), meta={"artist_id": artist, **({"release_types": kinds} if kinds is not None else {})})
+                   for ident, title, grp, artist, kinds, genres in rows], [])
+
+    def counts(self, query=""):
+        out = self.get("/api/library/lib?" + query).json()
+        return out["artists"], out["albums"], out["eps"], out["singles"]
+
+    def test_each_release_counts_once_by_its_main_type_in_both_views(self):
+        self.assertEqual(self.counts(), (2, 4, 2, 2))
+        self.assertEqual(self.counts("view=artists"), (2, 4, 2, 2))
+
+    def test_a_compilation_a_live_and_a_release_without_type_count_as_albums(self):
+        for title in ("compil", "concert", "sans type"):
+            with self.subTest(title=title):
+                self.assertEqual(self.counts("q=" + quote(title)), (1, 1, 0, 0))
+
+    def test_the_counts_follow_the_search_and_the_genre(self):
+        self.assertEqual(self.counts("q=air"), (1, 2, 1, 1))
+        self.assertEqual(self.counts("view=artists&q=air"), (1, 2, 1, 1))
+        self.assertEqual(self.counts("genre=Rock"), (1, 1, 1, 0))
+        self.assertEqual(self.counts("view=artists&genre=Rock"), (1, 2, 1, 1))        # le genre garde l'artiste, avec toutes ses sorties
+        self.assertEqual(self.counts("view=artists&q=compil"), (1, 2, 1, 1))          # le titre d'une sortie trouve son artiste
+
+    def test_a_wanted_album_never_counts(self):
+        self.db.kv_set("wanted:lib", {"ar1": [{"year": "1997", "title": "Homework", "key": "1997 - Homework", "cover": "Daft/1997 - Homework.jpg"}]})
+        self.assertEqual(self.counts(), (2, 4, 2, 2))
+        self.assertEqual(self.counts("view=artists"), (2, 4, 2, 2))
+
+    def test_the_card_of_an_artist_still_counts_all_its_releases(self):
+        cards = {c["title"]: c["n"] for c in self.get("/api/library/lib?view=artists").json()["items"]}
+        self.assertEqual(cards, {"Daft Punk": 4, "Air": 4})
+
+
 class TestNoMusicCountsElsewhere(RouteCase):
     def test_other_libraries_do_not_carry_them(self):
         self.fill([item("m1")], [])

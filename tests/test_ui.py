@@ -6787,6 +6787,196 @@ class TestLibraryToolbar(UiCase):
         self.assertEqual(self.view(".count").inner_text(), f"{total} série" + ("s" if total > 1 else ""))
 
 
+class TestMusicReleaseCounters(UiCase):
+    """La ligne de compteurs de la musique sépare albums, EP et singles (« Discovery » de Daft Punk est un album sans type ; Air a deux EP et deux singles) ; un compteur d'EP ou de singles à zéro ne s'affiche pas."""
+
+    @classmethod
+    def add_media(cls, root):
+        for year, title, kind in (("2000", "Maxi", "ep"), ("2001", "Court", "EP"), ("2002", "Face A", "single"), ("2003", "Face B", "single")):
+            path = fixtures.write_flac(root / "srv" / "Musique" / "Air" / f"{year} - {title}" / "01 - Piste.flac", "Piste", title, "Air", 1, 1, year=year, genre="Pop")
+            fixtures.add_tags(path, ("RELEASETYPE", kind))
+
+    def choose(self, view):
+        self.api("/api/me/settings", {"music_view": view})
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+
+    def counter(self):
+        self.view(".grid .card").first.wait_for()
+        return self.view(".count")
+
+    def test_the_line_gives_the_albums_the_eps_and_the_singles_in_both_views(self):
+        for view in ("albums", "artists"):
+            with self.subTest(view=view):
+                self.choose(view)
+                self.open("#/l/musique")
+                expect(self.counter()).to_have_text("2 artistes · 1 album · 2 EP · 2 singles")         # « EP » ne prend pas de s
+
+    def test_a_count_at_zero_hides_the_eps_and_the_singles_but_never_the_albums(self):
+        for view in ("albums", "artists"):
+            with self.subTest(view=view):
+                self.choose(view)
+                self.open("#/l/musique?genre=Electronic")
+                expect(self.counter()).to_have_text("1 artiste · 1 album")
+                self.open("#/l/musique")
+                self.counter()
+                self.view(".tools input").fill("face a")
+                expect(self.view(".count")).to_have_text("1 artiste · 0 album · 1 single")
+
+    def test_without_the_new_fields_the_line_stays_the_old_one(self):
+        def old(route):
+            response = route.fetch()
+            out = response.json()
+            out.pop("eps", None), out.pop("singles", None)
+            route.fulfill(response=response, json=out)
+        self.page.route("**/api/library/musique*", old)
+        self.open("#/l/musique")
+        expect(self.counter()).to_have_text("2 artistes · 1 album")
+
+    def test_the_line_breaks_between_two_counters_never_inside_one(self):
+        self.use_context(viewport={"width": 390, "height": 800}, has_touch=True)
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('phone'))")
+        self.open("#/l/musique")
+        count = self.counter()
+        expect(count).to_have_text("2 artistes · 1 album · 2 EP · 2 singles")
+        self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        count.evaluate("el => { el.style.width = '7em'; }")                                        # trop étroit pour deux compteurs : chacun va à la ligne en entier
+        lines = count.locator("span").evaluate_all("els => els.map(e => e.getClientRects().length)")
+        self.assertEqual(lines, [1, 1, 1, 1])
+        self.assertGreater(count.evaluate("el => el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight || 20)"), 1.5)
+
+    def test_the_line_is_in_english(self):
+        self.context.add_cookies([{"name": "hub_lang", "value": "en", "url": self.base}])
+        self.page.add_init_script("localStorage.setItem('hub.lang', JSON.stringify('en'))")
+        self.open("#/l/musique")
+        expect(self.counter()).to_have_text("2 artists · 1 album · 2 EPs · 2 singles")
+        self.view(".tools input").fill("face a")
+        expect(self.view(".count")).to_have_text("1 artist · 0 albums · 1 single")
+        self.view(".tools input").fill("maxi")
+        expect(self.view(".count")).to_have_text("1 artist · 0 albums · 1 EP")
+
+
+class TestMusicPreload(UiCase):
+    """La piste suivante se charge dans un second <audio> pendant les dernières secondes de la piste en cours, puis les deux s'échangent à la fin.
+    « Long » a trois pistes de 30 s : au départ, la fin est loin ; on y saute en plaçant `currentTime`, sans attendre."""
+
+    TITLES = ("Un", "Deux", "Trois")
+    ACTIVE = "document.getElementById('audio')"
+
+    @classmethod
+    def add_media(cls, root):
+        for n, title in enumerate(cls.TITLES, 1):
+            fixtures.write_flac(root / "srv" / "Musique" / "Air" / "2004 - Long" / f"{n:02d} - {title}.flac", title, "Long", "Air", n, 3, year="2004", seconds=30)
+
+    def setUp(self):
+        super().setUp()
+        self.tracks = [e["id"] for e in self.entries("musique", "Long")]
+        self.asked = []                                                        # (piste, instant) de chaque requête de fichier de l'album
+        self.page.on("request", lambda r: self.asked.extend((t, time.monotonic()) for t in self.tracks if f"/media/{t}/file" in r.url))
+
+    def begin(self):
+        self.open("#/l/musique")
+        card = self.view(".grid .card", has_text="Long")
+        card.hover()
+        card.locator(".qbtn").first.click()
+        self.playing(0)
+
+    def playing(self, n):
+        """Attend que la piste `n` joue, dans l'élément actif."""
+        expect(self.page.locator("#abar .ti")).to_have_text(self.TITLES[n])
+        self.page.wait_for_function(f"(() => {{ var a = {self.ACTIVE}; return a.src.indexOf('/media/{self.tracks[n]}/file') >= 0 && !a.paused && a.currentTime > 0 && a.duration > 0; }})()")
+
+    def near_end(self, left=1):
+        self.page.evaluate(f"(() => {{ var a = {self.ACTIVE}; a.currentTime = a.duration - {left}; }})()")
+
+    def asked_for(self, n):
+        return [at for t, at in self.asked if t == self.tracks[n]]
+
+    def active_players(self):
+        return self.page.evaluate("Array.prototype.filter.call(document.querySelectorAll('audio'), function (a) { return !a.paused; }).length")
+
+    def test_the_next_track_is_asked_before_the_end_of_the_current_one(self):
+        self.begin()
+        self.assertEqual(self.asked_for(1), [])                                 # 30 s restantes : rien n'est encore chargé
+        self.page.evaluate(f"{self.ACTIVE}.pause()")                           # en pause, la piste ne peut pas finir : seul le préchargement demande la suivante
+        with self.page.expect_request(lambda r: f"/media/{self.tracks[1]}/file" in r.url, timeout=10000):
+            self.near_end(5)
+        self.assertIn(f"/media/{self.tracks[0]}/file", self.page.evaluate(f"{self.ACTIVE}.src"))
+        expect(self.page.locator("#abar .ti")).to_have_text("Un")
+        self.assertEqual(self.active_players(), 0)                             # préchargée, pas jouée
+
+    def test_at_the_end_the_next_track_plays_at_once_and_only_one_plays(self):
+        self.begin()
+        self.near_end(5)
+        self.page.wait_for_function("(() => { var n = document.getElementById('audio-next'); return !!n && n.readyState >= 3; })()")
+        before = len(self.asked_for(1))
+        self.near_end(0.3)
+        self.playing(1)
+        self.assertEqual(self.active_players(), 1)
+        self.assertTrue(self.page.evaluate("document.getElementById('audio-next').paused && !document.getElementById('audio-next').getAttribute('src')"))
+        self.assertGreaterEqual(before, 1)
+
+    def test_a_manual_jump_cancels_the_preload(self):
+        self.begin()
+        with self.page.expect_request(lambda r: f"/media/{self.tracks[1]}/file" in r.url):
+            self.near_end(5)
+        self.page.locator("#abar [aria-label=\"File d’attente\"]").click()
+        self.page.locator(".menu.queue .qrow").nth(2).locator(".qt").click()         # saute à la piste 3
+        jumped = time.monotonic()
+        self.playing(2)
+        self.assertEqual(self.page.evaluate("(() => { var n = document.getElementById('audio-next'); return [n.getAttribute('src'), n.networkState]; })()"), [None, 0])   # NETWORK_EMPTY : plus rien ne charge
+        self.page.wait_for_function(f"{self.ACTIVE}.currentTime > 0.5")
+        self.assertEqual([at for at in self.asked_for(1) if at > jumped], [])     # pas de nouvelle requête vers l'ancienne suivante
+        self.assertEqual(self.active_players(), 1)
+
+    def test_the_queue_changing_under_the_preload_cancels_it(self):
+        self.begin()
+        with self.page.expect_request(lambda r: f"/media/{self.tracks[1]}/file" in r.url):
+            self.near_end(5)
+        self.page.locator("#abar [aria-label=\"File d’attente\"]").click()
+        self.page.locator(".menu.queue [aria-label=\"Retirer de la file\"]").nth(1).click()     # la suivante quitte la file
+        self.page.wait_for_function("!document.getElementById('audio-next').getAttribute('src')")
+        self.page.keyboard.press("Escape")
+        self.near_end(0.3)
+        self.playing(1 + 1)                                                    # c'est « Trois » qui suit
+
+    def test_never_more_than_two_audio_elements_after_several_tracks(self):
+        self.begin()
+        for n in (1, 2):
+            self.near_end(5)
+            self.page.wait_for_function("(() => { var n = document.getElementById('audio-next'); return !!n && !!n.getAttribute('src'); })()")
+            self.near_end(0.3)
+            self.playing(n)
+            self.assertEqual(self.active_players(), 1)
+        self.assertEqual(self.page.evaluate("document.querySelectorAll('audio').length"), 2)
+
+    def test_when_the_browser_refuses_the_preloaded_element_the_next_track_still_plays(self):
+        """Safari (iPhone, iPad) n'autorise la lecture sans geste que sur un élément déjà joué : le second <audio> se voit refuser `play()`. La suivante joue alors dans l'ancien élément, comme avant le préchargement."""
+        self.begin()
+        self.page.evaluate("() => { document.getElementById('audio-next').play = function () { return Promise.reject(new DOMException('refusé', 'NotAllowedError')); }; }")
+        self.near_end(5)
+        self.page.wait_for_function("!!document.getElementById('audio-next').getAttribute('src')")
+        self.near_end(0.3)
+        self.playing(1)
+        self.assertEqual(self.active_players(), 1)
+        self.assertEqual(self.page.evaluate("document.querySelectorAll('audio').length"), 2)
+        self.assertTrue(self.page.evaluate("!document.getElementById('audio-next').getAttribute('src')"))       # l'élément refusé s'est vidé : il resservira
+
+    def test_volume_and_speed_follow_the_track_that_plays(self):
+        self.begin()
+        self.page.locator("#abar .btn.spd").click()
+        self.page.locator(".veil .opt", has_text="1,5×").click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.page.locator("#abar .vol").fill("0.3")
+        self.near_end(5)
+        self.page.wait_for_function("!!document.getElementById('audio-next').getAttribute('src')")
+        self.near_end(0.3)
+        self.playing(1)
+        self.assertEqual(self.page.evaluate(f"[{self.ACTIVE}.playbackRate, {self.ACTIVE}.volume]"), [1.5, 0.3])
+        self.page.locator("#abar .vol").fill("0.6")
+        self.assertEqual(self.page.evaluate(f"{self.ACTIVE}.volume"), 0.6)
+        expect(self.page.locator("#abar .btn.spd")).to_have_text("1,5×")
+
+
 class TestArtistsView(UiCase):
     """La bibliothèque de musique par artiste : un artiste par carte, sans ses albums, quand le compte l'a choisi dans ses paramètres."""
 

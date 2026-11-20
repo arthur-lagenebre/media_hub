@@ -18,6 +18,8 @@
     'saison': 'season', 'saisons': 'seasons',
     'piste': 'track', 'pistes': 'tracks',
     'album': 'album', 'albums': 'albums',
+    'EP': 'EP', 'EPs': 'EPs',
+    'single': 'single', 'singles': 'singles',
     'artiste': 'artist', 'artistes': 'artists',
     'série': 'series', 'séries': 'series',
     'élément': 'item', 'éléments': 'items',

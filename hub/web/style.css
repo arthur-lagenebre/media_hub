@@ -147,6 +147,7 @@ body.has-audio #views { padding-bottom: 5.5rem; }
 .tools { display: flex; flex-wrap: wrap; align-items: center; padding: 0.3rem var(--gut) 0.6rem; }
 .tools > * { margin: 0 0.7rem 0.6rem 0; }
 .tools .count { margin-left: auto; color: var(--mute); font-size: 0.9rem; }
+.tools .count span { white-space: nowrap; }      /* « 2 EP » ne se coupe pas : la ligne passe à la ligne entre deux compteurs */
 /* Boutons de filtre « Genre : Tous » : largeur fixe (elle ne dépend pas de la valeur choisie), nom en gras, valeur en poids normal, coupée par « … » si elle est trop longue */
 .tools .btn.flt { width: 11.5rem; justify-content: flex-start; }
 .tools .btn.flt.wide { width: 14.5rem; }
