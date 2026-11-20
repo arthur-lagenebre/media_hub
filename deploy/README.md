@@ -10,7 +10,7 @@ media_hub  ── :8080 ──►  http://192.168.0.42:8080         (télé, à 
 
 **L'adresse `https://nas…` est ouverte à tout Internet** (Tailscale Funnel) : voir [Sécurité](#sécurité) et [Ouvrir à Internet (Funnel)](#ouvrir-à-internet-funnel) avant de la donner à quelqu'un.
 
-Le conteneur `media_hub` est l'**image publiée** à chaque version par le workflow `Image` : `ghcr.io/arthur-lagenebre/media_hub:<version>` (avec `media_library`, Pillow et un ffmpeg de Debian dedans), à un **numéro précis**, jamais `latest`. Mettre à jour, c'est changer ce numéro : voir [Mettre à jour](#mettre-à-jour) et [Revenir à la version d'avant](#revenir-à-la-version-davant). L'ancienne façon (sources montées dans `python:3.13-slim`) reste possible pour le développement ou un dépannage : voir [Variante : sources montées](#variante--sources-montées-dans-python313-slim).
+Le conteneur `media_hub` est l'**image publiée** à chaque version par le workflow `Image` : `ghcr.io/arthur-lagenebre/media_hub:<version>` (avec `media_library`, Pillow et un ffmpeg de Debian dedans), à un **numéro précis**, jamais `latest`. Mettre à jour, c'est changer ce numéro : voir [Mettre à jour](#mettre-à-jour) et [Revenir à la version d'avant](#revenir-à-la-version-davant). L'ancienne façon (sources montées dans une image Python nue) reste possible pour le développement ou un dépannage : voir [Variante : sources montées](#variante--sources-montées-dans-python315-slim).
 
 Le `media_hub` remplace l'ancien `updater` (page d'accueil + boutons « Mettre à jour » qui générait des pages HTML) : l'interface a son propre bouton de mise à jour. Tu peux garder le dossier Tailscale (`tailscale/`) tel quel : l'état de connexion est réutilisé, `serve.json` est le même.
 
@@ -26,7 +26,7 @@ Sur un dataset d'applications (ici `/mnt/tank/apps/media`, adapte) :
   tailscale-config/   y copier deploy/serve.json
 ```
 
-Le code n'est plus copié sur le NAS : `media_hub` et `media_library` sont dans l'image, Pillow aussi. Les dossiers `media_hub/` et `media_library/` (et `media_hub-data/pylib/`) ne servent qu'à la [variante à sources montées](#variante--sources-montées-dans-python313-slim) : sans elle, tu peux les supprimer une fois la bascule vérifiée.
+Le code n'est plus copié sur le NAS : `media_hub` et `media_library` sont dans l'image, Pillow aussi. Les dossiers `media_hub/` et `media_library/` (et `media_hub-data/pylib/`) ne servent qu'à la [variante à sources montées](#variante--sources-montées-dans-python315-slim) : sans elle, tu peux les supprimer une fois la bascule vérifiée.
 
 Facultatif : un dataset à part, `/mnt/tank/HubReception`, pour la boîte de réception (voir [Boîte de réception](#boîte-de-réception)) ; il n'est utilisé que si tu actives son montage dans le compose.
 
@@ -151,7 +151,7 @@ Depuis le shell web de TrueNAS (Apps > media-hub > Shell), lance seulement `pyth
 
 **Sauvegarde.** Les comptes, la progression, les playlists et le reste de ce qui ne se refait pas sont dans `media_hub-data` : voir [Sauvegarder et restaurer](#sauvegarder-et-restaurer).
 
-**Hachage des mots de passe.** Le serveur utilise `scrypt` si l'OpenSSL de Python le fournit (c'est le cas de l'image du hub, bâtie sur `python:3.15-slim`, comme de `python:3.13-slim`). Vérifie-le :
+**Hachage des mots de passe.** Le serveur utilise `scrypt` si l'OpenSSL de Python le fournit (c'est le cas de l'image du hub, bâtie sur `python:3.15-slim`, comme de la variante à sources montées). Vérifie-le :
 
 ```bash
 docker exec media-hub python -c "import hashlib; print(hasattr(hashlib,'scrypt'))"
@@ -441,12 +441,12 @@ Efface ensuite `test-funnel.mkv` de la boîte (téléchargement/suppression dans
 
 C'est la voie de déploiement. À chaque étiquette de version (`vX.Y.Z`, posée par `/release`), `.github/workflows/image.yml` construit l'image (`deploy/Dockerfile`), l'essaie et la publie : `ghcr.io/arthur-lagenebre/media_hub:<version>` (et `latest`, que le compose n'utilise **pas**). Elle contient `media_library` (dans `/app/media_library`, `HUB_REPO` déjà réglé), le ffmpeg de Debian et Pillow. Elle écoute `0.0.0.0:8080`, garde ses données dans `/data` et refuse de démarrer sans `HUB_PASSWORD` tant que la base n'a pas de compte. Les bibliothèques se montent sous `/srv`. Le compose y ajoute le ffmpeg figé (`/opt/ffmpeg`), qui l'emporte sur celui de l'image.
 
-### Variante : sources montées dans `python:3.13-slim`
+### Variante : sources montées dans `python:3.15-slim`
 
 L'ancienne façon, pour le développement ou un dépannage (essayer un correctif sans publier de version) : le code est copié sur le NAS (`${APPS}/media_hub` et `${APPS}/media_library`, voisins) et monté dans une image Python nue, et Pillow s'installe dans `media_hub-data/pylib` au premier démarrage. Une mise à jour = recopier `hub/` puis redémarrer l'application ; on ne sait plus exactement quelle version tourne. Dans le service `media_hub`, remplace `image:` et ajoute :
 
 ```yaml
-    image: python:3.13-slim
+    image: python:3.15-slim
     working_dir: /app/media_hub
     command: ["sh", "-c", "python -c 'import PIL' 2>/dev/null || pip install -q --no-cache-dir --disable-pip-version-check --target /data/pylib pillow || echo 'media_hub : Pillow non installé (facultatif)'; exec python -m hub"]
     environment:            # à ajouter aux variables existantes

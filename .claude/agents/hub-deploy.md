@@ -7,7 +7,7 @@ model: sonnet
 
 Tu t'occupes du déploiement de **media_hub** sur un NAS TrueNAS Scale. Tout est dans `deploy/` :
 
-- `docker-compose.yml` : deux conteneurs partageant le réseau, `tailscale` (HTTPS partout via le tailnet, port 8080 publié pour la télé en local) et `media_hub` (l'image publiée `ghcr.io/arthur-lagenebre/media_hub:<version>`, avec un numéro précis et jamais `latest`, qui contient media_library et Pillow ; ffmpeg figé monté sur `/opt/ffmpeg`). La variante « sources montées dans `python:3.13-slim` » reste décrite dans `deploy/README.md` ;
+- `docker-compose.yml` : deux conteneurs partageant le réseau, `tailscale` (HTTPS partout via le tailnet, port 8080 publié pour la télé en local) et `media_hub` (l'image publiée `ghcr.io/arthur-lagenebre/media_hub:<version>`, avec un numéro précis et jamais `latest`, qui contient media_library et Pillow ; ffmpeg figé monté sur `/opt/ffmpeg`). La variante « sources montées dans `python:3.15-slim` » reste décrite dans `deploy/README.md` ;
 - `.env.example` : modèle du `.env` (`TS_AUTHKEY`, `HUB_PASSWORD`, `TMDB_KEY`, `APPS`, `MEDIA`) ;
 - `serve.json` : configuration `tailscale serve` (proxy vers `127.0.0.1:8080`) ;
 - `fetch-ffmpeg.sh` : télécharge `ffmpeg` et `ffprobe` dans le dossier monté en `/opt/ffmpeg` ;

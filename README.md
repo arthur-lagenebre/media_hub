@@ -3,7 +3,7 @@
 [![Tests](https://github.com/arthur-lagenebre/media_hub/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/arthur-lagenebre/media_hub/actions/workflows/tests.yml)
 [![Version](https://img.shields.io/github/v/tag/arthur-lagenebre/media_hub?label=version)](https://github.com/arthur-lagenebre/media_hub/tags)
 [![Image](https://github.com/arthur-lagenebre/media_hub/actions/workflows/image.yml/badge.svg)](https://github.com/arthur-lagenebre/media_hub/actions/workflows/image.yml)
-![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue)
+![Python](https://img.shields.io/badge/python-3.14%20%7C%203.15-blue)
 ![Dépendances](https://img.shields.io/badge/dépendances-aucune-brightgreen)
 
 Le serveur de la médiathèque : **films, séries, musique, livres**, depuis le NAS, dans un navigateur ou sur la télé (Android TV, Google TV, Fire TV). Même idée que Plex ou Jellyfin, mais sur mesure : rien à installer côté client, aucune dépendance pip (Pillow est facultatif), un seul processus Python.
@@ -250,7 +250,7 @@ Les workflows sont dans `.github/workflows/` ; l'environnement commun (media_lib
 
 | Workflow | Quand | Ce qu'il fait |
 | --- | --- | --- |
-| `tests.yml` | chaque PR, chaque push sur `main` | le serveur sur Python 3.13 et 3.14 (l'interface dans Chromium n'y passe plus : à lancer à la main) |
+| `tests.yml` | chaque PR, chaque push sur `main` | le serveur sur Python 3.14 et 3.15 (l'interface dans Chromium n'y passe plus : à lancer à la main) |
 | `version.yml` | chaque PR | relit la règle de `/ship` : `__version__`, `API_VERSION`, `SCHEMA_VERSION` (échec si un numéro baisse, avertissement si la version ne suit pas `hub/`) |
 | `quality.yml` | PR qui touche du Python de `hub/` | `dryer` (aucune paire de score 0,8 ou plus) |
 | `nightly.yml` | chaque nuit si le commit de `main` n'a pas encore été entièrement traité, ou à la main | `crapper` (CRAP 10 au plus sur tout `hub/`, avec l'interface) et `mutator` sur tout `hub/`, en parties parallèles qui reprennent d'une passe à l'autre (`hub/server` sur dix jobs) |
