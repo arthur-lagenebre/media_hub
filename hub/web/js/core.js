@@ -227,6 +227,9 @@
     change[name] = value;
     return H.api('/api/me/settings', change).then(function (res) { H.session.settings = res.settings; return res.settings; });
   };
+  // « Masquer les épisodes non vus » : vrai quand l'épisode `e` (un fichier de l'API) est à cacher, c'est-à-dire que le compte a choisi de les masquer et ne l'a pas commencé (pas de `progress`).
+  // Un épisode en cours ou vu reste net. La seule décision : chaque vue la demande en se dessinant, et elle se redessine au retour (une fiche, l'accueil), ce qui suit le réglage et la progression sans recharger.
+  H.spoiler = function (e) { return H.setting('hide_spoilers') === 'hide' && !(e && e.progress); };
   // Les langues qu'un compte peut préférer pour le son et les sous-titres (celles que le serveur connaît : subs.LANG_NAMES), chacune nommée dans sa langue : un nom propre, il ne se traduit pas.
   H.spoken = [['fr', 'Français'], ['en', 'English'], ['es', 'Español'], ['de', 'Deutsch'], ['it', 'Italiano'], ['ja', '日本語'], ['pt', 'Português'], ['nl', 'Nederlands'], ['sv', 'Svenska'],
     ['da', 'Dansk'], ['no', 'Norsk'], ['fi', 'Suomi'], ['pl', 'Polski'], ['ru', 'Русский'], ['ko', '한국어'], ['zh', '中文'], ['ar', 'العربية'], ['he', 'עברית'], ['tr', 'Türkçe']];

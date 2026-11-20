@@ -1789,6 +1789,108 @@ class TestVideoResume(UiCase):
         self.assertEqual(shown, "0:40")
 
 
+class TestSpoilers(UiCase):
+    """« Masquer les épisodes non vus » (réglage de compte `hide_spoilers`) : le titre, le résumé et l'image d'un épisode pas encore commencé sont floutés ; le numéro et la durée restent lisibles."""
+
+    def setUp(self):
+        super().setUp()
+        self.dark = self.item("series", "Dark")
+        self.first, self.second, self.third = self.entries("series", "Dark")             # S1E1 « Pilote », S1E2 « Suite », S2E1 « Retour »
+        self.api(f"/api/item/{self.dark['id']}/seen", {"done": False})
+        self.hide(False)
+        self.addCleanup(self.hide, False)
+
+    def hide(self, on):
+        self.api("/api/me/settings", {"hide_spoilers": "hide" if on else "show"})
+
+    def row(self, entry, page=None):
+        return (page or self.page).locator(f"#views > .view:visible .ep[data-key='{entry['id']}']")
+
+    def sheet(self, page=None):
+        page = page or self.page
+        page.goto(self.base + "/#/i/" + self.dark["id"])
+        page.locator("#views > .view:visible .ep").first.wait_for()
+
+    def test_with_the_setting_off_nothing_is_blurred(self):
+        self.sheet()
+        expect(self.row(self.second).locator(".ti")).to_contain_text("Suite")
+        expect(self.view(".spoiler")).to_have_count(0)
+
+    def test_an_episode_not_started_is_blurred_one_in_progress_or_seen_is_not_and_its_number_and_length_stay_readable(self):
+        self.api("/api/progress", {"entry": self.second["id"], "position": 600, "duration": 3000})
+        self.api(f"/api/entry/{self.third['id']}/seen", {"done": True})
+        self.hide(True)
+        self.sheet()
+        unseen = self.row(self.first)                                                    # le seul des trois qui a une image
+        expect(unseen.locator(".ti .spoiler")).to_have_text("Pilote")                    # le vrai titre reste dans l'élément
+        expect(unseen.locator(".ti .spoiler")).to_have_attribute("aria-hidden", "true")
+        expect(unseen.locator(".ti")).to_contain_text("Épisode non vu")                  # ce que lit un lecteur d'écran
+        expect(unseen.locator(".su.spoiler")).to_have_text("Début.")
+        expect(unseen.locator("img.spoiler")).to_have_count(1)
+        expect(unseen.locator(".ti b")).to_have_text("1.")
+        expect(unseen.locator(".du")).to_have_text(re.compile(r"min"))
+        self.assertEqual(unseen.locator(".ti b, .du").evaluate_all("els => els.filter(e => e.closest('.spoiler')).length"), 0)
+        self.assertNotEqual(unseen.locator(".ti .spoiler").evaluate("e => getComputedStyle(e).filter"), "none")
+        expect(self.row(self.second).locator(".ti")).to_contain_text("Suite")
+        expect(self.row(self.second).locator(".spoiler")).to_have_count(0)               # en cours
+        self.view(".chip", has_text="Saison 2").click()
+        expect(self.row(self.third).locator(".ti")).to_contain_text("Retour")
+        expect(self.row(self.third).locator(".spoiler")).to_have_count(0)                # vu
+
+    def test_marking_an_episode_seen_removes_the_blur_without_reloading(self):
+        self.hide(True)
+        self.sheet()
+        expect(self.row(self.first).locator(".spoiler")).to_have_count(3)               # titre, résumé, image
+        self.page.evaluate("window.__same = 1")
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        self.page.locator(".menu .opt .lbl", has_text="Marquer comme vu").click()
+        expect(self.row(self.first).locator(".seen")).to_have_count(1)
+        expect(self.row(self.first).locator(".spoiler")).to_have_count(0)
+        self.assertEqual(self.page.evaluate("window.__same"), 1)
+
+    def test_resume_offers_the_next_episode_with_the_picture_of_the_show_and_without_its_title(self):
+        self.api("/api/progress", {"entry": self.first["id"], "position": 2950, "duration": 3000})
+        card = self.view(f".card[data-key='c{self.second['id']}']")
+        self.open("#/")
+        expect(card).to_contain_text("S1 · E2 · Suite")                                  # réglage coupé : le titre de l'épisode
+        self.hide(True)
+        asked = []
+        self.page.on("request", lambda r: asked.append(r.url))
+        self.page.reload()                                                               # les réglages se lisent au chargement de la page
+        expect(card.locator("img")).to_have_attribute("src", re.compile("/img/item/" + self.dark["id"]))
+        expect(card.locator("img")).to_have_class(re.compile(r"(^|\s)in(\s|$)"))               # l'image est arrivée : celle de l'épisode n'a jamais été demandée
+        self.assertEqual([u for u in asked if "/img/entry/" + self.second["id"] in u], [])
+        expect(card).to_contain_text("S1 · E2")
+        expect(card).not_to_contain_text("Suite")
+        expect(card.locator(".spoiler")).to_have_count(0)                                # pas de flou sur l'accueil
+
+    def test_the_setting_follows_the_account_to_another_browser(self):
+        self.open("#/settings?tab=preferences")
+        line = self.view(".panel .line").filter(has=self.page.locator("b", has_text=re.compile("^Masquer les épisodes non vus$")))
+        expect(line).to_contain_text("Désactivé")
+        line.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text=re.compile("^Activé$")).click()
+        expect(line).to_contain_text("Activé")
+        other = self.browser.new_context(viewport={"width": 1280, "height": 900})
+        self.addCleanup(other.close)
+        page = other.new_page()
+        page.on("pageerror", lambda e: self.errors.append(str(e)))
+        self.sheet(page)
+        expect(self.row(self.first, page).locator(".ti .spoiler")).to_have_text("Pilote")
+
+    def test_on_a_tv_the_focus_stays_visible_on_a_blurred_row(self):
+        self.hide(True)
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.sheet()
+        self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), "tv")
+        row = self.row(self.first)
+        expect(row.locator(".spoiler")).to_have_count(3)
+        row.focus()
+        expect(row).to_be_focused()
+        style = row.evaluate("e => { var s = getComputedStyle(e); return [s.outlineStyle, parseFloat(s.outlineWidth), s.filter]; }")
+        self.assertEqual((style[0], style[1] > 0, style[2]), ("solid", True, "none"))
+
+
 def ycc(y, cr, cb):
     """Le rouge, vert, bleu d'une entrée de palette PGS (norme BT.709, image HD), comme le décodeur les calcule."""
     l = 1.164 * (y - 16)
@@ -7853,7 +7955,7 @@ class TestSettings(UiCase):
         self.assertEqual(panels.nth(0).locator(".line .what b").all_inner_texts(), ["Appareil", "Taille du texte", "Langue"])
         self.assertEqual(panels.nth(1).locator(".line .what b").all_inner_texts(), ["Qualité", "Son surround 5.1"])
         self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Langues du son", "Langues des sous-titres", "Sous-titres d’office"])
-        self.assertEqual(panels.nth(3).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Rangées par rayon", "Nouveautés", "Pas encore vu", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…"])
+        self.assertEqual(panels.nth(3).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Rangées par rayon", "Nouveautés", "Pas encore vu", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…", "Masquer les épisodes non vus"])
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
