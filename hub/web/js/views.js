@@ -962,6 +962,7 @@
       if (d.type !== 'album' && entries.length) out.push(H.button(H.actions.seenLabel(d.type, view.allDone), 'check', { onclick: function () { setSeen(!view.allDone); } }));
       if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) out.push(H.button(H.t('Ajouter à une saga'), 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
       if (entries.length && H.actions.canDownload(d.library && d.library.id)) out.push(H.button(d.type === 'album' ? H.t('Télécharger l’album') : H.t('Télécharger'), 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
+      out.push(H.button(H.t('Signaler un problème'), 'flag', { 'data-key': 'report', onclick: function () { H.actions.report({ item: d.id, title: d.title }); } }));
       return out.concat(H.actions.posterTools(d, load), H.actions.tmdbTools(d, load),
         (d.links || []).map(function (l) { return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, H.tr(l.label)); }));
     }
@@ -1093,7 +1094,7 @@
           e.summary ? h('div', { class: 'su' }, e.summary) : null,
           h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
         done ? h('span', { class: 'seen' }, H.icon('check')) : null),
-        H.button('', 'more', { class: 'epmore', 'aria-label': H.t('Actions de l’épisode'), 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load, d.library && d.library.id); } }));
+        H.button('', 'more', { class: 'epmore', 'aria-label': H.t('Actions de l’épisode'), 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load, d.library && d.library.id, d.id); } }));
     }
     // La saison ouverte au début : celle de l'épisode où reprendre, sinon la première.
     function firstSeason(d, seasons) {
@@ -1140,7 +1141,7 @@
       d.entries.forEach(function (e) {
         var p = entryProgress(e), done = e.progress && e.progress.done;
         var pic = H.picture('/img/entry/' + e.id + '?w=300', e.title || d.title);
-        if (H.actions.canDownload(d.library && d.library.id)) pic.appendChild(H.actions.entryTools(e, load, d.library.id));
+        if (H.actions.canDownload(d.library && d.library.id)) pic.appendChild(H.actions.entryTools(e, load, d.library.id, d.id));
         if (done) pic.appendChild(h('span', { class: 'badge done' }, H.icon('check')));
         else if (p) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(Math.min(1, p.position / Math.max(1, p.duration || 1)) * 100) + '%' })));
         grid.appendChild(h('a', { class: 'card f', href: H.actions.canPlay(d.library && d.library.id) ? playHref(e) : '#/i/' + d.id, onclick: H.actions.canPlay(d.library && d.library.id) ? null : function (ev) { ev.preventDefault(); H.actions.denyPlay(); }, 'data-key': e.id }, pic, h('div', { class: 't' }, e.label ? H.t('N° {n}', { n: e.label }) : (e.title || '')), h('div', { class: 's' }, [(e.format || '').toUpperCase(), e.pages ? H.t('{n} p.', { n: e.pages }) : ''].filter(Boolean).join(' · '))));
@@ -1412,7 +1413,10 @@
   var SUGGESTION_CATEGORIES = [['evolution', H.t('Évolution')], ['improvement', H.t('Amélioration')], ['bug', H.t('Bug')], ['other', H.t('Autre')]];
   var SUGGESTION_STATUSES = [['new', H.t('Nouvelle')], ['planned', H.t('Prévue')], ['done', H.t('Faite')], ['declined', H.t('Écartée')]];
   function named(pairs, value) { var hit = pairs.filter(function (p) { return p[0] === value; })[0]; return hit ? hit[1] : value; }
+  // Les causes d'un signalement (POST /api/suggestions avec `item`) : la valeur est celle du serveur.
+  var REPORT_CAUSES = [['image', H.t('Image')], ['sound', H.t('Son')], ['subtitles', H.t('Sous-titres')], ['playback', H.t('Ne se lit pas')], ['other', H.t('Autre')]];
   function suggestionCategory(s) { return named(SUGGESTION_CATEGORIES, s.category); }
+  function reportCause(s) { return named(REPORT_CAUSES, s.cause); }
   function suggestionStatus(s) { return named(SUGGESTION_STATUSES, s.status); }
   // Une rangée de puces dont une seule est choisie (catégorie, état) : `current()` rend la valeur choisie. Atteignable aux flèches, chaque puce s'active par Entrée.
   function suggestionChoice(pairs, value, label, prefix) {
@@ -1427,14 +1431,19 @@
     return { el: h('div', { class: 'flab' }, label, row), current: function () { return chosen; } };
   }
   // Ce qu'une ligne de suggestion montre, pour son auteur comme pour l'administrateur : la catégorie, l'état, le texte, la réponse, puis `more` (date, auteur).
+  // Un signalement (`cause` donnée) montre son titre (`subject`, tel que l'auteur le voyait : un lien vers la fiche seulement si le serveur donne `link`) et sa cause, à la place de la catégorie ; son message est facultatif.
+  function suggestionHead(s) {
+    if (!s.cause) return [h('b', null, suggestionCategory(s))];
+    return [h('b', { class: 'sgsubject' }, s.link && s.link.item ? h('a', { class: 'f', href: '#/i/' + s.link.item }, s.subject) : s.subject), h('span', { class: 'sgcause' }, reportCause(s))];
+  }
   function suggestionWhat(s, more) {
-    return h('div', { class: 'what' }, h('b', null, suggestionCategory(s)), h('span', { class: 'sgstatus' }, suggestionStatus(s)),
-      h('p', { class: 'sgtext' }, s.text),
+    return h('div', { class: 'what' }, suggestionHead(s), h('span', { class: 'sgstatus' }, suggestionStatus(s)),
+      s.text || !s.cause ? h('p', { class: 'sgtext' }, s.text) : null,
       s.reply ? h('p', { class: 'sgreply' }, H.t('Réponse de l’administrateur : « {reply} »', { reply: s.reply })) : null,
       more);
   }
   // Ce que l'onglet Suggestions de la page Administration (admin.js) reprend d'ici.
-  H.suggestions = { categories: SUGGESTION_CATEGORIES, statuses: SUGGESTION_STATUSES, category: suggestionCategory, status: suggestionStatus, choice: suggestionChoice, what: suggestionWhat };
+  H.suggestions = { categories: SUGGESTION_CATEGORIES, statuses: SUGGESTION_STATUSES, causes: REPORT_CAUSES, cause: reportCause, category: suggestionCategory, status: suggestionStatus, choice: suggestionChoice, what: suggestionWhat };
 
   // #/suggestions : les suggestions du compte (GET /api/suggestions?mine=1), de la plus récente à la plus ancienne, avec l'état et la réponse de l'administrateur. Chacune se retire.
   H.route(/^\/suggestions$/, function () {

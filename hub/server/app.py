@@ -3450,19 +3450,43 @@ def suggestions_state(h):
 
 @route("GET", r"/api/suggestions")
 def api_suggestions(h, m, q):
-    """`?mine=1` : les suggestions du compte ; sans, toutes avec leurs auteurs, pour l'administrateur seulement (403 sinon), `?status=` et `?category=` en gardent une sorte."""
+    """`?mine=1` : les suggestions du compte ; sans, toutes avec leurs auteurs (et le contexte des signalements), pour l'administrateur seulement (403 sinon), `?status=` et `?category=` en gardent une sorte, `?reports=1` les seuls signalements."""
     if q.get("mine") == "1":
-        h.send_json({"suggestions": suggestions.mine(h.hub.db, h.user["id"])})
+        h.send_json({"suggestions": suggestions.mine(h.hub.db, h.user["id"], h.visible_ids())})
         return
     require_admin(h)
-    h.send_json({"suggestions": suggestion_call(suggestions.everything, h.hub.db, q.get("status"), q.get("category"))})
+    h.send_json({"suggestions": suggestion_call(suggestions.everything, h.hub.db, q.get("status"), q.get("category"), q.get("reports") == "1")})
+
+
+def report_ident(value, name):
+    """Un identifiant du corps d'un signalement : un texte, `""` quand il est absent (None) ; 400 sinon."""
+    if value is not None and not isinstance(value, str):
+        raise HttpError(400, f"{name} : un identifiant est attendu")
+    return value or ""
+
+
+def report_target(h, body):
+    """Le titre qu'un signalement désigne (`body["item"]`, et `body["entry"]` pour un épisode ou une piste) : `{"item", "entry", "subject", "context"}`.
+    404 `élément inconnu` pour un élément qui n'existe pas **ou que le compte ne voit pas** (les deux répondent pareil : rien n'est révélé), 400 pour un fichier qui n'est pas dans cet élément (ou qui n'existe pas)."""
+    db = h.hub.db
+    item_id, entry_id = report_ident(body["item"], "item"), report_ident(body.get("entry"), "entry")
+    item, visible = db.one("SELECT * FROM items WHERE id=?", (item_id,)), h.visible_ids()
+    if item is None or (visible is not None and item["lib"] not in visible):
+        raise HttpError(404, "élément inconnu")
+    file = db.one("SELECT title FROM entries WHERE id=? AND item_id=?", (entry_id, item_id)) if entry_id else None
+    if entry_id and file is None:
+        raise HttpError(400, "ce fichier n'est pas dans cet élément")
+    files = [entry_id] if entry_id else [r["id"] for r in db.query("SELECT id FROM entries WHERE item_id=?", (item_id,))]
+    return {"item": item_id, "entry": entry_id, "subject": suggestions.subject_of(item["title"], file["title"] if file else ""), "context": h.hub.activity.last_context(h.user["id"], files)}
 
 
 @route("POST", r"/api/suggestions")
 def api_suggestion_create(h, m, q):
-    """Le compte propose une amélioration du hub : `{"category": "evolution" | "improvement" | "bug" | "other", "text": "…"}` ; 201 et la suggestion. Tout compte, sans plafond."""
+    """Le compte propose une amélioration du hub : `{"category": "evolution" | "improvement" | "bug" | "other", "text": "…"}` ; 201 et la suggestion. Tout compte, sans plafond.
+    Avec `item` (et `entry`, un fichier de cet élément), c'est un **signalement** : `{"item", "entry"?, "cause": "image" | "sound" | "subtitles" | "playback" | "other", "text"?}`, la catégorie est `bug`, le texte facultatif, et la dernière décision de lecture du compte pour ce fichier est jointe (l'administrateur seul la lit)."""
     body = strict_body_dict(h)
-    h.send_json(suggestion_call(suggestions.create, h.hub.db, h.user["id"], body), 201)
+    target = report_target(h, body) if body.get("item") is not None else None
+    h.send_json(suggestion_call(suggestions.create, h.hub.db, h.user["id"], body, h.visible_ids(), target), 201)
 
 
 @route("POST", r"/api/suggestions/([0-9]{1,15})/status")

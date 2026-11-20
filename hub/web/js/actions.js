@@ -84,6 +84,7 @@
     if (it.type === 'movie' && d && d.tmdb && H.isAdmin() && H.sagas) options.push({ label: H.t('Ajouter à une saga'), value: 'saga' });      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
     if (tmdb) options.push({ label: 'TMDB', detail: H.t('Ouvre la fiche dans un nouvel onglet'), value: 'tmdb' });
     if (d && d.entries && d.entries.length && A.canDownload(d.library && d.library.id)) options.push({ label: H.t('Télécharger'), detail: d.entries.length > 1 ? H.t('{n} fichiers, l’un après l’autre', { n: d.entries.length }) : '', value: 'download' });
+    if (it.type !== 'saga') options.push({ label: H.t('Signaler un problème'), value: 'report' });
     H.menu(it.title, options, null, function (v) {
       if (v === 'play') (it.type === 'saga' ? playSaga : play)(it, done).catch(fail);
       else if (v === 'rate') A.ratingMenu(it, mine);
@@ -92,6 +93,7 @@
       else if (v === 'saga') H.sagas.addTo(d, refresh);
       else if (v === 'tmdb') window.open(tmdb.url, '_blank', 'noopener');
       else if (v === 'download') A.download(A.files(d));
+      else if (v === 'report') A.report({ item: it.id, title: it.title });
       else mark(it, !done).then(refresh).catch(fail);
     });
   }
@@ -111,6 +113,25 @@
   A.bind = function (card, it) {
     card.addEventListener('contextmenu', function (e) { e.preventDefault(); A.menu(it); });
     card.addEventListener('keydown', function (e) { if (e.key === 'ContextMenu' || e.keyCode === 93) { e.preventDefault(); A.menu(it); } });
+  };
+
+  // --- Signaler un problème ---------------------------------------------------------------------
+  // Un signalement est une suggestion de catégorie « bug » rattachée à un titre (POST /api/suggestions avec `item`, et `entry` pour un épisode, une piste ou le fichier qui ne se lit pas) : la cause est obligatoire, le message facultatif.
+  // `target` : {item, entry?, title} ; `title` ne sert qu'à rappeler de quoi on parle. Sur télévision, la cause seule : pas de champ de texte (H.canSuggest), mais le signalement part.
+  A.report = function (target) {
+    var cause = H.suggestions.choice(H.suggestions.causes, null, H.t('Cause'), 'rp-cause-');
+    cause.el.querySelector('.chip').setAttribute('data-autofocus', '1');          // sans champ de texte, le focus va à la première cause, pas à « Annuler »
+    H.form({ kind: 'form', title: H.t('Signaler un problème'), ok: H.t('Envoyer le signalement'),
+      lead: target.title ? [target.title] : [],
+      fields: H.canSuggest() ? [{ key: 'text', label: H.t('Un mot pour expliquer (facultatif, 1000 caractères au plus)'), type: 'textarea', maxlength: 1000 }] : [],
+      extra: [cause.el],
+      submit: function (v) {
+        if (!cause.current()) return H.t('Choisis la cause.');
+        var body = { item: target.item, cause: cause.current(), text: v.text || '' };
+        if (target.entry) body.entry = target.entry;
+        return H.api('/api/suggestions', body);
+      },
+      done: function () { H.toast(H.t('Signalement envoyé')); } });
   };
 
   // --- Lire ---------------------------------------------------------------------------------
@@ -237,21 +258,23 @@
     } })];
   };
   // Le bouton « … » d'une couverture de tome : le même menu que celui d'un épisode.
-  A.entryTools = function (e, done, libId) {
+  A.entryTools = function (e, done, libId, item) {
     return h('div', { class: 'qa' }, h('button', { class: 'qbtn', tabindex: '-1', 'aria-label': H.t('Plus d’actions'), title: H.t('Plus d’actions'),
-      onclick: function (ev) { ev.preventDefault(); ev.stopPropagation(); A.episodeMenu(e, done, libId); } }, H.icon('more')));
+      onclick: function (ev) { ev.preventDefault(); ev.stopPropagation(); A.episodeMenu(e, done, libId, item); } }, H.icon('more')));
   };
 
-  // Le menu d'un épisode : `done` est appelé une fois l'épisode marqué ; `libId` : sa bibliothèque (pour le droit de télécharger).
-  A.episodeMenu = function (e, done, libId) {
+  // Le menu d'un épisode : `done` est appelé une fois l'épisode marqué ; `libId` : sa bibliothèque (pour le droit de télécharger) ; `item` : l'élément dont il fait partie (pour le signaler).
+  A.episodeMenu = function (e, done, libId, item) {
     var seen = !!(e.progress && e.progress.done);
     var options = (A.canPlay(libId) ? [{ label: seen ? H.t('Revoir') : H.t('Lire'), value: 'play' }] : []).concat([{ label: A.seenLabel('episode', seen), value: 'seen' }]);
     if (e.kind !== 'book' && A.canVlc(libId)) options.splice(A.canPlay(libId) ? 1 : 0, 0, { label: H.t('Ouvrir dans VLC'), value: 'vlc' });      // juste après « Lire » ; pas pour un tome de livre
     if (A.canDownload(libId)) options.push({ label: H.t('Télécharger'), value: 'download' });
+    if (item) options.push({ label: H.t('Signaler un problème'), value: 'report' });
     H.menu(e.title || H.t('Épisode'), options, null, function (v) {
       if (v === 'play') H.go(H.playHref(e, seen ? 0 : undefined));
       else if (v === 'vlc') A.openInVlc(e.id);
       else if (v === 'download') A.download([{ id: e.id, title: e.title || '' }]);
+      else if (v === 'report') A.report({ item: item, entry: e.id, title: e.title || '' });
       else H.api('/api/entry/' + e.id + '/seen', { done: !seen }).then(done).catch(fail);
     });
   };

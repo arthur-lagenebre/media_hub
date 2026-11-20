@@ -434,11 +434,12 @@
 
     // --- Suggestions : les idées et les remarques des comptes sur le hub, filtrées par état et par catégorie ------------------
     // Lues à l'ouverture de l'onglet et après chaque action ; la pastille de la barre et de l'onglet suit (/api/state relu par poll).
-    var sgList = null, sgError = '', sgStatus = 'all', sgCategory = 'all', sgLoading = false, sgToken = 0;
+    var sgList = null, sgError = '', sgStatus = 'all', sgCategory = 'all', sgLoading = false, sgToken = 0, sgOpen = {};          // `sgCategory` vaut aussi 'reports' (les signalements, `reports=1`) ; `sgOpen` : les signalements dont le contexte de lecture est déplié
     function loadSuggestions(key, fallback) {
       var mine = ++sgToken, query = [];
       if (sgStatus !== 'all') query.push('status=' + sgStatus);
-      if (sgCategory !== 'all') query.push('category=' + sgCategory);
+      if (sgCategory === 'reports') query.push('reports=1');
+      else if (sgCategory !== 'all') query.push('category=' + sgCategory);
       sgLoading = true;
       return H.api('/api/suggestions' + (query.length ? '?' + query.join('&') : '')).then(function (res) { return { list: res.suggestions || [], error: '' }; }, function (e) { return { list: null, error: e.message }; }).then(function (got) {
         if (mine !== sgToken) return;
@@ -462,7 +463,7 @@
       var panel = h('section', { class: 'panel suggestions' }, h('h2', null, H.t('Suggestions')),
         h('p', { class: 'muted' }, H.t('Les idées et les remarques des comptes sur le hub. Chacune reste entre son auteur et toi : il voit l’état que tu lui donnes et ta réponse.')));
       panel.appendChild(suggestionFilters(S.statuses, sgStatus, H.t('Filtrer les suggestions par état'), 'sf-', function (v) { sgStatus = v; }));
-      panel.appendChild(suggestionFilters(S.categories, sgCategory, H.t('Filtrer les suggestions par catégorie'), 'sc-', function (v) { sgCategory = v; }));
+      panel.appendChild(suggestionFilters(S.categories.concat([['reports', H.t('Signalements')]]), sgCategory, H.t('Filtrer les suggestions par catégorie'), 'sc-', function (v) { sgCategory = v; }));
       if (sgError) panel.appendChild(h('p', { class: 'muted' }, sgError, ' ', h('button', { class: 'btn f', type: 'button', 'data-key': 'sg-retry', onclick: function () { sgList = null; sgError = ''; loadSuggestions('sf-' + sgStatus); } }, H.t('Réessayer'))));
       else if (!sgList) panel.appendChild(h('p', { class: 'muted' }, H.t('Chargement…')));
       else if (!sgList.length) panel.appendChild(h('p', { class: 'muted sgempty' }, sgStatus === 'all' && sgCategory === 'all' ? H.t('Aucune suggestion pour l’instant : un compte en propose une depuis Paramètres > Mon compte > Mes suggestions.') : H.t('Aucune suggestion ne correspond à ces filtres.')));
@@ -471,18 +472,34 @@
     }
     // Une suggestion : catégorie, état, texte, réponse, auteur et date, puis Répondre et Supprimer. Le nom et le texte viennent des comptes : toujours en texte.
     // Sur télévision, pas de « Répondre » : la réponse est un texte long (H.canSuggest).
+    // Un signalement a aussi son titre, sa cause et, à la demande, le contexte de lecture (`context`, que le serveur ne donne qu'à l'administrateur).
     function adminSuggestionRow(s) {
-      var who = (s.user && s.user.name) || H.t('compte supprimé');
-      return h('div', { class: 'line sgrow', 'data-suggestion': s.id, 'data-status': s.status },
-        S.what(s, h('span', null, H.t('{name} · proposée le {date}', { name: who, date: H.date(s.created) }))),
+      var who = (s.user && s.user.name) || H.t('compte supprimé'), row;
+      var open = !!sgOpen[s.id];
+      function toggle() {
+        sgOpen[s.id] = !open;
+        var fresh = adminSuggestionRow(s);
+        row.parentNode.replaceChild(fresh, row);
+        H.focus.key(fresh, 'sg-ctx-' + s.id, true);
+      }
+      row = h('div', { class: 'line sgrow', 'data-suggestion': s.id, 'data-status': s.status },
+        S.what(s, [h('span', null, H.t('{name} · proposée le {date}', { name: who, date: H.date(s.created) })), s.cause && open ? playbackContext(s.context) : null]),
+        s.cause ? H.button(H.t('Contexte de lecture'), null, { 'data-key': 'sg-ctx-' + s.id, 'aria-expanded': open ? 'true' : 'false', 'aria-label': H.t('Contexte de lecture du signalement de {name}', { name: who }), onclick: toggle }) : null,
         H.canSuggest() ? H.button(H.t('Répondre'), 'edit', { 'data-key': 'sg-answer-' + s.id, 'aria-label': H.t('Répondre à la suggestion de {name}', { name: who }), onclick: function () { answer(s, who); } }) : null,
         H.button(H.t('Supprimer'), 'trash', { 'data-key': 'sg-del-' + s.id, 'aria-label': H.t('Supprimer la suggestion de {name}', { name: who }), onclick: function () { deleteSuggestion(s, who); } }));
+      return row;
+    }
+    // La dernière décision de lecture de l'auteur pour ce fichier, au moment du signalement : quand, sur quel appareil, ce que le serveur a choisi et pourquoi. Tout vient du réseau : du texte. `null` : le registre ne la gardait plus.
+    function playbackContext(c) {
+      if (!c) return h('div', { class: 'sgctx muted' }, H.t('Aucune lecture récente enregistrée pour ce titre : le registre d’activité ne survit pas à un redémarrage.'));
+      var reasons = [].concat(c.why || []).map(function (w) { return H.tr(w); }).filter(Boolean).join(' ; ');
+      return h('div', { class: 'sgctx' }, h('span', null, [U.when(c.at), deviceName(c.device)].filter(Boolean).join(' · ')), h('span', null, [KINDS[c.mode] || c.mode, reasons].filter(Boolean).join(' : ')));
     }
     // Donner un état et, si on veut, une réponse que l'auteur lira. La réponse d'avant est préremplie : la vider l'efface.
     function answer(s, who) {
       var status = S.choice(S.statuses, s.status, H.t('État'), 'sg-st-');
       H.form({ title: H.t('Suggestion de {name}', { name: who }), ok: H.t('Enregistrer'), cls: 'sganswer',
-        lead: [s.text],
+        lead: s.cause ? [s.subject + ' · ' + S.cause(s)].concat(s.text ? [s.text] : []) : [s.text],
         fields: [{ key: 'reply', label: H.t('Ta réponse (facultative, 500 caractères au plus)'), type: 'textarea', maxlength: 500, value: s.reply || '' }],
         extra: [status.el],
         submit: function (v) { return H.api('/api/suggestions/' + s.id + '/status', { status: status.current(), reply: v.reply }); },

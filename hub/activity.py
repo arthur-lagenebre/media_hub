@@ -306,6 +306,14 @@ class Activity:
             self.decisions.append(Decision(self.clock(), user, name, address, short_agent(agent), clean_device(device), entry, clean_text(title, TITLE_MAX), clean_caps(caps),
                                            clean_text(mode, 20), clean_why(why)))
 
+    def last_context(self, user, entries):
+        """Ce que la dernière décision de lecture de ce compte pour l'un de ces fichiers (`entries`) dit à un signalement : la date, le mode, les raisons, l'appareil et `caps` ; None si le registre n'en a plus.
+        Ni adresse, ni agent, ni nom : seulement ce qui aide à comprendre ce qui a été joué (borné par WHY_* et CAPS_*)."""
+        wanted = set(entries)
+        with self.lock:
+            found = next((d for d in reversed(self.decisions) if d.user == user and d.entry in wanted), None)
+        return None if found is None else {"at": int(found.at), "mode": found.mode, "why": found.why, "device": found.device, "caps": found.caps}
+
     # --- La lecture -------------------------------------------------------
     def report(self):
         """{"counts", "transfers", "decisions"} : les lignes actives (avec `device` quand une décision du même compte, de la même entrée et du même client le donne), les décisions de la plus récente à la plus ancienne."""

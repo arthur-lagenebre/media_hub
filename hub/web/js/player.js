@@ -161,14 +161,21 @@
       paintTime();
     }
     // Le panneau posé sur l'image : tant qu'il est là, les touches du lecteur ne répondent plus (voir onKey), le focus est sur `first`.
-    function panel(heading, text, first, second) {
+    function panel(heading, text, first, second, third) {
       first.setAttribute('data-autofocus', '1');
-      H.clear(err).appendChild(h('div', null, h('h2', null, heading), h('p', null, text), h('div', { class: 'actions' }, first, second)));
+      H.clear(err).appendChild(h('div', null, h('h2', null, heading), h('p', null, text), h('div', { class: 'actions' }, first, second, third)));
       err.hidden = false; show(true);
       H.focus.first(err);
     }
+    // L'élément du fichier : celui du plan, ou, quand le plan n'est pas venu, la fiche gardée juste derrière le lecteur (voir toSheet) ; sans l'un ni l'autre, on ne sait pas quoi signaler.
+    function itemOfFile() {
+      var below = H.below(), sheet = below && /^#\/i\/(\w+)$/.exec(below.hash);
+      return plan ? plan.item : sheet ? sheet[1] : '';
+    }
     function showError(message) {
-      panel(H.t('Lecture impossible'), message, H.button(H.t('Réessayer'), 'refresh', { onclick: function () { level = 0; open(cur()); } }), H.button(H.t('Retour'), 'back', { onclick: function () { H.back('#/'); } }));
+      var item = itemOfFile();
+      panel(H.t('Lecture impossible'), message, H.button(H.t('Réessayer'), 'refresh', { onclick: function () { level = 0; open(cur()); } }), H.button(H.t('Retour'), 'back', { onclick: function () { H.back('#/'); } }),
+        item ? H.button(H.t('Signaler un problème'), 'flag', { onclick: function () { H.actions.report({ item: item, entry: id, title: title.textContent }); } }) : null);
     }
     // Un film ne s'enchaîne pas comme un épisode : on propose le suivant de sa saga. Les commandes disparaissent, sinon les flèches iraient sur des boutons cachés par le panneau.
     function offerNext(next) {
