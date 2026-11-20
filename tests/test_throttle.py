@@ -61,6 +61,14 @@ class TestThrottle(unittest.TestCase):
             self.throttle.failed("neuve")                           # plus de cinq adresses suivies : les échéances de toutes sont oubliées
         self.assertEqual(list(self.throttle._fails), ["neuve"])
 
+    def test_the_sweep_waits_until_the_table_is_over_its_size(self):
+        with mock.patch.object(Throttle, "SWEEP", 5):
+            for number in range(5):
+                self.throttle.failed(f"ancienne-{number}")
+            self.now += self.throttle.WINDOW + 1
+            self.throttle.failed("neuve")                           # cinq adresses suivies, pas plus de cinq : rien n'est encore balayé
+        self.assertEqual(len(self.throttle._fails), 6)
+
     def test_a_success_starts_the_count_again(self):
         self.fail(10)
         self.throttle.passed("a")

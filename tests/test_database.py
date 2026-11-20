@@ -380,6 +380,13 @@ class TestDerived(TempCase):
         self.db.update_item_meta("a", title="Autre")
         self.assertEqual(self.db.derived("x", self.build), 2)
 
+    def test_a_value_stored_meanwhile_for_the_same_version_stays(self):
+        def slower():
+            self.assertEqual(self.db.derived("x", lambda: "d'une autre requête"), "d'une autre requête")        # elle a fini avant, pour la même version
+            return "de celle-ci"
+        self.assertEqual(self.db.derived("x", slower), "de celle-ci")                                           # chacune rend ce qu'elle a construit
+        self.assertEqual(self.db.derived("x", self.build), "d'une autre requête")                               # mais la valeur gardée n'est remplacée que par une version plus récente
+
     def test_a_new_probe_renews_only_what_reads_the_probes(self):
         self.assertEqual((self.db.derived("items", self.build), self.db.derived("probes", self.build, probes=True)), (1, 2))
         self.db.set_probe("e1", {"video": None})

@@ -128,7 +128,7 @@ jobs:
             memory_mb: 4096
           - part: donnees
             paths: hub/db.py hub/accounts.py hub/requests.py hub/inbox.py
-            tests: tests/test_database.py tests/test_accounts.py tests/test_requests.py tests/test_inbox*.py
+            tests: tests/test_database.py tests/test_accounts.py tests/test_throttle.py tests/test_requests.py tests/test_inbox*.py
           # Le reste des modules de hub/ : calculé à l'exécution, en retirant ceux de « donnees » (garder les deux listes d'accord).
           # Sans « tests », chaque fichier a les siens (voir mutate_part.py).
           - part: reste
