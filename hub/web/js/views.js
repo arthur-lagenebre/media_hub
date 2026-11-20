@@ -1787,7 +1787,7 @@
           { label: H.t('Date d’ajout'), detail: H.t('Les plus récemment ajoutés d’abord'), value: 'added' }] },
       { key: 'home_requests', title: H.t('Tes demandes sont arrivées'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
       { key: 'home_recommend', title: H.t('Parce que tu as aimé…'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
-      { key: 'hide_spoilers', title: H.t('Masquer les épisodes non vus'), note: H.t('Sur les fiches des séries'),        // `show`, la valeur par défaut, est « Désactivé » : la liste montre d'abord ce qui est choisi d'office
+      { key: 'hide_spoilers', title: H.t('Masquer les épisodes non vus'), note: H.t('Sur les fiches des séries et dans « Reprendre »'),        // `show`, la valeur par défaut, est « Désactivé » : la liste montre d'abord ce qui est choisi d'office
         choices: [{ label: H.t('Désactivé'), detail: H.t('Titres, résumés et images de tous les épisodes en clair'), value: 'show' },
           { label: H.t('Image seulement'), detail: H.t('L’image d’un épisode pas encore commencé est floutée'), value: 'image' },
           { label: H.t('Image et résumé'), detail: H.t('L’image et le résumé d’un épisode pas encore commencé sont floutés, son titre reste lisible'), value: 'image_summary' },

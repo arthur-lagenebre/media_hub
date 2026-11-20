@@ -953,7 +953,7 @@
 
     // --- Masquer les épisodes non vus (réglages, fiche d'une série) ---
     'Masquer les épisodes non vus': 'Hide unwatched episodes',
-    'Sur les fiches des séries': 'On series pages',
+    'Sur les fiches des séries et dans « Reprendre »': 'On series pages and in “Resume”',
     'Désactivé': 'Off',
     'Image seulement': 'Picture only',
     'L’image d’un épisode pas encore commencé est floutée': 'The picture of an episode not yet started is blurred',

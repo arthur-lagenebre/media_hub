@@ -1900,7 +1900,7 @@ class TestSpoilers(UiCase):
     def test_the_setting_follows_the_account_to_another_browser(self):
         self.open("#/settings?tab=preferences")
         line = self.view(".panel .line").filter(has=self.page.locator("b", has_text=re.compile("^Masquer les épisodes non vus$")))
-        expect(line).to_contain_text("Désactivé")
+        expect(line).to_contain_text("Sur les fiches des séries et dans « Reprendre » : Désactivé")      # la note dit tout ce que le réglage change
         line.locator("button", has_text="Changer").click()
         self.page.locator(".menu .opt .lbl", has_text=re.compile("^Tout$")).click()
         expect(line).to_contain_text("Tout")
