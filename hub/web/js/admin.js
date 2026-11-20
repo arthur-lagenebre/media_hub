@@ -10,6 +10,7 @@
   var RECENT_JOBS = 5;          // les dernières tâches de l'onglet État
 
   // --- Onglet État : ce que `GET /api/activity` dit, mis en mots (ce qui n'a pas besoin de la page) ---
+  var ORIGINS = { local: H.t('Local'), tailscale: 'Tailscale', internet: H.t('Internet') };       // d'où vient la connexion (hub/origin.py) ; une valeur inconnue passe pour Internet : ce n'est pas le réseau de la maison
   var KINDS = { direct: H.t('Lecture directe'), audio: H.t('Lecture audio'), remux: H.t('Son converti'), transcode: H.t('Image convertie'), download: H.t('Téléchargement'), upload: H.t('Envoi'), backup: H.t('Sauvegarde') };
   var PLAYING = { direct: 1, audio: 1, remux: 1, transcode: 1 }, READS = { direct: 1, audio: 1 };
   H.adminStatus = { every: 3000 };          // le délai (ms) entre deux lectures de l'onglet État ; un test le raccourcit
@@ -356,7 +357,7 @@
     function transferRow(t) {
       var state = !ongoing(t) ? H.t('terminé') : t.connections > 0 ? H.t('en cours') : H.t('en pause ou en mémoire tampon');
       return h('div', { class: 'line transfer', 'data-kind': t.kind, 'data-state': ongoing(t) ? 'ongoing' : 'finished' }, h('div', { class: 'what' }, h('b', null, t.title),
-        h('span', null, [t.user, deviceName(t.device) || t.agent, t.origin === 'local' ? H.t('réseau local') : H.t('à distance')].filter(Boolean).join(' · ')),
+        h('span', null, [t.user, deviceName(t.device) || t.agent, ORIGINS[t.origin] || ORIGINS.internet].filter(Boolean).join(' · ')),
         h('span', null, [KINDS[t.kind] || t.kind, state, H.t('démarré {when}', { when: H.ago(t.started) }), t.bytes > 0 ? U.size(t.bytes) : ''].filter(Boolean).join(' · '))));
     }
 
@@ -526,8 +527,8 @@
       (users || []).forEach(function (u) {
         var mine = H.session.user && u.id === H.session.user.id;
         panel.appendChild(h('div', { class: 'line', 'data-user': u.id }, h('div', { class: 'what' }, h('b', null, u.name + (mine ? ' ' + H.t('(toi)') : '')),
-          h('span', null, (H.roles[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours') + ' · ' + H.t('Peut demander : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
-          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger, envoyer, demander', { name: u.name }), onclick: function () { rightsOf(u); } }),
+          h('span', null, (H.roles[u.role] || u.role) + ' · ' + H.t('créé le {date}', { date: H.date(u.created) })), u.role === 'admin' ? h('span', { 'data-upload': u.id }, H.t('Peut envoyer des fichiers : toujours') + ' · ' + H.t('Peut demander : toujours') + ' · ' + H.t('Télécharger à distance : toujours')) : h('span', { 'data-rights': u.id }, rightsSummary(u))),
+          u.role === 'admin' ? null : H.button(H.t('Droits'), 'edit', { 'data-key': 'rights-' + u.id, 'aria-label': H.t('Droits de {name} : consulter, lecture, télécharger, envoyer, demander, télécharger à distance', { name: u.name }), onclick: function () { rightsOf(u); } }),
           H.button(H.t('Renommer'), 'edit', { 'data-key': 'ren-' + u.id, 'aria-label': H.t('Renommer le compte de {name}', { name: u.name }), onclick: function () { renameOf(u, mine); } }),
           H.button(H.t('Mot de passe'), 'edit', { 'data-key': 'pw-' + u.id, 'aria-label': H.t('Changer le mot de passe de {name}', { name: u.name }), onclick: function () { passwordOf(u, mine); } }),
           H.button(H.t('Supprimer'), 'trash', { 'data-key': 'del-' + u.id, 'aria-label': H.t('Supprimer le compte de {name}', { name: u.name }), onclick: function () { deleteUser(u, mine); } })));
@@ -561,17 +562,19 @@
       if (libs.length) parts.push(H.t('Consulter : {view} · Lecture : {play} · Télécharger : {download}', { view: who('view'), play: who('play'), download: who('download') }));
       parts.push(H.t('Envoyer des fichiers : {upload}', { upload: u.can_upload ? H.t('oui') : H.t('non') }));
       parts.push(H.t('Peut demander : {request}', { request: u.can_request ? H.t('oui') : H.t('non') }));
+      parts.push(H.t('Télécharger à distance : {remote}', { remote: u.remote_download !== false ? H.t('oui') : H.t('non') }));
       return parts.join(' · ');
     }
-    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Au-dessous, le droit d'envoyer des fichiers et celui de demander des films (Oui / Non), qui ne tiennent pas à une bibliothèque.
-    // Les droits valent tout de suite, sans que la personne se reconnecte.
+    // Pour chaque bibliothèque : consulter, lecture, télécharger. Retirer « consulter » retire aussi les deux autres. Au-dessous, trois droits Oui / Non qui ne tiennent pas à une bibliothèque : envoyer des fichiers, demander des films,
+    // télécharger à distance (hors du réseau local : l'adresse ts.net, par Tailscale ou Funnel). Les droits valent tout de suite, sans que la personne se reconnecte.
     function rightsOf(u) {
-      var draft = {}, rows = h('div', { class: 'rights' }), upload = !!u.can_upload, ask = u.can_request !== false;
+      var FLAGS = [['upload', H.t('Envoyer des fichiers'), 'data-upload-right'], ['request', H.t('Peut demander'), 'data-request-right'], ['remote', H.t('Télécharger à distance'), 'data-remote-right']];
+      var draft = {}, rows = h('div', { class: 'rights' }), flags = { upload: !!u.can_upload, request: u.can_request !== false, remote: u.remote_download !== false }, chips = {};
       (state.libraries || []).forEach(function (l) {
         var r = (u.rights || {})[l.id] || { view: true, play: true, download: true };
         draft[l.id] = { view: !!r.view, play: !!(r.view && r.play), download: !!(r.view && r.download) };
       });
-      var saved = { rights: JSON.stringify(draft), upload: upload, request: ask, touched: false };      // ce que le serveur a déjà : un second essai n'envoie que le reste
+      var saved = { rights: JSON.stringify(draft), flags: { upload: flags.upload, request: flags.request, remote: flags.remote }, touched: false };      // ce que le serveur a déjà : un second essai n'envoie que le reste
       function toggle(l, which) {
         var button = h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + l.id, onclick: function () {
           var d = draft[l.id];
@@ -581,17 +584,22 @@
         } }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }));        // la coche a toujours sa place (visible ou non) : le bouton garde la même largeur
         return button;
       }
-      function choice(which, value, label) {         // `which` : « upload » (envoyer des fichiers) ou « request » (demander des films)
-        return h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + (value ? 'yes' : 'no'), onclick: function () { if (which === 'upload') upload = value; else ask = value; paint(); } },
-          h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, label));
+      function choice(which, value) {
+        return h('button', { class: 'chip f', type: 'button', 'data-key': 'r-' + which + '-' + (value ? 'yes' : 'no'), onclick: function () { flags[which] = value; paint(); } },
+          h('span', { class: 'mark', 'aria-hidden': 'true' }, '✓'), h('span', { class: 'lbl' }, value ? H.t('Oui') : H.t('Non')));
       }
-      var buttons = {}, yes = choice('upload', true, H.t('Oui')), no = choice('upload', false, H.t('Non')), askYes = choice('request', true, H.t('Oui')), askNo = choice('request', false, H.t('Non'));
+      var buttons = {};
       (state.libraries || []).forEach(function (l) {
         buttons[l.id] = { view: toggle(l, 'view'), play: toggle(l, 'play'), download: toggle(l, 'download') };
         rows.appendChild(h('div', { class: 'rrow', 'data-lib': l.id }, h('b', null, H.libLabel(l)), buttons[l.id].view, buttons[l.id].play, buttons[l.id].download));
       });
-      rows.appendChild(h('div', { class: 'rrow', 'data-upload-right': '1' }, h('b', null, H.t('Envoyer des fichiers')), yes, no));
-      rows.appendChild(h('div', { class: 'rrow', 'data-request-right': '1' }, h('b', null, H.t('Peut demander')), askYes, askNo));
+      FLAGS.forEach(function (f) {
+        chips[f[0]] = { yes: choice(f[0], true), no: choice(f[0], false) };
+        var row = h('div', { class: 'rrow' }, h('b', null, f[1]), chips[f[0]].yes, chips[f[0]].no);
+        row.setAttribute(f[2], '1');
+        rows.appendChild(row);
+      });
+      rows.appendChild(h('p', { class: 'muted rhint', 'data-remote-hint': '1' }, H.t('Par ts.net, pas à la maison. Contre la copie, retirer aussi « Lecture ».')));
       function paint() {
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
@@ -604,41 +612,50 @@
           b.download.querySelector('.lbl').textContent = H.t('Télécharger');
           b.download.disabled = !d.view;
         });
-        yes.classList.toggle('on', upload); yes.setAttribute('aria-pressed', upload ? 'true' : 'false');
-        no.classList.toggle('on', !upload); no.setAttribute('aria-pressed', upload ? 'false' : 'true');
-        askYes.classList.toggle('on', ask); askYes.setAttribute('aria-pressed', ask ? 'true' : 'false');
-        askNo.classList.toggle('on', !ask); askNo.setAttribute('aria-pressed', ask ? 'false' : 'true');
+        FLAGS.forEach(function (f) {
+          var on = flags[f[0]], c = chips[f[0]];
+          c.yes.classList.toggle('on', on); c.yes.setAttribute('aria-pressed', on ? 'true' : 'false');
+          c.no.classList.toggle('on', !on); c.no.setAttribute('aria-pressed', on ? 'false' : 'true');
+        });
       }
       paint();
       H.form({ title: H.t('Droits de {name}', { name: u.name }), ok: H.t('Enregistrer'), kind: 'form', cls: 'rightsbox',
         lead: [H.t('Consulter : la liste, les fiches, les images. Lecture : vidéo, musique et livres en ligne. Sans « Consulter », la bibliothèque disparaît pour ce compte.')],
         extra: [rows],
-        submit: function () { return saveAccount(u, draft, upload, ask, saved); },
+        submit: function () { return saveAccount(u, draft, flags, saved); },
         done: function () { H.toast(H.t('Droits enregistrés : {name}', { name: u.name })); refreshUsers('rights-' + u.id); },
         cancel: function () { if (saved.touched) refreshUsers('rights-' + u.id); } });       // fermée après un enregistrement à moitié réussi : la liste montre ce qui l'est
     }
-    // Enregistre les droits de bibliothèque, le droit d'envoi et celui de demander, chacun par son appel et seulement s'il a changé. Refuse (avec ce qui a réussi et ce qui a échoué) si l'un échoue.
-    function saveAccount(u, draft, upload, ask, saved) {
+    // Enregistre les droits de bibliothèque, puis chaque droit Oui / Non, chacun par son appel et seulement s'il a changé. Refuse (avec ce qui a réussi et ce qui a échoué) si l'un échoue.
+    function saveAccount(u, draft, flags, saved) {
       var base = '/api/user/' + encodeURIComponent(u.id), now = JSON.stringify(draft), failed = {}, applied = {};
       function run(part, changed, path, body, keep) {
         if (!changed) return Promise.resolve();
         return H.api(path, body).then(function () { keep(); applied[part] = true; saved.touched = true; }, function (e) { failed[part] = e.message; });
       }
+      function flag(part, path, field) {
+        var body = {};
+        body[field] = flags[part];
+        return run(part, flags[part] !== saved.flags[part], base + '/' + path, body, function () { saved.flags[part] = flags[part]; });
+      }
       return Promise.all([
         run('rights', now !== saved.rights, base + '/rights', { rights: draft }, function () { saved.rights = now; }),
-        run('upload', upload !== saved.upload, base + '/upload', { upload: upload }, function () { saved.upload = upload; }),
-        run('request', ask !== saved.request, base + '/request', { request: ask }, function () { saved.request = ask; })
+        flag('upload', 'upload', 'upload'), flag('request', 'request', 'request'), flag('remote', 'remote_download', 'remote_download')
       ]).then(function () {
         var bad = saveFailure(failed, applied);
         if (bad) throw new Error(bad);
       });
     }
-    // Dit ce qui a échoué, et seulement ce qui est enregistré s'il l'est : l'un n'est jamais présenté comme raté parce qu'un autre l'est. « Peut demander » s'ajoute à la phrase des deux autres.
+    // Dit ce qui a échoué, et seulement ce qui est enregistré s'il l'est : l'un n'est jamais présenté comme raté parce qu'un autre l'est. « Peut demander » et « Télécharger à distance » s'ajoutent à la phrase des deux premiers.
     function saveFailure(failed, applied) {
-      var said = libraryFailure(failed, applied), more = '';
-      if (failed.request) more = H.t('« Peut demander » n’a pas été enregistré : {error}', { error: failed.request }) + (!said && (applied.rights || applied.upload) ? ' ' + H.t('Le reste est enregistré.') : '');
-      else if (said && applied.request) more = H.t('« Peut demander » est enregistré.');
-      return [said, more].filter(Boolean).join(' ');
+      var said = libraryFailure(failed, applied), more = [];
+      [['request', function (e) { return H.t('« Peut demander » n’a pas été enregistré : {error}', { error: e }); }, function () { return H.t('« Peut demander » est enregistré.'); }],
+        ['remote', function (e) { return H.t('« Télécharger à distance » n’a pas été enregistré : {error}', { error: e }); }, function () { return H.t('« Télécharger à distance » est enregistré.'); }]].forEach(function (x) {
+        if (failed[x[0]]) more.push(x[1](failed[x[0]]));
+        else if (said && applied[x[0]]) more.push(x[2]());
+      });
+      if (more.length && !said && ['rights', 'upload', 'request', 'remote'].some(function (part) { return applied[part]; })) more.push(H.t('Le reste est enregistré.'));
+      return [said].concat(more).filter(Boolean).join(' ');
     }
     function libraryFailure(failed, applied) {
       if (failed.rights && failed.upload) return H.t('Rien n’a été enregistré. Droits de bibliothèque : {rights}. Envoyer des fichiers : {upload}', { rights: failed.rights, upload: failed.upload });

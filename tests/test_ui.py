@@ -2062,6 +2062,19 @@ class TestReader(UiCase):
         self.page.wait_for_selector(".reader .err:not([hidden])")
         self.assertIn("Télécharger", self.page.inner_text(".reader .err"))
 
+    def test_the_download_offered_when_the_book_cannot_load_carries_a_title(self):
+        """La fiche du livre ne vient pas : le titre de l'en-tête reste vide, mais le fichier proposé au téléchargement porte un nom (le toast « Le téléchargement de « … » s'est interrompu » ne doit pas citer un titre vide)."""
+        entry = self.entries("livres", "Dumas")[0]["id"]
+        self.page.route(lambda url: url.endswith("/api/book/" + entry), lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "boom"}'))
+        self.open("#/")
+        self.page.evaluate("() => { window.asked = []; Hub.actions.download = function (files) { window.asked.push(files); }; }")
+        self.page.evaluate("id => { location.hash = '#/read/' + id; }", entry)
+        self.page.wait_for_selector(".reader .err:not([hidden])")
+        self.page.locator(".reader .err a", has_text="Télécharger le fichier").click()
+        asked = self.page.evaluate("window.asked")
+        self.assertEqual([f["id"] for f in asked[0]], [entry])
+        self.assertNotEqual(asked[0][0]["title"].strip(), "")
+
 
 def scroll_mode(page):
     """La liseuse de romans en mode défilement (le réglage de la barre « Affichage », posé avant chaque ouverture) : les classes qui l'emploient vérifient que ce mode marche comme avant les pages."""
@@ -3870,7 +3883,7 @@ class TestBackupButton(UiCase):
 
 def activity_transfer(**over):
     now = int(time.time())
-    return {"user": "alice", "title": "Dark · Épisode 1", "library": "series", "kind": "transcode", "origin": "remote", "agent": "Chrome 120 · Android",
+    return {"user": "alice", "title": "Dark · Épisode 1", "library": "series", "kind": "transcode", "origin": "internet", "agent": "Chrome 120 · Android",
             "started": now - 120, "last": now, "bytes": 52428800, "connections": 1, **over}
 
 
@@ -3954,7 +3967,7 @@ class TestAdminStatusTab(UiCase):
         expect(self.fact("Téléchargements")).to_have_text("1")
         self.assertIn("alice", self.rows().inner_text())
         self.assertIn("Film.mkv", self.rows().inner_text())
-        self.assertIn("à distance", self.rows().inner_text())
+        self.assertIn("Internet", self.rows().inner_text())
         self.activity["transfers"] = []
         expect(self.rows()).to_have_count(0, timeout=20000)
         expect(self.message()).to_be_visible()
@@ -3967,7 +3980,16 @@ class TestAdminStatusTab(UiCase):
         self.assertIn("Télévision", self.rows().nth(0).inner_text())
         self.assertNotIn("Chrome", self.rows().nth(0).inner_text())
         self.assertIn("Firefox 120 · Linux", self.rows().nth(1).inner_text())
-        self.assertIn("réseau local", self.rows().nth(1).inner_text())
+        self.assertIn("Local", self.rows().nth(1).inner_text())
+
+    def test_the_origin_of_a_transfer_is_local_tailscale_or_internet(self):
+        self.activity["transfers"] = [activity_transfer(title="A", origin="local"), activity_transfer(title="B", origin="tailscale"), activity_transfer(title="C", origin="internet")]
+        self.open_status()
+        expect(self.rows()).to_have_count(3, timeout=20000)
+        for i, origin in enumerate(("Local", "Tailscale", "Internet")):
+            line = self.rows().nth(i).locator("span").first
+            expect(line).to_have_text(re.compile(f"alice · .* · {origin}$"))
+        self.assertNotIn("à distance", self.view("[data-etat=live]").inner_text())
 
     def test_a_direct_play_without_connection_is_not_finished(self):
         """Entre deux requêtes Range, le navigateur lit sa mémoire tampon : `connections: 0` ne veut pas dire fini, et on ne relance pas pour autant."""
@@ -9779,9 +9801,9 @@ class RequestsUiCase(unittest.TestCase):
         self.assertEqual(self.errors, [], "erreurs JavaScript")
 
     # --- Aides ---------------------------------------------------------------
-    def session(self, name, lang=None, device=None, width=1280):
-        """Une page connectée en tant que `name` (l'administrateur se connecte avec `secret`)."""
-        context = self.browser.new_context(viewport={"width": width, "height": 900})
+    def session(self, name, lang=None, device=None, width=1280, headers=None):
+        """Une page connectée en tant que `name` (l'administrateur se connecte avec `secret`). `headers` : envoyés avec chaque requête (`X-Forwarded-For` : le serveur croit la page venue d'ailleurs que du réseau local)."""
+        context = self.browser.new_context(viewport={"width": width, "height": 900}, extra_http_headers=headers)
         self.pages.append(context)
         if lang:
             context.add_cookies([{"name": "hub_lang", "value": lang, "url": self.base}])
@@ -9926,6 +9948,169 @@ class TestOpenInVlcWithAccounts(RequestsUiCase):
         page.locator("#views > .view:visible .actions .btn", has_text="Ouvrir dans VLC").wait_for()
         page.locator("#views > .view:visible .epmore").first.click()
         page.locator(".menu .opt", has_text="Ouvrir dans VLC").wait_for()
+
+
+class TestRemoteDownloadInTheUi(RequestsUiCase):
+    """« Télécharger à distance » : la case de la fenêtre des droits d'un compte, et ce que l'interface fait quand la connexion ne vient pas du réseau local.
+    Le serveur est réel : une page qui envoie `X-Forwarded-For` y passe pour une connexion venue d'Internet (voir tests/test_remote.py). `bob` retrouve le droit au début de chaque test."""
+    AWAY = {"X-Forwarded-For": "8.8.8.8"}
+    REFUSED = "téléchargement non autorisé à distance"
+
+    def setUp(self):
+        super().setUp()
+        from hub import accounts
+        accounts.set_remote_download(self.hub.db, self.bob["id"], True)
+
+    def item(self, lib, title):
+        return next(i for i in self.call("admin", f"/api/library/{lib}")["items"] if i["title"] == title)["id"]
+
+    def remote_right(self, name):
+        return next(u for u in self.call("admin", "/api/users")["users"] if u["name"] == name)["remote_download"]
+
+    def rights_box(self, page, who):
+        page.goto(self.base + "/#/admin?tab=comptes")
+        page.locator(f'[data-key="rights-{who["id"]}"]').click()
+        box = page.locator(".menu.rightsbox")
+        box.wait_for()
+        return box
+
+    def withdraw(self):
+        from hub import accounts
+        accounts.set_remote_download(self.hub.db, self.bob["id"], False)
+
+    def toasts(self, page):
+        """Les messages que la page affiche en toast à partir d'ici (relevés à chaque appel de `Hub.toast`)."""
+        page.evaluate("() => { window.shown = []; var t = Hub.toast; Hub.toast = function (m) { window.shown.push(m); return t.apply(this, arguments); }; }")
+        return lambda: page.evaluate("window.shown")
+
+    # --- La case ---------------------------------------------------------------
+    def test_the_right_is_set_in_the_rights_box_and_read_again_when_reopened(self):
+        page = self.session("admin")
+        box = self.rights_box(page, self.bob)
+        line = page.locator(f'[data-user="{self.bob["id"]}"]')
+        row = box.locator(".rrow[data-remote-right]")
+        self.assertEqual(row.locator("b").inner_text(), "Télécharger à distance")
+        hint = box.locator("[data-remote-hint]").inner_text()
+        self.assertIn("ts.net", hint)
+        self.assertIn("à la maison", hint)
+        self.assertIn("copie", hint)                                                                                       # le droit n'empêche pas de copier ce qui se lit
+        self.assertIn("« Lecture »", hint)                                                                                  # le nom du droit, tel que la fenêtre l'affiche
+        self.assertIn("Lecture", box.inner_text())
+        yes, no = row.locator('[data-key="r-remote-yes"]'), row.locator('[data-key="r-remote-no"]')
+        self.assertEqual((yes.inner_text().strip("✓ \n"), no.inner_text().strip("✓ \n")), ("Oui", "Non"))
+        self.assertEqual((yes.get_attribute("aria-pressed"), no.get_attribute("aria-pressed")), ("true", "false"))        # un compte l'a par défaut
+        self.assertTrue(yes.evaluate("e => e.classList.contains('f')") and no.evaluate("e => e.classList.contains('f')"))       # atteignables à la télécommande
+        no.click()
+        self.assertTrue(self.remote_right("bob"))                                                                         # rien n'est écrit avant « Enregistrer »
+        with page.expect_response(lambda r: r.url.endswith("/remote_download")):
+            box.locator(".btn", has_text="Enregistrer").click()
+        line.locator("[data-rights]", has_text="Télécharger à distance : non").wait_for()
+        self.assertFalse(self.remote_right("bob"))
+        box = self.rights_box(page, self.bob)
+        self.assertEqual(box.locator('[data-key="r-remote-no"]').get_attribute("aria-pressed"), "true")                   # relue à la réouverture
+        box.locator('[data-key="r-remote-yes"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        line.locator("[data-rights]", has_text="Télécharger à distance : oui").wait_for()
+        self.assertTrue(self.remote_right("bob"))
+
+    def test_an_administrator_has_no_box_for_it_and_always_downloads(self):
+        page = self.session("admin")
+        page.goto(self.base + "/#/admin?tab=comptes")
+        line = page.locator("[data-user]", has=page.locator("[data-upload]"))
+        line.wait_for()
+        self.assertIn("Télécharger à distance : toujours", line.locator("[data-upload]").inner_text())
+        self.assertEqual(line.locator('[data-key^="rights-"]').count(), 0)
+
+    def test_a_failed_save_of_the_right_is_said_and_the_rest_stays_saved(self):
+        page = self.session("admin")
+        page.route("**/remote_download", lambda route: route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "base verrouillée"})))
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-remote-no"]').click()
+        box.locator('[data-key="r-request-no"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        expect(box.locator(".formerr")).to_contain_text("« Télécharger à distance » n’a pas été enregistré : base verrouillée")
+        expect(box.locator(".formerr")).to_contain_text("Le reste est enregistré.")
+        self.assertTrue(self.remote_right("bob"))
+        self.assertFalse(next(u for u in self.call("admin", "/api/users")["users"] if u["name"] == "bob")["can_request"])
+
+    # --- Les boutons Télécharger ---------------------------------------------------
+    def assert_no_download_anywhere(self, page):
+        """La fiche d'un film, le menu de sa carte, la fiche d'une série (la saison) et le menu d'un épisode, la fiche d'un album : aucun « Télécharger »."""
+        film, dark, album = self.item("films", "Inception"), self.item("series", "Dark"), self.item("musique", "Discovery")
+        actions = "#views > .view:visible .actions .btn"
+        self.open(page, "#/i/" + film)
+        page.locator(actions, has_text="Signaler un problème").wait_for()
+        self.assertEqual(page.locator(actions, has_text="Télécharger").count(), 0)
+        self.open(page, "#/l/films")
+        page.locator(f'#views > .view:visible .card[data-key="{film}"] .qbtn').click()
+        page.locator(".menu .opt", has_text="Signaler un problème").wait_for()
+        self.assertEqual(page.locator(".menu .opt", has_text="Télécharger").count(), 0)
+        page.keyboard.press("Escape")
+        self.open(page, "#/i/" + dark)
+        page.locator(actions, has_text="Signaler un problème").wait_for()
+        self.assertEqual(page.locator(actions, has_text="Télécharger").count(), 0)
+        page.locator("#views > .view:visible .epmore").first.click()
+        page.locator(".menu .opt", has_text="Signaler un problème").wait_for()
+        self.assertEqual(page.locator(".menu .opt", has_text="Télécharger").count(), 0)
+        page.keyboard.press("Escape")
+        self.open(page, "#/i/" + album)
+        page.locator("#views > .view:visible .actions .btn.primary").wait_for()
+        self.assertEqual(page.locator(actions, has_text="Télécharger").count(), 0)
+
+    def test_away_from_home_without_the_right_there_is_no_download_button(self):
+        self.withdraw()
+        self.assert_no_download_anywhere(self.session("bob", headers=self.AWAY))
+
+    def test_at_home_without_the_right_the_download_stays(self):
+        self.withdraw()
+        page = self.session("bob")
+        self.open(page, "#/i/" + self.item("films", "Inception"))
+        page.locator("#views > .view:visible .actions .btn", has_text="Télécharger").wait_for()
+
+    def test_away_from_home_with_the_right_the_download_stays(self):
+        page = self.session("bob", headers=self.AWAY)
+        self.open(page, "#/i/" + self.item("films", "Inception"))
+        page.locator("#views > .view:visible .actions .btn", has_text="Télécharger").wait_for()
+
+    # --- Un refus malgré tout ------------------------------------------------------
+    def test_a_refusal_after_the_right_is_withdrawn_is_a_toast_and_no_broken_screen(self):
+        page = self.session("bob", headers=self.AWAY)
+        self.open(page, "#/i/" + self.item("films", "Inception"))
+        button = page.locator("#views > .view:visible .actions .btn", has_text="Télécharger")
+        button.wait_for()                                                                                                 # la page a été chargée quand le droit existait
+        shown = self.toasts(page)
+        self.withdraw()
+        button.click()
+        expect(page.locator("#toast")).to_have_text(self.REFUSED)
+        self.assertEqual([m for m in shown() if "non autorisé" in m], [self.REFUSED])
+        expect(page.locator("#dlbar")).to_be_hidden()
+        self.assertIn("/#/i/", page.url)                                                                                  # la page n'a pas été remplacée par la réponse JSON
+        page.locator("#views > .view:visible .actions .btn", has_text="Signaler un problème").wait_for()
+
+    def test_a_refused_season_stops_at_the_first_file_with_one_message(self):
+        page = self.session("bob", headers=self.AWAY)
+        self.open(page, "#/i/" + self.item("series", "Dark"))
+        button = page.locator("#views > .view:visible .actions .btn", has_text="Télécharger")
+        button.wait_for()
+        shown = self.toasts(page)
+        self.withdraw()
+        button.click()
+        page.locator(".menu .opt", has_text="Toute la série").click()
+        expect(page.locator("#toast")).to_have_text(self.REFUSED)
+        expect(page.locator("#dlbar")).to_be_hidden()
+        page.wait_for_function("() => !Object.keys(localStorage).some(function (k) { return k.indexOf('hub.dlq.') === 0 && !/\\.lock$/.test(k); })")        # la file est vidée, pas en pause
+        page.wait_for_timeout(3500)                                                                                       # rien ne revient ensuite : ni deuxième message, ni file relancée
+        self.assertEqual([m for m in shown() if "non autorisé" in m], [self.REFUSED])
+        expect(page.locator("#dlbar")).to_be_hidden()
+
+    def test_the_refusal_is_in_english_in_english(self):
+        page = self.session("bob", lang="en", headers=self.AWAY)
+        self.open(page, "#/i/" + self.item("films", "Inception"))
+        button = page.locator("#views > .view:visible .actions .btn", has_text="Download")
+        button.wait_for()
+        self.withdraw()
+        button.click()
+        expect(page.locator("#toast")).to_have_text("download not allowed away from home")
 
 
 class TestRequestsInTheUi(RequestsUiCase):

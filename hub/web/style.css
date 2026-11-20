@@ -557,8 +557,9 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .rights .rrow .chip .mark { visibility: hidden; margin-right: 0.35em; }
 .rights .rrow .chip.on .mark { visibility: visible; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
-.rights .rrow[data-upload-right], .rights .rrow[data-request-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* envoyer des fichiers, demander des films : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas */
-.rights .rrow[data-upload-right] b, .rights .rrow[data-request-right] b { grid-column: auto; }
+.rights .rrow[data-upload-right], .rights .rrow[data-request-right], .rights .rrow[data-remote-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* envoyer des fichiers, demander des films : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas */
+.rights .rrow[data-upload-right] b, .rights .rrow[data-request-right] b, .rights .rrow[data-remote-right] b { grid-column: auto; }
+.rights .rhint { margin: 0; padding: 0.1rem 0 0; font-size: 0.8rem; line-height: 1.35; }       /* la règle de « Télécharger à distance », sous ses boutons */
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
 /* Sagas composées à la main */
