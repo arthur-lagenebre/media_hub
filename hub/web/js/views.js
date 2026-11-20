@@ -1184,7 +1184,9 @@
       return sec;
     }
     load();
-    return { el: el, nav: null, refresh: load, get lib() { return data ? data.library.id : ''; } };
+    // L'élément de la fiche si le fichier `entry` en fait partie, d'après ce que la fiche a chargé ; sinon rien (aussi tant qu'elle n'a rien chargé).
+    function itemOf(entry) { return data && data.entries.some(function (e) { return e.id === entry; }) ? id : ''; }
+    return { el: el, nav: null, refresh: load, itemOf: itemOf, get lib() { return data ? data.library.id : ''; } };
   });
 
   // --- Saga ------------------------------------------------------------------------
