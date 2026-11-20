@@ -866,7 +866,7 @@
     'Télécharger à distance': 'Download away from home',
     'Télécharger à distance : toujours': 'Download away from home: always',
     'Télécharger à distance : {remote}': 'Download away from home: {remote}',
-    '« Télécharger à distance » vaut pour l’accès par l’adresse ts.net (Tailscale ou Funnel) ; à la maison, le téléchargement reste permis.': '“Download away from home” applies to access through the ts.net address (Tailscale or Funnel); at home, downloading stays allowed.',
+    '« Télécharger à distance » vaut pour l’accès par l’adresse ts.net (Tailscale ou Funnel) ; à la maison, le téléchargement reste permis. Il n’empêche pas de copier ce qui se lit : pour l’empêcher, retirer aussi « Lecture ».': '“Download away from home” applies to access through the ts.net address (Tailscale or Funnel); at home, downloading stays allowed. It does not stop copying what can be read: to stop that, also remove “Playback”.',
     '« Télécharger à distance » n’a pas été enregistré : {error}': '“Download away from home” was not saved: {error}',
     '« Télécharger à distance » est enregistré.': '“Download away from home” is saved.',
     '« Peut demander » n’a pas été enregistré : {error}': '“Can request” was not saved: {error}',

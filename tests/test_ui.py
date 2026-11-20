@@ -2062,6 +2062,19 @@ class TestReader(UiCase):
         self.page.wait_for_selector(".reader .err:not([hidden])")
         self.assertIn("Télécharger", self.page.inner_text(".reader .err"))
 
+    def test_the_download_offered_when_the_book_cannot_load_carries_a_title(self):
+        """La fiche du livre ne vient pas : le titre de l'en-tête reste vide, mais le fichier proposé au téléchargement porte un nom (le toast « Le téléchargement de « … » s'est interrompu » ne doit pas citer un titre vide)."""
+        entry = self.entries("livres", "Dumas")[0]["id"]
+        self.page.route(lambda url: url.endswith("/api/book/" + entry), lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "boom"}'))
+        self.open("#/")
+        self.page.evaluate("() => { window.asked = []; Hub.actions.download = function (files) { window.asked.push(files); }; }")
+        self.page.evaluate("id => { location.hash = '#/read/' + id; }", entry)
+        self.page.wait_for_selector(".reader .err:not([hidden])")
+        self.page.locator(".reader .err a", has_text="Télécharger le fichier").click()
+        asked = self.page.evaluate("window.asked")
+        self.assertEqual([f["id"] for f in asked[0]], [entry])
+        self.assertNotEqual(asked[0][0]["title"].strip(), "")
+
 
 def scroll_mode(page):
     """La liseuse de romans en mode défilement (le réglage de la barre « Affichage », posé avant chaque ouverture) : les classes qui l'emploient vérifient que ce mode marche comme avant les pages."""
@@ -9980,6 +9993,9 @@ class TestRemoteDownloadInTheUi(RequestsUiCase):
         hint = box.locator("[data-remote-hint]").inner_text()
         self.assertIn("ts.net", hint)
         self.assertIn("à la maison", hint)
+        self.assertIn("copier", hint)                                                                                       # le droit n'empêche pas de copier ce qui se lit
+        self.assertIn("« Lecture »", hint)                                                                                  # le nom du droit, tel que la fenêtre l'affiche
+        self.assertIn("Lecture", box.inner_text())
         yes, no = row.locator('[data-key="r-remote-yes"]'), row.locator('[data-key="r-remote-no"]')
         self.assertEqual((yes.inner_text().strip("✓ \n"), no.inner_text().strip("✓ \n")), ("Oui", "Non"))
         self.assertEqual((yes.get_attribute("aria-pressed"), no.get_attribute("aria-pressed")), ("true", "false"))        # un compte l'a par défaut

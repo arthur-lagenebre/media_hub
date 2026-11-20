@@ -599,7 +599,7 @@
         row.setAttribute(f[2], '1');
         rows.appendChild(row);
       });
-      rows.appendChild(h('p', { class: 'muted rhint', 'data-remote-hint': '1' }, H.t('« Télécharger à distance » vaut pour l’accès par l’adresse ts.net (Tailscale ou Funnel) ; à la maison, le téléchargement reste permis.')));
+      rows.appendChild(h('p', { class: 'muted rhint', 'data-remote-hint': '1' }, H.t('« Télécharger à distance » vaut pour l’accès par l’adresse ts.net (Tailscale ou Funnel) ; à la maison, le téléchargement reste permis. Il n’empêche pas de copier ce qui se lit : pour l’empêcher, retirer aussi « Lecture ».')));
       function paint() {
         (state.libraries || []).forEach(function (l) {
           var d = draft[l.id], b = buttons[l.id];
