@@ -72,6 +72,7 @@ def _create_suggestions(conn):
 # 8 : les demandes (tables `requests` et `request_users`, voir requests.py) et la colonne `users.can_request` (« Peut demander »), qui vaut 1 pour les comptes d'avant : le droit est donné par défaut, l'administrateur le retire.
 # 9 : les suggestions (table `suggestions`, voir suggestions.py), qui ne change aucune table existante.
 # 10 : les signalements : cinq colonnes ajoutées à `suggestions` (`item_id`, `entry_id`, `cause`, `subject`, `context`), vides pour les lignes d'avant ; aucune ligne ne change.
+# 11 : la colonne `users.remote_download` (« Télécharger à distance »), qui vaut 1 pour les comptes d'avant : rien ne change pour eux, l'administrateur retire le droit.
 # (Une virgule doit précéder chaque numéro : .github/scripts/check_version.py lit ces clés dans le texte.)
 MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition="INTEGER NOT NULL DEFAULT 1"),
               5: partial(_add_column, table="users", column="can_upload", definition="INTEGER NOT NULL DEFAULT 0"),
@@ -79,8 +80,9 @@ MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition=
               7: _create_ratings,
               8: _create_requests,
               9: _create_suggestions,
-              10: _add_report_columns}
-SCHEMA_VERSION = 10         # 10 : colonnes `item_id`, `entry_id`, `cause`, `subject`, `context` de `suggestions` (signaler un titre qui pose problème) ; 9 : table `suggestions` (idées et remarques sur le hub, pour l'administrateur) ; 8 : tables `requests` et `request_users` (les demandes), colonne `users.can_request` ; 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+              10: _add_report_columns,
+              11: partial(_add_column, table="users", column="remote_download", definition="INTEGER NOT NULL DEFAULT 1")}
+SCHEMA_VERSION = 11         # 11 : colonne `users.remote_download` (le droit « Télécharger à distance ») ; 10 : colonnes `item_id`, `entry_id`, `cause`, `subject`, `context` de `suggestions` (signaler un titre qui pose problème) ; 9 : table `suggestions` (idées et remarques sur le hub, pour l'administrateur) ; 8 : tables `requests` et `request_users` (les demandes), colonne `users.can_request` ; 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 RATINGS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS ratings(
@@ -159,6 +161,7 @@ CREATE TABLE IF NOT EXISTS users(
     created       INTEGER NOT NULL,
     can_upload    INTEGER NOT NULL DEFAULT 0,     -- le droit « Envoyer » (boîte de réception) ; l'administrateur envoie toujours, sans tenir compte de cette colonne
     can_request   INTEGER NOT NULL DEFAULT 1,     -- le droit « Peut demander » (voir requests.py), donné par défaut ; l'administrateur demande toujours, sans tenir compte de cette colonne
+    remote_download INTEGER NOT NULL DEFAULT 1,   -- le droit « Télécharger à distance » (voir origin.py) : refusé quand la connexion n'est pas locale s'il vaut 0 ; donné par défaut, et l'administrateur télécharge toujours
     inbox_dir     TEXT                            -- le nom du dossier du compte sous la boîte de réception, fixé à la première utilisation (voir inbox.py) ; NULL tant que le compte n'a rien envoyé. Un renommage ou une suppression de compte ne le change pas
 );
 CREATE TABLE IF NOT EXISTS rights(

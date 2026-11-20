@@ -219,13 +219,13 @@ class TestMigration(unittest.TestCase):
         conn.commit()
         conn.close()
         db = Database(path)
-        self.assertEqual(database.SCHEMA_VERSION, 10)
-        self.assertEqual(db.kv_get("schema"), 10)
+        self.assertEqual(database.SCHEMA_VERSION, 11)
+        self.assertEqual(db.kv_get("schema"), 11)
         self.assertEqual([tuple(r) for r in db.query("SELECT profile, entry_id, position FROM progress")], [(alice["id"], "e1", 12.5)])
         self.assertEqual(db.ratings_for(alice["id"]), {"m1": "up"})
         self.assertEqual([r["title"] for r in db.query("SELECT title FROM requests")], ["Sept"])
         self.assertEqual(db.query("SELECT * FROM suggestions"), [])
-        self.assertEqual(Database(path).kv_get("schema"), 10)         # rouverte : rien n'est rejoué
+        self.assertEqual(Database(path).kv_get("schema"), 11)         # rouverte : rien n'est rejoué
 
 
 OLD_SUGGESTIONS = """CREATE TABLE suggestions(

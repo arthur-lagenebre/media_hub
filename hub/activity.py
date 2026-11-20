@@ -3,14 +3,13 @@
 Tout est en mémoire, sous un verrou (un fil par connexion) : ni table ni migration, et rien ne survit au redémarrage. L'horloge s'injecte pour les tests.
 
 Un transfert est une ligne par (compte, élément transféré, nature, adresse du client) : la lecture directe d'un film se fait en nombreuses requêtes Range courtes, qui ne font qu'une ligne.
-L'adresse sert à séparer deux appareils d'un même compte ; elle n'est jamais rendue (`origin` en dit seulement `local` ou `remote`).
+L'adresse sert à séparer deux appareils d'un même compte ; elle n'est jamais rendue (`origin` en dit seulement `local`, `tailscale` ou `internet`, voir origin.py).
 
 Une tentative de téléchargement est autre chose : l'interface tire un identifiant (`dl`) par fichier à télécharger, et le compte demande ensuite où il en est (`attempts_of`). Elle dit si l'envoi est allé jusqu'au dernier octet, ce qu'une ligne ne sait pas, et reste bien plus longtemps.
 """
 
 from __future__ import annotations
 
-import ipaddress
 import re
 import threading
 import time
@@ -18,6 +17,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
+
 
 ACTIVE_SECONDS = 60             # une ligne reste tant qu'une connexion est ouverte, puis ce temps après sa dernière activité (le navigateur lit un moment depuis sa mémoire tampon sans rien demander)
 MAX_LINES = 500                 # au-delà, une nouvelle ligne remplace la ligne sans connexion la plus ancienne : demander un octet de milliers de fichiers ne gonfle pas le registre
@@ -29,7 +29,6 @@ DECISIONS_KEPT = 100            # les décisions de lecture gardées, les plus r
 KINDS = ("direct", "audio", "remux", "transcode", "download", "upload", "backup")
 PLAYING = ("direct", "audio", "remux", "transcode")
 DEVICES = ("pc", "phone", "tablet", "tv")
-TAILSCALE_V4 = ipaddress.ip_network("100.64.0.0/10")    # les appareils du réseau privé Tailscale comptent comme locaux
 TITLE_MAX = 200
 AGENT_MAX = 60
 WHY_ITEMS = 8                   # les raisons d'une décision : au plus ce nombre de phrases, de ce nombre de caractères
@@ -107,18 +106,6 @@ def clean_why(why):
     return [reason for reason in reasons if reason][:WHY_ITEMS]
 
 
-def origin_of(address):
-    """`local` pour la boucle locale, les adresses privées (réseau de la maison, IPv6 locale) et Tailscale, `remote` pour le reste, adresse illisible comprise. `address` est celui de `client_ip` : une adresse, ou, pour l'IPv6 derrière le proxy, un réseau /64.
-    Tailscale en IPv6 (`fd7a:115c:a1e0::/48`) est déjà un réseau local unique ; en IPv4, sa plage n'est pas privée pour Python, d'où `TAILSCALE_V4`."""
-    try:
-        found = ipaddress.ip_network(str(address).partition("%")[0], strict=False).network_address
-    except ValueError:
-        return "remote"
-    found = getattr(found, "ipv4_mapped", None) or found
-    tailscale = found.version == 4 and found in TAILSCALE_V4
-    return "local" if found.is_loopback or found.is_private or tailscale else "remote"
-
-
 @dataclass
 class Line:
     user: str                   # l'identifiant du compte
@@ -181,9 +168,9 @@ class Activity:
 
     # --- Les transferts ---------------------------------------------------
     @contextmanager
-    def transfer(self, user, name, ref, kind, address, title="", library="", agent="", leave_empty=True):
+    def transfer(self, user, name, ref, kind, address, title="", library="", agent="", leave_empty=True, *, origin):
         """Un transfert ouvert le temps du bloc, qui rend la fonction où compter les octets envoyés ; il se referme sur toute sortie, une coupure du client comprise.
-        Un transfert qui échoue avant le moindre octet ne laisse pas de ligne (un envoi refusé n'a rien envoyé). `leave_empty=False` : un travail ouvert avant l'envoi (ffmpeg qui démarre, archive à construire) est listé pendant qu'il dure, mais ne laisse rien s'il n'a rien envoyé, même sans erreur (un HEAD, un 416)."""
+        Un transfert qui échoue avant le moindre octet ne laisse pas de ligne (un envoi refusé n'a rien envoyé). `origin` (obligatoire) : celle de la requête (`origin_of` avec son `X-Forwarded-For`) ; elle ne se déduit pas de `address`, qui peut venir de cet en-tête. `leave_empty=False` : un travail ouvert avant l'envoi (ffmpeg qui démarre, archive à construire) est listé pendant qu'il dure, mais ne laisse rien s'il n'a rien envoyé, même sans erreur (un HEAD, un 416)."""
         key = (user, ref, kind, address)
         with self.lock:
             now = self.clock()
@@ -191,7 +178,7 @@ class Activity:
             line = self.lines.get(key)
             if line is None:
                 self._make_room()
-                line = self.lines[key] = Line(user, name, ref, address, kind, clean_text(title, TITLE_MAX), clean_text(library, TITLE_MAX), origin_of(address), short_agent(agent), now, now)
+                line = self.lines[key] = Line(user, name, ref, address, kind, clean_text(title, TITLE_MAX), clean_text(library, TITLE_MAX), origin, short_agent(agent), now, now)
             line.name, line.connections, line.last = name, line.connections + 1, now
         failed = False
         try:
