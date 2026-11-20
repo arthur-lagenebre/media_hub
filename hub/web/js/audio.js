@@ -136,22 +136,36 @@
     if (spare.getAttribute('src')) { spare.removeAttribute('src'); spare.load(); }
   }
   // La piste préchargée devient celle qui joue ; l'ancien élément se vide et servira au prochain préchargement.
-  function swap() {
+  function exchange() {
     var old = el;
     el = spare; spare = old;
     old.id = 'audio-next'; el.id = 'audio';
-    old.pause();
+  }
+  function swap() {
+    exchange();
+    spare.pause();
     cancel();
+  }
+  // Safari (iPhone, iPad) n'autorise la lecture sans geste que sur un élément déjà joué : s'il refuse l'élément préchargé, la piste repart dans l'ancien, comme avant le préchargement.
+  function refused(t, player) {
+    return function (e) {
+      if (!e || e.name !== 'NotAllowedError' || el !== player || queue[idx] !== t) { paintPlay(); return; }
+      exchange();
+      cancel();
+      el.src = url(t);
+      var p = el.play();
+      if (p && p.catch) p.catch(function () { paintPlay(); });
+    };
   }
   function load(i) {
     idx = i;
-    var t = queue[idx];
+    var t = queue[idx], swapped = nextId === t.id && !spare.error;
     reported = null;
-    if (nextId === t.id && !spare.error) swap();
+    if (swapped) swap();
     else { cancel(); el.src = url(t); }
     save();
     var p = el.play();
-    if (p && p.catch) p.catch(function () { paintPlay(); });
+    if (p && p.catch) p.catch(swapped ? refused(t, el) : function () { paintPlay(); });
     show();
   }
   function finish() {

@@ -6753,6 +6753,18 @@ class TestMusicPreload(UiCase):
             self.assertEqual(self.active_players(), 1)
         self.assertEqual(self.page.evaluate("document.querySelectorAll('audio').length"), 2)
 
+    def test_when_the_browser_refuses_the_preloaded_element_the_next_track_still_plays(self):
+        """Safari (iPhone, iPad) n'autorise la lecture sans geste que sur un élément déjà joué : le second <audio> se voit refuser `play()`. La suivante joue alors dans l'ancien élément, comme avant le préchargement."""
+        self.begin()
+        self.page.evaluate("() => { document.getElementById('audio-next').play = function () { return Promise.reject(new DOMException('refusé', 'NotAllowedError')); }; }")
+        self.near_end(5)
+        self.page.wait_for_function("!!document.getElementById('audio-next').getAttribute('src')")
+        self.near_end(0.3)
+        self.playing(1)
+        self.assertEqual(self.active_players(), 1)
+        self.assertEqual(self.page.evaluate("document.querySelectorAll('audio').length"), 2)
+        self.assertTrue(self.page.evaluate("!document.getElementById('audio-next').getAttribute('src')"))       # l'élément refusé s'est vidé : il resservira
+
     def test_volume_and_speed_follow_the_track_that_plays(self):
         self.begin()
         self.page.locator("#abar .btn.spd").click()
