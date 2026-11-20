@@ -107,7 +107,7 @@ class TestRun(unittest.TestCase):
         self.assertEqual(code, 0, out.getvalue())
         self.assertIn("tests", out.getvalue())
         self.assertIn("sautés", out.getvalue())
-        self.assertEqual(sorted(json.loads(path.read_text(encoding="utf-8"))), ["tests.test_runlock.TestRunLock", "tests.test_throttle.TestThrottle"])
+        self.assertEqual(sorted(json.loads(path.read_text(encoding="utf-8"))), ["tests.test_runlock.TestRunLock", "tests.test_runlock.TestWindowsLock", "tests.test_throttle.TestThrottle"])
 
     def test_a_failing_test_gives_a_non_zero_exit_and_its_report(self):
         """Un échec dans un processus : sa sortie complète est affichée, le total le compte, le code est 1."""
