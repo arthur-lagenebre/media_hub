@@ -89,6 +89,32 @@ class TestWho(TempCase):
         self.assertEqual(self.ids(["films"]), [])
 
 
+class TestSearch(TempCase):
+    """`people.search` : les personnes dont la clé contient le texte, l'exacte d'abord, puis celles qui commencent par lui, puis les autres ; à rang égal, le plus de titres."""
+
+    def setUp(self):
+        super().setUp()
+        names = ["Bob"] + ["Bobby"] * 3 + ["Bobbie"] * 2 + ["Abob"] * 5 + ["Zbob"] * 4 + ["Alice"]
+        self.db.replace_library("films", [film(n, [], [name]) for n, name in enumerate(names)], [])
+        self.db.replace_library("prive", [film(100 + n, [], ["Bob"], lib="prive") for n in range(7)], [])
+
+    def test_the_exact_name_comes_first_then_the_names_that_start_with_the_text_then_the_others(self):
+        self.assertEqual(people.search(self.db, "bob", ["films"]), [("Bob", 1), ("Bobby", 3), ("Bobbie", 2), ("Abob", 5), ("Zbob", 4)])
+
+    def test_at_equal_rank_the_most_titles_come_first_then_the_order_of_the_keys(self):
+        self.db.replace_library("films", [film(n, [], [name]) for n, name in enumerate(["Bobo", "Bobi", "Bobi", "Bobu"])], [])
+        self.assertEqual(people.search(self.db, "bo", ["films"]), [("Bobi", 2), ("Bobo", 1), ("Bobu", 1)])
+
+    def test_only_the_libraries_given_count_and_the_titles_add_up(self):
+        self.assertEqual(people.search(self.db, "bob", ["prive"]), [("Bob", 7)])
+        self.assertEqual(people.search(self.db, "bob", ["films", "prive"])[0], ("Bob", 8))
+        self.assertEqual(people.search(self.db, "alice", ["prive"]), [])             # aucun titre dans ces bibliothèques
+
+    def test_no_more_than_the_limit(self):
+        self.assertEqual(len(people.search(self.db, "bob", ["films"], limit=2)), 2)
+        self.assertEqual(len(people.search(self.db, "b", ["films", "prive"])), 5)
+
+
 class FakeMany:
     """TMDB avec une réponse par personne (`credits` : {adresse: réponse}, ou une exception à lever)."""
 
