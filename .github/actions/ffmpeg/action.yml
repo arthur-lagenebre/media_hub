@@ -8,14 +8,21 @@ runs:
   steps:
     # La clé suit l'image du runner : une nouvelle image peut demander d'autres paquets (ou d'autres versions) pour ffmpeg.
     # ImageOS et ImageVersion sont des variables du runner, absentes du contexte `env` des expressions : on les lit ici.
+    # Repli : pendant que GitHub déploie une image, deux versions tournent à la fois ; une image nouvelle part des paquets
+    # de la précédente (même système, même architecture) plutôt que du miroir. S'ils ne s'installent plus, l'étape
+    # suivante repasse en ligne ; dans les deux cas, le dossier est gardé sous la clé de la nouvelle image.
     - id: image
       shell: bash
-      run: echo "key=ffmpeg-debs-${ImageOS:-inconnu}-${ImageVersion:-inconnu}-$(uname -m)" >> "$GITHUB_OUTPUT"
+      run: |
+        prefix="ffmpeg-debs-${ImageOS:-inconnu}-$(uname -m)-"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "key=$prefix${ImageVersion:-inconnu}" >> "$GITHUB_OUTPUT"
 
     - uses: actions/cache@v6
       with:
         path: ~/ffmpeg-debs
         key: ${{ steps.image.outputs.key }}
+        restore-keys: ${{ steps.image.outputs.prefix }}
 
     # Avec le cache : les .deb gardés s'installent sans réseau. S'ils ne suffisent pas (paquet manquant, version dépassée),
     # on retombe sur l'installation en ligne, qui remplit le dossier pour la prochaine fois.
