@@ -136,6 +136,11 @@ class TestSearching(SearchCase):
         self.tmdb.answers["search/movie"] = ["pas", "un", "objet"]
         self.assertEqual(self.found(self.alice, "autre", kind="movie"), [])
 
+    def test_an_identifier_must_be_positive_and_small_enough_to_be_exact_in_json(self):
+        ids = [0, 1, (1 << 53) - 1, 1 << 53, (1 << 53) + 1, -1]
+        self.tmdb.answers["search/movie"] = {"results": [{"id": n, "title": f"Film {n}"} for n in ids]}
+        self.assertEqual([r["tmdb"] for r in self.found(self.alice, kind="movie")], [1, (1 << 53) - 1])
+
     def test_the_same_search_is_asked_once_within_ten_minutes(self):
         self.found(self.alice, "Dune", "movie")
         self.found(self.bob, "  dune ", "movie")
@@ -296,6 +301,31 @@ class TestPace(unittest.TestCase):
         pace.take("dernier")
         self.assertEqual(list(pace._calls), ["dernier"])
 
+    def test_the_accounts_are_only_swept_above_the_limit_not_at_it(self):
+        now = [1000.0]
+        pace = request_search.Pace(clock=lambda: now[0])
+        pace.SWEEP = 3
+        for n in range(3):
+            pace.take(f"compte {n}")
+        now[0] += 61
+        pace.take("quatrième")
+        self.assertEqual(len(pace._calls), 4)               # trois comptes suivis : pas au-dessus de la limite, rien n'est oublié
+        now[0] += 61
+        pace.take("cinquième")
+        self.assertEqual(list(pace._calls), ["cinquième"])
+
+    def test_the_delay_is_counted_from_the_oldest_search_of_the_window(self):
+        now = [1000.0]
+        pace = request_search.Pace(clock=lambda: now[0])
+        pace.take("a")
+        now[0] += 30
+        for _ in range(pace.LIMIT - 1):
+            pace.take("a")
+        now[0] += 10
+        with self.assertRaises(hub_requests.RequestError) as caught:
+            pace.take("a")
+        self.assertEqual(caught.exception.message, "trop de recherches : réessaie dans 21 s")
+
 
 class TestMemo(unittest.TestCase):
     def test_the_memory_keeps_two_hundred_answers_ten_minutes(self):
@@ -310,6 +340,14 @@ class TestMemo(unittest.TestCase):
         now[0] += 2
         self.assertIsNone(memo.get(200))
         self.assertEqual(len(memo._kept), 199)
+
+    def test_an_answer_is_forgotten_at_the_very_moment_its_ten_minutes_are_up(self):
+        now = [0.0]
+        memo = request_search.Memo(clock=lambda: now[0])
+        memo.put("a", [1])
+        now[0] = memo.TTL
+        self.assertIsNone(memo.get("a"))
+        self.assertEqual(len(memo._kept), 0)
 
 
 class TestWhatIsThere(SearchCase):
@@ -472,6 +510,25 @@ class TestPosters(SearchCase):
         with self.assertRaises(RuntimeError):
             self.fetch()
         self.assertFalse(any(p.suffix != ".jpg" for p in self.posters.iterdir()))
+
+    def test_the_folder_of_the_posters_is_made_with_its_parents_and_may_already_exist(self):
+        cfg = types.SimpleNamespace(tmdb_key=KEY, data=self.hub.cfg.data / "nouveau" / "profond", libraries=self.hub.cfg.libraries)
+        make = lambda cfg: self.tmdb
+        request_search.fetch_posters(cfg, self.db, self.log.append, make=make)
+        self.assertTrue((cfg.data / "tmdb").is_dir())
+        request_search.fetch_posters(cfg, self.db, self.log.append, make=make)
+
+    def test_a_run_takes_no_more_than_its_ceiling_and_says_how_many_wait(self):
+        with mock.patch.object(request_search, "POSTERS_PER_RUN", 3):
+            result = self.fetch()
+        self.assertEqual(sum(result.values()), 3)
+        self.assertIn("2 affiche(s) laissée(s) pour la prochaine fois.", self.log)
+
+    def test_a_run_that_fits_its_ceiling_exactly_leaves_nothing_for_the_next_time(self):
+        with mock.patch.object(request_search, "POSTERS_PER_RUN", 5):
+            result = self.fetch()
+        self.assertEqual(sum(result.values()), 5)
+        self.assertFalse([line for line in self.log if "laissée" in line])
 
     def test_without_a_key_nothing_is_asked(self):
         self.hub.cfg.tmdb_key = ""
