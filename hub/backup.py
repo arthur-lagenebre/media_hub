@@ -134,7 +134,7 @@ def _allowed(name):
     parts = PurePosixPath(name).parts
     if name in (BASE, *FILES):
         return True
-    return len(parts) == 2 and parts[0] in FOLDERS and parts[1] not in ("", ".", "..") and not parts[1].startswith(".")
+    return len(parts) == 2 and parts[0] in FOLDERS and not parts[1].startswith(".")
 
 
 def _open(archive):
@@ -195,7 +195,7 @@ def _extract(z, name, entry, stage):
     if info.file_size != entry.get("size"):
         raise BackupError(f"{name} : taille différente de celle du manifeste (archive abîmée)")
     target = stage / name
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(exist_ok=True)
     digest = hashlib.sha256()
     with z.open(info) as src, open(target, "wb") as dst:
         for chunk in iter(lambda: src.read(CHUNK), b""):

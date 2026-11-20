@@ -403,20 +403,20 @@ class Inbox:
             os.unlink(path)
         except FileNotFoundError:
             raise InboxError(404, "fichier introuvable")
-        self._prune([path.parent], self._folder(folder_name), climb=True)
+        self._prune([path.parent], self._folder(folder_name))
 
-    def _prune(self, folders, account, climb):
-        """Retire de `folders` ceux qui sont vides, du plus profond au plus haut, sous le verrou des noms ; avec `climb`, remonte aussi aux parents devenus vides. S'arrête avant le dossier du compte, qui reste toujours."""
+    def _prune(self, folders, account):
+        """Retire de `folders` ceux qui sont vides, sous le verrou des noms, et remonte aux parents devenus vides (dans quelque ordre que ce soit, le résultat est le même). Ne touche qu'à ce qui est sous le dossier du compte, qui reste toujours."""
         if account is None:
             return
         with self._names:
-            for folder in sorted(folders, key=lambda p: len(p.parts), reverse=True):
-                while folder != account and account in folder.parents:
+            for folder in folders:
+                while account in folder.parents:
                     try:
                         folder.rmdir()
                     except OSError:                       # il n'est pas vide (ou a disparu) : on le laisse
                         break
-                    folder = folder.parent if climb else account
+                    folder = folder.parent
 
     def _files_of(self, account):
         for folder, relative, entries in self._tree(account):
@@ -707,14 +707,12 @@ class Inbox:
             account = self._folder(folder_name)
             if account is None:                 # un lien ou une jonction à la place du dossier, ou un dossier hors de la boîte : jamais écrire par là
                 raise self._unusable(f"le dossier « {folder_name} » n'est pas un dossier de la boîte", "lien, jonction ou dossier absent")
-            touched, stored = [], False
+            touched = []
             try:
                 folder, final, out = self._stage(account, parts, name, touched)
                 self._write(folder, final, out, source, length)
-                stored = True
             finally:
-                if not stored:
-                    self._prune(touched, account, climb=True)
+                self._prune(touched, account)          # un envoi réussi laisse son fichier dans le dossier : seuls ceux d'un envoi qui a échoué sont vides
         return {"name": final, "size": length, "account": folder_name, "dir": "/".join(folder.relative_to(account).parts)}
 
     # --- Nettoyage ---------------------------------------------------------------
@@ -729,7 +727,7 @@ class Inbox:
                 removed += gone
                 if gone:
                     emptied.append(folder)
-            self._prune(emptied, account, climb=True)
+            self._prune(emptied, account)
         return removed
 
     def _sweep_quietly(self):

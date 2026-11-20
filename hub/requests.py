@@ -272,7 +272,7 @@ def _year(value):
     """Une année facultative : absente ou vide, sinon 4 chiffres (texte ou nombre, pas un booléen) ; 400 sinon."""
     if value in (None, ""):
         return ""
-    text = str(value) if isinstance(value, (str, int)) and not isinstance(value, bool) else ""
+    text = str(value) if type(value) in (str, int) else ""          # un booléen est un entier, une liste ou un nombre à virgule n'est pas une année
     if not YEAR_RE.fullmatch(text):
         raise RequestError(400, "année attendue : 4 chiffres")
     return text

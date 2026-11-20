@@ -225,6 +225,25 @@ class TestOnlyListedNamesAreServed(SubCase):
         self.assertEqual(self.inbox.path_of("alice", "x.mkv").read_bytes(), b"secret")
         self.assertEqual((self.alice / "y.mkv.part").read_bytes(), b"en cours")
 
+    def test_a_name_the_listing_does_not_give_is_refused_whatever_else_the_folder_lists(self):
+        self.send("x.mkv", data=b"secret")
+        self.send("y.mkv")
+        with self.hidden("x.mkv"):
+            self.assertEqual(self.status(self.inbox.path_of, "alice", "x.mkv"), 404)
+            self.assertEqual(self.status(self.inbox.remove, "alice", "x.mkv"), 404)
+        self.assertEqual(self.inbox.path_of("alice", "x.mkv").read_bytes(), b"secret")
+
+    def test_a_listed_file_is_refused_when_the_system_says_it_is_a_link_not_a_file_or_not_under_the_account(self):
+        """Chacun des trois contrôles tient seul (portable : on fait dire au système ce que seul un cas rare lui ferait dire)."""
+        self.send("x.mkv", data=b"secret")
+        refusals = {"un lien": mock.patch.object(Path, "is_symlink", lambda path: path.name == "x.mkv"),
+                    "pas un fichier": mock.patch.object(Path, "is_file", lambda path: path.name != "x.mkv"),
+                    "hors du compte": mock.patch.object(inbox.Inbox, "_confined", lambda box, path, account: path.name != "x.mkv")}
+        for why, patched in refusals.items():
+            with self.subTest(why), patched:
+                self.assertEqual(self.status(self.inbox.path_of, "alice", "x.mkv"), 404)
+        self.assertEqual(self.inbox.path_of("alice", "x.mkv").read_bytes(), b"secret")
+
     def test_a_file_the_listing_does_not_give_in_a_subfolder_is_neither_read_nor_removed(self):
         self.send("x.mkv", "a/b", data=b"secret")
         with self.hidden("x.mkv"):
