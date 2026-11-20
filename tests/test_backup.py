@@ -27,6 +27,17 @@ def contents(folder):
     return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.name != runlock.NAME)
 
 
+def undeletable(prefix):
+    """Un dossier de travail dont le nom commence par `prefix` ne peut pas être supprimé (fichier ouvert ailleurs, droits) : le nettoyage échoue, le reste a réussi."""
+    real = os.rmdir
+
+    def rmdir(path, *args, **kwargs):
+        if Path(path).name.startswith(prefix):
+            raise PermissionError("occupé")
+        return real(path, *args, **kwargs)
+    return mock.patch("os.rmdir", rmdir)
+
+
 def names_in(archive):
     with zipfile.ZipFile(archive) as z:
         return sorted(z.namelist())
@@ -112,6 +123,23 @@ class TestCreate(BackupCase):
         target = self.empty_install()
         backup.restore(self.archive, target / "hub.db", target)          # ce que la sauvegarde prend, la restauration l'accepte
 
+    def test_the_folder_of_the_archive_is_created_with_its_parents(self):
+        out = self.root / "a" / "b" / "sauvegarde.zip"
+        backup.create(self.data / "hub.db", self.data, out)
+        self.assertIn("hub.db", names_in(out))
+
+    def test_a_file_name_with_accents_is_written_as_is_in_the_manifest(self):
+        (self.data / "posters" / "épée.jpg").write_bytes(b"x")
+        self.make()
+        with zipfile.ZipFile(self.archive) as z:
+            self.assertIn("épée.jpg".encode("utf-8"), z.read("manifest.json"))          # lisible tel quel, pas « épée »
+
+    def test_a_working_folder_that_cannot_be_removed_does_not_fail_a_finished_backup(self):
+        with undeletable(".sauvegarde-"):
+            manifest = self.make()
+        self.assertEqual(manifest["format"], backup.FORMAT)
+        self.assertIn("hub.db", names_in(self.archive))
+
     def test_an_installation_without_a_base_cannot_be_saved(self):
         with self.assertRaises(backup.BackupError):
             backup.create(self.root / "absente.db", self.data, self.archive)
@@ -131,6 +159,20 @@ class TestRestore(BackupCase):
         self.assertEqual((target / "posters" / "film.jpg").read_bytes(), b"affiche")
         self.assertEqual((target / "artists" / "a1.webp").read_bytes(), b"photo")
         self.assertEqual((target / "sagas.json").read_text(encoding="utf-8"), '{"sagas": []}')
+
+    def test_the_base_goes_where_it_is_asked_even_in_folders_that_do_not_exist_yet(self):
+        self.make()
+        target = self.empty_install()
+        backup.restore(self.archive, target / "a" / "b" / "hub.db", target)
+        self.assertEqual([r["name"] for r in accounts.rows(Database(target / "a" / "b" / "hub.db"))], ["alice"])
+
+    def test_a_working_folder_that_cannot_be_removed_does_not_fail_a_finished_restoration(self):
+        self.make()
+        target = self.empty_install()
+        with undeletable(".restauration-"):
+            done = backup.restore(self.archive, target / "hub.db", target)
+        self.assertEqual(done["files"], 4)
+        self.assertEqual((target / "posters" / "film.jpg").read_bytes(), b"affiche")
 
     def test_restoring_leaves_no_working_folder_behind(self):
         self.make()
@@ -276,6 +318,18 @@ class TestRefusal(BackupCase):
         self.edit_manifest(files="hub.db")
         self.refused("liste de fichiers")
 
+    def test_a_manifest_whose_files_are_missing_or_not_all_objects_is_refused(self):
+        for files in (None, 12, ["hub.db"], [1]):
+            with self.subTest(files=files):
+                self.edit_manifest(files=files)
+                self.refused("liste de fichiers")
+
+    def test_a_listed_file_without_a_text_path_is_refused(self):
+        for entry in ({"size": 1, "sha256": "x"}, {"path": 5, "size": 1, "sha256": "x"}):
+            with self.subTest(entry=entry):
+                self.edit_manifest(files=manifest_of(self.archive)["files"] + [entry])
+                self.refused("chemin refusé")
+
     def test_a_file_whose_size_differs_from_the_manifest_is_refused(self):
         self.edit_manifest(files=[{**f, "size": f["size"] + 1} if f["path"] == "posters/film.jpg" else f for f in manifest_of(self.archive)["files"]])
         self.refused("posters/film.jpg", "taille")
@@ -293,7 +347,8 @@ class TestRefusal(BackupCase):
         self.refused("posters/intrus.jpg")
 
     def test_a_path_that_leaves_the_data_folder_is_refused(self):
-        for bad in ("../dehors.txt", "posters/../../dehors.txt", "/etc/dehors", "img/cache.jpg", "posters\\..\\x", "C:/x"):
+        for bad in ("../dehors.txt", "posters/../../dehors.txt", "/etc/dehors", "img/cache.jpg", "posters\\..\\x", "C:/x",
+                    "posters/a:b.jpg", "posters/a\\b.jpg", "posters/.cache", "artists/.cache", "posters/..", "posters/a/b.jpg"):
             with self.subTest(bad=bad):
                 self.setUp()
                 rewrite(self.archive, lambda name, data: [(name, data)] + ([(bad, b"x")] if name == "sagas.json" else []))
