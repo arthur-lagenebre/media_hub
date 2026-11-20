@@ -24,7 +24,7 @@ Tu es l'architecte de **media_hub**, le serveur de médiathèque (films, séries
 - **Interface** : `hub/web`, JavaScript sans framework ni build, scripts chargés dans l'ordre de `index.html`. Elle n'est qu'un client de l'API JSON ; la navigation fonctionne à la souris, au tactile et à la télécommande (`data-device` : pc, phone, tablet, tv).
 - **Lecture vidéo** : `POST /api/play/<id>` décide du mode d'après les capacités du client (`caps`) : *direct*, puis *remux* (le son passe en AAC), puis *transcodage*. Cet ordre est voulu. `HUB_MAX_STREAMS` borne les flux ffmpeg.
 - **Authentification** : des comptes (nom + mot de passe haché `scrypt`, rôles `admin` / `user`, `hub/accounts.py`), un jeton de session sans état `<uid>.<mac>` dérivé d'un secret du serveur, un jeton de média global pour les URLs ; progression et playlists par compte, bibliothèque commune. `HUB_PASSWORD` ne sert plus qu'à amorcer le premier compte (id `default`).
-- **Déploiement** : TrueNAS Scale, deux conteneurs (`tailscale` pour le HTTPS à distance, `media_hub` en `python:3.13-slim`), `hub/` monté en lecture seule, voir `deploy/`. Clients : navigateurs de télé (Android TV, Google TV, Fire TV), téléphones, PC.
+- **Déploiement** : TrueNAS Scale, deux conteneurs (`tailscale` pour le HTTPS à distance, `media_hub` : l'image publiée `ghcr.io/arthur-lagenebre/media_hub:<version>`, sur `python:3.15-slim`), voir `deploy/`. Clients : navigateurs de télé (Android TV, Google TV, Fire TV), téléphones, PC.
 
 ## Invariants à défendre
 

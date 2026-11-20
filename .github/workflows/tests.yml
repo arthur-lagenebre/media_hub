@@ -1,6 +1,6 @@
 name: Tests
 
-# Les tests de la PR, sur Linux : le serveur sur les deux Python qui comptent (3.13 : celui du conteneur du NAS, 3.14 : celui du poste).
+# Les tests de la PR, sur Linux : le serveur sur les deux Python qui comptent (3.15 : celui de l'image publiée, qui tourne sur le NAS ; 3.14 : celui du poste).
 # L'interface (Chromium, Playwright) n'est plus testée ici : trop lente ; elle se lance à la main (`python -m unittest tests.test_ui tests.test_popups`).
 on:
   pull_request:
@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.13", "3.14"]
+        python: ["3.14", "3.15"]
     steps:
       - uses: actions/checkout@v7
         with:

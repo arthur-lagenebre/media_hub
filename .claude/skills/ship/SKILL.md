@@ -13,7 +13,7 @@ Le dépôt avance par **branches thématiques** (`accueil`, `titre-invisible`, `
 
 ## Étapes
 
-1. **Vérifier** : la CI (`tests.yml`) relance toute la suite du serveur sur chaque PR, en Python 3.13 et 3.14, mais pas l'interface (Chromium). En local, `/ship` ne lance donc que ce que la CI ne lance pas, en parallèle, d'après les fichiers que la PR touche (`git diff --name-only main...HEAD` plus `git status --short`) :
+1. **Vérifier** : la CI (`tests.yml`) relance toute la suite du serveur sur chaque PR, en Python 3.14 et 3.15, mais pas l'interface (Chromium). En local, `/ship` ne lance donc que ce que la CI ne lance pas, en parallèle, d'après les fichiers que la PR touche (`git diff --name-only main...HEAD` plus `git status --short`) :
 
    | La PR touche… | En local |
    |---|---|
