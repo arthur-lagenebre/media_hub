@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import threading
+import types
 import warnings
 from pathlib import Path
 
@@ -218,8 +219,8 @@ class Images:
             if image.format == "JPEG":
                 image.draft("RGB", (width * 2, width * 3))
             image = image.convert("RGB")
-            if image.width > width:
-                image = image.resize((width, max(1, round(image.height * width / image.width))), Image.LANCZOS)
+            width = min(width, image.width)                       # une image plus étroite n'est pas agrandie ; à sa largeur, la réduction la recopie telle quelle
+            image = image.resize((width, max(1, round(image.height * width / image.width))), Image.LANCZOS)
             out = io.BytesIO()
             image.save(out, "JPEG", quality=80, optimize=True)
             return out.getvalue()
@@ -249,8 +250,7 @@ class Images:
         return found[0] if found else None
 
     def _book_cover(self, path, meta):
-        kind = meta.get("format", "")
-        volume = shelf.Volume(path, "", "", "", "", 0, 0, kind, meta.get("info") or {})
+        volume = types.SimpleNamespace(path=path, kind=meta.get("format", ""), info=meta.get("info") or {})        # ce que read_cover lit d'un Volume : le reste (rang, taille, date) ne sert pas à la couverture
         try:
             return shelf.read_cover(volume)
         except Exception:

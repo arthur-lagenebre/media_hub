@@ -67,6 +67,17 @@ class TestConversionSlots(unittest.TestCase):
             self.assertEqual(taken, [True] * slots + [False], streams)
 
 
+class TestCacheFolder(unittest.TestCase):
+    def test_the_cache_folder_is_made_with_its_parents_and_an_existing_one_is_kept(self):
+        data = Path(tempfile.mkdtemp()) / "pas" / "encore"
+        self.addCleanup(shutil.rmtree, data.parent.parent, True)
+        cfg = types.SimpleNamespace(data=data, max_streams=1, ffmpeg="")
+        first = images.Images(cfg, None)
+        (first.cache / "kept.jpg").write_bytes(b"jpeg")
+        second = images.Images(cfg, None)                  # le serveur qui redémarre : le dossier est déjà là
+        self.assertEqual((second.cache, (second.cache / "kept.jpg").read_bytes()), (data / "img", b"jpeg"))
+
+
 class TestFfmpegJpeg(unittest.TestCase):
     def convert(self, result):
         cfg = types.SimpleNamespace(data=Path(tempfile.mkdtemp()), max_streams=1, ffmpeg="ffmpeg")
@@ -278,6 +289,21 @@ class TestPillowWebp(unittest.TestCase):
         self.assertEqual(self.mode(encoded("JPEG", (20, 20))), "RGB")
 
 
+class TestCanWebp(unittest.TestCase):
+    @needs_pillow
+    def test_pillow_with_libwebp_writes_webp_by_itself(self):
+        with mock.patch("PIL.features.check", return_value=True):
+            self.assertIs(images.can_webp(""), True)
+        with mock.patch("PIL.features.check", return_value=False):
+            self.assertIs(images.can_webp(""), False)
+            self.assertIs(images.can_webp("ffmpeg"), True)
+
+    def test_without_pillow_ffmpeg_is_the_only_way(self):
+        with mock.patch.object(images, "Image", None):
+            self.assertIs(images.can_webp(""), False)
+            self.assertIs(images.can_webp("ffmpeg"), True)
+
+
 class TestFfmpegWebp(unittest.TestCase):
     def convert(self, returncode=0, stdout=b"webp", box=None):
         run = mock.Mock(return_value=types.SimpleNamespace(returncode=returncode, stdout=stdout))
@@ -288,6 +314,9 @@ class TestFfmpegWebp(unittest.TestCase):
         data, run = self.convert(box=(0.1, 0.2, 0.3, 0.4))
         self.assertEqual(data, b"webp")
         self.assertIn("crop=iw*0.3:ih*0.4:iw*0.1:ih*0.2,scale='min(500,iw)':'min(500,ih)':force_original_aspect_ratio=decrease", run.call_args.args[0])
+
+    def test_the_output_of_ffmpeg_is_captured(self):
+        self.assertTrue(self.convert()[1].call_args.kwargs["capture_output"])
 
     def test_without_a_box_nothing_is_cropped(self):
         self.assertIn("scale='min(500,iw)':'min(500,ih)':force_original_aspect_ratio=decrease", self.convert()[1].call_args.args[0])
@@ -344,6 +373,17 @@ class TestMoreSources(ServiceCase):
         (self.root / "cover.jpg").write_bytes(b"jpeg")
         self.assertRegex(self.service._cover_stamp(self.cfg.library("lib"), row), r"^\|4\|\d+$")
 
+    def test_an_album_cover_replaced_by_another_of_the_same_name_is_served_again(self):
+        (self.root / "Artiste").mkdir()
+        cover = self.root / "Artiste" / "cover.png"
+        cover.write_bytes(fixtures.PNG)
+        self.fill([item("i1", kind="album", meta={"folder": "Artiste", "cover_file": "cover.png"})])
+        first = self.service.get("item", "i1")
+        cover.write_bytes(fixtures.PNG + b"autre")
+        again = self.service.get("item", "i1")
+        self.assertEqual((first[0], again[0]), (fixtures.PNG, fixtures.PNG + b"autre"))
+        self.assertNotEqual(first[2], again[2])
+
     @needs_pillow
     def test_a_photo_without_a_width_is_served_as_it_is(self):
         photo = self.root / "photo.png"
@@ -372,6 +412,13 @@ class TestToJpeg(unittest.TestCase):
         with self.assertRaises(images.ConvertError):
             images.to_jpeg(b"RIFF....WEBPpas une image")
 
+    def test_the_jpeg_is_written_with_optimized_tables(self):
+        noise = images.Image.effect_noise((200, 200), 60).convert("RGB")
+        raw, plain = io.BytesIO(), io.BytesIO()
+        noise.save(raw, "PNG")
+        noise.save(plain, "JPEG", quality=92)
+        self.assertLess(len(images.to_jpeg(raw.getvalue())), len(plain.getvalue()))
+
 
 class TestToJpegWithoutPillow(unittest.TestCase):
     def test_ffmpeg_does_it_when_pillow_is_not_there(self):
@@ -386,9 +433,16 @@ class TestToJpegWithoutPillow(unittest.TestCase):
             self.assertEqual(images.to_jpeg(b"octets", "ffmpeg"), b"jpeg")
 
     def test_a_failing_ffmpeg_is_a_convert_error(self):
-        run = mock.Mock(return_value=types.SimpleNamespace(returncode=1, stdout=b""))
-        with mock.patch.object(images, "Image", None), mock.patch.object(images.subprocess, "run", run), self.assertRaises(images.ConvertError):
+        for returncode, stdout in ((1, b""), (1, b"jpeg"), (0, b"")):                    # il faut le code de réussite et des octets
+            run = mock.Mock(return_value=types.SimpleNamespace(returncode=returncode, stdout=stdout))
+            with mock.patch.object(images, "Image", None), mock.patch.object(images.subprocess, "run", run), self.assertRaises(images.ConvertError):
+                images.to_jpeg(b"octets", "ffmpeg")
+
+    def test_the_output_of_ffmpeg_is_captured(self):
+        run = mock.Mock(return_value=types.SimpleNamespace(returncode=0, stdout=b"jpeg"))
+        with mock.patch.object(images, "Image", None), mock.patch.object(images.subprocess, "run", run):
             images.to_jpeg(b"octets", "ffmpeg")
+        self.assertTrue(run.call_args.kwargs["capture_output"])
 
     def test_without_pillow_or_ffmpeg_there_is_no_converter(self):
         with mock.patch.object(images, "Image", None), self.assertRaises(images.NoConverter):
@@ -405,6 +459,11 @@ class TestCacheFolderGone(ServiceCase):
         shutil.rmtree(self.service.cache)
         data, mime, _key = self.service.get("item", "i1")
         self.assertEqual((data, mime), (fixtures.PNG, "image/png"))
+        self.assertEqual(len(list(self.service.cache.glob("*.jpg"))), 1)
+
+    def test_the_whole_data_folder_gone_is_made_again_with_the_cache(self):
+        shutil.rmtree(self.cfg.data)
+        self.assertEqual(self.service.get("item", "i1")[0], fixtures.PNG)
         self.assertEqual(len(list(self.service.cache.glob("*.jpg"))), 1)
 
     def test_an_item_without_image_is_a_plain_miss_not_an_error(self):
