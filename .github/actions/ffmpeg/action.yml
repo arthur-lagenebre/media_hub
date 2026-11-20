@@ -1,0 +1,38 @@
+name: ffmpeg
+description: >
+  Installe ffmpeg depuis les paquets Ubuntu, en gardant les .deb en cache : le miroir d'Azure tombe parfois à 170 ko/s,
+  et les 66 Mo de ffmpeg prenaient alors 6 à 15 minutes au lieu de quelques secondes (runs 44662377074, 44743160592).
+
+runs:
+  using: composite
+  steps:
+    # La clé suit l'image du runner : une nouvelle image peut demander d'autres paquets (ou d'autres versions) pour ffmpeg.
+    # ImageOS et ImageVersion sont des variables du runner, absentes du contexte `env` des expressions : on les lit ici.
+    - id: image
+      shell: bash
+      run: echo "key=ffmpeg-debs-${ImageOS:-inconnu}-${ImageVersion:-inconnu}-$(uname -m)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v6
+      with:
+        path: ~/ffmpeg-debs
+        key: ${{ steps.image.outputs.key }}
+
+    # Avec le cache : les .deb gardés s'installent sans réseau. S'ils ne suffisent pas (paquet manquant, version dépassée),
+    # on retombe sur l'installation en ligne, qui remplit le dossier pour la prochaine fois.
+    - name: Installer ffmpeg
+      shell: bash
+      run: |
+        debs="$HOME/ffmpeg-debs"
+        if compgen -G "$debs/*.deb" > /dev/null \
+          && sudo apt-get install -y --no-install-recommends "$debs"/*.deb; then
+          echo "ffmpeg installé depuis le cache ($(ls "$debs"/*.deb | wc -l) paquets)"
+        else
+          rm -rf "$debs"
+          mkdir -p "$debs"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends -o Dir::Cache::Archives="$debs" ffmpeg
+          # apt laisse là son verrou et un dossier partial/ réservé à _apt : le cache ne pourrait pas les lire.
+          sudo rm -rf "$debs/partial" "$debs/lock"
+          sudo chown -R "$(id -u):$(id -g)" "$debs"
+        fi
+        ffmpeg -version | head -n 1

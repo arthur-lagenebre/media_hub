@@ -35,9 +35,7 @@ runs:
         python-version: ${{ inputs.python-version }}
 
     # Les tests fabriquent de vrais fichiers avec ffmpeg, et sont ignorés s'il manque.
-    - name: ffmpeg
-      shell: bash
-      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+    - uses: ./media_hub/.github/actions/ffmpeg
 
     # Le .venv de media_hub est celui que crapper et mutator choisissent pour lancer les tests.
     - name: .venv de media_hub
