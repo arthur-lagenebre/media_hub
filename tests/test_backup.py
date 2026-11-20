@@ -330,7 +330,7 @@ class TestRefusal(BackupCase):
                 self.refused("liste de fichiers")
 
     def test_a_listed_file_without_a_text_path_is_refused(self):
-        for entry in ({"size": 1, "sha256": "x"}, {"path": 5, "size": 1, "sha256": "x"}):
+        for entry in ({"size": 1, "sha256": "x"}, {"path": 5, "size": 1, "sha256": "x"}, {"path": ["hub.db"], "size": 1, "sha256": "x"}, {"path": {}, "size": 1, "sha256": "x"}):
             with self.subTest(entry=entry):
                 self.edit_manifest(files=manifest_of(self.archive)["files"] + [entry])
                 self.refused("chemin refusé")

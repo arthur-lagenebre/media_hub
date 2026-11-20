@@ -166,6 +166,9 @@ def _check_manifest(manifest):
     files = manifest.get("files")
     if not isinstance(files, list) or not all(isinstance(f, dict) for f in files):
         raise BackupError("manifest.json sans liste de fichiers : archive abîmée")
+    odd = [f.get("path") for f in files if not isinstance(f.get("path"), str)]
+    if odd:                                                        # avant tout dictionnaire : une liste ou un objet comme chemin ne sert pas de clé
+        raise BackupError(f"chemin refusé dans l'archive : {odd[0]!r}")
     return manifest
 
 
