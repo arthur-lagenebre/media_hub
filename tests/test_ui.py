@@ -1848,6 +1848,38 @@ class TestSpoilers(UiCase):
         expect(self.row(self.first).locator(".spoiler")).to_have_count(0)
         self.assertEqual(self.page.evaluate("window.__same"), 1)
 
+    def test_turning_the_setting_off_clears_the_blur_when_coming_back_to_the_sheet(self):
+        self.hide(True)
+        self.sheet()
+        expect(self.row(self.first).locator(".spoiler")).to_have_count(3)
+        self.page.evaluate("window.__same = 1")
+        self.page.evaluate("location.hash = '#/settings?tab=preferences'")                 # dans l'application : la fiche reste dans la pile
+        line = self.view(".panel .line").filter(has=self.page.locator("b", has_text=re.compile("^Masquer les épisodes non vus$")))
+        line.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text=re.compile("^Désactivé$")).click()
+        expect(line).to_contain_text("Désactivé")
+        self.page.go_back()                                                                # Retour
+        expect(self.row(self.first).locator(".ti")).to_contain_text("Pilote")
+        expect(self.view(".spoiler")).to_have_count(0)
+        self.assertEqual(self.page.evaluate("window.__same"), 1)                           # sans recharger
+
+    def test_the_menu_and_the_report_of_a_blurred_episode_name_it_by_its_number_only(self):
+        self.hide(True)
+        self.sheet()
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        menu = self.page.locator(".menu")
+        expect(menu).to_contain_text("S1 · E1")
+        expect(menu).not_to_contain_text("Pilote")
+        menu.locator(".opt .lbl", has_text="Signaler un problème").click()
+        form = self.page.locator(".menu", has_text="Envoyer le signalement")
+        expect(form).to_contain_text("S1 · E1")
+        expect(form).not_to_contain_text("Pilote")
+        self.page.keyboard.press("Escape")
+        self.hide(False)
+        self.page.reload()                                                                 # réglage coupé : le titre revient
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        expect(self.page.locator(".menu")).to_contain_text("Pilote")
+
     def test_resume_offers_the_next_episode_with_the_picture_of_the_show_and_without_its_title(self):
         self.api("/api/progress", {"entry": self.first["id"], "position": 2950, "duration": 3000})
         card = self.view(f".card[data-key='c{self.second['id']}']")

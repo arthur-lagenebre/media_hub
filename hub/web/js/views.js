@@ -828,6 +828,7 @@
   var SHOW_STATUS = { 'Ended': H.t('Terminée'), 'Returning Series': H.t('En cours'), 'Canceled': H.t('Annulée'), 'In Production': H.t('En production'), 'Planned': H.t('Prévue'), 'Pilot': H.t('Pilote') };
   function entryProgress(e) { return e.progress && !e.progress.done && e.progress.position >= (e.kind === 'book' ? 1 : 20) ? e.progress : null; }
   function epLabel(e) { return 'S' + (e.season === null || e.season === undefined ? 1 : e.season) + ' · E' + (e.number === null || e.number === undefined ? '?' : e.number); }
+  H.epLabel = epLabel;
 
   H.route(/^\/i\/(\w+)$/, function (m) {
     var id = m[1], el = h('section', { class: 'detail' }), season = null, data = null;

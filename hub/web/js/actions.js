@@ -270,11 +270,12 @@
     if (e.kind !== 'book' && A.canVlc(libId)) options.splice(A.canPlay(libId) ? 1 : 0, 0, { label: H.t('Ouvrir dans VLC'), value: 'vlc' });      // juste après « Lire » ; pas pour un tome de livre
     if (A.canDownload(libId)) options.push({ label: H.t('Télécharger'), value: 'download' });
     if (item) options.push({ label: H.t('Signaler un problème'), value: 'report' });
-    H.menu(e.title || H.t('Épisode'), options, null, function (v) {
+    var hidden = e.kind === 'video' && H.spoiler(e), title = hidden ? H.epLabel(e) : e.title || '';      // un épisode masqué (voir H.spoiler) est nommé par son numéro, comme sur sa ligne floutée
+    H.menu(title || H.t('Épisode'), options, null, function (v) {
       if (v === 'play') H.go(H.playHref(e, seen ? 0 : undefined));
       else if (v === 'vlc') A.openInVlc(e.id);
       else if (v === 'download') A.download([{ id: e.id, title: e.title || '' }]);
-      else if (v === 'report') A.report({ item: item, entry: e.id, title: e.title || '' });
+      else if (v === 'report') A.report({ item: item, entry: e.id, title: title });
       else H.api('/api/entry/' + e.id + '/seen', { done: !seen }).then(done).catch(fail);
     });
   };
