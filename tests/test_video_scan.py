@@ -43,6 +43,10 @@ class TestTags(unittest.TestCase):
         self.assertEqual(video._split_actor("Tom (le grand) (Forrest)  "), ("Tom (le grand)", "Forrest"))
         self.assertEqual(video._split_actor("Tom ()"), ("Tom", ""))
 
+    def test_a_name_of_one_letter_or_none_is_still_split_from_its_role(self):
+        self.assertEqual(video._split_actor("A(Forrest)"), ("A", "Forrest"))
+        self.assertEqual(video._split_actor("(Forrest)"), ("", "Forrest"))
+
     def test_a_role_that_has_parentheses_of_its_own_is_kept_whole(self):
         self.assertEqual(video._split_actor("Tom Hanks (Woody (voice))"), ("Tom Hanks", "Woody (voice)"))
         self.assertEqual(video._split_actor('Dennis Quaid (Charlie Wessler (segment "The Pitch"))'), ("Dennis Quaid", 'Charlie Wessler (segment "The Pitch")'))
