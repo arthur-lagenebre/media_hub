@@ -60,6 +60,24 @@
   function first(q, state) { return q.items.filter(function (it) { return it.state === state; })[0] || null; }
   function byDl(q, dl) { return q.items.filter(function (it) { return it.dl === dl; })[0] || null; }
 
+  // Le lien part sans qu'on lise sa réponse : un refus du serveur (403, les droits ont changé depuis le chargement de la page) ne se verrait que comme un téléchargement qui ne démarre pas, puis une file « en pause ».
+  // Un HEAD (sans corps, sans trace dans l'activité du hub) dit tout de suite s'il est refusé ; le message est celui du serveur, qu'un Range d'un octet va chercher.
+  function refusal(id, dl) {
+    var path = '/media/' + id + '/file?download=1';
+    fetch(path, { method: 'HEAD', credentials: 'same-origin' }).then(function (head) {
+      if (head.status !== 403) return null;
+      return fetch(path, { credentials: 'same-origin', headers: { Range: 'bytes=0-0' } }).then(function (r) {
+        return r.status === 403 ? r.json().then(function (data) { return H.tr(data.error); }, function () { return H.t('Erreur {status}', { status: 403 }); }) : null;
+      });
+    }).then(function (message) { if (message) refused(dl, message); }, function () { /* le réseau ne répond pas : la file suit son cours */ });
+  }
+  // Un refus arrête toute la file, d'un seul message : les fichiers suivants seraient refusés de même.
+  function refused(dl, message) {
+    var q = load();
+    if (!q || !byDl(q, dl)) return;                  // la file a changé entre-temps (arrêtée, menée par un autre onglet)
+    D.close();
+    H.toast(message, 6000);
+  }
   function launch(q, it) {
     it.dl = rand(); it.state = 'sent'; it.at = Date.now(); it.seen = false; it.bytes = 0;
     q.paused = false;
@@ -70,6 +88,7 @@
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    refusal(it.id, it.dl);
   }
   // Le fichier suivant, ou la fin : le bilan d'une file, rien pour un fichier seul (sauf s'il a échoué).
   function advance(q) {
