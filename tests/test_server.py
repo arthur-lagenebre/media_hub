@@ -2028,7 +2028,7 @@ class TestApiUrls(ServerCase):
     """L'API donne elle-même les URLs des images et des fichiers : relatives, sans ?w= ni jeton, et elles mènent bien quelque part."""
 
     def test_state_announces_the_contract_version(self):
-        self.assertEqual(self.api.json("/api/state")[1]["api"], 2)
+        self.assertEqual(self.api.json("/api/state")[1]["api"], 1)
 
     def test_items_carry_their_cover(self):
         album = self.item_by_title("musique", "Discovery")
@@ -3202,7 +3202,7 @@ class TestApiContract(ContractBase):
     def test_state(self):
         data = self.get("/api/state")
         self.has(data, {"version": str, "api": int, "libraries": list, "ffmpeg": bool, "ffprobe": bool, "tmdb": bool, "auth": bool, "busy": bool, "streams": int, "max_streams": int, "can_request": bool}, "state")
-        self.assertEqual(data["api"], 2)
+        self.assertEqual(data["api"], 1)
         self.assertTrue(data["auth"])
         self.assertEqual([l["id"] for l in data["libraries"]], ["films", "series", "musique", "livres"])
         for lib in data["libraries"]:

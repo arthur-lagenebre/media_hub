@@ -67,7 +67,7 @@ from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, t
 from ..scan.common import STACK_MAX
 from .jobs import Jobs
 
-API_VERSION = 2             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
+API_VERSION = 1             # le contrat décrit dans docs/api.md ; n'augmente qu'en cas de rupture (champ retiré, renommé ou de sens différent)
 CHUNK = 256 * 1024
 DOWNLOADS_ASKED = 50        # les tentatives de téléchargement que /api/downloads accepte en une question
 INBOX_DRAIN_SECONDS = 5    # un envoi refusé (POST /api/inbox) laisse au client ce temps, au plus, pour finir d'envoyer son corps avant que la connexion soit coupée
