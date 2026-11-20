@@ -223,6 +223,11 @@ html[data-device="phone"] .tags { font-size: 0.85rem; }
 .ep .ti b { color: var(--accent); font-weight: 750; }
 .ep .su { color: var(--mute); font-size: 0.88rem; margin-top: 0.2rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ep .du { color: var(--mute); font-size: 0.8rem; margin-top: 0.2rem; }
+/* « Masquer les épisodes non vus » (H.spoiler) : le titre, le résumé et l'image d'un épisode pas encore commencé. Le flou est posé sur ces seuls éléments, jamais sur la ligne : son contour de focus reste net. */
+.spoiler { filter: blur(0.42rem); user-select: none; }
+img.spoiler { filter: blur(0.9rem); }
+@supports not (filter: blur(1px)) { .spoiler { color: transparent; background: var(--s2); border-radius: 0.3rem; } img.spoiler { visibility: hidden; } }      /* un vieux navigateur de télé sans `filter` : des blocs unis à la place du flou */
+.sronly { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }      /* lu par un lecteur d'écran, invisible à l'écran */
 .what .ua { display: block; font-size: 0.7rem; opacity: 0.7; word-break: break-all; }
 .seen { color: var(--accent); margin-left: 0.8rem; }
 .seen .ic svg { width: 1.5em; height: 1.5em; }
@@ -558,8 +563,9 @@ body.mouse .card.saga:focus:not(:hover) .stack, body.mouse .card.multi:focus:not
 .rights .rrow .chip .mark { visibility: hidden; margin-right: 0.35em; }
 .rights .rrow .chip.on .mark { visibility: visible; }
 .rights .rrow .chip:disabled { opacity: 0.45; cursor: default; }
-.rights .rrow[data-upload-right], .rights .rrow[data-request-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* envoyer des fichiers, demander des films : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas */
-.rights .rrow[data-upload-right] b, .rights .rrow[data-request-right] b { grid-column: auto; }
+.rights .rrow[data-upload-right], .rights .rrow[data-request-right], .rights .rrow[data-remote-right] { grid-template-columns: 2fr 1fr 1fr; align-items: center; }       /* envoyer des fichiers, demander des films : le nom puis Oui / Non sur une seule ligne, pour que la fenêtre ne défile pas */
+.rights .rrow[data-upload-right] b, .rights .rrow[data-request-right] b, .rights .rrow[data-remote-right] b { grid-column: auto; }
+.rights .rhint { margin: 0; padding: 0.1rem 0 0; font-size: 0.8rem; line-height: 1.35; }       /* la règle de « Télécharger à distance », sous ses boutons */
 .btn.danger { background: #b3402f; color: #fff; }
 .btns .btn.danger { background: #b3402f; }
 /* Sagas composées à la main */

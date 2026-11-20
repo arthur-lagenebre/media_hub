@@ -58,6 +58,7 @@ from .. import sagas as sagafile
 from ..sagas import Sagas
 from ..db import RATINGS, Database, make_id
 from ..inbox import EXTENSIONS, Inbox, InboxError
+from ..origin import origin_of
 from ..media import badges
 from ..media import books as bookmedia
 from ..media import probe as prober
@@ -150,7 +151,7 @@ class Hub:
 
     def open_user(self):
         """Qui est « connecté » quand le serveur est ouvert : le profil `default`, administrateur (c'est lui que le premier compte reprendra)."""
-        return {"id": accounts.FIRST_ID, "name": self.cfg.admin, "role": "admin", "can_upload": False, "can_request": True}        # sans compte, personne n'envoie : un envoi anonyme serait une porte ouverte sur le disque
+        return {"id": accounts.FIRST_ID, "name": self.cfg.admin, "role": "admin", "can_upload": False, "can_request": True, "remote_download": True}        # sans compte, personne n'envoie : un envoi anonyme serait une porte ouverte sur le disque
 
     def media_token(self, row):
         """Le jeton de média du compte `row`, celui qui voyage dans les URLs (`?token=`) : il ne vaut que sur /media, /img, /book et /api/subs (sous-titres, lecture seule), nulle part ailleurs sur /api/ ;
@@ -293,6 +294,12 @@ def entry_json(row, progress=None):
             out["artists"] = info["artists"]
     if row["kind"] == "book" and info.get("PageCount"):
         out["pages"] = info["PageCount"]
+    return with_progress(out, progress)
+
+
+def with_progress(out, progress):
+    """`out` (un fichier tel que l'API le montre), avec `progress` : où en est le compte, s'il l'a commencé ; sans `progress`, le compte ne l'a pas commencé (c'est ce que l'interface floute pour « Masquer les épisodes non vus »).
+    Le même champ partout où un épisode se montre : la fiche, « Reprendre », le plan de lecture et son `next`."""
     if progress is not None:
         out["progress"] = {"position": progress["position"], "duration": progress["duration"], "done": bool(progress["done"]), "updated": progress["updated"]}
     return out
@@ -360,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def transfer(self, kind, ref, title, library="", leave_empty=True):
         """Le transfert de cette requête dans l'activité du hub (voir activity.py) : qui le fait, d'où et avec quoi ; `ref` reconnaît ce qui est transféré."""
-        return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty)
+        return self.hub.activity.transfer(self.user["id"], self.user["name"], ref, kind, client_ip(self), title, library, self.headers.get("User-Agent", ""), leave_empty, origin=origin(self))
 
     def send_file(self, path, mime=None, headers=None, track=None, attempt=None):
         """Le fichier, avec les requêtes Range (reprise, avance rapide, lecteur vidéo). `track` : de quoi inscrire l'envoi dans l'activité (une fonction sans argument qui rend `Handler.transfer(…)`), ouvert autour de l'envoi réel seulement :
@@ -458,17 +465,28 @@ class Handler(BaseHTTPRequestHandler):
         row = accounts.user_for_vlc_token(self.hub.db, self.hub.secret, token, found.group(1))
         return accounts.public(row) if row is not None else None
 
-    def can(self, lib_id, perm="view"):
-        """Le compte de la requête peut-il `view` (voir), `play` (lire en ligne) ou `download` (télécharger) cette bibliothèque ? Un administrateur le peut toujours ; sans rien dans `rights`, tout est permis."""
+    def granted_to_account(self, lib_id, perm):
+        """Le droit `perm` du compte sur cette bibliothèque, tel que l'administrateur l'a réglé (la table `rights`), sans regarder d'où vient la requête."""
         if self.user is None:
             return False
         if self.user["role"] != "admin" and self.granted is None:
             self.granted = accounts.grants(self.hub.db, self.user["id"])
         return accounts.allows(self.user["role"], self.granted or {}, lib_id, perm)
 
+    def remote_download_refused(self):
+        """Le compte n'a pas « Télécharger à distance » et la requête n'est pas locale (voir origin.py) : un administrateur télécharge de partout."""
+        return not self.user["remote_download"] and origin(self) != "local"
+
+    def can(self, lib_id, perm="view"):
+        """Le compte de la requête peut-il `view` (voir), `play` (lire en ligne) ou `download` (télécharger) cette bibliothèque ? Un administrateur le peut toujours ; sans rien dans `rights`, tout est permis.
+        `download` demande en plus « Télécharger à distance » quand la connexion n'est pas locale ; la lecture n'en dépend jamais."""
+        return self.granted_to_account(lib_id, perm) and not (perm == "download" and self.remote_download_refused())
+
     def require(self, lib_id, perm="view"):
-        """403 quand le compte n'a pas ce droit sur la bibliothèque."""
+        """403 quand le compte n'a pas ce droit sur la bibliothèque (et, pour `download`, à distance sans « Télécharger à distance » : le message le dit)."""
         if not self.can(lib_id, perm):
+            if perm == "download" and self.granted_to_account(lib_id, perm):
+                raise HttpError(403, "téléchargement non autorisé à distance")
             raise HttpError(403, {"download": "téléchargement non autorisé", "play": "lecture non autorisée"}.get(perm, "accès à cette bibliothèque non autorisé"))
 
     def visible_libs(self):
@@ -707,12 +725,18 @@ def from_loopback(h):
 
 
 def forwarded(h, name):
-    """La dernière valeur de l'en-tête `name` (`X-Forwarded-For`, `X-Forwarded-Proto`) quand la connexion vient de la boucle locale ; None sinon, ou s'il est absent.
+    """La dernière valeur de l'en-tête `name` (`X-Forwarded-For`, `X-Forwarded-Proto`) quand la connexion vient de la boucle locale ; None si elle n'en vient pas ou si l'en-tête est ABSENT.
+    Un en-tête présent mais vide (`""`, `"8.8.8.8,"`) rend `""`, pas None : l'appelant ne doit pas le prendre pour une absence (`origin` en fait `internet`).
     La dernière, jamais la première : le proxy ajoute la sienne à la fin de ce que le client a pu écrire (plusieurs lignes d'en-tête comprises)."""
     if not from_loopback(h):
         return None
-    last = ",".join(h.headers.get_all(name, [])).rpartition(",")[2].strip()
-    return last or None
+    lines = h.headers.get_all(name, [])
+    return ",".join(lines).rpartition(",")[2].strip() if lines else None
+
+
+def origin(h):
+    """`local`, `tailscale` ou `internet` pour la connexion de cette requête (voir origin.py) ; le dernier `X-Forwarded-For` n'est lu que d'une connexion de la boucle locale."""
+    return origin_of(h.client_address[0], forwarded(h, "X-Forwarded-For"))
 
 
 def client_ip(h):
@@ -916,12 +940,13 @@ def api_user_rights(h, m, q):
     h.send_json(user_listing(h.hub, accounts.by_id(h.hub.db, m.group(1))))
 
 
-ACCOUNT_FLAGS = {"upload": accounts.set_can_upload, "request": accounts.set_can_request}       # clé de la route et du corps -> ce qui change le droit
+ACCOUNT_FLAGS = {"upload": accounts.set_can_upload, "request": accounts.set_can_request, "remote_download": accounts.set_remote_download}       # clé de la route et du corps -> ce qui change le droit
 
 
-@route("POST", r"/api/user/(\w+)/(upload|request)")
+@route("POST", r"/api/user/(\w+)/(upload|request|remote_download)")
 def api_user_flag(h, m, q):
-    """L'administrateur donne ou retire un droit global d'un compte : `/upload` `{"upload": bool}` (envoyer dans la boîte de réception) ou `/request` `{"request": bool}` (demander des films et des séries).
+    """L'administrateur donne ou retire un droit global d'un compte : `/upload` `{"upload": bool}` (envoyer dans la boîte de réception), `/request` `{"request": bool}` (demander des films et des séries)
+    ou `/remote_download` `{"remote_download": bool}` (télécharger quand la connexion n'est pas locale : appareil Tailscale ou Funnel).
     Pas pour un administrateur (400 : il a toujours ces droits). Rend le compte. Valable à la requête suivante ; ce qui a déjà été envoyé ou demandé reste."""
     require_admin(h)
     need_accounts(h)
@@ -1089,8 +1114,10 @@ def dismiss_key(profile, item_id):
     return f"dismiss:{profile}:{item_id}"
 
 
-def progress_card(entry, item, position, total, resume, updated, ratings=None):
-    card = entry_json(entry)
+def progress_card(entry, item, progress, resume, updated, ratings=None):
+    """Une carte « Reprendre » : le fichier, avec `progress` comme sur la fiche (absent : pas encore commencé), et `position` / `total` pour la barre."""
+    card = entry_json(entry, progress)
+    position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
     card.update({"item": summary(item, opinion=(ratings or {}).get(item["id"])), "position": position, "total": total or entry["duration"], "resume": resume, "updated": updated})
     return card
 
@@ -1105,8 +1132,7 @@ def finished_card(hub, profile, row, item, ratings=None):
     progress = hub.db.progress_for(profile, [following["id"]]).get(following["id"])
     if progress is not None and progress["done"]:
         return None
-    position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
-    return progress_card(following, item, position, total, False, row["updated"], ratings)
+    return progress_card(following, item, progress, False, row["updated"], ratings)
 
 
 def resume_card(hub, profile, row, item, ratings=None):
@@ -1115,7 +1141,8 @@ def resume_card(hub, profile, row, item, ratings=None):
         return finished_card(hub, profile, row, item, ratings)
     if row["position"] < (1 if row["kind"] == "book" else RESUME_MIN):
         return None
-    return progress_card(row, item, row["position"], row["pduration"], True, row["updated"], ratings)
+    progress = {"position": row["position"], "duration": row["pduration"], "done": row["done"], "updated": row["updated"]}
+    return progress_card(row, item, progress, True, row["updated"], ratings)
 
 
 def continue_row(hub, profile, libs=None, ratings=None):
@@ -2439,7 +2466,7 @@ def play_warning(decision, video):
 
 def resume_position(hub, user, entry):
     """Où reprendre : la position enregistrée, tant que le fichier n'est pas fini et qu'on n'en est pas au tout début."""
-    progress = hub.db.progress_for(user, [entry["id"]]).get(entry["id"])
+    progress = progress_of(hub, user, entry)
     return progress["position"] if progress and not progress["done"] and progress["position"] >= RESUME_MIN else 0
 
 
@@ -2483,10 +2510,18 @@ def next_in_saga(hub, entry):
     return None
 
 
-def play_next(hub, entry):
-    """Le `next` du plan de lecture : le fichier suivant de l'élément, sinon, après la dernière partie d'un film, le film suivant de sa saga."""
+def play_next(hub, user, entry):
+    """Le `next` du plan de lecture : le fichier suivant de l'élément, avec la progression du compte `user` (voir with_progress), sinon, après la dernière partie d'un film, le film suivant de sa saga."""
     following = next_entry(hub, entry)
-    return next_summary(following) if following is not None else next_in_saga(hub, entry)
+    if following is None:
+        return next_in_saga(hub, entry)
+    found = next_summary(following)
+    return found and with_progress(found, progress_of(hub, user, following))
+
+
+def progress_of(hub, user, entry):
+    """La ligne de progression du compte `user` sur ce fichier, ou None s'il ne l'a pas commencé."""
+    return hub.db.progress_for(user, [entry["id"]]).get(entry["id"])
 
 
 @route("POST", r"/api/play/(\w+)")
@@ -2517,16 +2552,16 @@ def api_play(h, m, q):
     picked = tracks.pick_sub(subs, settings["sub_mode"], settings["sub_langs"] or [h.lang], heard, settings["audio_langs"])
     for sub in subs:
         sub["selected"] = sub["id"] == picked
-    h.send_json({
+    h.send_json(with_progress({
         "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": show, "season": entry["season"], "number": entry["number"],
         "mode": decision["mode"], "why": decision["why"], "url": play_url(entry, decision, caps, kbps, height), "seekable": decision["mode"] == "direct",
         "duration": probe["duration"] or entry["duration"], "resume": resume_position(hub, h.user["id"], entry), "warning": play_warning(decision, video),
         "audio": [{"index": t["index"], "label": track_label(t, h.lang), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
         "subs": subs,
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
-        "next": play_next(hub, entry),
+        "next": play_next(hub, h.user["id"], entry),
         "chapters": prober.with_skips(probe.get("chapters", [])),
-    })
+    }, progress_of(hub, h.user["id"], entry)))
 
 
 @route("GET", r"/api/play/(\w+)/start")

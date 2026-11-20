@@ -43,7 +43,7 @@
     }
     function later() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 1500); }
     function fail(text) {
-      var save = H.actions.canDownloadKind('books') ? h('a', { class: 'btn f primary', href: '/media/' + id + '/file?download=1', 'data-autofocus': '1' }, H.t('Télécharger le fichier')) : null;
+      var save = H.actions.canDownloadKind('books') ? h('a', { class: 'btn f primary', href: '/media/' + id + '/file?download=1', 'data-autofocus': '1', onclick: function (ev) { ev.preventDefault(); H.actions.download([{ id: id, title: title.textContent || H.t('Livre') }]); } }, H.t('Télécharger le fichier')) : null;
       H.clear(msg).appendChild(h('div', null, h('h2', null, H.t('Lecture impossible ici')), h('p', null, text),
         h('div', { class: 'actions' }, save, H.button(H.t('Retour'), 'back', { 'data-autofocus': save ? null : '1', onclick: function () { H.back('#/'); } }))));
       msg.hidden = false; bar.hidden = true;

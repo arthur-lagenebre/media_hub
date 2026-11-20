@@ -1789,6 +1789,180 @@ class TestVideoResume(UiCase):
         self.assertEqual(shown, "0:40")
 
 
+class TestSpoilers(UiCase):
+    """« Masquer les épisodes non vus » (réglage de compte `hide_spoilers`) : selon le choix du compte, l'image (`image`), l'image et le résumé (`image_summary`) ou tout, titre compris (`all`), d'un épisode pas encore commencé sont floutés ; le numéro et la durée restent lisibles."""
+
+    def setUp(self):
+        super().setUp()
+        self.dark = self.item("series", "Dark")
+        self.first, self.second, self.third = self.entries("series", "Dark")             # S1E1 « Pilote », S1E2 « Suite », S2E1 « Retour »
+        self.api(f"/api/item/{self.dark['id']}/seen", {"done": False})
+        self.hide("show")
+        self.addCleanup(self.hide, "show")
+
+    def hide(self, level):
+        """`level` : `show` (rien), `image`, `image_summary` ou `all`."""
+        self.api("/api/me/settings", {"hide_spoilers": level})
+
+    def row(self, entry, page=None):
+        return (page or self.page).locator(f"#views > .view:visible .ep[data-key='{entry['id']}']")
+
+    def sheet(self, page=None):
+        page = page or self.page
+        page.goto(self.base + "/#/i/" + self.dark["id"])
+        page.locator("#views > .view:visible .ep").first.wait_for()
+
+    def test_with_the_setting_off_nothing_is_blurred(self):
+        self.sheet()
+        expect(self.row(self.second).locator(".ti")).to_contain_text("Suite")
+        expect(self.view(".spoiler")).to_have_count(0)
+
+    def test_an_episode_not_started_is_blurred_one_in_progress_or_seen_is_not_and_its_number_and_length_stay_readable(self):
+        self.api("/api/progress", {"entry": self.second["id"], "position": 600, "duration": 3000})
+        self.api(f"/api/entry/{self.third['id']}/seen", {"done": True})
+        self.hide("all")
+        self.sheet()
+        unseen = self.row(self.first)                                                    # le seul des trois qui a une image
+        expect(unseen.locator(".ti .spoiler")).to_have_text("Pilote")                    # le vrai titre reste dans l'élément
+        expect(unseen.locator(".ti .spoiler")).to_have_attribute("aria-hidden", "true")
+        expect(unseen.locator(".ti")).to_contain_text("Épisode non vu")                  # ce que lit un lecteur d'écran
+        expect(unseen.locator(".su.spoiler")).to_have_text("Début.")
+        expect(unseen.locator("img.spoiler")).to_have_count(1)
+        expect(unseen.locator(".ti b")).to_have_text("1.")
+        expect(unseen.locator(".du")).to_have_text(re.compile(r"min"))
+        self.assertEqual(unseen.locator(".ti b, .du").evaluate_all("els => els.filter(e => e.closest('.spoiler')).length"), 0)
+        self.assertNotEqual(unseen.locator(".ti .spoiler").evaluate("e => getComputedStyle(e).filter"), "none")
+        expect(self.row(self.second).locator(".ti")).to_contain_text("Suite")
+        expect(self.row(self.second).locator(".spoiler")).to_have_count(0)               # en cours
+        self.view(".chip", has_text="Saison 2").click()
+        expect(self.row(self.third).locator(".ti")).to_contain_text("Retour")
+        expect(self.row(self.third).locator(".spoiler")).to_have_count(0)                # vu
+
+    def test_marking_an_episode_seen_removes_the_blur_without_reloading(self):
+        self.hide("all")
+        self.sheet()
+        expect(self.row(self.first).locator(".spoiler")).to_have_count(3)               # titre, résumé, image
+        self.page.evaluate("window.__same = 1")
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        self.page.locator(".menu .opt .lbl", has_text="Marquer comme vu").click()
+        expect(self.row(self.first).locator(".seen")).to_have_count(1)
+        expect(self.row(self.first).locator(".spoiler")).to_have_count(0)
+        self.assertEqual(self.page.evaluate("window.__same"), 1)
+
+    def test_turning_the_setting_off_clears_the_blur_when_coming_back_to_the_sheet(self):
+        self.hide("all")
+        self.sheet()
+        expect(self.row(self.first).locator(".spoiler")).to_have_count(3)
+        self.page.evaluate("window.__same = 1")
+        self.page.evaluate("location.hash = '#/settings?tab=preferences'")                 # dans l'application : la fiche reste dans la pile
+        line = self.view(".panel .line").filter(has=self.page.locator("b", has_text=re.compile("^Masquer les épisodes non vus$")))
+        line.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text=re.compile("^Désactivé$")).click()
+        expect(line).to_contain_text("Désactivé")
+        self.page.go_back()                                                                # Retour
+        expect(self.row(self.first).locator(".ti")).to_contain_text("Pilote")
+        expect(self.view(".spoiler")).to_have_count(0)
+        self.assertEqual(self.page.evaluate("window.__same"), 1)                           # sans recharger
+
+    def test_the_menu_and_the_report_of_a_blurred_episode_name_it_by_its_number_only(self):
+        self.hide("all")
+        self.sheet()
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        menu = self.page.locator(".menu")
+        expect(menu).to_contain_text("S1 · E1")
+        expect(menu).not_to_contain_text("Pilote")
+        menu.locator(".opt .lbl", has_text="Signaler un problème").click()
+        form = self.page.locator(".menu", has_text="Envoyer le signalement")
+        expect(form).to_contain_text("S1 · E1")
+        expect(form).not_to_contain_text("Pilote")
+        self.page.keyboard.press("Escape")
+        self.hide("show")
+        self.page.reload()                                                                 # réglage coupé : le titre revient
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        expect(self.page.locator(".menu")).to_contain_text("Pilote")
+
+    def test_resume_offers_the_next_episode_with_the_picture_of_the_show_and_without_its_title(self):
+        self.api("/api/progress", {"entry": self.first["id"], "position": 2950, "duration": 3000})
+        card = self.view(f".card[data-key='c{self.second['id']}']")
+        self.open("#/")
+        expect(card).to_contain_text("S1 · E2 · Suite")                                  # réglage coupé : le titre de l'épisode
+        self.hide("all")
+        asked = []
+        self.page.on("request", lambda r: asked.append(r.url))
+        self.page.reload()                                                               # les réglages se lisent au chargement de la page
+        expect(card.locator("img")).to_have_attribute("src", re.compile("/img/item/" + self.dark["id"]))
+        expect(card.locator("img")).to_have_class(re.compile(r"(^|\s)in(\s|$)"))               # l'image est arrivée : celle de l'épisode n'a jamais été demandée
+        self.assertEqual([u for u in asked if "/img/entry/" + self.second["id"] in u], [])
+        expect(card).to_contain_text("S1 · E2")
+        expect(card).not_to_contain_text("Suite")
+        expect(card.locator(".spoiler")).to_have_count(0)                                # pas de flou sur l'accueil
+
+    def test_the_setting_follows_the_account_to_another_browser(self):
+        self.open("#/settings?tab=preferences")
+        line = self.view(".panel .line").filter(has=self.page.locator("b", has_text=re.compile("^Masquer les épisodes non vus$")))
+        expect(line).to_contain_text("Sur les fiches des séries et dans « Reprendre » : Désactivé")      # la note dit tout ce que le réglage change
+        line.locator("button", has_text="Changer").click()
+        self.page.locator(".menu .opt .lbl", has_text=re.compile("^Tout$")).click()
+        expect(line).to_contain_text("Tout")
+        other = self.browser.new_context(viewport={"width": 1280, "height": 900})
+        self.addCleanup(other.close)
+        page = other.new_page()
+        page.on("pageerror", lambda e: self.errors.append(str(e)))
+        self.sheet(page)
+        expect(self.row(self.first, page).locator(".ti .spoiler")).to_have_text("Pilote")
+
+    def test_image_only_blurs_the_picture_and_leaves_the_title_and_summary_readable(self):
+        self.hide("image")
+        self.sheet()
+        unseen = self.row(self.first)
+        expect(unseen.locator("img.spoiler")).to_have_count(1)
+        expect(unseen.locator(".spoiler")).to_have_count(1)                              # l'image seule
+        expect(unseen.locator(".ti")).to_contain_text("Pilote")
+        expect(unseen.locator(".ti")).not_to_contain_text("Épisode non vu")
+        expect(unseen.locator(".su")).to_have_text("Début.")
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        expect(self.page.locator(".menu")).to_contain_text("Pilote")                    # le titre n'est pas caché : le menu le dit
+
+    def test_image_and_summary_blur_both_and_leave_the_title_readable(self):
+        self.hide("image_summary")
+        self.sheet()
+        unseen = self.row(self.first)
+        expect(unseen.locator("img.spoiler")).to_have_count(1)
+        expect(unseen.locator(".su.spoiler")).to_have_text("Début.")
+        expect(unseen.locator(".su")).to_have_attribute("aria-hidden", "true")
+        expect(unseen.locator(".ti .spoiler")).to_have_count(0)
+        expect(unseen.locator(".ti")).to_contain_text("Pilote")
+        expect(unseen.locator(".ti")).not_to_contain_text("Épisode non vu")
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        expect(self.page.locator(".menu")).to_contain_text("Pilote")
+
+    def test_resume_takes_the_picture_of_the_show_but_keeps_the_title_when_only_the_image_is_hidden(self):
+        self.api("/api/progress", {"entry": self.first["id"], "position": 2950, "duration": 3000})
+        card = self.view(f".card[data-key='c{self.second['id']}']")
+        for level in ("image", "image_summary"):
+            self.hide(level)
+            asked = []
+            self.page.on("request", lambda r: asked.append(r.url))
+            self.open("#/")
+            self.page.reload()                                                           # les réglages se lisent au chargement de la page
+            expect(card.locator("img")).to_have_attribute("src", re.compile("/img/item/" + self.dark["id"]))
+            expect(card.locator("img")).to_have_class(re.compile(r"(^|\s)in(\s|$)"))
+            self.assertEqual([u for u in asked if "/img/entry/" + self.second["id"] in u], [], level)
+            expect(card).to_contain_text("S1 · E2 · Suite")                              # le titre n'est pas caché
+
+    def test_on_a_tv_the_focus_stays_visible_on_a_blurred_row(self):
+        self.hide("all")
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.sheet()
+        self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), "tv")
+        row = self.row(self.first)
+        expect(row.locator(".spoiler")).to_have_count(3)
+        row.focus()
+        expect(row).to_be_focused()
+        style = row.evaluate("e => { var s = getComputedStyle(e); return [s.outlineStyle, parseFloat(s.outlineWidth), s.filter]; }")
+        self.assertEqual((style[0], style[1] > 0, style[2]), ("solid", True, "none"))
+
+
 def ycc(y, cr, cb):
     """Le rouge, vert, bleu d'une entrée de palette PGS (norme BT.709, image HD), comme le décodeur les calcule."""
     l = 1.164 * (y - 16)
@@ -2061,6 +2235,19 @@ class TestReader(UiCase):
         self.open("#/read/" + entry)
         self.page.wait_for_selector(".reader .err:not([hidden])")
         self.assertIn("Télécharger", self.page.inner_text(".reader .err"))
+
+    def test_the_download_offered_when_the_book_cannot_load_carries_a_title(self):
+        """La fiche du livre ne vient pas : le titre de l'en-tête reste vide, mais le fichier proposé au téléchargement porte un nom (le toast « Le téléchargement de « … » s'est interrompu » ne doit pas citer un titre vide)."""
+        entry = self.entries("livres", "Dumas")[0]["id"]
+        self.page.route(lambda url: url.endswith("/api/book/" + entry), lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "boom"}'))
+        self.open("#/")
+        self.page.evaluate("() => { window.asked = []; Hub.actions.download = function (files) { window.asked.push(files); }; }")
+        self.page.evaluate("id => { location.hash = '#/read/' + id; }", entry)
+        self.page.wait_for_selector(".reader .err:not([hidden])")
+        self.page.locator(".reader .err a", has_text="Télécharger le fichier").click()
+        asked = self.page.evaluate("window.asked")
+        self.assertEqual([f["id"] for f in asked[0]], [entry])
+        self.assertNotEqual(asked[0][0]["title"].strip(), "")
 
 
 def scroll_mode(page):
@@ -3870,7 +4057,7 @@ class TestBackupButton(UiCase):
 
 def activity_transfer(**over):
     now = int(time.time())
-    return {"user": "alice", "title": "Dark · Épisode 1", "library": "series", "kind": "transcode", "origin": "remote", "agent": "Chrome 120 · Android",
+    return {"user": "alice", "title": "Dark · Épisode 1", "library": "series", "kind": "transcode", "origin": "internet", "agent": "Chrome 120 · Android",
             "started": now - 120, "last": now, "bytes": 52428800, "connections": 1, **over}
 
 
@@ -3954,7 +4141,7 @@ class TestAdminStatusTab(UiCase):
         expect(self.fact("Téléchargements")).to_have_text("1")
         self.assertIn("alice", self.rows().inner_text())
         self.assertIn("Film.mkv", self.rows().inner_text())
-        self.assertIn("à distance", self.rows().inner_text())
+        self.assertIn("Internet", self.rows().inner_text())
         self.activity["transfers"] = []
         expect(self.rows()).to_have_count(0, timeout=20000)
         expect(self.message()).to_be_visible()
@@ -3967,7 +4154,16 @@ class TestAdminStatusTab(UiCase):
         self.assertIn("Télévision", self.rows().nth(0).inner_text())
         self.assertNotIn("Chrome", self.rows().nth(0).inner_text())
         self.assertIn("Firefox 120 · Linux", self.rows().nth(1).inner_text())
-        self.assertIn("réseau local", self.rows().nth(1).inner_text())
+        self.assertIn("Local", self.rows().nth(1).inner_text())
+
+    def test_the_origin_of_a_transfer_is_local_tailscale_or_internet(self):
+        self.activity["transfers"] = [activity_transfer(title="A", origin="local"), activity_transfer(title="B", origin="tailscale"), activity_transfer(title="C", origin="internet")]
+        self.open_status()
+        expect(self.rows()).to_have_count(3, timeout=20000)
+        for i, origin in enumerate(("Local", "Tailscale", "Internet")):
+            line = self.rows().nth(i).locator("span").first
+            expect(line).to_have_text(re.compile(f"alice · .* · {origin}$"))
+        self.assertNotIn("à distance", self.view("[data-etat=live]").inner_text())
 
     def test_a_direct_play_without_connection_is_not_finished(self):
         """Entre deux requêtes Range, le navigateur lit sa mémoire tampon : `connections: 0` ne veut pas dire fini, et on ne relance pas pour autant."""
@@ -8043,7 +8239,7 @@ class TestSettings(UiCase):
         self.assertEqual(panels.nth(0).locator(".line .what b").all_inner_texts(), ["Appareil", "Taille du texte", "Langue"])
         self.assertEqual(panels.nth(1).locator(".line .what b").all_inner_texts(), ["Qualité", "Son surround 5.1"])
         self.assertEqual(panels.nth(2).locator(".line .what b").all_inner_texts(), ["Langues du son", "Langues des sous-titres", "Sous-titres d’office"])
-        self.assertEqual(panels.nth(3).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Rangées par rayon", "Nouveautés", "Pas encore vu", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…"])
+        self.assertEqual(panels.nth(3).locator(".line .what b").all_inner_texts(), ["Bibliothèque de musique", "Bibliothèque de films", "Rangées par rayon", "Nouveautés", "Pas encore vu", "Pas encore vu : trier par", "Tes demandes sont arrivées", "Parce que tu as aimé…", "Masquer les épisodes non vus"])
 
     def test_the_tabs_stay_at_the_top_when_the_page_scrolls(self):
         self.page.set_viewport_size({"width": 1280, "height": 300})
@@ -9969,9 +10165,9 @@ class RequestsUiCase(unittest.TestCase):
         self.assertEqual(self.errors, [], "erreurs JavaScript")
 
     # --- Aides ---------------------------------------------------------------
-    def session(self, name, lang=None, device=None, width=1280):
-        """Une page connectée en tant que `name` (l'administrateur se connecte avec `secret`)."""
-        context = self.browser.new_context(viewport={"width": width, "height": 900})
+    def session(self, name, lang=None, device=None, width=1280, headers=None):
+        """Une page connectée en tant que `name` (l'administrateur se connecte avec `secret`). `headers` : envoyés avec chaque requête (`X-Forwarded-For` : le serveur croit la page venue d'ailleurs que du réseau local)."""
+        context = self.browser.new_context(viewport={"width": width, "height": 900}, extra_http_headers=headers)
         self.pages.append(context)
         if lang:
             context.add_cookies([{"name": "hub_lang", "value": lang, "url": self.base}])
@@ -10116,6 +10312,169 @@ class TestOpenInVlcWithAccounts(RequestsUiCase):
         page.locator("#views > .view:visible .actions .btn", has_text="Ouvrir dans VLC").wait_for()
         page.locator("#views > .view:visible .epmore").first.click()
         page.locator(".menu .opt", has_text="Ouvrir dans VLC").wait_for()
+
+
+class TestRemoteDownloadInTheUi(RequestsUiCase):
+    """« Télécharger à distance » : la case de la fenêtre des droits d'un compte, et ce que l'interface fait quand la connexion ne vient pas du réseau local.
+    Le serveur est réel : une page qui envoie `X-Forwarded-For` y passe pour une connexion venue d'Internet (voir tests/test_remote.py). `bob` retrouve le droit au début de chaque test."""
+    AWAY = {"X-Forwarded-For": "8.8.8.8"}
+    REFUSED = "téléchargement non autorisé à distance"
+
+    def setUp(self):
+        super().setUp()
+        from hub import accounts
+        accounts.set_remote_download(self.hub.db, self.bob["id"], True)
+
+    def item(self, lib, title):
+        return next(i for i in self.call("admin", f"/api/library/{lib}")["items"] if i["title"] == title)["id"]
+
+    def remote_right(self, name):
+        return next(u for u in self.call("admin", "/api/users")["users"] if u["name"] == name)["remote_download"]
+
+    def rights_box(self, page, who):
+        page.goto(self.base + "/#/admin?tab=comptes")
+        page.locator(f'[data-key="rights-{who["id"]}"]').click()
+        box = page.locator(".menu.rightsbox")
+        box.wait_for()
+        return box
+
+    def withdraw(self):
+        from hub import accounts
+        accounts.set_remote_download(self.hub.db, self.bob["id"], False)
+
+    def toasts(self, page):
+        """Les messages que la page affiche en toast à partir d'ici (relevés à chaque appel de `Hub.toast`)."""
+        page.evaluate("() => { window.shown = []; var t = Hub.toast; Hub.toast = function (m) { window.shown.push(m); return t.apply(this, arguments); }; }")
+        return lambda: page.evaluate("window.shown")
+
+    # --- La case ---------------------------------------------------------------
+    def test_the_right_is_set_in_the_rights_box_and_read_again_when_reopened(self):
+        page = self.session("admin")
+        box = self.rights_box(page, self.bob)
+        line = page.locator(f'[data-user="{self.bob["id"]}"]')
+        row = box.locator(".rrow[data-remote-right]")
+        self.assertEqual(row.locator("b").inner_text(), "Télécharger à distance")
+        hint = box.locator("[data-remote-hint]").inner_text()
+        self.assertIn("ts.net", hint)
+        self.assertIn("à la maison", hint)
+        self.assertIn("copie", hint)                                                                                       # le droit n'empêche pas de copier ce qui se lit
+        self.assertIn("« Lecture »", hint)                                                                                  # le nom du droit, tel que la fenêtre l'affiche
+        self.assertIn("Lecture", box.inner_text())
+        yes, no = row.locator('[data-key="r-remote-yes"]'), row.locator('[data-key="r-remote-no"]')
+        self.assertEqual((yes.inner_text().strip("✓ \n"), no.inner_text().strip("✓ \n")), ("Oui", "Non"))
+        self.assertEqual((yes.get_attribute("aria-pressed"), no.get_attribute("aria-pressed")), ("true", "false"))        # un compte l'a par défaut
+        self.assertTrue(yes.evaluate("e => e.classList.contains('f')") and no.evaluate("e => e.classList.contains('f')"))       # atteignables à la télécommande
+        no.click()
+        self.assertTrue(self.remote_right("bob"))                                                                         # rien n'est écrit avant « Enregistrer »
+        with page.expect_response(lambda r: r.url.endswith("/remote_download")):
+            box.locator(".btn", has_text="Enregistrer").click()
+        line.locator("[data-rights]", has_text="Télécharger à distance : non").wait_for()
+        self.assertFalse(self.remote_right("bob"))
+        box = self.rights_box(page, self.bob)
+        self.assertEqual(box.locator('[data-key="r-remote-no"]').get_attribute("aria-pressed"), "true")                   # relue à la réouverture
+        box.locator('[data-key="r-remote-yes"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        line.locator("[data-rights]", has_text="Télécharger à distance : oui").wait_for()
+        self.assertTrue(self.remote_right("bob"))
+
+    def test_an_administrator_has_no_box_for_it_and_always_downloads(self):
+        page = self.session("admin")
+        page.goto(self.base + "/#/admin?tab=comptes")
+        line = page.locator("[data-user]", has=page.locator("[data-upload]"))
+        line.wait_for()
+        self.assertIn("Télécharger à distance : toujours", line.locator("[data-upload]").inner_text())
+        self.assertEqual(line.locator('[data-key^="rights-"]').count(), 0)
+
+    def test_a_failed_save_of_the_right_is_said_and_the_rest_stays_saved(self):
+        page = self.session("admin")
+        page.route("**/remote_download", lambda route: route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "base verrouillée"})))
+        box = self.rights_box(page, self.bob)
+        box.locator('[data-key="r-remote-no"]').click()
+        box.locator('[data-key="r-request-no"]').click()
+        box.locator(".btn", has_text="Enregistrer").click()
+        expect(box.locator(".formerr")).to_contain_text("« Télécharger à distance » n’a pas été enregistré : base verrouillée")
+        expect(box.locator(".formerr")).to_contain_text("Le reste est enregistré.")
+        self.assertTrue(self.remote_right("bob"))
+        self.assertFalse(next(u for u in self.call("admin", "/api/users")["users"] if u["name"] == "bob")["can_request"])
+
+    # --- Les boutons Télécharger ---------------------------------------------------
+    def assert_no_download_anywhere(self, page):
+        """La fiche d'un film, le menu de sa carte, la fiche d'une série (la saison) et le menu d'un épisode, la fiche d'un album : aucun « Télécharger »."""
+        film, dark, album = self.item("films", "Inception"), self.item("series", "Dark"), self.item("musique", "Discovery")
+        actions = "#views > .view:visible .actions .btn"
+        self.open(page, "#/i/" + film)
+        page.locator(actions, has_text="Signaler un problème").wait_for()
+        self.assertEqual(page.locator(actions, has_text="Télécharger").count(), 0)
+        self.open(page, "#/l/films")
+        page.locator(f'#views > .view:visible .card[data-key="{film}"] .qbtn').click()
+        page.locator(".menu .opt", has_text="Signaler un problème").wait_for()
+        self.assertEqual(page.locator(".menu .opt", has_text="Télécharger").count(), 0)
+        page.keyboard.press("Escape")
+        self.open(page, "#/i/" + dark)
+        page.locator(actions, has_text="Signaler un problème").wait_for()
+        self.assertEqual(page.locator(actions, has_text="Télécharger").count(), 0)
+        page.locator("#views > .view:visible .epmore").first.click()
+        page.locator(".menu .opt", has_text="Signaler un problème").wait_for()
+        self.assertEqual(page.locator(".menu .opt", has_text="Télécharger").count(), 0)
+        page.keyboard.press("Escape")
+        self.open(page, "#/i/" + album)
+        page.locator("#views > .view:visible .actions .btn.primary").wait_for()
+        self.assertEqual(page.locator(actions, has_text="Télécharger").count(), 0)
+
+    def test_away_from_home_without_the_right_there_is_no_download_button(self):
+        self.withdraw()
+        self.assert_no_download_anywhere(self.session("bob", headers=self.AWAY))
+
+    def test_at_home_without_the_right_the_download_stays(self):
+        self.withdraw()
+        page = self.session("bob")
+        self.open(page, "#/i/" + self.item("films", "Inception"))
+        page.locator("#views > .view:visible .actions .btn", has_text="Télécharger").wait_for()
+
+    def test_away_from_home_with_the_right_the_download_stays(self):
+        page = self.session("bob", headers=self.AWAY)
+        self.open(page, "#/i/" + self.item("films", "Inception"))
+        page.locator("#views > .view:visible .actions .btn", has_text="Télécharger").wait_for()
+
+    # --- Un refus malgré tout ------------------------------------------------------
+    def test_a_refusal_after_the_right_is_withdrawn_is_a_toast_and_no_broken_screen(self):
+        page = self.session("bob", headers=self.AWAY)
+        self.open(page, "#/i/" + self.item("films", "Inception"))
+        button = page.locator("#views > .view:visible .actions .btn", has_text="Télécharger")
+        button.wait_for()                                                                                                 # la page a été chargée quand le droit existait
+        shown = self.toasts(page)
+        self.withdraw()
+        button.click()
+        expect(page.locator("#toast")).to_have_text(self.REFUSED)
+        self.assertEqual([m for m in shown() if "non autorisé" in m], [self.REFUSED])
+        expect(page.locator("#dlbar")).to_be_hidden()
+        self.assertIn("/#/i/", page.url)                                                                                  # la page n'a pas été remplacée par la réponse JSON
+        page.locator("#views > .view:visible .actions .btn", has_text="Signaler un problème").wait_for()
+
+    def test_a_refused_season_stops_at_the_first_file_with_one_message(self):
+        page = self.session("bob", headers=self.AWAY)
+        self.open(page, "#/i/" + self.item("series", "Dark"))
+        button = page.locator("#views > .view:visible .actions .btn", has_text="Télécharger")
+        button.wait_for()
+        shown = self.toasts(page)
+        self.withdraw()
+        button.click()
+        page.locator(".menu .opt", has_text="Toute la série").click()
+        expect(page.locator("#toast")).to_have_text(self.REFUSED)
+        expect(page.locator("#dlbar")).to_be_hidden()
+        page.wait_for_function("() => !Object.keys(localStorage).some(function (k) { return k.indexOf('hub.dlq.') === 0 && !/\\.lock$/.test(k); })")        # la file est vidée, pas en pause
+        page.wait_for_timeout(3500)                                                                                       # rien ne revient ensuite : ni deuxième message, ni file relancée
+        self.assertEqual([m for m in shown() if "non autorisé" in m], [self.REFUSED])
+        expect(page.locator("#dlbar")).to_be_hidden()
+
+    def test_the_refusal_is_in_english_in_english(self):
+        page = self.session("bob", lang="en", headers=self.AWAY)
+        self.open(page, "#/i/" + self.item("films", "Inception"))
+        button = page.locator("#views > .view:visible .actions .btn", has_text="Download")
+        button.wait_for()
+        self.withdraw()
+        button.click()
+        expect(page.locator("#toast")).to_have_text("download not allowed away from home")
 
 
 class TestRequestsInTheUi(RequestsUiCase):

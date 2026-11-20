@@ -1,3 +1,13 @@
+## 0.49.0 — 2026-11-20
+- Dans Paramètres › Affichage, « Masquer les épisodes non vus » floute ce que tu choisis (l'image, l'image et le résumé, ou tout) pour les épisodes d'une série que tu n'as pas encore commencés.
+- Le numéro et la durée de l'épisode restent lisibles, et le flou disparaît dès que tu le commences ou le marques comme vu.
+- Dans « Reprendre », l'épisode suivant montre alors l'image de la série, et son titre reste caché si tu as choisi « Tout ».
+
+## 0.48.0 — 2026-11-20
+- Dans Administration › Comptes, un nouveau droit « Télécharger à distance » : un compte peut garder le téléchargement à la maison sans pouvoir télécharger quand il passe par Internet ou par Tailscale.
+- Si ce droit t'est retiré pendant que tu navigues, un seul message te le dit, et une saison s'arrête dès le premier épisode.
+- L'onglet État dit maintenant d'où vient chaque connexion : Local, Tailscale ou Internet.
+
 ## 0.47.0 — 2026-11-20
 - Un roman se lit maintenant page par page : la page tient dans l'écran, et tu la tournes avec les flèches, en touchant un bord ou en glissant le doigt.
 - Sur un grand écran en paysage, deux pages s'affichent côte à côte, comme un livre ouvert.
