@@ -159,6 +159,31 @@ class TestOrder(RecommendCase):
         self.assertEqual(self.sf_order([film("c_sf2", "Contact", genres=["SF"], year="1997", vote=9.0), film("c_sf4", "Tenet", genres=["SF"], year="2020", vote=9.5)]),
                          ["c_sf4", "c_sf2", "c_sf1", "c_sf3"])                          # bonus plafonné des deux côtés : la note départage avant le titre
 
+    def ranking(self, extra=()):
+        """(index, ancre « a1 », portée d'Alice) sur les films d'essai, dont `extra` remplace ou complète les lignes ; la note montrée est celle de l'étiquette, telle quelle."""
+        rows = {r["id"]: r for r in FILMS}
+        rows.update({r["id"]: r for r in extra})
+        self.fill("films", list(rows.values()))
+        idx = recommend.build(self.db, lambda meta: (meta.get("tmdb_rating") or {}).get("vote"))
+        return idx, idx["items"]["a1"], recommend.Scope(idx, "movie", {}, {"films"})
+
+    def test_a_candidate_whose_proximity_is_exactly_the_minimum_is_not_offered(self):
+        idx, anchor, scope = self.ranking()
+        allowed = lambda ident: ident != "a1"
+        offered = [cand.row["id"] for cand, _ in recommend.ranked(idx, anchor, allowed, scope)]
+        self.assertIn("c_rare", offered)
+        edge = recommend.breakdown(anchor, idx["items"]["c_rare"], scope).score
+        self.assertGreater(edge, 0)
+        with mock.patch.object(recommend, "MIN_SCORE", edge):
+            kept = [cand.row["id"] for cand, _ in recommend.ranked(idx, anchor, allowed, scope)]
+        self.assertNotIn("c_rare", kept)
+        self.assertEqual(kept, [i for i in offered if recommend.breakdown(anchor, idx["items"][i], scope).score > edge])
+
+    def test_between_equals_a_zero_rating_comes_after_any_other(self):
+        idx, anchor, scope = self.ranking([film("c_sf2", "Contact", genres=["SF"], year="1997", vote=0.0), film("c_sf4", "Tenet", genres=["SF"], year="2020", vote=0.5)])
+        ranked = [cand.row["id"] for cand, _ in recommend.ranked(idx, anchor, lambda ident: ident.startswith("c_sf"), scope)]
+        self.assertEqual(ranked, ["c_sf1", "c_sf3", "c_sf4", "c_sf2"])         # les deux notes sont au plancher du malus : « Contact » ne passe pas devant « Tenet » à l'ordre du titre
+
     def test_a_decade_alone_is_not_enough(self):
         self.rate(self.alice, "a1", "a2")
         self.assertNotIn("c_dec", self.by_anchor(self.alice)["a1"])

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from tests.rig import MiniHub, call
 from tests.test_server_views import entry, item
-from hub import accounts, config
+from hub import accounts, config, suggestions
 from hub import db as database
 from hub.db import Database
 
@@ -415,6 +415,20 @@ class TestReportsRead(ReportCase):
         self.hub.activity.decide(self.alice["id"], "alice", "203.0.113.7", "x", "pc", "v1", "Alpha", {"video": ["h264"] * 50, "audio": ["w" * 500] * 50}, "direct", ['"' * 400] * 50)       # les guillemets sont doublés une fois écrits en JSON : le pire cas
         self.report(self.alice, item="m1", cause="playback")
         self.assertLess(len(self.db.one("SELECT context FROM suggestions")[0]), 8000)
+
+    def test_the_context_is_kept_in_plain_characters_not_escaped(self):
+        self.hub.activity.decide(self.alice["id"], "alice", "203.0.113.7", "x", "pc", "v1", "Alpha", {}, "transcode", ["Piste audio « française » non lue"])
+        self.report(self.alice, item="m1", entry="v1", cause="playback")
+        raw = self.db.one("SELECT context FROM suggestions")[0]
+        self.assertIn("« française »", raw)
+        self.assertNotIn("\\u", raw)
+
+    def test_everything_lists_all_suggestions_and_only_the_reports_when_asked(self):
+        self.suggest(self.alice, "Une idée")
+        self.report(self.alice, item="m1", cause="image")
+        self.assertEqual([s["category"] for s in suggestions.everything(self.db)], ["bug", "improvement"])
+        self.assertEqual([s["category"] for s in suggestions.everything(self.db, reports=True)], ["bug"])
+        self.assertEqual(len(suggestions.everything(self.db, reports=False)), 2)
 
     def test_the_badge_counts_a_new_report_and_reports_are_filtered_for_the_admin(self):
         first = self.shown(self.report(self.alice, item="m1", cause="image"))

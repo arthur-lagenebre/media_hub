@@ -228,6 +228,7 @@ class TestPersistence(LabelCase):
         for junk in ("texte", ["a"], {"films": 5, "series": "", "musique": None}, None):
             self.db.kv_set(labels.KEY, junk)
             self.assertEqual(self.label_of("films"), "Films")
+            self.assertEqual(labels.stored(self.db), {})                 # un libellé vide n'est pas une surcharge
         self.assertEqual(self.rename("films", {"label": "Cinéma"})[0], 200)
         self.assertEqual(self.label_of("films"), "Cinéma")
 

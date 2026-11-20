@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import time
 import types
 import unittest
 from datetime import date, timedelta
@@ -17,7 +18,9 @@ from hub import config
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
 
-from hub import enrich, scan  # noqa: E402
+from libraries.video.tmdb import TmdbAuthError, TmdbError  # noqa: E402
+
+from hub import enrich, missing, scan  # noqa: E402
 from hub.db import Database  # noqa: E402
 
 JPEG = b"\xff\xd8\xff\xe0" + b"x" * 20
@@ -750,6 +753,201 @@ class TestArtistPass(TempCase):
         self.assertEqual(self.run_pass()[2], ["z-id"])
         self.db.kv_set(enrich.artist_key("a-id"), sheet)
         self.assertEqual(self.run_pass(force=True)[2], ["z-id", "a-id"])
+
+
+class FakeSeasons:
+    """Un TMDB qui donne la saison `number` d'après `answers` ({numéro: fiche, ou exception})."""
+
+    def __init__(self, answers):
+        self.answers = answers
+
+    def season(self, show_id, number):
+        answer = self.answers[number]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+class TestSeasonSummaries(unittest.TestCase):
+    def test_each_season_gives_its_overview_under_its_number(self):
+        tmdb = FakeSeasons({1: {"overview": "Un"}, 2: {"overview": "Deux"}})
+        self.assertEqual(enrich.season_summaries(tmdb, 5, [1, 2]), {"1": "Un", "2": "Deux"})
+
+    def test_a_season_without_overview_or_that_tmdb_does_not_know_is_left_out(self):
+        tmdb = FakeSeasons({1: {"overview": ""}, 2: {"overview": None}, 3: {}, 4: TmdbError("introuvable"), 5: {"overview": "Cinq"}})
+        self.assertEqual(enrich.season_summaries(tmdb, 5, [1, 2, 3, 4, 5]), {"5": "Cinq"})
+
+    def test_a_refused_key_stops_everything(self):
+        with self.assertRaises(TmdbAuthError):
+            enrich.season_summaries(FakeSeasons({1: TmdbAuthError("clé refusée")}), 5, [1])
+
+
+class TestRatingFreshnessWithoutDate(unittest.TestCase):
+    def test_a_rating_without_a_date_is_as_old_as_can_be(self):
+        for rating in ({"tmdb": 5}, {"tmdb": 5, "at": None}, {"tmdb": 5, "at": 0}):
+            self.assertFalse(enrich.rating_is_fresh(rating, 5, enrich.RATING_STALE), rating)
+            self.assertTrue(enrich.rating_is_fresh(rating, 5, enrich.RATING_STALE - 1), rating)
+            self.assertFalse(enrich.rating_is_fresh(rating, 5, 10, force=True, since=1), rating)
+            self.assertTrue(enrich.rating_is_fresh(rating, 5, 10, force=True, since=0), rating)
+
+
+class FakeMovies:
+    """Un TMDB qui décrit les films demandés (`movie/<n>`) ou échoue pour ceux de `failing` ; il note ce qu'on lui demande."""
+
+    def __init__(self, failing=(), error=TmdbError):
+        self.failing, self.error, self.asked = set(failing), error, []
+
+    def get(self, endpoint):
+        self.asked.append(endpoint)
+        ident = int(endpoint.split("/")[1])
+        if ident in self.failing:
+            raise self.error(f"échec {ident}")
+        return {"id": ident, "title": f"Film {ident}", "release_date": "2001-02-03"}
+
+
+def saga_pass(tmdb, owned=(), films=(), log=None, force=False):
+    return enrich.SagaPass(tmdb, None, {"films": {str(i): {} for i in films}, "collections": {}}, {i: {} for i in owned}, (log if log is not None else []).append, force)
+
+
+class TestSagaPassFilms(unittest.TestCase):
+    def test_a_film_is_kept_with_its_title_its_date_its_year_and_no_poster_when_tmdb_has_none(self):
+        run = saga_pass(None)
+        run.keep({"id": 7, "title": "Sept", "release_date": "2001-02-03"})
+        self.assertEqual(run.info["films"], {"7": {"title": "Sept", "date": "2001-02-03", "year": "2001", "poster": ""}})
+        self.assertEqual(run.counts["films"], 1)
+
+    def test_a_film_without_title_or_date_is_kept_with_empty_texts(self):
+        run = saga_pass(None)
+        run.keep({"id": 7, "title": None, "release_date": None})
+        run.keep({"id": 8})
+        self.assertEqual(run.info["films"], {"7": {"title": "", "date": "", "year": "", "poster": ""}, "8": {"title": "", "date": "", "year": "", "poster": ""}})
+
+    def test_a_film_that_tmdb_cannot_describe_is_counted_said_and_the_next_one_goes_on(self):
+        log = []
+        run = saga_pass(FakeMovies(failing=[5]), log=log)
+        run.describe(5)
+        run.describe(6)
+        self.assertEqual((run.counts, log), ({"sagas": 0, "films": 1, "failed": 1}, ["  film 5 : échec 5"]))
+        self.assertIn("6", run.info["films"])
+
+    def test_a_refused_key_while_describing_stops_everything(self):
+        with self.assertRaises(TmdbAuthError):
+            saga_pass(FakeMovies(failing=[5], error=TmdbAuthError)).describe(5)
+
+    def test_a_known_collection_describes_only_the_films_neither_owned_nor_described(self):
+        tmdb = FakeMovies()
+        run = saga_pass(tmdb, owned=[2], films=[3])
+        run.describe_missing({"films": [1, 2, 3, 4]})
+        self.assertEqual(tmdb.asked, ["movie/1", "movie/4"])
+
+    def test_the_parts_of_a_collection_come_in_release_order_and_those_without_a_date_come_last(self):
+        parts = [{"id": 5, "release_date": "2005-01-01"}, {"id": 4, "release_date": ""}, {"id": 2, "release_date": "2001-01-01"}, {"id": 3}, {"id": 1, "release_date": "2005-01-01"}]
+        run = saga_pass(FakeCollections(parts))
+        run.refresh("Saga", [tagged(1)])
+        self.assertEqual(run.info["collections"]["Saga"]["films"], [2, 1, 5, 3, 4])
+
+
+class TestTopBilled(unittest.TestCase):
+    def film(self, order, votes):
+        return {"order": order, "vote_count": votes}
+
+    def test_the_first_ten_roles_of_a_film_with_enough_votes_count(self):
+        self.assertTrue(enrich.is_top_billed(self.film(0, enrich.MIN_VOTES)))
+        self.assertTrue(enrich.is_top_billed(self.film(enrich.MAX_ORDER, enrich.MIN_VOTES)))
+        self.assertTrue(enrich.is_top_billed(self.film(0, 10 * enrich.MIN_VOTES)))
+
+    def test_one_role_too_far_or_one_vote_too_few_does_not(self):
+        self.assertFalse(enrich.is_top_billed(self.film(enrich.MAX_ORDER + 1, enrich.MIN_VOTES)))
+        self.assertFalse(enrich.is_top_billed(self.film(0, enrich.MIN_VOTES - 1)))
+
+    def test_an_order_or_a_count_that_is_not_a_number_does_not(self):
+        for order, votes in ((None, 500), (0, None), ("0", 500), (0, "500"), (1.5, 500), (0, 500.5)):
+            self.assertFalse(enrich.is_top_billed(self.film(order, votes)), (order, votes))
+        self.assertFalse(enrich.is_top_billed({}))
+
+
+class TestCredits(unittest.TestCase):
+    def test_only_the_films_with_an_integer_identifier_are_kept(self):
+        credits = {"cast": [{"id": 1}, "texte", {"id": "2"}, {"title": "sans identifiant"}, None, 5, {"id": 3, "title": "Trois"}], "crew": "pas une liste"}
+        self.assertEqual(enrich._credits(credits, "cast"), [{"id": 1}, {"id": 3, "title": "Trois"}])
+        self.assertEqual(enrich._credits(credits, "crew"), [])
+        self.assertEqual(enrich._credits(credits, "absent"), [])
+        self.assertEqual(enrich._credits("pas un dictionnaire", "cast"), [])
+
+    def test_a_film_without_title_or_poster_is_listed_with_empty_texts(self):
+        credits = {"crew": [{"id": 1, "job": "Director", "release_date": "2000-01-01"}],
+                   "cast": [{"id": 2, "order": 0, "vote_count": 500, "release_date": "2001-01-01", "title": None, "poster_path": None}]}
+        with mock.patch.object(missing, "released", return_value=True):
+            found = enrich.person_films(credits)
+        self.assertEqual(found, [{"tmdb": 2, "title": "", "year": "2001", "date": "2001-01-01", "role": "actor", "poster_path": ""},
+                                 {"tmdb": 1, "title": "", "year": "2000", "date": "2000-01-01", "role": "director", "poster_path": ""}])
+
+
+class TestPersonFreshness(unittest.TestCase):
+    def test_a_sheet_kept_for_less_than_the_delay_is_fresh_unless_forced(self):
+        self.assertTrue(enrich.is_fresh({"at": 100, "films": []}, 100 + enrich.PERSON_STALE - 1, False))
+        self.assertFalse(enrich.is_fresh({"at": 100, "films": []}, 100 + enrich.PERSON_STALE, False))
+        self.assertFalse(enrich.is_fresh({"at": 100, "films": []}, 101, True))
+        self.assertFalse(enrich.is_fresh(None, 101, False))
+
+    def test_a_sheet_without_a_date_is_as_old_as_can_be(self):
+        self.assertFalse(enrich.is_fresh({"films": []}, enrich.PERSON_STALE, False))
+        self.assertTrue(enrich.is_fresh({"films": []}, enrich.PERSON_STALE - 1, False))
+
+
+class TestEnrichPerson(TempCase):
+    def enrich_person(self, known=None, counts=None, **options):
+        log = []
+        if known is not None:
+            self.db.kv_set(enrich.person_key(5), known)
+        with mock.patch.object(enrich, "tmdb_client", return_value=("tmdb", "posters")) as client, \
+                mock.patch.object(enrich, "fetch_person", return_value=counts or {"films": 2, "failed": 0}) as fetch:
+            result = enrich.enrich_person("cfg", self.db, 5, log.append, **options)
+        return result, log, client, fetch
+
+    def test_a_fresh_sheet_is_not_asked_again_by_default_and_gives_its_count(self):
+        result, log, client, fetch = self.enrich_person({"at": int(time.time()), "films": [{"tmdb": 1}, {"tmdb": 2}, {"tmdb": 3}]})
+        self.assertEqual((result, log), ({"films": 3, "failed": 0}, []))
+        client.assert_not_called()
+        fetch.assert_not_called()
+
+    def test_a_fresh_sheet_without_a_list_of_films_counts_none(self):
+        result, _, client, _ = self.enrich_person({"at": int(time.time()), "films": None})
+        self.assertEqual(result, {"films": 0, "failed": 0})
+        client.assert_not_called()
+
+    def test_force_asks_again_without_reading_the_cache(self):
+        _, _, client, fetch = self.enrich_person({"at": int(time.time()), "films": []}, force=True)
+        client.assert_called_once_with("cfg", read=False)
+        fetch.assert_called_once()
+
+    def test_an_unknown_person_is_asked_with_the_cache_read_and_said_in_the_journal(self):
+        result, log, client, _ = self.enrich_person()
+        client.assert_called_once_with("cfg", read=True)
+        self.assertEqual((result, log), ({"films": 2, "failed": 0}, ["  personne 5 : 2 film(s) retenu(s)"]))
+
+    def test_a_failure_is_given_back_and_nothing_is_said_of_it_here(self):
+        result, log, _, _ = self.enrich_person(counts={"films": 0, "failed": 1})
+        self.assertEqual((result, log), ({"films": 0, "failed": 1}, []))
+
+
+class TestAlbumArtists(TempCase):
+    def album(self, ident, grp, **meta):
+        return item(ident, "musique", "album", grp=grp, meta=meta)
+
+    def test_the_artists_with_an_identifier_their_ids_and_their_existing_folders(self):
+        (self.tmp / "Daft Punk").mkdir()
+        self.db.replace_library("musique", [
+            self.album("a1", "Daft Punk", artist_mbid="mb1", artist_id="id1", artist_dir="Daft Punk"),
+            self.album("a2", "Daft Punk (bis)", artist_mbid="mb1", artist_id="id1b", artist_dir="Absent"),          # un autre dossier, qui n'existe pas
+            self.album("a3", "Absent", artist_mbid="mb2", artist_id="id2", artist_dir="Introuvable"),
+            self.album("a4", "Sans dossier", artist_mbid="mb3", artist_id="id3"),
+            self.album("a5", "Sans identifiant", artist_id="id4", artist_dir="Daft Punk"),
+            self.album("a6", "Sans id d'artiste", artist_mbid="mb4")], [])
+        artists, ids, homes = enrich.album_artists(self.db, types.SimpleNamespace(id="musique", path=self.tmp))
+        self.assertEqual(artists, {"mb1": "Daft Punk", "mb2": "Absent", "mb3": "Sans dossier", "mb4": "Sans id d'artiste"})
+        self.assertEqual(ids, {"mb1": {"id1", "id1b"}, "mb2": {"id2"}, "mb3": {"id3"}})
+        self.assertEqual(homes, {"id1": self.tmp / "Daft Punk"})
 
 
 if __name__ == "__main__":
