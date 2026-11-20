@@ -1,3 +1,7 @@
+## 0.50.0 — 2026-11-20
+- En musique, le décompte en haut de la bibliothèque distingue maintenant les albums, les EP et les singles.
+- Les morceaux s'enchaînent plus vite : le suivant se prépare pendant les dernières secondes de celui que tu écoutes.
+
 ## 0.49.0 — 2026-11-20
 - Dans Paramètres › Affichage, « Masquer les épisodes non vus » floute ce que tu choisis (l'image, l'image et le résumé, ou tout) pour les épisodes d'une série que tu n'as pas encore commencés.
 - Le numéro et la durée de l'épisode restent lisibles, et le flou disparaît dès que tu le commences ou le marques comme vu.
