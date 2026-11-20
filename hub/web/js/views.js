@@ -417,10 +417,11 @@
   H.playHref = playHref;
   // `onRemove(card)` : appelée une fois la carte retirée de « Reprendre » (clic sur ✕, clic droit / appui long, touche Suppr ou Menu)
   // La ligne « S1 · E2 · Titre » (série), « Tome 3 » (livre), ou le titre de l'épisode ; rien pour un film.
-  // L'épisode suivant d'une série que le compte n'a pas commencé, quand il masque les épisodes non vus (H.spoiler) : la carte n'est pas floutée, elle montre l'image de la série et le numéro seul.
-  function unseenNext(c) { return c.item.type === 'show' && H.spoiler(c); }
+  // L'épisode suivant d'une série que le compte n'a pas commencé, quand il en masque la partie `part` (H.spoiler) : la carte n'est pas floutée, elle montre l'image de la série à la place
+  // de celle de l'épisode (`image`), et le numéro sans le titre (`title`).
+  function unseenNext(c, part) { return c.item.type === 'show' && H.spoiler(c, part); }
   function resumeLabel(c) {
-    if (c.item.type === 'show') return 'S' + (c.season || 1) + ' · E' + (c.number || '?') + (c.title && !unseenNext(c) ? ' · ' + c.title : '');
+    if (c.item.type === 'show') return 'S' + (c.season || 1) + ' · E' + (c.number || '?') + (c.title && !unseenNext(c, 'title') ? ' · ' + c.title : '');
     if (c.kind === 'book') return c.label ? H.t('Tome {n}', { n: c.label }) : c.title;
     return c.item.type === 'movie' ? '' : c.title;
   }
@@ -435,7 +436,7 @@
     var pic = h('div', { class: 'poster wide' }, h('span', { class: 'ph', style: '--h:' + H.hue(c.item.title) }, initial(c.item.title)));
     var drop = function () { if (this.parentNode) this.parentNode.removeChild(this); };
     var tryItem = function () { this.onerror = drop; this.src = '/img/item/' + c.item.id + '?w=480'; };
-    var own = !unseenNext(c);
+    var own = !unseenNext(c, 'image');
     pic.appendChild(h('img', { src: own ? '/img/entry/' + c.id + '?w=480' : '/img/item/' + c.item.id + '?w=480', alt: '', loading: 'lazy', onload: function () { this.classList.add('in'); }, onerror: own ? tryItem : drop }));
     if (c.resume && ratio > 0) pic.appendChild(h('div', { class: 'pbar' }, h('i', { style: 'width:' + Math.round(ratio * 100) + '%' })));
     return pic;
@@ -1096,12 +1097,12 @@
       var title = e.title || H.t('Épisode');
       return hidden ? [h('span', { class: 'spoiler', 'aria-hidden': 'true' }, title), h('span', { class: 'sronly' }, H.t('Épisode non vu'))] : title;
     }
-    // Une ligne de la liste : la vignette, le titre, le résumé, la durée, « vu », et le bouton « … » de l'épisode. Le numéro et la durée restent nets sur un épisode masqué.
+    // Une ligne de la liste : la vignette, le titre, le résumé, la durée, « vu », et le bouton « … » de l'épisode. Chaque partie est floutée selon le réglage (H.spoiler) ; le numéro et la durée restent nets.
     function episodeRow(d, e) {
-      var done = e.progress && e.progress.done, no = episodeNumber(e), hidden = H.spoiler(e);
-      return h('div', { class: 'epwrap' }, h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.go(playHref(e)); else H.actions.denyPlay(); } }, h('div', { class: 'thumb' }, episodeThumb(d, e, hidden)),
-        h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, no === '' ? '' : no + '.'), ' ', episodeTitle(e, hidden)),
-          e.summary ? h('div', { class: hidden ? 'su spoiler' : 'su', 'aria-hidden': hidden ? 'true' : null }, e.summary) : null,
+      var done = e.progress && e.progress.done, no = episodeNumber(e), hideSummary = H.spoiler(e, 'summary');
+      return h('div', { class: 'epwrap' }, h('button', { class: 'ep f', 'data-key': e.id, onclick: function () { if (H.actions.canPlay(d.library && d.library.id)) H.go(playHref(e)); else H.actions.denyPlay(); } }, h('div', { class: 'thumb' }, episodeThumb(d, e, H.spoiler(e, 'image'))),
+        h('div', { class: 'txt' }, h('div', { class: 'ti' }, h('b', null, no === '' ? '' : no + '.'), ' ', episodeTitle(e, H.spoiler(e, 'title'))),
+          e.summary ? h('div', { class: hideSummary ? 'su spoiler' : 'su', 'aria-hidden': hideSummary ? 'true' : null }, e.summary) : null,
           h('div', { class: 'du' }, [e.duration ? H.dur(e.duration) : '', e.date || ''].filter(Boolean).join(' · '))),
         done ? h('span', { class: 'seen' }, H.icon('check')) : null),
         H.button('', 'more', { class: 'epmore', 'aria-label': H.t('Actions de l’épisode'), 'data-key': 'm' + e.id, onclick: function () { H.actions.episodeMenu(e, load, d.library && d.library.id, d.id); } }));
@@ -1788,7 +1789,9 @@
       { key: 'home_recommend', title: H.t('Parce que tu as aimé…'), note: H.t('Sur la page d’accueil'), choices: ON_OFF },
       { key: 'hide_spoilers', title: H.t('Masquer les épisodes non vus'), note: H.t('Sur les fiches des séries'),        // `show`, la valeur par défaut, est « Désactivé » : la liste montre d'abord ce qui est choisi d'office
         choices: [{ label: H.t('Désactivé'), detail: H.t('Titres, résumés et images de tous les épisodes en clair'), value: 'show' },
-          { label: H.t('Activé'), detail: H.t('Le titre, le résumé et l’image d’un épisode pas encore commencé sont floutés'), value: 'hide' }] }];
+          { label: H.t('Image seulement'), detail: H.t('L’image d’un épisode pas encore commencé est floutée'), value: 'image' },
+          { label: H.t('Image et résumé'), detail: H.t('L’image et le résumé d’un épisode pas encore commencé sont floutés, son titre reste lisible'), value: 'image_summary' },
+          { label: H.t('Tout'), detail: H.t('Le titre, le résumé et l’image d’un épisode pas encore commencé sont floutés'), value: 'all' }] }];
     function displayPanel() {
       var panel = h('section', { class: 'panel' }, h('h2', null, H.t('Affichage')));
       DISPLAY.forEach(function (setting) {

@@ -1790,18 +1790,19 @@ class TestVideoResume(UiCase):
 
 
 class TestSpoilers(UiCase):
-    """« Masquer les épisodes non vus » (réglage de compte `hide_spoilers`) : le titre, le résumé et l'image d'un épisode pas encore commencé sont floutés ; le numéro et la durée restent lisibles."""
+    """« Masquer les épisodes non vus » (réglage de compte `hide_spoilers`) : selon le choix du compte, l'image (`image`), l'image et le résumé (`image_summary`) ou tout, titre compris (`all`), d'un épisode pas encore commencé sont floutés ; le numéro et la durée restent lisibles."""
 
     def setUp(self):
         super().setUp()
         self.dark = self.item("series", "Dark")
         self.first, self.second, self.third = self.entries("series", "Dark")             # S1E1 « Pilote », S1E2 « Suite », S2E1 « Retour »
         self.api(f"/api/item/{self.dark['id']}/seen", {"done": False})
-        self.hide(False)
-        self.addCleanup(self.hide, False)
+        self.hide("show")
+        self.addCleanup(self.hide, "show")
 
-    def hide(self, on):
-        self.api("/api/me/settings", {"hide_spoilers": "hide" if on else "show"})
+    def hide(self, level):
+        """`level` : `show` (rien), `image`, `image_summary` ou `all`."""
+        self.api("/api/me/settings", {"hide_spoilers": level})
 
     def row(self, entry, page=None):
         return (page or self.page).locator(f"#views > .view:visible .ep[data-key='{entry['id']}']")
@@ -1819,7 +1820,7 @@ class TestSpoilers(UiCase):
     def test_an_episode_not_started_is_blurred_one_in_progress_or_seen_is_not_and_its_number_and_length_stay_readable(self):
         self.api("/api/progress", {"entry": self.second["id"], "position": 600, "duration": 3000})
         self.api(f"/api/entry/{self.third['id']}/seen", {"done": True})
-        self.hide(True)
+        self.hide("all")
         self.sheet()
         unseen = self.row(self.first)                                                    # le seul des trois qui a une image
         expect(unseen.locator(".ti .spoiler")).to_have_text("Pilote")                    # le vrai titre reste dans l'élément
@@ -1838,7 +1839,7 @@ class TestSpoilers(UiCase):
         expect(self.row(self.third).locator(".spoiler")).to_have_count(0)                # vu
 
     def test_marking_an_episode_seen_removes_the_blur_without_reloading(self):
-        self.hide(True)
+        self.hide("all")
         self.sheet()
         expect(self.row(self.first).locator(".spoiler")).to_have_count(3)               # titre, résumé, image
         self.page.evaluate("window.__same = 1")
@@ -1849,7 +1850,7 @@ class TestSpoilers(UiCase):
         self.assertEqual(self.page.evaluate("window.__same"), 1)
 
     def test_turning_the_setting_off_clears_the_blur_when_coming_back_to_the_sheet(self):
-        self.hide(True)
+        self.hide("all")
         self.sheet()
         expect(self.row(self.first).locator(".spoiler")).to_have_count(3)
         self.page.evaluate("window.__same = 1")
@@ -1864,7 +1865,7 @@ class TestSpoilers(UiCase):
         self.assertEqual(self.page.evaluate("window.__same"), 1)                           # sans recharger
 
     def test_the_menu_and_the_report_of_a_blurred_episode_name_it_by_its_number_only(self):
-        self.hide(True)
+        self.hide("all")
         self.sheet()
         self.view(f".epmore[data-key='m{self.first['id']}']").click()
         menu = self.page.locator(".menu")
@@ -1875,7 +1876,7 @@ class TestSpoilers(UiCase):
         expect(form).to_contain_text("S1 · E1")
         expect(form).not_to_contain_text("Pilote")
         self.page.keyboard.press("Escape")
-        self.hide(False)
+        self.hide("show")
         self.page.reload()                                                                 # réglage coupé : le titre revient
         self.view(f".epmore[data-key='m{self.first['id']}']").click()
         expect(self.page.locator(".menu")).to_contain_text("Pilote")
@@ -1885,7 +1886,7 @@ class TestSpoilers(UiCase):
         card = self.view(f".card[data-key='c{self.second['id']}']")
         self.open("#/")
         expect(card).to_contain_text("S1 · E2 · Suite")                                  # réglage coupé : le titre de l'épisode
-        self.hide(True)
+        self.hide("all")
         asked = []
         self.page.on("request", lambda r: asked.append(r.url))
         self.page.reload()                                                               # les réglages se lisent au chargement de la page
@@ -1901,8 +1902,8 @@ class TestSpoilers(UiCase):
         line = self.view(".panel .line").filter(has=self.page.locator("b", has_text=re.compile("^Masquer les épisodes non vus$")))
         expect(line).to_contain_text("Désactivé")
         line.locator("button", has_text="Changer").click()
-        self.page.locator(".menu .opt .lbl", has_text=re.compile("^Activé$")).click()
-        expect(line).to_contain_text("Activé")
+        self.page.locator(".menu .opt .lbl", has_text=re.compile("^Tout$")).click()
+        expect(line).to_contain_text("Tout")
         other = self.browser.new_context(viewport={"width": 1280, "height": 900})
         self.addCleanup(other.close)
         page = other.new_page()
@@ -1910,8 +1911,47 @@ class TestSpoilers(UiCase):
         self.sheet(page)
         expect(self.row(self.first, page).locator(".ti .spoiler")).to_have_text("Pilote")
 
+    def test_image_only_blurs_the_picture_and_leaves_the_title_and_summary_readable(self):
+        self.hide("image")
+        self.sheet()
+        unseen = self.row(self.first)
+        expect(unseen.locator("img.spoiler")).to_have_count(1)
+        expect(unseen.locator(".spoiler")).to_have_count(1)                              # l'image seule
+        expect(unseen.locator(".ti")).to_contain_text("Pilote")
+        expect(unseen.locator(".ti")).not_to_contain_text("Épisode non vu")
+        expect(unseen.locator(".su")).to_have_text("Début.")
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        expect(self.page.locator(".menu")).to_contain_text("Pilote")                    # le titre n'est pas caché : le menu le dit
+
+    def test_image_and_summary_blur_both_and_leave_the_title_readable(self):
+        self.hide("image_summary")
+        self.sheet()
+        unseen = self.row(self.first)
+        expect(unseen.locator("img.spoiler")).to_have_count(1)
+        expect(unseen.locator(".su.spoiler")).to_have_text("Début.")
+        expect(unseen.locator(".su")).to_have_attribute("aria-hidden", "true")
+        expect(unseen.locator(".ti .spoiler")).to_have_count(0)
+        expect(unseen.locator(".ti")).to_contain_text("Pilote")
+        expect(unseen.locator(".ti")).not_to_contain_text("Épisode non vu")
+        self.view(f".epmore[data-key='m{self.first['id']}']").click()
+        expect(self.page.locator(".menu")).to_contain_text("Pilote")
+
+    def test_resume_takes_the_picture_of_the_show_but_keeps_the_title_when_only_the_image_is_hidden(self):
+        self.api("/api/progress", {"entry": self.first["id"], "position": 2950, "duration": 3000})
+        card = self.view(f".card[data-key='c{self.second['id']}']")
+        for level in ("image", "image_summary"):
+            self.hide(level)
+            asked = []
+            self.page.on("request", lambda r: asked.append(r.url))
+            self.open("#/")
+            self.page.reload()                                                           # les réglages se lisent au chargement de la page
+            expect(card.locator("img")).to_have_attribute("src", re.compile("/img/item/" + self.dark["id"]))
+            expect(card.locator("img")).to_have_class(re.compile(r"(^|\s)in(\s|$)"))
+            self.assertEqual([u for u in asked if "/img/entry/" + self.second["id"] in u], [], level)
+            expect(card).to_contain_text("S1 · E2 · Suite")                              # le titre n'est pas caché
+
     def test_on_a_tv_the_focus_stays_visible_on_a_blurred_row(self):
-        self.hide(True)
+        self.hide("all")
         self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
         self.sheet()
         self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), "tv")
