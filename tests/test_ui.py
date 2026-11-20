@@ -11478,6 +11478,52 @@ class TestReportsInTheUi(RequestsUiCase):
         self.send_report(page, self.report_dialog(page), "playback")
         self.assertEqual([(s["item"], s["entry"], s["cause"]) for s in self.reports()], [(film, entry, "playback")])
 
+    def fail_the_plan(self, page):
+        page.route("**/api/play/*", lambda r: r.fulfill(status=500, json={"error": "Le fichier n'a pas pu être sondé."}) if r.request.method == "POST" else r.continue_())
+
+    def play_from_sheet(self, page, sheet, entry):
+        """Ouvre la fiche `sheet`, attend qu'elle soit dessinée, puis passe au lecteur de `entry` (un lien direct, comme un retour arrière peut en laisser), dont le plan ne vient pas."""
+        self.fail_the_plan(page)
+        self.open(page, "#/i/" + sheet)
+        self.view(page, ".hero").wait_for()
+        page.evaluate("hash => { location.hash = hash }", "#/play/" + entry)
+        page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
+
+    def reports_after_a_failed_plan(self, sheet, entry):
+        page = self.session("alice")
+        self.play_from_sheet(page, sheet, entry)
+        page.locator(".player .err .btn", has_text=self.ENTRY).click()
+        self.send_report(page, self.report_dialog(page), "playback")
+        return [(s["item"], s["entry"], s["cause"]) for s in self.reports()]
+
+    def test_the_player_error_panel_reports_the_episode_when_the_show_sheet_is_behind_it(self):
+        show = self.item("series", "Dark")
+        episode = self.entries("series", "Dark")[0]["id"]
+        self.assertEqual(self.reports_after_a_failed_plan(show, episode), [(show, episode, "playback")])
+
+    def test_the_player_error_panel_reports_the_track_when_the_album_sheet_is_behind_it(self):
+        album = self.item("musique", "Discovery")
+        track = self.entries("musique", "Discovery")[0]["id"]
+        self.assertEqual(self.reports_after_a_failed_plan(album, track), [(album, track, "playback")])
+
+    def test_the_player_error_panel_does_not_offer_the_report_when_the_sheet_behind_it_is_another_title(self):
+        other = self.item("films", "Inception")
+        stranger = self.entries("films", "Sans Etiquette")[0]["id"]
+        page = self.session("alice")
+        self.play_from_sheet(page, other, stranger)
+        expect(page.locator(".player .err .btn", has_text="Réessayer")).to_have_count(1)           # le panneau est dessiné en entier
+        expect(page.locator(".player .err .btn", has_text=self.ENTRY)).to_have_count(0)
+        self.assertEqual(self.reports(), [])
+
+    def test_the_player_error_panel_does_not_offer_the_report_when_nothing_is_behind_it(self):
+        stranger = self.entries("films", "Sans Etiquette")[0]["id"]
+        page = self.session("alice")
+        self.fail_the_plan(page)
+        self.open(page, "#/play/" + stranger)
+        page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
+        expect(page.locator(".player .err .btn", has_text="Réessayer")).to_have_count(1)
+        expect(page.locator(".player .err .btn", has_text=self.ENTRY)).to_have_count(0)
+
     def test_a_television_picks_the_cause_without_a_text_field_and_the_report_goes(self):
         item = self.item("films", "Inception")
         page = self.session("alice", device="tv")

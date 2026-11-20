@@ -167,10 +167,11 @@
       err.hidden = false; show(true);
       H.focus.first(err);
     }
-    // L'élément du fichier : celui du plan, ou, quand le plan n'est pas venu, la fiche gardée juste derrière le lecteur (voir toSheet) ; sans l'un ni l'autre, on ne sait pas quoi signaler.
+    // L'élément du fichier : celui du plan ou, quand le plan n'est pas venu, celui de la fiche gardée juste derrière le lecteur (voir toSheet), mais seulement si cette fiche contient ce fichier :
+    // un lien direct ou un retour arrière peuvent laisser la fiche d'un autre titre. Sans preuve, on ne sait pas quoi signaler.
     function itemOfFile() {
-      var below = H.below(), sheet = below && /^#\/i\/(\w+)$/.exec(below.hash);
-      return plan ? plan.item : sheet ? sheet[1] : '';
+      var below = H.below(), sheet = below && below.view.itemOf;
+      return plan ? plan.item : sheet ? sheet(id) : '';
     }
     function showError(message) {
       var item = itemOfFile();

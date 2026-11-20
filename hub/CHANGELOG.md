@@ -1,3 +1,6 @@
+## 0.50.1 — 2026-11-20
+- Quand une lecture est impossible, « Signaler un problème » ne vise plus un autre titre que celui que tu regardais : le bouton n'apparaît que si la fiche ouverte derrière le lecteur est bien la sienne.
+
 ## 0.50.0 — 2026-11-20
 - En musique, le décompte en haut de la bibliothèque distingue maintenant les albums, les EP et les singles.
 - Les morceaux s'enchaînent plus vite : le suivant se prépare pendant les dernières secondes de celui que tu écoutes.
