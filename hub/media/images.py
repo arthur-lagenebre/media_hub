@@ -17,7 +17,6 @@ import json
 import os
 import subprocess
 import threading
-import types
 import warnings
 from pathlib import Path
 
@@ -250,7 +249,7 @@ class Images:
         return found[0] if found else None
 
     def _book_cover(self, path, meta):
-        volume = types.SimpleNamespace(path=path, kind=meta.get("format", ""), info=meta.get("info") or {})        # ce que read_cover lit d'un Volume : le reste (rang, taille, date) ne sert pas à la couverture
+        volume = shelf.Volume(path, "", "", "", "", 0, 0, meta.get("format", ""), meta.get("info") or {})        # rangs, taille et date ne servent pas à read_cover : leurs mutants sont équivalents, gardés pour lire un vrai Volume
         try:
             return shelf.read_cover(volume)
         except Exception:
