@@ -74,14 +74,17 @@ class TestPrefs(PrefsCase):
         self.db.kv_set(prefs.KEY + "u1", "pas un dictionnaire")
         self.assertEqual(prefs.load(self.db, "u1"), ALL)
 
-    def test_unseen_episodes_are_shown_unless_the_account_hides_them(self):
+    def test_unseen_episodes_are_shown_unless_the_account_hides_their_image_their_image_and_summary_or_all(self):
         self.assertEqual(prefs.load(self.db, "u1")["hide_spoilers"], "show")
-        self.assertEqual(prefs.save(self.db, "u1", {"hide_spoilers": "hide"})["hide_spoilers"], "hide")
-        self.assertEqual(prefs.load(self.db, "u1")["hide_spoilers"], "hide")
+        for choice in ("image", "image_summary", "all", "show"):
+            self.assertEqual(prefs.save(self.db, "u1", {"hide_spoilers": choice})["hide_spoilers"], choice)
+            self.assertEqual(prefs.load(self.db, "u1")["hide_spoilers"], choice)
+        prefs.save(self.db, "u1", {"hide_spoilers": "image_summary"})
         self.assertEqual(prefs.load(self.db, "u2")["hide_spoilers"], "show")                  # par compte
-        with self.assertRaisesRegex(ValueError, "valeur inconnue pour hide_spoilers : flou"):
-            prefs.save(self.db, "u1", {"hide_spoilers": "flou"})
-        self.assertEqual(prefs.load(self.db, "u1")["hide_spoilers"], "hide")
+        for wrong in ("flou", "hide", "title"):                                               # `hide` : la valeur d'avant les quatre choix ; le titre seul n'est pas un choix
+            with self.assertRaisesRegex(ValueError, f"valeur inconnue pour hide_spoilers : {wrong}"):
+                prefs.save(self.db, "u1", {"hide_spoilers": wrong})
+        self.assertEqual(prefs.load(self.db, "u1")["hide_spoilers"], "image_summary")
 
     def test_the_recommendations_are_shown_unless_the_account_hides_them(self):
         self.assertEqual(prefs.load(self.db, "u1")["home_recommend"], "show")
