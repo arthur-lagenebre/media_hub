@@ -162,6 +162,15 @@ class TestTasks(JobsCase):
                 if ratings.called:
                     self.assertIs(ratings.call_args.args[-1], bool(force), (task, force))
 
+    def test_the_films_of_the_people_ask_for_the_force_only_when_told_to(self):
+        for force in (None, True):
+            with mock.patch.object(jobs.enrich, "enrich_people", return_value={}) as people, mock.patch.object(jobs.enrich, "enrich_person", return_value={}) as person:
+                extra = () if force is None else (force,)
+                self.wait(self.jobs.enrich_people([self.lib], "Films", *extra))
+                self.wait(self.jobs.enrich_person("Une Personne", 42, *extra))
+            self.assertIs(people.call_args.args[-1], bool(force), force)
+            self.assertIs(person.call_args.args[-1], bool(force), force)
+
     def test_the_tmdb_enrichments_end_with_the_ratings_and_count_both(self):
         for task, target in (("enrich", "enrich_shows"), ("enrich_sagas", "enrich_sagas")):
             with mock.patch.object(jobs.enrich, target, return_value={"sagas": 1, "failed": 2}), \
@@ -341,6 +350,20 @@ class TestProbeVideos(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(self.log[-1], "Interrompue : 1 vidéo(s) analysée(s), il en reste 2 ; la suite après la tâche qui attend.")
         self.assertEqual(self.run_probe()[0], {"probed": 2, "failed": 0, "left": 0, "interrupted": False})       # la reprise finit le travail
+
+    def test_what_is_left_when_it_stops_counts_the_unreadable_files_as_done(self):
+        videos(self.db, "a", "b", "c", "d")
+        asked = []
+
+        def answer(ffprobe, path):
+            if path.name == "a-v":
+                raise ProbeError("fichier abîmé")
+            return SUMMARY
+
+        result, calls = self.run_probe(answer, stop=lambda: asked.append(1) or len(asked) > 2)          # oui à la troisième question : après un illisible et un lu
+        self.assertEqual(result, {"probed": 1, "failed": 1, "left": 2, "interrupted": True})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.log[-1], "Interrompue : 1 vidéo(s) analysée(s), il en reste 2 ; la suite après la tâche qui attend.")
 
     def test_the_files_of_a_library_that_is_no_longer_configured_are_left_alone(self):
         videos(self.db, "a", lib="partie")

@@ -433,6 +433,11 @@ class TestInboxAndBackup(ActivityCase):
         after, = self.transfers()
         self.assertEqual((after["connections"], after["bytes"]), (0, 10))
 
+    def test_an_upload_is_told_from_another_by_its_folder_and_its_name(self):
+        for target in ("/api/inbox?name=Film.mkv", "/api/inbox?name=Film.mkv&dir=Saga", "/api/inbox?name=Autre.mkv&dir=Saga"):
+            self.assertEqual(call(self.hub, "POST", target, b"0123456789", self.cookie(self.alice))[1].status, 201, target)
+        self.assertEqual(sorted(ref for _, ref, _, _ in self.hub.activity.lines), ["upload:/Film.mkv", "upload:Saga/Autre.mkv", "upload:Saga/Film.mkv"])
+
     def test_a_refused_upload_leaves_nothing(self):
         bob = accounts.create(self.hub.db, "bob", PASSWORD)
         self.hub.activity = Activity(self.clock)
@@ -468,6 +473,17 @@ class TestInboxAndBackup(ActivityCase):
             self.assertEqual(call(self.hub, "GET", "/api/backup", headers=self.cookie(self.boss))[1].status, 200)
         self.assertEqual(seen, [("backup", "boss", 1)])
         self.assertEqual([(t["bytes"], t["connections"]) for t in self.transfers()], [(3, 0)])
+
+    def test_the_folder_a_backup_was_built_in_goes_away_without_a_word_even_when_it_is_gone_already(self):
+        def make(db_path, data, out):
+            Path(out).write_bytes(b"zip")
+
+        def sent(handler, path, *args, **kwargs):
+            shutil.rmtree(path.parent)
+        with mock.patch.object(app.backup, "create", make), mock.patch.object(app.Handler, "send_file", sent):
+            handler, reply = call(self.hub, "GET", "/api/backup", headers=self.cookie(self.boss))
+        self.assertEqual((handler.stderr, reply), ("", None))
+        self.assertEqual([p.name for p in self.hub.cfg.data.glob(".sauvegarde-*")], [])
 
     def test_a_backup_that_sends_nothing_leaves_no_line(self):
         def fails(db_path, data, out):
@@ -557,6 +573,18 @@ class TestStreams(ActivityCase):
         self.assertEqual((self.hub.active, self.free()), (0, True))
         self.assertEqual([t["connections"] for t in self.transfers()], [0])
 
+    def test_the_thread_that_reads_what_ffmpeg_says_never_keeps_the_server_alive(self):
+        started = []
+
+        class Recorded(threading.Thread):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                started.append(self)
+        with mock.patch.object(app.threading, "Thread", Recorded):
+            self.assertEqual(self.stream("m=remux")[3].status, 200)
+        self.assertTrue(started)
+        self.assertTrue(all(thread.daemon for thread in started))
+
     def test_a_head_or_an_ffmpeg_that_produces_nothing_leaves_no_line(self):
         proc, _, _, reply = self.stream("m=remux", chunks=[])
         self.assertEqual(reply.status, 500)
@@ -586,6 +614,10 @@ class TestRoute(ActivityCase):
     def test_a_plain_account_gets_a_403_and_nobody_a_401(self):
         self.assertEqual((self.read(self.bob).status, self.read(self.bob).json()), (403, {"error": "réservé à l'administrateur"}))
         self.assertEqual(call(self.hub, "GET", "/api/activity")[1].status, 401)
+
+    def test_a_clock_that_went_back_never_gives_a_negative_uptime(self):
+        self.hub.started = time.time() + 1000
+        self.assertEqual(self.read().json()["uptime"], 0)
 
     def test_the_shape_of_the_answer(self):
         self.hub.jobs.busy.return_value = True
