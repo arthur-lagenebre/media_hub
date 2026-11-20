@@ -1,3 +1,9 @@
+## 0.47.0 — 2026-11-20
+- Un roman se lit maintenant page par page : la page tient dans l'écran, et tu la tournes avec les flèches, en touchant un bord ou en glissant le doigt.
+- Sur un grand écran en paysage, deux pages s'affichent côte à côte, comme un livre ouvert.
+- Changer la taille du texte, tourner la tablette ou agrandir la fenêtre ne te ramène plus au début du chapitre.
+- Tu préfères faire défiler ? Le bouton « Affichage » de la barre remet le défilement, et il s'en souvient.
+
 ## 0.46.0 — 2026-11-20
 - Un film, un épisode, un album ou un morceau passe mal ? « Signaler un problème », dans son menu, sur sa fiche ou quand la lecture est impossible : choisis la cause (image, son, sous-titres, ne se lit pas, autre) et ajoute un mot si tu veux.
 - Sur la télé, tu signales en choisissant seulement la cause, sans rien écrire.

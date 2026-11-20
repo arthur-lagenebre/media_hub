@@ -2063,6 +2063,11 @@ class TestReader(UiCase):
         self.assertIn("Télécharger", self.page.inner_text(".reader .err"))
 
 
+def scroll_mode(page):
+    """La liseuse de romans en mode défilement (le réglage de la barre « Affichage », posé avant chaque ouverture) : les classes qui l'emploient vérifient que ce mode marche comme avant les pages."""
+    page.add_init_script("try { localStorage.setItem('hub.bookLayout', JSON.stringify('scroll')); } catch (e) { /* about:blank n'a pas de localStorage */ }")
+
+
 class TestReaderGamebook(UiCase):
     """Un livre dont vous êtes le héros : les chapitres se renvoient l'un à l'autre, et Retour quitte le livre au lieu d'y reculer."""
 
@@ -2075,6 +2080,10 @@ class TestReaderGamebook(UiCase):
                             body=lambda n: f"<h1>Chapitre {n}</h1>{links[n]}")
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Ancres" / "Ancres.epub", "Ancres", "Auteur", chapters=1,          # une ancre nommée (sans href) couvre tout l'écran : elle n'est pas un lien
                             body=lambda n: '<a id="nm" style="position:fixed;left:0;top:0;width:100vw;height:100vh"></a><h1>Chapitre 1</h1><div style="height:4000px"></div>')
+
+    def setUp(self):
+        super().setUp()
+        scroll_mode(self.page)
 
     def book(self, title):
         """Le livre, remis au début : les tests se suivent sur le même serveur, et la liseuse reprend où l'on s'était arrêté."""
@@ -2102,7 +2111,9 @@ class TestReaderGamebook(UiCase):
         self.follow("Aller au trois", "Chapitre 3 / 3")
         self.follow("Retour au un", "Chapitre 1 / 3")
         self.follow("Aller au trois", "Chapitre 3 / 3")
-        self.until(lambda: self.api("/api/book/" + entry)["position"] == 2)         # la progression suit le chapitre atteint par le lien
+        self.until(lambda: self.api("/api/book/" + entry)["position"] == 2, tries=150)          # la progression suit le chapitre atteint par le lien (enregistrée 1,5 s après : un navigateur ralenti y met bien plus)
+        if self.page.evaluate("document.querySelector('.reader .rbar').hidden"):
+            self.page.keyboard.press("Enter")                                       # la barre s'est masquée pendant l'attente
         self.page.locator(".reader .rbar button[aria-label=Retour]").click()
         self.shown("#/i/" + self.item("livres", "Heros")["id"])                     # un seul appui : on a quitté le livre
 
@@ -2206,6 +2217,10 @@ class TestReaderToc(UiCase):
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Bout" / "Bout.epub", "Bout", "Auteur", chapters=2, manifest_extra=cls.NAV_ITEM, files={"nav.xhtml": end},
                             body=lambda n: f'<h1>Chapitre 1</h1>{cls.TALL}<h2 id="fin">Dernière section</h2><p>Quelques lignes.</p>' if n == 1 else "<h1>Chapitre 2</h1>")
         fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Profond" / "Profond.epub", "Profond", "Auteur", chapters=3, body=lambda n: f"<h1>Chapitre {n}</h1>", manifest_extra=cls.NAV_ITEM, files={"nav.xhtml": toc_nav(many)})
+
+    def setUp(self):
+        super().setUp()
+        scroll_mode(self.page)
 
     def read(self, title="Plan", position=0):
         """Ouvre le livre à cette position et attend que le chapitre soit affiché et mis en forme."""
@@ -2457,6 +2472,199 @@ class TestReaderToc(UiCase):
         expect(self.page.locator(".reader .rbar")).to_be_visible()
         self.close()
         expect(self.page.locator(".reader .rbar")).to_be_hidden()
+
+
+class TestReaderPages(UiCase):
+    """Un roman lu page par page, le mode par défaut : des colonnes de la hauteur de la vue, deux par écran en paysage large, une sinon. La position reste « chapitre + fraction »."""
+    WIN = "document.querySelector('.reader iframe').contentWindow"
+    OUTSIDE = """() => { var w = document.querySelector('.reader iframe').contentWindow, d = w.document, range = d.createRange(), walk = d.createTreeWalker(d.body, NodeFilter.SHOW_TEXT), node, boxes = [], out = [];
+      while ((node = walk.nextNode())) { range.selectNodeContents(node); Array.from(range.getClientRects()).forEach(r => boxes.push([r, node.textContent.slice(0, 30)])); }
+      Array.from(d.images).forEach(i => boxes.push([i.getBoundingClientRect(), 'image']));
+      boxes.forEach(([r, what]) => {
+        if (!r.width || r.right <= 0 || r.left >= w.innerWidth) return;          // une autre page
+        if (r.left < -0.5 || r.right > w.innerWidth + 0.5 || r.top < -0.5 || r.bottom > w.innerHeight + 0.5) out.push(what + ' ' + JSON.stringify([r.left, r.top, r.right, r.bottom]));
+      });
+      return out; }"""
+    COLUMNS = """() => { var w = document.querySelector('.reader iframe').contentWindow, lefts = {};
+      Array.from(w.document.querySelectorAll('p')).forEach(p => Array.from(p.getClientRects()).forEach(r => { if (r.width && r.right > 0 && r.left < w.innerWidth) lefts[Math.round(r.left)] = true; }));
+      return Object.keys(lefts).length; }"""
+
+    @classmethod
+    def add_media(cls, root):
+        def paras(first, end):
+            return "".join(f"<p>Paragraphe {k}. " + "Une phrase assez longue pour remplir les lignes de la colonne, avec des mots ordinaires. " * 5 + "</p>" for k in range(first, end))
+        bodies = {1: f'<h1>Chapitre 1</h1>{paras(0, 30)}<p><img src="grand.png" alt=""/></p><p>{"anticonstitutionnellement" * 6}</p>{paras(30, 45)}<h2 id="milieu">Milieu du chapitre</h2>{paras(45, 70)}',
+                  2: f"<h1>Chapitre 2</h1>{paras(0, 40)}", 3: '<h1>Chapitre 3</h1><p><a href="c1.xhtml#milieu">Vers le milieu</a></p>'}
+        plan = toc_nav([("c1.xhtml", "Un", [("c1.xhtml#milieu", "Milieu", [])]), ("c2.xhtml", "Deux", []), ("c3.xhtml", "Trois", [])])
+        fixtures.write_epub(root / "srv" / "Livres" / "Romans" / "Pages" / "Pages.epub", "Pages", "Auteur", chapters=3, body=lambda n: bodies[n],
+                            manifest_extra=TestReaderToc.NAV_ITEM, files={"nav.xhtml": plan, "grand.png": solid_png(300, 3000)})          # une image plus haute qu'une page, un mot plus long qu'une ligne
+
+    def read(self, position=0):
+        """Ouvre le livre à cette position ; la liseuse d'avant est d'abord quittée, sinon elle enregistrerait la sienne en partant, par-dessus."""
+        entry = self.entries("livres", "Pages")[0]["id"]
+        self.page.goto("about:blank")
+        self.api("/api/progress", {"entry": entry, "position": position, "duration": 4})
+        self.open("#/read/" + entry)
+        return entry
+
+    def reopen(self, entry):
+        self.page.goto("about:blank")
+        self.open("#/read/" + entry)
+
+    def wait_page(self, chapter, page=0):
+        """Attend que le chapitre soit arrivé et mis en page, et que la liseuse en montre cette page (à partir de 1 ; 0 : n'importe laquelle ; -1 : la dernière)."""
+        self.page.wait_for_function(r"""a => { var f = document.querySelector('.reader iframe'), d = f && f.contentDocument, m = /^Chapitre (\d+) \/ \d+ · page (\d+)\/(\d+)$/.exec(document.querySelector('.reader .pg').textContent);
+          return !!d && !!d.getElementById('hub-style') && !!d.body && d.body.textContent.indexOf('Chapitre ' + a[0]) === 0 && !!m && +m[1] === a[0] && (a[1] === 0 || (a[1] < 0 ? m[2] === m[3] : +m[2] === a[1])); }""", arg=[chapter, page])
+
+    def state(self):
+        """(chapitre, page, pages du chapitre), lus dans la barre."""
+        found = re.match(r"^Chapitre (\d+) / \d+ · page (\d+)/(\d+)$", self.page.evaluate("document.querySelector('.reader .pg').textContent"))
+        return tuple(int(n) for n in found.groups())
+
+    def scroll_x(self):
+        return self.page.evaluate(self.WIN + ".scrollX")
+
+    def width(self):
+        return self.page.evaluate(self.WIN + ".innerWidth")
+
+    def turn(self, key, chapter, page):
+        self.page.keyboard.press(key)
+        self.wait_page(chapter, page)
+
+    def tool(self, name):
+        """Appuie sur ce bouton de la barre (que l'on fait d'abord apparaître), puis masque la barre d'un appui au milieu du texte : les flèches tournent de nouveau les pages."""
+        if self.page.evaluate("document.querySelector('.reader .rbar').hidden"):
+            self.page.keyboard.press("Enter")
+        self.page.locator(".reader .rbar .btn", has_text=name).click()
+        size = self.page.viewport_size
+        self.page.locator(".reader iframe").click(position={"x": size["width"] // 2, "y": size["height"] // 2})
+        expect(self.page.locator(".reader .rbar")).to_be_hidden()
+
+    def test_the_text_never_leaves_the_reading_area(self):
+        for width, height in ((1920, 1080), (390, 844)):
+            with self.subTest(width=width):
+                self.page.set_viewport_size({"width": width, "height": height})
+                self.read()
+                self.wait_page(1, 1)
+                pages = self.state()[2]
+                self.assertGreater(pages, 3)
+                for page in range(1, pages + 1):
+                    self.assertEqual(self.page.evaluate(self.OUTSIDE), [], f"page {page}")
+                    if page < pages:
+                        self.turn("ArrowRight", 1, page + 1)
+
+    def test_a_turn_moves_by_one_page_and_the_end_of_a_chapter_opens_the_next_at_its_first_page(self):
+        self.read()
+        self.wait_page(1, 1)
+        width = self.width()
+        self.assertEqual(self.scroll_x(), 0)
+        self.turn("ArrowRight", 1, 2)
+        self.assertEqual(self.scroll_x(), width)
+        self.turn(" ", 1, 3)
+        self.turn("PageDown", 1, 4)
+        frame = self.page.locator(".reader iframe")
+        frame.click(position={"x": 1850, "y": 540})                                 # le bord droit tourne la page, le gauche la ramène
+        self.wait_page(1, 5)
+        frame.click(position={"x": 70, "y": 540})
+        self.wait_page(1, 4)
+        self.assertEqual(self.scroll_x(), 3 * width)
+        pages = self.state()[2]
+        for page in range(4, pages):
+            self.turn("ArrowRight", 1, page + 1)
+        self.turn("ArrowRight", 2, 1)
+        self.assertEqual(self.scroll_x(), 0)
+
+    def test_going_back_opens_the_previous_chapter_at_its_last_page(self):
+        self.read(position=1)
+        self.wait_page(2, 1)
+        self.turn("ArrowLeft", 1, -1)
+        chapter, page, pages = self.state()
+        self.assertGreater(pages, 1)
+        self.assertEqual(self.scroll_x(), (pages - 1) * self.width())
+
+    def test_two_pages_side_by_side_in_a_wide_landscape_window_one_in_portrait(self):
+        self.read()
+        self.wait_page(1, 1)
+        self.assertEqual(self.page.evaluate(self.COLUMNS), 2)
+        self.page.set_viewport_size({"width": 800, "height": 1200})
+        self.page.wait_for_function("(" + self.COLUMNS + ")() === 1")
+        self.page.set_viewport_size({"width": 1920, "height": 1080})
+        self.page.wait_for_function("(" + self.COLUMNS + ")() === 2")
+
+    def test_the_fraction_is_kept_when_the_text_grows_and_the_window_changes(self):
+        self.read(position=0.5)
+        self.wait_page(1)
+        chapter, page, pages = self.state()
+        self.assertEqual(page - 1, pages // 2)                                       # la page de la fraction 0,5
+        self.tool("Texte +")
+        self.tool("Texte +")
+        self.until(lambda: self.state()[2] > pages)
+        chapter, page, grown = self.state()
+        self.assertEqual(page - 1, grown // 2)                                       # plus de pages, la même fraction : pas de retour au début
+        self.page.set_viewport_size({"width": 1000, "height": 1300})
+        self.page.wait_for_function("(" + self.COLUMNS + ")() === 1")
+        self.until(lambda: self.state()[2] != grown)
+        chapter, page, narrow = self.state()
+        self.assertEqual(page - 1, narrow // 2)
+
+    def test_an_anchor_leads_to_the_page_that_holds_it(self):
+        on_screen = "(() => { var w = " + self.WIN + ", r = w.document.getElementById('milieu').getBoundingClientRect(); return r.left >= 0 && r.right <= w.innerWidth && r.bottom <= w.innerHeight; })()"
+        self.read()
+        self.wait_page(1, 1)
+        if self.page.evaluate("document.querySelector('.reader .rbar').hidden"):
+            self.page.keyboard.press("Enter")
+        self.page.locator(".reader .bottom .btn", has_text="Sommaire").click()
+        self.page.locator(".veil .opt", has_text="Milieu").click()
+        self.page.wait_for_selector(".veil", state="detached")
+        self.page.wait_for_function(on_screen)                                      # le sommaire mène à la page de l'ancre, pas en haut du chapitre
+        page = self.state()[1]
+        self.assertGreater(page, 1)
+        self.read(position=2)
+        self.wait_page(3, 1)
+        self.assertEqual(self.state()[2], 1)                                         # un chapitre plus court qu'une page
+        self.page.frame_locator(".reader iframe").locator("a", has_text="Vers le milieu").click()          # un lien du livre : la même page
+        self.wait_page(1, page)
+        self.assertTrue(self.page.evaluate(on_screen))
+
+    def test_reopening_resumes_at_the_same_page(self):
+        entry = self.read()
+        self.wait_page(1, 1)
+        pages = self.state()[2]
+        with self.page.expect_response(lambda r: r.url.endswith("/api/progress") and r.request.method == "POST" and abs(json.loads(r.request.post_data)["position"] - 3 / pages) < 1e-6):
+            for page in (2, 3, 4):
+                self.turn("ArrowRight", 1, page)
+        self.reopen(entry)
+        self.wait_page(1, 4)
+        self.assertEqual(self.scroll_x(), 3 * self.width())
+
+    def test_the_scroll_mode_still_works_and_is_remembered(self):
+        entry = self.read(position=0.5)
+        self.wait_page(1)
+        self.tool("Affichage : pages")
+        expect(self.page.locator(".reader .rbar .btn", has_text="Affichage : défilement")).to_have_count(1)
+        self.page.wait_for_function("(() => { var w = " + self.WIN + ", max = w.document.documentElement.scrollHeight - w.innerHeight; return w.scrollX === 0 && Math.abs(w.scrollY / max - 0.5) < 0.05; })()")          # la même fraction, en défilement
+        expect(self.page.locator(".reader .pg")).to_have_text("Chapitre 1 / 3")
+        before = self.page.evaluate(self.WIN + ".scrollY")
+        self.page.keyboard.press("ArrowRight")
+        self.page.wait_for_function("y => " + self.WIN + ".scrollY > y", arg=before)
+        self.reopen(entry)
+        expect(self.page.locator(".reader .rbar .btn", has_text="Affichage : défilement")).to_have_count(1)
+        self.page.wait_for_function(self.WIN + ".scrollY > 0")                    # repris en défilement, au même endroit
+        self.assertEqual(self.scroll_x(), 0)
+
+    def test_the_bar_label_fits_a_narrow_phone(self):
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.read()
+        self.wait_page(1, 1)
+        box = self.page.evaluate("(() => { var l = document.querySelector('.reader .pg'), r = document.createRange(); r.selectNodeContents(l); return { lines: r.getClientRects().length, right: l.getBoundingClientRect().right }; })()")
+        self.assertEqual(box["lines"], 1)
+        self.assertLessEqual(box["right"], 390)
+
+    def test_a_comic_is_unchanged(self):
+        self.reopen(self.entries("livres", "Naruto")[0]["id"])
+        expect(self.page.locator(".reader .rbar .btn", has_text="Ajuster")).to_have_count(1)
+        expect(self.page.locator(".reader .rbar .btn", has_text="Affichage")).to_have_count(0)
+        expect(self.page.locator(".reader .pg")).to_have_text(re.compile(r"^Page \d+ / 3$"))
 
 
 def solid_png(width, height):
