@@ -30,10 +30,13 @@ env:
   # appellent ses routes sans porter son nom (activité, sauvegarde, téléchargements, étiquettes, avis, demandes,
   # suggestions). Sans eux, la tranche des demandes et des suggestions gardait 29 survivants pour 6 tués (run 44567224895).
   # Environ un tiers de temps en plus par mutant ; une tranche de 140 mutations prend alors un peu plus de 4 h.
+  # Les routes des personnes (/api/person, /api/enrich/person et /api/enrich/people) et la suite d'une saga (/api/play) sont dans
+  # test_person_films, test_enrich_people et test_saga_next : 6 s au total, et 16 survivants de la nuit du 20 novembre (run 44715189607).
   SERVEUR_TESTS: >-
     tests/test_server*.py tests/test_range.py tests/test_autoscan.py tests/test_jobs.py
     tests/test_activity.py tests/test_backup.py tests/test_downloads.py tests/test_labels.py tests/test_labels_hostile.py tests/test_ratings.py
     tests/test_request_search*.py tests/test_requests.py tests/test_suggestions.py
+    tests/test_person_films.py tests/test_enrich_people.py tests/test_saga_next.py
 
 jobs:
   changes:
