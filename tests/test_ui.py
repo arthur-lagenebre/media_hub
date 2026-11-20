@@ -9993,7 +9993,7 @@ class TestRemoteDownloadInTheUi(RequestsUiCase):
         hint = box.locator("[data-remote-hint]").inner_text()
         self.assertIn("ts.net", hint)
         self.assertIn("à la maison", hint)
-        self.assertIn("copier", hint)                                                                                       # le droit n'empêche pas de copier ce qui se lit
+        self.assertIn("copie", hint)                                                                                       # le droit n'empêche pas de copier ce qui se lit
         self.assertIn("« Lecture »", hint)                                                                                  # le nom du droit, tel que la fenêtre l'affiche
         self.assertIn("Lecture", box.inner_text())
         yes, no = row.locator('[data-key="r-remote-yes"]'), row.locator('[data-key="r-remote-no"]')
