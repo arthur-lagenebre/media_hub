@@ -909,6 +909,21 @@
     'Elle disparaît aussi pour son auteur, avec ta réponse. Cela ne s’annule pas.': 'It also disappears for its author, with your answer. This can’t be undone.',
     'Suggestion supprimée': 'Suggestion deleted',
 
+    // --- Signaler un problème sur un titre (fiche, menus, panneau « Lecture impossible ») et le suivre ---
+    'Signaler un problème': 'Report a problem',
+    'Cause': 'Cause',
+    'Image': 'Picture',
+    'Son': 'Sound',
+    'Ne se lit pas': 'Won’t play',
+    'Un mot pour expliquer (facultatif, 1000 caractères au plus)': 'A few words to explain (optional, 1000 characters at most)',
+    'Choisis la cause.': 'Pick the cause.',
+    'Envoyer le signalement': 'Send report',
+    'Signalement envoyé': 'Report sent',
+    'Signalements': 'Reports',
+    'Contexte de lecture': 'Playback context',
+    'Contexte de lecture du signalement de {name}': 'Playback context of the report from {name}',
+    'Aucune lecture récente enregistrée pour ce titre : le registre d’activité ne survit pas à un redémarrage.': 'No recent playback recorded for this title: the activity log doesn’t survive a restart.',
+
     // --- Demander un film ou une série cherché dans TMDB (#/request), et ses entrées ---
     'Demander un film ou une série': 'Request a movie or a series',
     'Nouvelle demande': 'New request',

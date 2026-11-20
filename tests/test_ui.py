@@ -4684,7 +4684,7 @@ class TestActionsMenu(UiCase):
     def test_a_film_unknown_to_tmdb_offers_neither(self):
         self.card("films", "Sans Etiquette").locator(".qbtn").click()
         self.page.locator(".menu .opt", has_text="Marquer comme vu").wait_for()
-        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu", "Mon avis", "Télécharger"])
+        self.assertEqual(self.page.locator(".menu .opt").all_inner_texts(), ["Voir", "Marquer comme vu", "Mon avis", "Télécharger", "Signaler un problème"])
 
     def test_a_show_knows_its_tmdb_page_once_enriched_and_a_saga_never_does(self):
         item = self.item("series", "Dark")
@@ -10569,6 +10569,287 @@ class TestSuggestionsInTheUi(RequestsUiCase):
         self.open(page, "#/admin?tab=suggestions")
         self.count_sg_rows(page, 1)
         self.assertEqual(self.sg_rows(page).first.locator("button", has_text="Répondre").count(), 1)
+
+
+class TestReportsInTheUi(RequestsUiCase):
+    """Signaler un problème sur un titre : depuis la fiche, le menu d'une carte, d'un épisode, d'une piste et le panneau « Lecture impossible » ; la cause obligatoire, le message facultatif ; la télé (la cause seule) ;
+    puis le suivi, dans « Mes suggestions » et dans l'onglet Suggestions de l'administrateur (filtre « Signalements », contexte de lecture à la demande)."""
+    ENTRY = "Signaler un problème"
+    CAUSES = ["image", "sound", "subtitles", "playback", "other"]
+
+    def setUp(self):
+        super().setUp()
+        self.hub.db.execute("DELETE FROM suggestions")
+
+    # --- Aides ---------------------------------------------------------------
+    def item(self, lib, title):
+        return next(i for i in self.call("admin", f"/api/library/{lib}")["items"] if i["title"] == title)["id"]
+
+    def entries(self, lib, title):
+        return self.call("admin", "/api/item/" + self.item(lib, title))["entries"]
+
+    def reports(self, name="alice"):
+        return [s for s in self.call(name, "/api/suggestions?mine=1")["suggestions"] if s["item"]]
+
+    def sheet_button(self, page, label):
+        return page.locator("#views > .view:visible .actions .btn", has_text=label)
+
+    def report_dialog(self, page):
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertTrue(box.evaluate("e => e.classList.contains('form')"))
+        return box
+
+    def cause_labels(self, box):
+        return [box.locator(f"[data-key=rp-cause-{c}]").inner_text().strip().lstrip("✓").strip() for c in self.CAUSES]
+
+    def send_report(self, page, box, cause, text=None):
+        box.locator(f"[data-key=rp-cause-{cause}]").click()
+        if text is not None:
+            box.locator("textarea").fill(text)
+        with page.expect_response(lambda r: r.url.endswith("/api/suggestions") and r.request.method == "POST"):
+            box.locator(".btn.primary").click()
+        expect(self.dialog(page)).to_have_count(0)
+
+    def menu_report(self, page):
+        page.locator(".menu .opt", has_text=self.ENTRY).click()
+        return self.report_dialog(page)
+
+    def sg_rows(self, page):
+        return self.view(page, ".sgrow")
+
+    def count_sg_rows(self, page, n):
+        page.wait_for_function("n => document.querySelectorAll('#views > .view:not([style*=\"none\"]) .sgrow').length === n", arg=n)
+
+    # --- Signaler ------------------------------------------------------------
+    def test_a_film_is_reported_from_its_sheet_with_a_cause_and_a_message(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice")
+        self.open(page, "#/i/" + item)
+        self.sheet_button(page, self.ENTRY).click()
+        box = self.report_dialog(page)
+        self.assertEqual(box.locator("h3").inner_text(), self.ENTRY)
+        self.assertEqual(self.cause_labels(box), ["Image", "Son", "Sous-titres", "Ne se lit pas", "Autre"])
+        self.assertEqual(box.locator("[aria-pressed=true]").count(), 0)                                      # aucune cause d'office
+        self.assertEqual(box.locator("textarea").get_attribute("maxlength"), "1000")
+        self.send_report(page, box, "image", "L'affiche <b>est</b> floue")
+        self.assertEqual([(s["category"], s["item"], s["entry"], s["cause"], s["text"]) for s in self.reports()], [("bug", item, "", "image", "L'affiche <b>est</b> floue")])
+        page.locator("#toast.on", has_text="Signalement envoyé").wait_for()
+
+    def test_the_cause_is_required_and_the_message_is_not(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice")
+        self.open(page, "#/i/" + item)
+        self.sheet_button(page, self.ENTRY).click()
+        box = self.report_dialog(page)
+        box.locator("textarea").fill("Un message sans cause")
+        box.locator(".btn.primary").click()
+        box.locator(".formerr", has_text="Choisis la cause.").wait_for()                                     # rien ne part sans cause
+        self.assertEqual(self.reports(), [])
+        self.send_report(page, box, "sound")                                                                 # la cause choisie, le message déjà écrit part avec
+        self.assertEqual([(s["cause"], s["text"]) for s in self.reports()], [("sound", "Un message sans cause")])
+
+    def test_a_report_with_the_cause_alone_sends_no_text(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice")
+        self.open(page, "#/i/" + item)
+        self.sheet_button(page, self.ENTRY).click()
+        self.send_report(page, self.report_dialog(page), "subtitles")
+        self.assertEqual([(s["cause"], s["text"]) for s in self.reports()], [("subtitles", "")])
+
+    def test_a_server_error_stays_in_the_window(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice")
+        self.open(page, "#/i/" + item)
+        page.route("**/api/suggestions", lambda r: r.fulfill(status=400, json={"error": "ce fichier n'est pas dans cet élément"}) if r.request.method == "POST" else r.continue_())
+        self.sheet_button(page, self.ENTRY).click()
+        box = self.report_dialog(page)
+        box.locator("[data-key=rp-cause-other]").click()
+        box.locator(".btn.primary").click()
+        box.locator(".formerr", has_text="ce fichier n'est pas dans cet élément").wait_for()
+        self.assertTrue(box.is_visible())
+
+    def test_a_film_card_menu_reports_the_film(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice")
+        self.open(page, "#/l/films")
+        card = self.view(page, f'.card[data-key="{item}"]')
+        card.wait_for()
+        card.locator(".qbtn").click()
+        self.send_report(page, self.menu_report(page), "playback")
+        self.assertEqual([(s["item"], s["entry"], s["cause"]) for s in self.reports()], [(item, "", "playback")])
+
+    def test_an_episode_is_reported_from_its_menu(self):
+        show = self.item("series", "Dark")
+        episode = self.entries("series", "Dark")[0]["id"]
+        page = self.session("alice")
+        self.open(page, "#/i/" + show)
+        self.view(page, f'.epmore[data-key="m{episode}"]').click()
+        self.send_report(page, self.menu_report(page), "sound")
+        self.assertEqual([(s["item"], s["entry"], s["cause"]) for s in self.reports()], [(show, episode, "sound")])
+
+    def test_a_track_is_reported_from_its_menu(self):
+        album = self.item("musique", "Discovery")
+        track = self.entries("musique", "Discovery")[0]["id"]
+        page = self.session("alice")
+        self.open(page, "#/i/" + album)
+        self.view(page, f'.trkmore[data-key="m{track}"]').click()
+        self.send_report(page, self.menu_report(page), "other", "Saute au milieu")
+        self.assertEqual([(s["item"], s["entry"], s["cause"], s["text"]) for s in self.reports()], [(album, track, "other", "Saute au milieu")])
+
+    def test_the_player_error_panel_offers_the_report_of_the_file_that_failed(self):
+        film = self.item("films", "Sans Etiquette")
+        broken = self.entries("films", "Sans Etiquette")[0]["id"]
+        page = self.session("alice")
+        self.open(page, "#/play/" + broken)
+        page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
+        page.locator(".player .err .btn", has_text=self.ENTRY).click()
+        box = self.report_dialog(page)
+        self.assertTrue(box.locator("[data-key=rp-cause-playback]").is_visible())
+        self.send_report(page, box, "playback")
+        self.assertEqual([(s["item"], s["entry"], s["cause"]) for s in self.reports()], [(film, broken, "playback")])
+
+    def test_the_player_error_panel_reports_with_the_sheet_behind_it_when_the_plan_never_came(self):
+        film = self.item("films", "Inception")
+        entry = self.entries("films", "Inception")[0]["id"]
+        page = self.session("alice")
+        page.route("**/api/play/*", lambda r: r.fulfill(status=500, json={"error": "Le fichier n'a pas pu être sondé."}) if r.request.method == "POST" else r.continue_())
+        self.open(page, "#/i/" + film)
+        page.locator("#views > .view:visible .actions .btn.primary").click()
+        page.wait_for_selector(".player .err:not([hidden])", timeout=15000)
+        page.locator(".player .err .btn", has_text=self.ENTRY).click()
+        self.send_report(page, self.report_dialog(page), "playback")
+        self.assertEqual([(s["item"], s["entry"], s["cause"]) for s in self.reports()], [(film, entry, "playback")])
+
+    def test_a_television_picks_the_cause_without_a_text_field_and_the_report_goes(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice", device="tv")
+        self.open(page, "#/i/" + item)
+        self.sheet_button(page, self.ENTRY).click()
+        box = self.report_dialog(page)
+        self.assertEqual(box.locator("textarea, input").count(), 0)                                          # pas de saisie à la télécommande
+        self.focused_key(page, "rp-cause-image")                                                             # le focus est sur la première cause
+        self.send_report(page, box, "playback")
+        self.assertEqual([(s["cause"], s["text"]) for s in self.reports()], [("playback", "")])
+
+    def test_a_report_form_is_in_english(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice", lang="en")
+        self.open(page, "#/i/" + item)
+        self.sheet_button(page, "Report a problem").click()
+        box = self.report_dialog(page)
+        self.assertEqual(box.locator("h3").inner_text(), "Report a problem")
+        self.assertEqual(self.cause_labels(box), ["Picture", "Sound", "Subtitles", "Won’t play", "Other"])
+        self.send_report(page, box, "image")
+        page.locator("#toast.on", has_text="Report sent").wait_for()
+
+    # --- Suivre : Mes suggestions ------------------------------------------------
+    def test_my_suggestions_shows_the_report_with_its_title_cause_state_and_reply(self):
+        item = self.item("films", "Inception")
+        report = self.call("alice", "/api/suggestions", {"item": item, "cause": "image", "text": "Floue"})
+        self.call("admin", f"/api/suggestions/{report['id']}/status", {"status": "planned", "reply": "Je cherche une autre affiche"})
+        page = self.session("alice")
+        self.open(page, "#/suggestions")
+        self.count_sg_rows(page, 1)
+        row = self.sg_rows(page).first
+        title = row.locator(".sgsubject a")
+        expect(title).to_have_text("Inception")
+        expect(title).to_have_attribute("href", "#/i/" + item)
+        self.assertIn("Image", row.locator(".sgcause").inner_text())
+        self.assertIn("Prévue", row.inner_text())
+        self.assertIn("Floue", row.inner_text())
+        self.assertIn("Je cherche une autre affiche", row.inner_text())
+        title.click()
+        self.shown(page, "#/i/" + item)
+
+    def test_a_report_without_a_link_shows_its_title_as_plain_text(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice")
+        reply = {"suggestions": [{"id": 1, "category": "bug", "text": "", "status": "new", "reply": "", "created": 1700000000, "updated": 1700000000, "item": item, "entry": "", "cause": "sound", "subject": HOSTILE}]}
+        page.route("**/api/suggestions?mine=1", lambda r: r.fulfill(status=200, json=reply))
+        self.open(page, "#/suggestions")
+        self.count_sg_rows(page, 1)
+        row = self.sg_rows(page).first
+        self.assertEqual(row.locator(".sgsubject").inner_text(), HOSTILE)                                    # le titre disparu reste lisible, sans lien, et c'est du texte
+        self.assertEqual(row.locator(".sgsubject a").count(), 0)
+        self.assertEqual(row.locator("img").count(), 0)
+        self.assertIsNone(page.evaluate("window.pwned"))
+
+    def test_a_hostile_title_stays_text_even_with_a_link(self):
+        item = self.item("films", "Inception")
+        page = self.session("alice")
+        reply = {"suggestions": [{"id": 1, "category": "bug", "text": "", "status": "new", "reply": "", "created": 1700000000, "updated": 1700000000, "item": item, "entry": "", "cause": "image", "subject": HOSTILE, "link": {"item": item}}]}
+        page.route("**/api/suggestions?mine=1", lambda r: r.fulfill(status=200, json=reply))
+        self.open(page, "#/suggestions")
+        self.count_sg_rows(page, 1)
+        link = self.sg_rows(page).first.locator(".sgsubject a")
+        expect(link).to_have_text(HOSTILE)
+        self.assertEqual(self.sg_rows(page).first.locator("img").count(), 0)
+        self.assertIsNone(page.evaluate("window.pwned"))
+
+    # --- Suivre : l'administrateur ----------------------------------------------------
+    def test_the_administrator_filters_the_reports_and_reads_the_playback_context_on_demand(self):
+        film = self.item("films", "Inception")
+        entry = self.entries("films", "Inception")[0]["id"]
+        self.call("bob", "/api/suggestions", {"category": "evolution", "text": "Un mode sombre"})
+        plan = self.call("alice", "/api/play/" + entry, {"device": "tv"})
+        self.call("alice", "/api/suggestions", {"item": film, "entry": entry, "cause": "playback", "text": "Rien ne démarre"})
+        page = self.session("admin")
+        self.open(page, "#/admin?tab=suggestions")
+        self.count_sg_rows(page, 2)
+        self.view(page, "[data-key=sc-reports]").click()                                                     # le filtre « Signalements »
+        self.count_sg_rows(page, 1)
+        row = self.sg_rows(page).first
+        self.assertEqual(self.view(page, "[data-key=sc-reports]").get_attribute("aria-pressed"), "true")
+        self.assertIn("alice", row.inner_text())
+        self.assertEqual(row.locator(".sgsubject").inner_text(), self.call("admin", "/api/suggestions?reports=1")["suggestions"][0]["subject"])
+        self.assertIn("Ne se lit pas", row.locator(".sgcause").inner_text())
+        self.assertIn("Rien ne démarre", row.inner_text())
+        self.assertEqual(row.locator(".sgctx").count(), 0)                                                   # le contexte attend la demande
+        row.locator("[data-key^=sg-ctx-]").click()
+        context = row.locator(".sgctx")
+        context.wait_for()
+        modes = {"direct": "Lecture directe", "remux": "Son converti", "transcode": "Image convertie"}
+        text = context.inner_text()
+        self.assertIn(modes[plan["mode"]], text)
+        self.assertIn("Télévision", text)
+        for why in plan["why"]:
+            self.assertIn(why, text)
+        self.assertEqual(row.locator("[data-key^=sg-ctx-]").get_attribute("aria-expanded"), "true")
+        row.locator("[data-key^=sg-ctx-]").click()                                                           # se replie
+        expect(row.locator(".sgctx")).to_have_count(0)
+        row.locator("button", has_text="Répondre").click()                                                   # répondre et changer l'état passent par les boutons existants
+        box = self.dialog(page)
+        self.assertIn("Rien ne démarre", box.inner_text())
+        box.locator("[data-key=sg-st-done]").click()
+        box.locator("textarea").fill("Corrigé")
+        box.locator(".btn.primary").click()
+        row.locator(".sgstatus", has_text="Faite").wait_for()
+        self.assertEqual(self.reports()[0]["reply"], "Corrigé")
+        self.view(page, "[data-key=sc-all]").click()
+        self.count_sg_rows(page, 2)
+
+    def test_a_report_without_any_recorded_playback_says_so(self):
+        film = self.item("films", "Inception")
+        self.call("alice", "/api/suggestions", {"item": film, "cause": "image"})
+        page = self.session("admin")
+        self.open(page, "#/admin?tab=suggestions")
+        self.count_sg_rows(page, 1)
+        self.sg_rows(page).first.locator("[data-key^=sg-ctx-]").click()
+        self.sg_rows(page).first.locator(".sgctx", has_text="Aucune lecture récente").wait_for()
+
+    def test_the_badge_of_the_administrator_rises_with_a_report(self):
+        film = self.item("films", "Inception")
+        self.call("bob", "/api/suggestions", {"category": "bug", "text": "Une idée"})
+        page = self.session("admin")
+        badge = page.locator("#nav [data-nav='#/admin'] .pend")
+        badge.wait_for()
+        self.assertEqual(badge.inner_text(), "1")
+        self.call("alice", "/api/suggestions", {"item": film, "cause": "image"})
+        page.reload()
+        page.wait_for_function("(() => { var c = document.querySelector(\"#nav [data-nav='#/admin'] .pend\"); return !!c && c.textContent === '2'; })()")
+        self.open(page, "#/admin?tab=suggestions")
+        self.assertEqual(self.view(page, "[data-key=tab-suggestions] .pend").inner_text(), "2")
 
 
 class TestRequestSearchInTheUi(RequestsUiCase):

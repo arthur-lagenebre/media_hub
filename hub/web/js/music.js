@@ -80,8 +80,9 @@
   M.albumMenu = function (itemId, title, libId) {
     H.menu(title, (canHear(libId) ? [
       { label: H.t('Lire l’album'), value: 'play' }, { label: H.t('Lecture aléatoire'), value: 'shuffle' },
-      { label: H.t('Jouer ensuite'), value: 'next' }, { label: H.t('Ajouter à la file d’attente'), value: 'end' }] : []).concat([{ label: H.t('Ajouter à une playlist…'), value: 'list' }]).concat(canGet(libId) ? [{ label: H.t('Télécharger l’album'), value: 'download' }] : []), null, function (v) {
-      if (v === 'download') M.tracksOf(itemId).then(function (list) { H.actions.download(list.map(function (t) { return t.id; })); }).catch(fail);
+      { label: H.t('Jouer ensuite'), value: 'next' }, { label: H.t('Ajouter à la file d’attente'), value: 'end' }] : []).concat([{ label: H.t('Ajouter à une playlist…'), value: 'list' }]).concat(canGet(libId) ? [{ label: H.t('Télécharger l’album'), value: 'download' }] : [], [{ label: H.t('Signaler un problème'), value: 'report' }]), null, function (v) {
+      if (v === 'report') H.actions.report({ item: itemId, title: title });
+      else if (v === 'download') M.tracksOf(itemId).then(function (list) { H.actions.download(list.map(function (t) { return t.id; })); }).catch(fail);
       else if (v === 'play') M.playItem(itemId);
       else if (v === 'shuffle') M.playItem(itemId, true);
       else if (v === 'next' || v === 'end') M.queueItem(itemId, v, title);
@@ -90,9 +91,10 @@
   };
   // `extra` : actions propres à l'endroit où l'on est (dans une playlist : monter, descendre, retirer) : [{label, value, run}]
   M.trackMenu = function (track, extra, libId) {
-    var options = (canHear(libId) ? [{ label: H.t('Jouer ensuite'), value: 'next' }, { label: H.t('Ajouter à la file d’attente'), value: 'end' }] : []).concat([{ label: H.t('Ajouter à une playlist…'), value: 'list' }]).concat(canGet(libId) ? [{ label: H.t('Télécharger'), value: 'download' }] : [], extra || []);
+    var options = (canHear(libId) ? [{ label: H.t('Jouer ensuite'), value: 'next' }, { label: H.t('Ajouter à la file d’attente'), value: 'end' }] : []).concat([{ label: H.t('Ajouter à une playlist…'), value: 'list' }]).concat(canGet(libId) ? [{ label: H.t('Télécharger'), value: 'download' }] : [], track.item ? [{ label: H.t('Signaler un problème'), value: 'report' }] : [], extra || []);
     H.menu(track.title, options, null, function (v) {
-      if (v === 'download') H.actions.download([track.id]);
+      if (v === 'report') H.actions.report({ item: track.item, entry: track.id, title: track.title });
+      else if (v === 'download') H.actions.download([track.id]);
       else if (v === 'next' || v === 'end') queueTracks([track], v, track.title);
       else if (v === 'list') M.addToPlaylist([track.id], track.title);
       else (extra || []).forEach(function (x) { if (x.value === v) x.run(); });

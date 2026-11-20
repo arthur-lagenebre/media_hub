@@ -1,3 +1,8 @@
+## 0.46.0 — 2026-11-20
+- Un film, un épisode, un album ou un morceau passe mal ? « Signaler un problème », dans son menu, sur sa fiche ou quand la lecture est impossible : choisis la cause (image, son, sous-titres, ne se lit pas, autre) et ajoute un mot si tu veux.
+- Sur la télé, tu signales en choisissant seulement la cause, sans rien écrire.
+- Tes signalements apparaissent dans « Mes suggestions », avec le titre concerné et la réponse de l'administrateur.
+
 ## 0.45.0 — 2026-11-20
 - Sur la fiche d'un film, d'une série, d'un album ou d'un artiste, chaque genre se clique : il ouvre la bibliothèque avec seulement les titres de ce genre, et Retour te ramène à la fiche.
 - Un genre peu fréquent, absent du menu « Genre » jusqu'ici, y apparaît quand tu le choisis ainsi, et le filtre reste en place.

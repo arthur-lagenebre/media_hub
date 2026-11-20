@@ -615,6 +615,9 @@ html[data-device="phone"] .rqlink, html[data-device="tablet"] .rqlink { text-dec
 .sgrow .what .sgtext, .sgrow .what .sgreply { margin: 0.3rem 0 0; max-width: var(--prose); line-height: 1.45; white-space: pre-line; overflow-wrap: anywhere; }
 .sgrow .what .sgtext { color: var(--text); }
 .sgrow .what .sgreply { font-style: italic; }
+.sgrow .what .sgsubject a { color: inherit; text-decoration: underline; text-underline-offset: 0.2em; }
+.sgrow .what .sgcause { color: var(--text); }
+.sgrow .what .sgctx { display: flex; flex-direction: column; gap: 0.15rem; margin-top: 0.4rem; padding-left: 0.7rem; border-left: 2px solid var(--line, currentColor); max-width: var(--prose); overflow-wrap: anywhere; }
 .panel.suggestions > .chips { margin-bottom: 0.5rem; }
 .menu.form textarea.field { resize: vertical; min-height: 7rem; line-height: 1.4; }
 .menu.sganswer .lead { white-space: pre-line; overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }
