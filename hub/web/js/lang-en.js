@@ -956,6 +956,18 @@
     'Parce que tu as aimé…': 'Because you liked…',
     'Pourquoi cette suggestion ?': 'Why this suggestion?',
     'Pas intéressé': 'Not interested',
+
+    // --- Masquer les épisodes non vus (réglages, fiche d'une série) ---
+    'Masquer les épisodes non vus': 'Hide unwatched episodes',
+    'Sur les fiches des séries et dans « Reprendre »': 'On series pages and in “Resume”',
+    'Désactivé': 'Off',
+    'Image seulement': 'Picture only',
+    'L’image d’un épisode pas encore commencé est floutée': 'The picture of an episode not yet started is blurred',
+    'Image et résumé': 'Picture and summary',
+    'L’image et le résumé d’un épisode pas encore commencé sont floutés, son titre reste lisible': 'The picture and summary of an episode not yet started are blurred, its title stays readable',
+    'Titres, résumés et images de tous les épisodes en clair': 'Titles, summaries and pictures of every episode in full view',
+    'Le titre, le résumé et l’image d’un épisode pas encore commencé sont floutés': 'The title, summary and picture of an episode not yet started are blurred',
+    'Épisode non vu': 'Unwatched episode',
     'Noté « Je n’aime pas » : il n’est plus proposé': 'Rated “I don’t like it”: no longer suggested',
     'Même réalisateur : {value}': 'Same director: {value}',
     'Même acteur : {value}': 'Same actor: {value}',

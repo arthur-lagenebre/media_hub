@@ -294,6 +294,12 @@ def entry_json(row, progress=None):
             out["artists"] = info["artists"]
     if row["kind"] == "book" and info.get("PageCount"):
         out["pages"] = info["PageCount"]
+    return with_progress(out, progress)
+
+
+def with_progress(out, progress):
+    """`out` (un fichier tel que l'API le montre), avec `progress` : où en est le compte, s'il l'a commencé ; sans `progress`, le compte ne l'a pas commencé (c'est ce que l'interface floute pour « Masquer les épisodes non vus »).
+    Le même champ partout où un épisode se montre : la fiche, « Reprendre », le plan de lecture et son `next`."""
     if progress is not None:
         out["progress"] = {"position": progress["position"], "duration": progress["duration"], "done": bool(progress["done"]), "updated": progress["updated"]}
     return out
@@ -1108,8 +1114,10 @@ def dismiss_key(profile, item_id):
     return f"dismiss:{profile}:{item_id}"
 
 
-def progress_card(entry, item, position, total, resume, updated, ratings=None):
-    card = entry_json(entry)
+def progress_card(entry, item, progress, resume, updated, ratings=None):
+    """Une carte « Reprendre » : le fichier, avec `progress` comme sur la fiche (absent : pas encore commencé), et `position` / `total` pour la barre."""
+    card = entry_json(entry, progress)
+    position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
     card.update({"item": summary(item, opinion=(ratings or {}).get(item["id"])), "position": position, "total": total or entry["duration"], "resume": resume, "updated": updated})
     return card
 
@@ -1124,8 +1132,7 @@ def finished_card(hub, profile, row, item, ratings=None):
     progress = hub.db.progress_for(profile, [following["id"]]).get(following["id"])
     if progress is not None and progress["done"]:
         return None
-    position, total = (progress["position"], progress["duration"]) if progress else (0, 0)
-    return progress_card(following, item, position, total, False, row["updated"], ratings)
+    return progress_card(following, item, progress, False, row["updated"], ratings)
 
 
 def resume_card(hub, profile, row, item, ratings=None):
@@ -1134,7 +1141,8 @@ def resume_card(hub, profile, row, item, ratings=None):
         return finished_card(hub, profile, row, item, ratings)
     if row["position"] < (1 if row["kind"] == "book" else RESUME_MIN):
         return None
-    return progress_card(row, item, row["position"], row["pduration"], True, row["updated"], ratings)
+    progress = {"position": row["position"], "duration": row["pduration"], "done": row["done"], "updated": row["updated"]}
+    return progress_card(row, item, progress, True, row["updated"], ratings)
 
 
 def continue_row(hub, profile, libs=None, ratings=None):
@@ -2445,7 +2453,7 @@ def play_warning(decision, video):
 
 def resume_position(hub, user, entry):
     """Où reprendre : la position enregistrée, tant que le fichier n'est pas fini et qu'on n'en est pas au tout début."""
-    progress = hub.db.progress_for(user, [entry["id"]]).get(entry["id"])
+    progress = progress_of(hub, user, entry)
     return progress["position"] if progress and not progress["done"] and progress["position"] >= RESUME_MIN else 0
 
 
@@ -2489,10 +2497,18 @@ def next_in_saga(hub, entry):
     return None
 
 
-def play_next(hub, entry):
-    """Le `next` du plan de lecture : le fichier suivant de l'élément, sinon, après la dernière partie d'un film, le film suivant de sa saga."""
+def play_next(hub, user, entry):
+    """Le `next` du plan de lecture : le fichier suivant de l'élément, avec la progression du compte `user` (voir with_progress), sinon, après la dernière partie d'un film, le film suivant de sa saga."""
     following = next_entry(hub, entry)
-    return next_summary(following) if following is not None else next_in_saga(hub, entry)
+    if following is None:
+        return next_in_saga(hub, entry)
+    found = next_summary(following)
+    return found and with_progress(found, progress_of(hub, user, following))
+
+
+def progress_of(hub, user, entry):
+    """La ligne de progression du compte `user` sur ce fichier, ou None s'il ne l'a pas commencé."""
+    return hub.db.progress_for(user, [entry["id"]]).get(entry["id"])
 
 
 @route("POST", r"/api/play/(\w+)")
@@ -2523,16 +2539,16 @@ def api_play(h, m, q):
     picked = tracks.pick_sub(subs, settings["sub_mode"], settings["sub_langs"] or [h.lang], heard, settings["audio_langs"])
     for sub in subs:
         sub["selected"] = sub["id"] == picked
-    h.send_json({
+    h.send_json(with_progress({
         "entry": entry["id"], "item": entry["item_id"], "title": entry["title"], "show": show, "season": entry["season"], "number": entry["number"],
         "mode": decision["mode"], "why": decision["why"], "url": play_url(entry, decision, caps, kbps, height), "seekable": decision["mode"] == "direct",
         "duration": probe["duration"] or entry["duration"], "resume": resume_position(hub, h.user["id"], entry), "warning": play_warning(decision, video),
         "audio": [{"index": t["index"], "label": track_label(t, h.lang), "lang": t["lang"], "selected": t["index"] == chosen, "commentary": t["commentary"]} for t in probe["audio"]],
         "subs": subs,
         "video": {"codec": video.get("codec"), "width": video.get("width"), "height": video.get("height"), "hdr": video.get("hdr")} if video else None,
-        "next": play_next(hub, entry),
+        "next": play_next(hub, h.user["id"], entry),
         "chapters": prober.with_skips(probe.get("chapters", [])),
-    })
+    }, progress_of(hub, h.user["id"], entry)))
 
 
 @route("GET", r"/api/play/(\w+)/start")

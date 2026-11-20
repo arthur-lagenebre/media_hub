@@ -253,9 +253,14 @@ class TestContinue(ProgressCase):
 class TestCards(ProgressCase):
     def test_the_card_of_a_file_is_its_json_with_its_item_and_where_it_stands(self):
         entry_row = self.db.one("SELECT * FROM entries WHERE id='f1'")
-        card = app.progress_card(entry_row, self.db.one("SELECT * FROM items WHERE id='m1'"), 10, 0, True, 5)
+        movie = self.db.one("SELECT * FROM items WHERE id='m1'")
+        started = {"position": 10, "duration": 0, "done": 0, "updated": 4}
+        card = app.progress_card(entry_row, movie, started, True, 5)
         self.assertEqual((card["id"], card["position"], card["total"], card["resume"], card["updated"], card["item"]["title"], card["file"]), ("f1", 10, 100.0, True, 5, "m1", urls.entry_file("f1")))
-        self.assertEqual(app.progress_card(entry_row, self.db.one("SELECT * FROM items WHERE id='m1'"), 10, 50, True, 5)["total"], 50)
+        self.assertEqual(card["progress"], {"position": 10, "duration": 0, "done": False, "updated": 4})
+        self.assertEqual(app.progress_card(entry_row, movie, {**started, "duration": 50}, True, 5)["total"], 50)
+        untouched = app.progress_card(entry_row, movie, None, False, 5)                    # pas encore commencé : ni `progress`, et la barre à zéro sur toute sa durée
+        self.assertEqual((untouched["position"], untouched["total"], "progress" in untouched), (0, 100.0, False))
 
 
 class TestTaggedAndCollapsed(unittest.TestCase):
