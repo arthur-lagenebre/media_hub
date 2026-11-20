@@ -311,6 +311,24 @@ class TestLinksInTheWay(SubCase):
         self.assertEqual(self.status(self.inbox.remove, "alice", "secret.mkv", "sub"), 404)
         self.assertEqual((self.bob / "secret.mkv").read_bytes(), b"abc")
 
+    def test_a_link_to_another_folder_of_the_same_account_is_not_followed_either(self):
+        self.send("y.mkv", "reel", data=b"abc")
+        self.link(self.alice / "reel", self.alice / "lien")
+        self.assertEqual(self.status(self.inbox.path_of, "alice", "y.mkv", "lien"), 404)
+        self.assertEqual(self.status(self.inbox.remove, "alice", "y.mkv", "lien"), 404)
+        self.assertEqual(self.inbox.path_of("alice", "y.mkv", "reel").read_bytes(), b"abc")
+
+    def test_the_sweep_removes_the_folders_a_stale_part_leaves_empty_up_to_the_account_folder(self):
+        (self.alice / "a" / "b").mkdir(parents=True)
+        (self.alice / "a" / "b" / "vieux.mkv.part").write_bytes(b"x")
+        self.assertEqual(self.inbox.sweep(now=time.time() + 3 * inbox.STALE), 1)
+        self.assertEqual(tree(self.alice), ["x.mkv"])
+
+    def test_nothing_outside_the_account_folder_is_ever_removed_as_an_empty_folder(self):
+        (self.tmp / "inbox" / "dehors" / "vide").mkdir(parents=True)
+        self.inbox._prune([self.tmp / "inbox" / "dehors" / "vide", self.tmp / "inbox" / "dehors"], self.alice)
+        self.assertEqual(tree(self.tmp / "inbox" / "dehors"), ["vide/"])
+
     def test_the_sweep_does_not_enter_a_link_or_a_junction(self):
         (self.bob / "vieux.mkv.part").write_bytes(b"x")
         self.link(self.bob, self.alice / "sub")

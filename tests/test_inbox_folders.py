@@ -135,6 +135,13 @@ class TestAccountFolder(FolderCase):
         self.assertEqual(self.inbox.folder_for(first), "Léa_")
         self.assertEqual(self.dirs(), ["Léa_", "léa_ (2)"])
 
+    def test_the_last_numbered_name_is_still_given(self):
+        for name in ("Léa", "Léa (2)"):
+            (self.tmp / "inbox" / name).mkdir(parents=True, exist_ok=True)
+        uid = self.user("Léa", "1")
+        with mock.patch.object(inbox, "SAME_NAME", 3):
+            self.assertEqual(self.inbox.folder_for(uid), "Léa (3)")
+
     def test_every_numbered_name_taken_is_a_409_and_leaves_no_new_folder(self):
         for name in ("Léa", "Léa (2)", "Léa (3)"):
             (self.tmp / "inbox" / name).mkdir(parents=True, exist_ok=True)
@@ -365,6 +372,27 @@ class TestMigration(FolderCase):
                 self.assertTrue((self.tmp / "inbox" / f"Léa{n}" / "film.mkv").is_file())
                 self.assertFalse((self.tmp / "inbox" / uid).exists())
 
+    def test_a_dubious_folder_name_in_the_base_is_replaced_by_the_old_folder_even_when_the_rename_then_fails(self):
+        """Le dossier de l'identifiant est déjà celui du compte : si le renommage échoue, la base le dit, au lieu de garder une valeur qui ne désigne rien."""
+        for n, bad in enumerate(("../x", "a/b", " ")):
+            with self.subTest(bad=bad):
+                uid = f"{n:016x}"
+                self.legacy(uid, f"Léa{n}")
+                self.db.execute("UPDATE users SET inbox_dir=? WHERE id=?", (bad, uid))
+                with mock.patch.object(inbox.os, "rename", side_effect=PermissionError(13, "Permission denied")), mock.patch.object(sys, "stderr", io.StringIO()):
+                    self.assertEqual(self.inbox.migrate(), 0)
+                self.assertEqual(self.recorded(uid), uid)
+                self.assertTrue((self.tmp / "inbox" / uid / "film.mkv").is_file())
+
+    def test_a_folder_the_system_takes_for_the_same_one_may_change_its_case(self):
+        """NTFS et SMB confondent « ABC » et « abc » : renommer l'un en l'autre n'est pas écraser un dossier qui existe déjà (portable : on fait croire au système qu'ils se confondent)."""
+        self.legacy("ABC", "abc", files=("film.mkv",), parts=())
+        real = os.path.lexists
+        with mock.patch.object(inbox.os.path, "lexists", lambda path: Path(path).name == "abc" or real(path)), mock.patch.object(inbox.os.path, "samefile", return_value=True):
+            self.inbox._rename_folder("ABC", "abc")
+        self.assertEqual(self.recorded("ABC"), "abc")
+        self.assertEqual(self.dirs(), ["abc"])
+
     def test_a_new_inbox_is_not_a_migration(self):
         add_user(self.db, "default", "Arthur")
         self.assertEqual(self.inbox.migrate(), 0)
@@ -577,6 +605,13 @@ class TestInboxOutsideTheDataFolder(FolderCase):
         self.assertIn("HubReception", message)
         self.assertIn("HUB_INBOX", message)
         self.assertIn("Permission denied", message)
+
+    def test_the_reason_is_the_one_the_system_gives_without_its_error_number_or_a_blank(self):
+        for error, reason in ((PermissionError(13, "Permission denied"), "Permission denied"), (OSError("volume démonté"), "volume démonté")):
+            with mock.patch.object(inbox.tempfile, "TemporaryFile", side_effect=error):
+                message = self.box.check()
+            self.assertIn(f"{reason} ; les envois seront refusés", message)
+            self.assertNotIn("Errno", message)
 
     def test_an_inbox_that_cannot_be_created_is_a_clear_message_too(self):
         self.assertIn("n'est pas utilisable", self.blocked().check())
