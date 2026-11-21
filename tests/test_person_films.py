@@ -15,8 +15,10 @@ from urllib.parse import quote
 from tests import fixtures
 from tests import test_server_routes as base
 from tests.rig import call
+from tests.test_server_routes import JPEG
 from tests.test_server_views import item
 from hub import accounts, config
+from hub.server import app
 
 fixtures.REPO  # noqa: B018  (rend `libraries` importable)
 config.use_media_library(fixtures.REPO)
@@ -542,7 +544,7 @@ class TestSheetInThePerson(PersonCase):
     """`info` de `/api/person` : la fiche que la passe a gardée, telle quelle, sans rien demander en ligne."""
 
     SHEET = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "known_for_department": "Acting", "profile_path": "/cruz.jpg"}
-    SHOWN = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "department": "Acting", "tmdb": CRUZ}          # `tmdb` : de quoi faire /img/person/<tmdb>
+    SHOWN = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "department": "Acting", "tmdb": CRUZ, "own_photo": False}          # `tmdb` : de quoi faire /img/person/<tmdb> ; `own_photo` : pas de photo envoyée
 
     def keep(self, ident=CRUZ, **over):
         self.db.kv_set(f"personinfo:{ident}", {"at": 1, "films": [self.film(5)], "info": {**self.SHEET, **over}})
@@ -623,6 +625,193 @@ class TestPersonPhotoRoute(PersonCase):
         bob = self.bob()
         self.assertEqual(self.get(f"/img/person/{CRUZ}").status, 302)
         self.assertEqual(self.get(f"/img/person/{CRUZ}", headers=bob).status, 200)
+
+
+class EditCase(PersonCase):
+    """Penélope Cruz a une fiche gardée par la passe (`info`) ; Chris Evans n'en a pas."""
+
+    SHEET = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "known_for_department": "Acting", "profile_path": "/cruz.jpg"}
+
+    def setUp(self):
+        super().setUp()
+        self.db.kv_set(f"personinfo:{CRUZ}", {"at": 1, "films": [], "info": dict(self.SHEET)})
+
+    def edit(self, body, ident=CRUZ, headers=None):
+        return call(self.hub, "POST", f"/api/person/{ident}/sheet", body, headers=headers)[1]
+
+    def info(self):
+        return self.person()[1]["info"]
+
+    def new_pass(self, **over):
+        """Une nouvelle passe des personnes : la fiche de TMDB est réécrite en entier."""
+        self.db.kv_set(f"personinfo:{CRUZ}", {"at": 2, "films": [], "info": {**self.SHEET, **over}})
+
+
+class TestPersonSheetEdits(EditCase):
+    """`POST /api/person/<tmdb>/sheet` : l'administrateur corrige la fiche ; la correction est gardée à part (`personedit:<tmdb>`), et passe avant TMDB, champ par champ."""
+
+    def test_a_corrected_field_wins_over_tmdb_and_survives_a_new_pass(self):
+        reply = self.edit({"biography": "  Corrigée.\nSur deux lignes.  ", "place_of_birth": "Madrid"})
+        self.assertEqual(reply.status, 200)
+        self.assertEqual((reply.json()["info"]["biography"], reply.json()["info"]["place_of_birth"]), ("Corrigée.\nSur deux lignes.", "Madrid"))
+        self.new_pass(biography="Nouvelle de TMDB.", birthday="1974-04-29")
+        info = self.info()
+        self.assertEqual((info["biography"], info["place_of_birth"], info["birthday"]), ("Corrigée.\nSur deux lignes.", "Madrid", "1974-04-29"))          # ce qui n'est pas corrigé suit TMDB
+
+    def test_an_emptied_field_goes_back_to_tmdb_and_nothing_left_is_nothing_kept(self):
+        self.edit({"biography": "Corrigée."})
+        self.assertEqual(self.edit({"biography": "  "}).json()["info"]["biography"], "Actrice espagnole.")
+        self.assertIsNone(self.db.kv_get(f"personedit:{CRUZ}"))
+
+    def test_a_value_equal_to_what_tmdb_says_is_not_kept_so_tmdb_keeps_it(self):
+        self.edit({"birthday": "1974-04-28", "department": "Acting"})
+        self.assertIsNone(self.db.kv_get(f"personedit:{CRUZ}"))
+
+    def test_the_fields_not_sent_are_left_alone(self):
+        self.edit({"biography": "Corrigée."})
+        self.edit({"place_of_birth": "Madrid"})
+        self.assertEqual(self.db.kv_get(f"personedit:{CRUZ}"), {"biography": "Corrigée.", "place_of_birth": "Madrid"})
+
+    def test_everything_empty_gives_back_the_sheet_of_tmdb(self):
+        self.edit({"biography": "Corrigée.", "deathday": "2030-01-01", "department": "Chant"})
+        info = self.edit({key: "" for key in ("biography", "birthday", "deathday", "place_of_birth", "department")}).json()["info"]
+        self.assertEqual((info["biography"], info["deathday"], info["department"]), ("Actrice espagnole.", "", "Acting"))
+        self.assertIsNone(self.db.kv_get(f"personedit:{CRUZ}"))
+
+    def test_the_trade_is_free_text_and_a_date_of_death_can_be_added(self):
+        info = self.edit({"department": "Chant et comédie", "deathday": "2030-01-01"}).json()["info"]
+        self.assertEqual((info["department"], info["deathday"]), ("Chant et comédie", "2030-01-01"))
+
+    def test_bad_values_are_refused_with_a_clear_message_and_nothing_is_kept(self):
+        for body, message in (({"birthday": "28/04/1974"}, "date de naissance invalide : AAAA-MM-JJ attendu"),
+                              ({"deathday": "1974-02-30"}, "date de décès invalide : AAAA-MM-JJ attendu"),
+                              ({"birthday": "١٩٧٤-04-28"}, "date de naissance invalide : AAAA-MM-JJ attendu"),
+                              ({"deathday": "1970-01-01"}, "la date de décès précède la date de naissance"),
+                              ({"biography": 12}, "biographie : texte attendu"),
+                              ({"place_of_birth": "x" * 201}, "lieu de naissance trop long (200 caractères au plus)"),
+                              ({"biography": "x" * 10001}, "biographie trop longue (10000 caractères au plus)"),
+                              ({"photo": "x"}, "champ inconnu : photo")):
+            with self.subTest(body=str(body)[:40]):
+                reply = self.edit(body)
+                self.assertEqual((reply.status, reply.json()), (400, {"error": message}))
+        self.assertIsNone(self.db.kv_get(f"personedit:{CRUZ}"))
+
+    def test_a_death_on_the_day_of_birth_is_accepted(self):
+        reply = self.edit({"deathday": "1974-04-28"})
+        self.assertEqual((reply.status, reply.json()["info"]["deathday"]), (200, "1974-04-28"))
+
+    def test_what_is_damaged_in_the_kept_corrections_is_ignored_field_by_field(self):
+        self.db.kv_set(f"personedit:{CRUZ}", {"biography": 12, "photo": "x", "place_of_birth": "", "department": "Chant"})
+        info = self.info()
+        self.assertEqual((info["biography"], info["place_of_birth"], info["department"]), ("Actrice espagnole.", "Madrid, Espagne", "Chant"))
+        self.db.kv_set(f"personedit:{CRUZ}", ["pas", "un", "objet"])
+        self.assertEqual(self.info()["biography"], "Actrice espagnole.")
+        self.assertEqual(self.edit({"place_of_birth": "Madrid"}).status, 200)          # une correction abîmée n'empêche pas d'en écrire une
+        self.assertEqual(self.db.kv_get(f"personedit:{CRUZ}"), {"place_of_birth": "Madrid"})
+
+    def test_a_person_without_a_sheet_cannot_be_corrected(self):
+        self.assertEqual(self.edit({"biography": "x"}, ident=EVANS).status, 404)
+        self.db.kv_set(f"personinfo:{CRUZ}", {"at": 1, "films": []})          # une fiche d'avant : pas d'info
+        reply = self.edit({"biography": "x"})
+        self.assertEqual((reply.status, reply.json()), (404, {"error": "pas de fiche pour cette personne : lance d'abord « Chercher ses films manquants »"}))
+
+    def test_only_the_administrator_may(self):
+        bob = self.bob()
+        self.assertEqual(self.edit({"biography": "x"}, headers=bob).status, 403)
+        self.assertEqual(self.edit({"biography": "x"}, headers=self.root_cookie).status, 200)
+
+    def test_a_namesake_shows_no_sheet_even_corrected(self):
+        self.edit({"biography": "Corrigée."})
+        self.db.replace_library("lib", [item("m9", title="Homonyme", meta={"actors": [{"name": "Penélope Cruz"}], "person_ids": {"Penélope Cruz": 1}})], [])
+        self.assertNotIn("info", self.person()[1])
+
+
+class TestPersonPhotoEdits(EditCase):
+    """La photo envoyée par l'administrateur (HUB_DATA/people/<tmdb>.<ext>) passe avant celle de TMDB, que la passe ne touche pas ; elle se recadre et se retire."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmdb_photo = TestSheetInThePerson.put_photo(self)
+        self.hub.images.file.return_value = (b"IMAGE", "image/jpeg", "cle")
+        no_webp = mock.patch.object(enrich.images, "can_webp", return_value=False)          # gardée telle quelle : le test ne dépend pas de Pillow
+        no_webp.start()
+        self.addCleanup(no_webp.stop)
+
+    def post(self, target, body, headers=None):
+        return call(self.hub, "POST", target, body, headers=headers)[1]
+
+    def own(self):
+        return sorted(p.name for p in (self.root / "data" / "people").glob("*")) if (self.root / "data" / "people").is_dir() else []
+
+    def test_an_uploaded_photo_is_served_instead_of_the_one_of_tmdb_and_stays_after_a_pass(self):
+        reply = self.post(f"/api/person/{CRUZ}/photo", JPEG)
+        self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
+        self.assertEqual(self.own(), [f"{CRUZ}.jpg"])
+        self.assertEqual((self.info()["photo"], self.info()["own_photo"]), (True, True))
+        self.get(f"/img/person/{CRUZ}")
+        self.hub.images.file.assert_called_with(f"person:{CRUZ}", self.root / "data" / "people" / f"{CRUZ}.jpg", 0)
+        self.new_pass(profile_path="/autre.jpg")
+        self.assertEqual(self.own(), [f"{CRUZ}.jpg"])
+
+    def test_without_its_own_photo_the_one_of_tmdb_is_served(self):
+        self.assertEqual(self.info()["own_photo"], False)
+        self.get(f"/img/person/{CRUZ}")
+        self.hub.images.file.assert_called_with(f"person:{CRUZ}", self.tmdb_photo, 0)
+
+    def test_a_person_without_any_photo_can_get_one(self):
+        self.tmdb_photo.unlink()
+        self.assertIs(self.info()["photo"], False)
+        self.post(f"/api/person/{CRUZ}/photo", JPEG)
+        self.assertIs(self.info()["photo"], True)
+
+    def test_something_that_is_not_an_image_or_a_bad_crop_is_refused(self):
+        self.assertEqual(self.post(f"/api/person/{CRUZ}/photo", b"du texte").status, 415)
+        self.assertEqual(self.post(f"/api/person/{CRUZ}/photo?crop=2,2,2,2", JPEG).status, 400)
+        self.assertEqual(self.own(), [])
+
+    def test_a_photo_that_cannot_be_converted_or_written_is_a_clear_error(self):
+        reply = self.post(f"/api/person/{CRUZ}/photo?crop=0,0,1,1", JPEG)          # recadrer sans Pillow ni ffmpeg
+        self.assertEqual((reply.status, reply.json()), (501, {"error": "ni Pillow ni ffmpeg : pas de recadrage possible"}))
+        with mock.patch.object(enrich, "converted_photo", side_effect=enrich.images.ConvertError("image illisible")):
+            self.assertEqual(self.post(f"/api/person/{CRUZ}/photo", JPEG).status, 415)
+        (self.root / "data" / "people").write_bytes(b"un fichier, pas un dossier")
+        reply = self.post(f"/api/person/{CRUZ}/photo", JPEG)
+        self.assertEqual(reply.status, 500)
+        self.assertTrue(reply.json()["error"].startswith("photo non enregistrée : "))
+
+    def test_a_crop_starts_from_the_photo_shown_and_keeps_the_result_as_its_own(self):
+        with mock.patch.object(app, "save_person_photo") as save:
+            reply = self.post(f"/api/person/{CRUZ}/photo/crop", {"x": 0, "y": 0.25, "w": 1, "h": 0.5})
+        self.assertEqual((reply.status, reply.json()), (200, {"ok": True}))
+        self.assertEqual(save.call_args.args[1:], (CRUZ, b"jpeg", (0.0, 0.25, 1.0, 0.5)))          # la photo de TMDB, puisqu'elle n'en a pas d'autre
+        self.assertEqual(self.post(f"/api/person/{CRUZ}/photo/crop", {"x": 5}).status, 400)
+        self.tmdb_photo.unlink()
+        reply = self.post(f"/api/person/{CRUZ}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1})
+        self.assertEqual((reply.status, reply.json()), (404, {"error": "pas de photo à recadrer"}))
+
+    def test_removing_its_own_photo_brings_back_the_one_of_tmdb(self):
+        reply = self.post(f"/api/person/{CRUZ}/photo/remove", {})
+        self.assertEqual((reply.status, reply.json()), (404, {"error": "pas de photo envoyée"}))
+        self.post(f"/api/person/{CRUZ}/photo", JPEG)
+        self.assertEqual(self.post(f"/api/person/{CRUZ}/photo/remove", {}).json(), {"ok": True})
+        self.assertEqual((self.own(), self.info()["own_photo"], self.info()["photo"]), ([], False, True))
+
+    def test_the_routes_read_their_body_so_it_does_not_stick_to_the_next_request(self):
+        """Connexion persistante : un corps laissé là serait lu comme le début de la requête suivante (« {}GET … »)."""
+        self.post(f"/api/person/{CRUZ}/photo", JPEG)
+        for target, body in ((f"/api/person/{CRUZ}/photo/remove", {}), (f"/api/person/{CRUZ}/sheet", {"place_of_birth": "Madrid"}),
+                             (f"/api/person/{CRUZ}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1})):
+            with self.subTest(target=target), mock.patch.object(app, "save_person_photo"):
+                handler, reply = call(self.hub, "POST", target, body)
+                self.assertEqual((reply.status, handler.rfile.read()), (200, b""))
+
+    def test_only_the_administrator_and_only_for_a_person_with_a_sheet(self):
+        bob = self.bob()
+        for target, body in ((f"/api/person/{CRUZ}/photo", JPEG), (f"/api/person/{CRUZ}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1}), (f"/api/person/{CRUZ}/photo/remove", {})):
+            with self.subTest(target=target):
+                self.assertEqual(self.post(target, body, headers=bob).status, 403)
+                self.assertEqual(self.post(target.replace(str(CRUZ), str(EVANS)), body, headers=self.root_cookie).status, 404)
+        self.assertEqual(self.own(), [])
 
 
 class TestEnrichable(PersonCase):

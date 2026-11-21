@@ -519,6 +519,102 @@ def enrich_person(cfg, db, person_id, log=print, force=False):
     return counts
 
 
+# --- Les corrections de l'administrateur ---------------------------------------------------------
+# Gardées à part de la fiche de TMDB (`personedit:<id>`), que la passe réécrit en entier : elles passent avant elle, champ par champ, et lui survivent.
+# Un champ : (le champ de la fiche de TMDB qu'il corrige, longueur au plus, son nom dans les messages, « trop long » accordé).
+EDITABLE = {
+    "biography": ("biography", 10000, "biographie", "trop longue"),
+    "department": ("known_for_department", 80, "métier", "trop long"),
+    "birthday": ("birthday", 10, "date de naissance", "trop longue"),
+    "deathday": ("deathday", 10, "date de décès", "trop longue"),
+    "place_of_birth": ("place_of_birth", 200, "lieu de naissance", "trop long"),
+}
+ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")          # chiffres ASCII : \d laisserait passer ceux d'autres écritures
+
+
+def person_edit_key(tmdb_id):
+    return f"personedit:{tmdb_id}"
+
+
+def person_edits(db, tmdb_id):
+    """{champ: texte} des corrections gardées pour cette personne (voir EDITABLE) ; ce qui est abîmé est ignoré."""
+    kept = db.kv_get(person_edit_key(tmdb_id))
+    kept = kept if isinstance(kept, dict) else {}
+    return {field: value for field, value in kept.items() if field in EDITABLE and isinstance(value, str) and value}
+
+
+def edited_sheet(info, edits):
+    """{champ: texte} de la fiche montrée : la correction de l'administrateur, sinon ce que TMDB dit (`info`, voir fetch_person)."""
+    return {field: edits.get(field) or info.get(source) or "" for field, (source, *_) in EDITABLE.items()}
+
+
+def checked_value(field, value):
+    """`value` nettoyée pour le champ `field` ; ValueError (message en français) si elle n'y va pas."""
+    _, limit, label, too_long = EDITABLE[field]
+    if not isinstance(value, str):
+        raise ValueError(f"{label} : texte attendu")
+    value = value.strip()
+    if len(value) > limit:
+        raise ValueError(f"{label} {too_long} ({limit} caractères au plus)")
+    if value and field in ("birthday", "deathday") and not is_iso_date(value):
+        raise ValueError(f"{label} invalide : AAAA-MM-JJ attendu")
+    return value
+
+
+def is_iso_date(text):
+    try:
+        return bool(ISO_DATE.fullmatch(text)) and date.fromisoformat(text) is not None
+    except ValueError:
+        return False
+
+
+def new_edits(info, edits, body):
+    """Les corrections après la demande `body` ({champ: texte}) : un champ envoyé vide, ou égal à ce que dit TMDB, revient à TMDB ; un champ non envoyé ne change pas. ValueError (message en français) pour un champ inconnu, une valeur refusée, ou une mort avant la naissance ; rien n'est alors changé."""
+    unknown = sorted(field for field in body if field not in EDITABLE)
+    if unknown:
+        raise ValueError(f"champ inconnu : {unknown[0]}")
+    result = dict(edits)
+    for field, value in body.items():
+        value = checked_value(field, value)
+        if value and value != (info.get(EDITABLE[field][0]) or ""):
+            result[field] = value
+        else:
+            result.pop(field, None)
+    check_dates(edited_sheet(info, result))
+    return result
+
+
+def check_dates(shown):
+    """ValueError si la fiche montrée `shown` fait mourir la personne avant sa naissance (dates ISO : elles se comparent comme des textes)."""
+    if shown["birthday"] and shown["deathday"] and shown["deathday"] < shown["birthday"]:
+        raise ValueError("la date de décès précède la date de naissance")
+
+
+def own_photo(cfg, tmdb_id):
+    """La photo que l'administrateur a envoyée pour cette personne (HUB_DATA/people/<id>.<ext>), ou None. La passe n'y touche pas."""
+    return find_photo(cfg.data / "people", str(tmdb_id))
+
+
+def person_photo(cfg, tmdb_id):
+    """La photo montrée d'une personne : celle envoyée, sinon celle de TMDB posée par la passe ; None s'il n'y en a pas."""
+    tmdb = cfg.data / "tmdb" / missing.photo_name(tmdb_id)
+    return own_photo(cfg, tmdb_id) or (tmdb if tmdb.is_file() else None)
+
+
+def save_person_photo(cfg, tmdb_id, data, box=None):
+    """Garde `data` comme photo de la personne, à la place de celle qu'elle avait envoyée (convertie et rognée comme celle d'un artiste, voir converted_photo). ConvertError, NoConverter, OSError comme save_photo."""
+    data, ext = converted_photo(cfg, data, box)
+    return store_photo(cfg.data / "people", str(tmdb_id), data, ext)
+
+
+def remove_person_photo(cfg, tmdb_id):
+    """Retire la photo envoyée : celle de TMDB revient. Faux s'il n'y en avait pas."""
+    found = own_photo(cfg, tmdb_id)
+    if found:
+        found.unlink()
+    return bool(found)
+
+
 PEOPLE_PROGRESS = 100        # une ligne de journal toutes les 100 personnes : le journal d'une tâche ne garde que 400 lignes
 PEOPLE_MAX_NOTES = 40        # lignes d'échec ou d'affiche manquante écrites au journal ; les suivantes sont comptées sans être écrites (elles chasseraient le début du journal)
 PEOPLE_MAX_FAILS = 15        # échecs de suite au bout desquels TMDB est jugé injoignable : la passe s'arrête (une tâche ne reste pas des heures sur un réseau coupé, et elle reprendra où elle en était)

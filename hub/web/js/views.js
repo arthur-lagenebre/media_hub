@@ -1336,6 +1336,7 @@
       head = inner = null;
       fold(false);
       more.hidden = true;
+      showTools(null);
       if (had) H.focus.set(button, true);
     }
     function sheet(info) {
@@ -1349,18 +1350,86 @@
       }
       Array.prototype.slice.call(head.querySelectorAll('.hero-bg, .hero-in > .poster')).forEach(function (n) { n.parentNode.removeChild(n); });
       var face = info.photo && info.tmdb ? '/img/person/' + info.tmdb : '';
+      var v = stamp ? '&v=' + stamp : '';          // après un changement de photo : une autre adresse, que le navigateur ne prend pas dans son cache
       if (face) {
-        head.insertBefore(h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320)' }), inner);
-        inner.insertBefore(H.picture(face + '?w=480', shown, 'big'), inner.firstChild);
+        head.insertBefore(h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320' + v + ')' }), inner);
+        inner.insertBefore(H.picture(face + '?w=480' + v, shown, info.own_photo ? 'sq' : ''), inner.firstChild);          // la photo envoyée sort du cadre carré du recadrage ; celle de TMDB est un portrait
       }
       inner.classList.toggle('solo', !face);
       trade.textContent = info.department ? personTrade(info.department) : '';
       dates.textContent = personDates(info, new Date());
       bio.textContent = info.biography || '';
       [trade, dates, bio].forEach(function (p) { p.hidden = !p.textContent; });
+      showTools(info);
       requestAnimationFrame(measure);
     }
     window.addEventListener('resize', measure);
+    // Corriger la fiche : l'administrateur seulement, et hors télé (saisir un texte à la télécommande se fait mal, son sélecteur de fichiers aussi). Les boutons restent dans la page, cachés quand ils n'ont pas lieu d'être :
+    // un redessin ne leur prend pas le focus. Les corrections sont gardées à part de TMDB par le serveur (voir docs/api.md, « Corriger la fiche d'une personne »).
+    var current = null, stamp = 0;
+    var picker = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', hidden: true, 'aria-hidden': 'true', tabindex: '-1',
+      onchange: function () { var file = this.files && this.files[0]; this.value = ''; if (file) upload(file); } });
+    var tools = {
+      edit: H.button(H.t('Modifier la fiche'), 'edit', { 'data-key': 'person-edit', hidden: true, onclick: editSheet }),
+      photo: H.button(H.t('Changer la photo'), 'edit', { 'data-key': 'person-photo', hidden: true, onclick: function () { picker.click(); } }),
+      crop: H.button(H.t('Recadrer'), 'full', { 'data-key': 'person-crop', hidden: true, onclick: recrop }),
+      unphoto: H.button(H.t('Photo de TMDB'), null, { 'data-key': 'person-unphoto', hidden: true, title: H.t('Retire la photo envoyée : celle de TMDB revient.'), onclick: unphoto })
+    };
+    Object.keys(tools).forEach(function (k) { actions.appendChild(tools[k]); });
+    actions.appendChild(picker);
+    function showTools(info) {
+      current = info;
+      var on = !!info && H.isAdmin() && H.device !== 'tv';
+      tools.edit.hidden = tools.photo.hidden = !on;
+      tools.crop.hidden = !(on && info.photo);
+      tools.unphoto.hidden = !(on && info.own_photo);
+      syncActions();
+    }
+    function syncActions() { actions.hidden = !button.parentNode && Object.keys(tools).every(function (k) { return tools[k].hidden; }); }
+    // Les champs de la fiche à corriger : [clé de l'API, libellé, type de champ, longueur au plus (celle du serveur)].
+    var EDIT_FIELDS = [['biography', H.t('Biographie'), 'textarea', 10000], ['department', H.t('Métier'), 'text', 80], ['birthday', H.t('Naissance (AAAA-MM-JJ)'), 'text', 10],
+      ['place_of_birth', H.t('Lieu de naissance'), 'text', 200], ['deathday', H.t('Décès (AAAA-MM-JJ)'), 'text', 10]];
+    // Une valeur comme H.form la rend : un texte long sans espaces autour, un texte court sans espaces en trop.
+    function tidy(value, type) { return type === 'textarea' ? value.trim() : value.replace(/\s+/g, ' ').trim(); }
+    // La fenêtre « Modifier la fiche » : chaque champ prérempli de ce qui est montré ; seuls les champs changés partent (un champ resté tel quel suit TMDB, même s'il change là-bas). « Tout reprendre de TMDB » vide toutes les corrections.
+    function editSheet() {
+      var info = current, start = {};
+      EDIT_FIELDS.forEach(function (f) { start[f[0]] = tidy(f[0] === 'department' ? personTrade(info.department || '') : (info[f[0]] || ''), f[2]); });
+      function send(values) { return H.api('/api/person/' + info.tmdb + '/sheet', values).then(function () { return H.t('Fiche enregistrée'); }); }
+      H.form({ title: H.t('Modifier la fiche de {name}', { name: shown }), ok: H.t('Enregistrer'),
+        lead: [H.t('Un champ vidé reprend ce que dit TMDB. Une nouvelle recherche sur TMDB ne touche pas à ces corrections.')],
+        fields: EDIT_FIELDS.map(function (f) { return { key: f[0], label: f[1], type: f[2], maxlength: f[3], value: start[f[0]] }; }),
+        submit: function (values) {
+          var changed = {};
+          EDIT_FIELDS.forEach(function (f) { if (values[f[0]] !== start[f[0]]) changed[f[0]] = values[f[0]]; });
+          return Object.keys(changed).length ? send(changed) : Promise.resolve(null);
+        },
+        alt: { label: H.t('Tout reprendre de TMDB'), submit: function () { var all = {}; EDIT_FIELDS.forEach(function (f) { all[f[0]] = ''; }); return send(all); } },
+        done: function (message) { if (message) { H.toast(message); load(); } } });
+    }
+    function photoSaved(message) { stamp = Date.now(); H.toast(message); return load(); }
+    // L'image choisie s'ouvre dans le recadrage d'un artiste ; rien n'est envoyé avant « Valider ».
+    function upload(file) {
+      if (file.size > 10 * 1024 * 1024) { H.toast(H.t('Image trop grosse (10 Mo au plus).')); return; }
+      var url = URL.createObjectURL(file), id = current.tmdb;
+      H.cropPhoto(url, function (f) {
+        return H.api('/api/person/' + id + '/photo?crop=' + [f.x, f.y, f.w, f.h].join(','), file, { raw: true }).then(function () { return photoSaved(H.t('Photo enregistrée')); });
+      }, function () { URL.revokeObjectURL(url); });
+    }
+    // La photo montrée (envoyée, ou celle de TMDB) rognée une seconde fois : le résultat devient la photo envoyée.
+    function recrop() {
+      var id = current.tmdb;
+      H.cropPhoto('/img/person/' + id + '?w=1280&v=' + (stamp || 1), function (f) {
+        return H.api('/api/person/' + id + '/photo/crop', f).then(function () { return photoSaved(H.t('Photo recadrée')); });
+      });
+    }
+    function unphoto() {
+      var id = current.tmdb;
+      H.confirm({ title: H.t('Revenir à la photo de TMDB ?'), lead: [H.t('La photo envoyée est supprimée.')], ok: H.t('Supprimer la photo envoyée'), danger: true, done: function () {
+        H.api('/api/person/' + id + '/photo/remove', {}).then(function () { return photoSaved(H.t('Photo de TMDB rétablie')); })
+          .then(function () { H.focus.set(tools.photo, true); }).catch(function (e) { H.toast(e.message, 5000); });          // son bouton disparaît : le focus va à « Changer la photo »
+      } });
+    }
     var ROLE_LABELS = [['director', H.t('Réalisateur')], ['actor', H.t('Acteur')]];
     var ROLE_NAMES = {};
     ROLE_LABELS.forEach(function (r) { ROLE_NAMES[r[0]] = r[1]; });
@@ -1370,7 +1439,7 @@
     function settle(key) {
       var active = document.activeElement;
       var free = !active || active === document.body || el.contains(active) || active.getClientRects().length === 0;
-      if (!free || active === button || !H.focus.shown(el) || H.overlay.isOpen()) return;          // sur le bouton « Chercher… », on y reste
+      if (!free || actions.contains(active) || (head && head.contains(active)) || !H.focus.shown(el) || H.overlay.isOpen()) return;          // sur un bouton de la page (« Chercher… », « Recadrer »…) ou de l'en-tête, on y reste
       if (key && H.focus.key(out, key, true)) return;
       H.focus.set(out.querySelector('.card') || out.querySelector('.f'), true);
     }
@@ -1413,9 +1482,9 @@
     // Le bouton est le même d'un dessin à l'autre : un redessin ne lui prend pas le focus de la télécommande. Il n'existe que pour l'administrateur, quand TMDB peut répondre pour cette personne.
     var button = H.button(H.t('Chercher ses films manquants'), null, { 'data-key': 'person-enrich', title: H.t('Demande à TMDB les films de cette personne, pour voir ceux qui ne sont pas dans ta médiathèque.'), onclick: ask });
     function showButton(on) {
-      if (on && !button.parentNode) actions.appendChild(button);
+      if (on && !button.parentNode) actions.insertBefore(button, actions.firstChild);          // avant les boutons de correction
       else if (!on && button.parentNode) button.parentNode.removeChild(button);
-      actions.hidden = !on;
+      syncActions();
     }
     function show(res) {
       if (gone) return;
