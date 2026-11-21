@@ -796,6 +796,15 @@ class TestPersonPhotoEdits(EditCase):
         self.assertEqual(self.post(f"/api/person/{CRUZ}/photo/remove", {}).json(), {"ok": True})
         self.assertEqual((self.own(), self.info()["own_photo"], self.info()["photo"]), ([], False, True))
 
+    def test_the_routes_read_their_body_so_it_does_not_stick_to_the_next_request(self):
+        """Connexion persistante : un corps laissé là serait lu comme le début de la requête suivante (« {}GET … »)."""
+        self.post(f"/api/person/{CRUZ}/photo", JPEG)
+        for target, body in ((f"/api/person/{CRUZ}/photo/remove", {}), (f"/api/person/{CRUZ}/sheet", {"place_of_birth": "Madrid"}),
+                             (f"/api/person/{CRUZ}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1})):
+            with self.subTest(target=target), mock.patch.object(app, "save_person_photo"):
+                handler, reply = call(self.hub, "POST", target, body)
+                self.assertEqual((reply.status, handler.rfile.read()), (200, b""))
+
     def test_only_the_administrator_and_only_for_a_person_with_a_sheet(self):
         bob = self.bob()
         for target, body in ((f"/api/person/{CRUZ}/photo", JPEG), (f"/api/person/{CRUZ}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1}), (f"/api/person/{CRUZ}/photo/remove", {})):

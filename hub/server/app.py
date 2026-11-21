@@ -1377,6 +1377,7 @@ def api_person_photo_remove(h, m, q):
     """Retire la photo envoyée : celle de TMDB revient (s'il y en a une). 404 quand il n'y en a pas. Administrateur seulement."""
     require_admin(h)
     ident, _ = person_target(h.hub, m.group(1))
+    h.body_json()          # rien à y lire, mais le corps est lu : sur une connexion persistante, il collerait à la requête suivante
     try:
         removed = enrich.remove_person_photo(h.hub.cfg, ident)
     except OSError as e:
