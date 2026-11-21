@@ -660,6 +660,21 @@ class TestRefusalsReachTheClient(AccountsCase):
         response.read()
         self.assertEqual(response.status, 200)                                                      # la connexion a servi une seconde requête
 
+    def test_a_refused_upload_does_not_wait_for_a_body_the_client_has_not_sent(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
+        self.addCleanup(conn.close)
+        conn.putrequest("POST", "/api/inbox?name=malin.exe", skip_accept_encoding=True)
+        for key, value in (("Authorization", f"Bearer {self.alice.token}"), ("Content-Length", "100000")):
+            conn.putheader(key, value)
+        conn.endheaders()                                                                           # 100 Ko annoncés (sous le Mo que _fail jetterait), rien envoyé
+        started = time.monotonic()
+        response = conn.getresponse()
+        self.assertEqual(response.status, 415)
+        response.read()
+        conn.sock.settimeout(3)
+        self.assertEqual(conn.sock.recv(1), b"")                                                    # le serveur ferme son côté aussitôt, sans attendre le corps
+        self.assertLess(time.monotonic() - started, 3)
+
     def test_another_route_that_refuses_a_big_body_is_cut_at_once(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.run_.port, timeout=30)
         self.addCleanup(conn.close)

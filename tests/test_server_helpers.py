@@ -564,6 +564,13 @@ class TestStrictBody(unittest.TestCase):
             self.assertEqual(caught.exception.status, 400, body)
             self.assertTrue(request.body_taken, body)
 
+    def test_a_body_over_one_megabyte_is_refused_unread_and_the_connection_cut(self):
+        request = FakeRequest(b"{}", length=(1 << 20) + 1)
+        with self.assertRaises(HttpError) as caught:
+            app.strict_body_dict(request)
+        self.assertEqual((caught.exception.status, caught.exception.message), (413, "corps trop gros"))
+        self.assertEqual((request.close_connection, request.body_taken, request.rfile.tell()), (True, True, 0))   # le reste du corps ne doit pas passer pour la requête suivante
+
 
 class TestGrantsOfTheAccount(unittest.TestCase):
     def request(self, role):
