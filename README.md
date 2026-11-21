@@ -258,7 +258,7 @@ Les workflows sont dans `.github/workflows/` ; l'environnement commun (media_lib
 | `tests.yml` | chaque PR, chaque push sur `main` | le serveur sur Python 3.14 et 3.15 (l'interface dans Chromium n'y passe plus : à lancer à la main) |
 | `version.yml` | chaque PR | relit la règle de `/ship` : `__version__`, `API_VERSION`, `SCHEMA_VERSION` (échec si un numéro baisse, avertissement si la version ne suit pas `hub/`) |
 | `quality.yml` | PR qui touche du Python de `hub/` | `dryer` (aucune paire de score 0,8 ou plus) |
-| `nightly.yml` | chaque nuit si le commit de `main` n'a pas encore été entièrement traité, ou à la main | `crapper` (CRAP 10 au plus sur tout `hub/`, avec l'interface) et `mutator` sur tout `hub/`, en parties parallèles qui reprennent d'une passe à l'autre (`hub/server` sur dix jobs) |
+| `nightly.yml` | chaque nuit si le commit de `main` n'a pas encore été entièrement traité, ou à la main | `crapper` (CRAP 10 au plus sur tout `hub/`, avec l'interface) et `mutator` sur tout `hub/`, en parties parallèles qui reprennent d'une passe à l'autre (`hub/server` sur onze jobs) |
 | `mutator.yml` | à la main, ou étiquette `mutator` sur une PR | la passe de mutation, sur les chemins choisis ou les fichiers Python de la PR |
 | `image.yml` | étiquette `vX.Y.Z` | construit l'image (`deploy/Dockerfile`), l'essaie, la publie sur `ghcr.io` ; l'étiquette doit être celle de `__version__` |
 
