@@ -366,6 +366,15 @@ class TestPersonSheet(TempCase):
         self.assertFalse((self.tmp / "tmdb" / f"person-{CRUZ}.jpg").exists())
         self.assertTrue(any("pas de photo" in line for line in log), log)
 
+    def test_a_refused_key_on_the_photo_stops_the_pass_instead_of_passing_for_a_missing_photo(self):
+        class Refused(FakeTmdb):
+            def save_image(self, path, size, dest):
+                raise TmdbAuthError("clé refusée")
+
+        with self.assertRaisesRegex(RuntimeError, "TMDB : clé refusée"):
+            self.run_pass(Refused(sheet={"profile_path": "/cruz.jpg"}))
+        self.assertIsNone(self.db.kv_get(f"personinfo:{CRUZ}"))
+
     def test_without_a_photo_on_tmdb_nothing_is_downloaded(self):
         tmdb = FakeTmdb()
         self.run_pass(tmdb)
