@@ -6434,12 +6434,14 @@ class FakePersonTmdb:
     def __init__(self, key, language="fr-FR", **kwargs):
         pass
 
-    def get(self, endpoint):
+    def get(self, endpoint, language=None):
+        """La fiche d'une personne et ses films en un appel (`person/<id>?append_to_response=movie_credits`), avec une biographie : pas de second appel en anglais."""
         from libraries.video.tmdb import TmdbError
         FakePersonTmdb.calls.append(endpoint)
-        if endpoint not in self.credits:
+        credits = self.credits.get(endpoint.replace("?append_to_response=movie_credits", "/movie_credits"))
+        if credits is None:
             raise TmdbError("introuvable sur TMDB (HTTP 404)")
-        return self.credits[endpoint]
+        return {"biography": "Une vie.", "movie_credits": credits}
 
     def save_image(self, image_path, size, dest):
         Path(dest).write_bytes(fixtures.PNG)
@@ -6491,7 +6493,7 @@ class TestPersonMissingUi(UiCase):
         self.assertEqual(self.view(".card.wanted .s").all_inner_texts(), ["2010 · Acteur", "2008 · Acteur", "2005 · Acteur"])
         self.assertEqual(self.view("section.missing h2").inner_text(), "Films qui manquent · 3")
         self.assertEqual(self.view("section.missing .part").count(), 0)          # le rang n'a pas de sens ici : pas de pastille
-        self.assertEqual(FakePersonTmdb.calls, ["person/8200/movie_credits"])
+        self.assertEqual(FakePersonTmdb.calls, ["person/8200?append_to_response=movie_credits"])
         self.assertEqual(self.view("section.missing b").count(), 0)          # « <b>x</b> » est un titre, pas du HTML
 
     def test_the_greyed_films_open_nothing_but_each_one_can_be_requested(self):
@@ -6518,7 +6520,7 @@ class TestPersonMissingUi(UiCase):
             self.view("[data-key=person-enrich]").dblclick()
             self.view(".card.wanted").first.wait_for()
             self.run_.wait_jobs()
-        self.assertEqual(FakePersonTmdb.calls, ["person/8200/movie_credits"])
+        self.assertEqual(FakePersonTmdb.calls, ["person/8200?append_to_response=movie_credits"])
 
     def test_on_a_phone_the_page_does_not_scroll_sideways(self):
         self.page.set_viewport_size({"width": 390, "height": 800})
@@ -6570,7 +6572,7 @@ class TestPersonMissingUi(UiCase):
             self.page.locator("#toast.on", has_text="Recherche des films manquants lancée : Films").wait_for()
             self.until(lambda: len(FakePersonTmdb.calls) >= 2, tries=100)
             self.run_.wait_jobs()
-        self.assertEqual(sorted(FakePersonTmdb.calls), ["person/8100/movie_credits", "person/8200/movie_credits"])
+        self.assertEqual(sorted(FakePersonTmdb.calls), ["person/8100?append_to_response=movie_credits", "person/8200?append_to_response=movie_credits"])
         self.person()                                                                          # sans cliquer sur la page : tout est déjà là
         self.assertEqual(self.missing_titles(), ["Absent Un", "<b>x</b>", "Absent Deux"])
         self.assertEqual(self.view("[data-key=person-enrich]").count(), 1)
@@ -6603,7 +6605,7 @@ class TestPersonMissingUi(UiCase):
             self.page.locator("#toast.on", has_text="Recherche des films manquants lancée").wait_for()
             self.until(lambda: FakePersonTmdb.calls, tries=100)
             self.run_.wait_jobs()
-        self.assertEqual(FakePersonTmdb.calls, ["person/8300/movie_credits"])                      # les personnes de cette catégorie seulement, pas celles des films
+        self.assertEqual(FakePersonTmdb.calls, ["person/8300?append_to_response=movie_credits"])                      # les personnes de cette catégorie seulement, pas celles des films
         self.open("#/person?n=Voix%20Test")
         self.view(".shelf .card").first.wait_for()
         self.assertEqual(self.missing_titles(), ["Film de la voix"])

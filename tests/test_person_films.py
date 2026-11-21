@@ -39,16 +39,22 @@ def crew(ident, title, job="Director", date="2020-05-01", votes=5, poster="/p.jp
 
 
 class FakeTmdb:
-    """Le client TMDB : `credits` est la réponse de person/<id>/movie_credits ; ce qui est demandé est noté dans `asked`."""
+    """Le client TMDB : la fiche d'une personne (`person/<id>?append_to_response=movie_credits`) est `SHEET` corrigée par `sheet`, ses films `credits` ; `english` répond à la fiche demandée en anglais (une exception est levée). Ce qui est demandé est noté dans `asked`, avec la langue quand elle est précisée."""
 
-    def __init__(self, credits=None, error=None):
-        self.credits, self.error, self.asked, self.saved = credits or {}, error, [], []
+    SHEET = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": None, "place_of_birth": "Madrid, Espagne", "known_for_department": "Acting", "profile_path": None}
 
-    def get(self, endpoint):
-        self.asked.append(endpoint)
+    def __init__(self, credits=None, error=None, sheet=None, english=None):
+        self.credits, self.error, self.sheet, self.english, self.asked, self.saved = credits or {}, error, sheet or {}, english, [], []
+
+    def get(self, endpoint, language=None):
+        self.asked.append(endpoint if language is None else (endpoint, language))
         if self.error:
             raise self.error
-        return self.credits
+        if language is not None:
+            if isinstance(self.english, Exception):
+                raise self.english
+            return self.english or {}
+        return {**self.SHEET, **self.sheet, "movie_credits": self.credits}
 
     def save_image(self, path, size, dest):
         self.saved.append((path, size, Path(dest).name))
@@ -188,7 +194,7 @@ class TestEnrichPerson(TempCase):
     def test_the_credits_are_asked_once_and_kept_under_the_person(self):
         tmdb = FakeTmdb(self.CREDITS)
         counts, _, _ = self.run_pass(tmdb)
-        self.assertEqual(tmdb.asked, [f"person/{CRUZ}/movie_credits"])          # sans « / » au début : l'adresse de base n'en finit pas par un
+        self.assertEqual(tmdb.asked, [f"person/{CRUZ}?append_to_response=movie_credits"])          # sans « / » au début : l'adresse de base n'en finit pas par un ; la fiche et les films en un appel
         kept = self.db.kv_get(f"personinfo:{CRUZ}")
         self.assertEqual(kept["at"], 1_000_000_000)
         self.assertEqual(kept["films"], [{"tmdb": 2, "title": "Sans affiche", "year": "2010", "date": "2010-01-01", "role": "actor", "poster": ""},
@@ -295,6 +301,75 @@ class TestEnrichPerson(TempCase):
         self.run_pass(FakeTmdb(self.CREDITS))
         self.db.replace_library("films", [item("m1", lib="films")], [])
         self.assertEqual(len(self.db.kv_get(f"personinfo:{CRUZ}")["films"]), 3)
+
+
+class TestPersonSheet(TempCase):
+    """La fiche d'une personne (biographie, dates, lieu, métier, photo) vient du même appel que ses films ; l'anglais seulement quand la biographie française est vide."""
+
+    run_pass = TestEnrichPerson.run_pass
+    ASKED = f"person/{CRUZ}?append_to_response=movie_credits"
+
+    def info(self):
+        return self.db.kv_get(f"personinfo:{CRUZ}")["info"]
+
+    def test_one_call_brings_the_films_and_the_sheet(self):
+        tmdb = FakeTmdb(TestEnrichPerson.CREDITS)
+        counts, _, _ = self.run_pass(tmdb)
+        self.assertEqual(tmdb.asked, [self.ASKED])
+        self.assertEqual(self.info(), {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne",
+                                       "known_for_department": "Acting", "profile_path": ""})          # ce que TMDB laisse vide (null) est une chaîne vide
+        self.assertEqual(counts, {"films": 3, "failed": 0})
+
+    def test_an_empty_french_biography_is_asked_once_more_in_english(self):
+        tmdb = FakeTmdb(TestEnrichPerson.CREDITS, sheet={"biography": ""}, english={"biography": "Spanish actress.", "birthday": "1900-01-01"})
+        self.run_pass(tmdb)
+        self.assertEqual(tmdb.asked, [self.ASKED, (f"person/{CRUZ}", "en-US")])
+        self.assertEqual((self.info()["biography"], self.info()["birthday"]), ("Spanish actress.", "1974-04-28"))          # seule la biographie vient de l'anglais
+
+    def test_an_english_call_that_fails_leaves_the_biography_empty_and_keeps_the_rest(self):
+        tmdb = FakeTmdb(TestEnrichPerson.CREDITS, sheet={"biography": None}, english=TmdbError("panne"))
+        counts, _, _ = self.run_pass(tmdb)
+        self.assertEqual((self.info()["biography"], self.info()["place_of_birth"], counts), ("", "Madrid, Espagne", {"films": 3, "failed": 0}))
+
+    def test_a_refused_key_on_the_english_call_stops_too(self):
+        with self.assertRaisesRegex(RuntimeError, "TMDB : clé refusée"):
+            self.run_pass(FakeTmdb(TestEnrichPerson.CREDITS, sheet={"biography": ""}, english=TmdbAuthError("clé refusée")))
+
+    def test_what_is_not_text_is_left_empty(self):
+        self.run_pass(FakeTmdb(TestEnrichPerson.CREDITS, sheet={"birthday": 1974, "place_of_birth": ["Madrid"], "known_for_department": {"x": 1}}))
+        self.assertEqual((self.info()["birthday"], self.info()["place_of_birth"], self.info()["known_for_department"]), ("", "", ""))
+
+    def test_the_photo_is_downloaded_during_the_pass_next_to_the_posters(self):
+        tmdb = FakeTmdb(TestEnrichPerson.CREDITS, sheet={"profile_path": "/cruz.jpg"})
+        self.run_pass(tmdb)
+        self.assertIn(("/cruz.jpg", "h632", f"person-{CRUZ}.jpg.tmp"), tmdb.saved)
+        self.assertEqual(sorted(p.name for p in (self.tmp / "tmdb").iterdir()), ["film-1.jpg", "film-4.jpg", f"person-{CRUZ}.jpg"])
+        self.assertEqual(self.info()["profile_path"], "/cruz.jpg")
+
+    def test_a_photo_already_there_is_not_downloaded_again_unless_forced(self):
+        (self.tmp / "tmdb").mkdir()
+        (self.tmp / "tmdb" / f"person-{CRUZ}.jpg").write_bytes(b"ancienne")
+        tmdb = FakeTmdb(sheet={"profile_path": "/cruz.jpg"})
+        self.run_pass(tmdb)
+        self.assertEqual((tmdb.saved, (self.tmp / "tmdb" / f"person-{CRUZ}.jpg").read_bytes()), ([], b"ancienne"))
+        again = FakeTmdb(sheet={"profile_path": "/cruz.jpg"})
+        self.run_pass(again, force=True)
+        self.assertEqual(again.saved, [("/cruz.jpg", "h632", f"person-{CRUZ}.jpg.tmp")])
+
+    def test_a_broken_photo_keeps_the_sheet_and_the_films(self):
+        class NoImage(FakeTmdb):
+            def save_image(self, path, size, dest):
+                raise TmdbError("image introuvable")
+
+        counts, log, _ = self.run_pass(NoImage(TestEnrichPerson.CREDITS, sheet={"profile_path": "/cruz.jpg"}))
+        self.assertEqual((self.info()["biography"], counts["films"]), ("Actrice espagnole.", 3))
+        self.assertFalse((self.tmp / "tmdb" / f"person-{CRUZ}.jpg").exists())
+        self.assertTrue(any("pas de photo" in line for line in log), log)
+
+    def test_without_a_photo_on_tmdb_nothing_is_downloaded(self):
+        tmdb = FakeTmdb()
+        self.run_pass(tmdb)
+        self.assertEqual(tmdb.saved, [])
 
 
 class TestJob(unittest.TestCase):
@@ -444,6 +519,93 @@ class TestMissingInThePerson(PersonCase):
         self.db.kv_set("personinfo:4242", {"at": 1, "films": [self.film(88)]})
         body = self.person("Seule Ailleurs", self.bob())[1]
         self.assertEqual((body["results"], body["enrichable"], "missing" in body), ([], False, False))
+
+
+class TestSheetInThePerson(PersonCase):
+    """`info` de `/api/person` : la fiche que la passe a gardée, telle quelle, sans rien demander en ligne."""
+
+    SHEET = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "known_for_department": "Acting", "profile_path": "/cruz.jpg"}
+    SHOWN = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "department": "Acting"}
+
+    def keep(self, ident=CRUZ, **over):
+        self.db.kv_set(f"personinfo:{ident}", {"at": 1, "films": [self.film(5)], "info": {**self.SHEET, **over}})
+
+    def put_photo(self, ident=CRUZ):
+        folder = self.root / "data" / "tmdb"
+        folder.mkdir(exist_ok=True)
+        (folder / f"person-{ident}.jpg").write_bytes(b"jpeg")
+        return folder / f"person-{ident}.jpg"
+
+    def test_the_sheet_kept_by_the_pass_comes_with_the_page(self):
+        self.keep()
+        self.put_photo()
+        self.assertEqual(self.person()[1]["info"], {**self.SHOWN, "photo": True})
+
+    def test_without_its_file_there_is_no_photo(self):
+        self.keep()
+        self.assertEqual(self.person()[1]["info"], {**self.SHOWN, "photo": False})
+
+    def test_a_sheet_kept_before_has_no_info_and_the_rest_still_works(self):
+        status, body = self.person()          # setUp garde une fiche d'avant : des films, pas d'info
+        self.assertEqual(status, 200)
+        self.assertNotIn("info", body)
+        self.assertEqual([f["tmdb"] for f in body["missing"]], [5, 6])
+
+    def test_a_person_never_enriched_has_no_info(self):
+        self.db.kv_delete(f"personinfo:{CRUZ}")
+        self.assertNotIn("info", self.person()[1])
+
+    def test_a_person_without_an_id_has_no_sheet(self):
+        self.assertNotIn("info", self.person("Seule Ici")[1])
+
+    def test_namesakes_have_no_sheet_whatever_is_kept(self):
+        self.db.replace_library("lib", [item("m9", title="Homonyme", meta={"actors": [{"name": "Penélope Cruz"}], "person_ids": {"Penélope Cruz": 1}})], [])
+        self.keep()
+        self.keep(1)
+        self.assertNotIn("info", self.person()[1])
+
+    def test_opening_the_page_asks_nothing_online(self):
+        for kept in ({"at": 1, "films": [self.film(5)]}, {"at": 1, "films": [], "info": self.SHEET}, None):          # ancienne fiche, fiche complète, rien
+            if kept is None:
+                self.db.kv_delete(f"personinfo:{CRUZ}")
+            else:
+                self.db.kv_set(f"personinfo:{CRUZ}", kept)
+            with mock.patch.object(enrich, "Tmdb") as client, mock.patch.object(enrich, "tmdb_client") as maker:
+                self.assertEqual(self.person()[0], 200)
+            self.assertEqual((client.called, maker.called), (False, False), kept)
+
+
+class TestPersonPhotoRoute(PersonCase):
+    """`GET /img/person/<tmdb>` : la photo que la passe a posée sous HUB_DATA/tmdb, comme l'affiche d'un film manquant."""
+
+    def setUp(self):
+        super().setUp()
+        self.hub.images.file.return_value = (b"IMAGE", "image/jpeg", "cle")
+        self.photo = TestSheetInThePerson.put_photo(self)
+
+    def test_the_photo_is_served_from_the_data_folder_with_its_stamp(self):
+        reply = self.get(f"/img/person/{CRUZ}")
+        self.assertEqual((reply.status, reply.body, reply.headers["etag"], reply.headers["cache-control"]), (200, b"IMAGE", '"cle"', "private, no-cache"))
+        self.hub.images.file.assert_called_with(f"person:{CRUZ}", self.photo, 0)
+        self.assertEqual(self.get(f"/img/person/{CRUZ}", headers={"If-None-Match": '"cle"'}).status, 304)
+        self.get(f"/img/person/{CRUZ}?w=185")
+        self.hub.images.file.assert_called_with(f"person:{CRUZ}", self.photo, 185)
+
+    def test_without_a_photo_it_is_a_404(self):
+        reply = self.get(f"/img/person/{EVANS}")
+        self.assertEqual((reply.status, reply.json()), (404, {"error": "pas de photo"}))
+        self.hub.images.file.return_value = None
+        self.assertEqual(self.get(f"/img/person/{CRUZ}").status, 404)
+
+    def test_an_id_that_is_not_a_short_number_is_refused(self):
+        for ident in ("abc", "12a", "1234567890", "-1", "%2E%2E"):
+            self.assertEqual(self.get(f"/img/person/{ident}").status, 400, ident)
+        self.hub.images.file.assert_not_called()
+
+    def test_an_unauthenticated_client_gets_nothing(self):
+        bob = self.bob()
+        self.assertEqual(self.get(f"/img/person/{CRUZ}").status, 302)
+        self.assertEqual(self.get(f"/img/person/{CRUZ}", headers=bob).status, 200)
 
 
 class TestEnrichable(PersonCase):

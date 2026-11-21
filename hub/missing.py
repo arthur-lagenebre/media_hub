@@ -35,6 +35,11 @@ def poster_name(ident):
     return f"film-{ident}.jpg"
 
 
+def photo_name(ident):
+    """La photo d'une personne (identifiant TMDB), à côté des affiches : posée par la passe des personnes (enrich.fetch_person), servie par /img/person/<id>."""
+    return f"person-{ident}.jpg"
+
+
 def today():
     return date.today().isoformat()
 
