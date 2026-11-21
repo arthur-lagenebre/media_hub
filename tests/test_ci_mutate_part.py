@@ -53,6 +53,12 @@ class TestTestCommand(ProjectCase):
         self.assertEqual(option(commands[1], "--test-command"),
                          "/venv/python -m unittest tests.test_enrich_people tests.test_person_films")
 
+    def test_enrich_also_gets_the_tests_of_the_filmographies_it_builds(self):
+        self.write("hub/enrich.py")
+        self.write("tests/test_enrich.py")
+        self.assertEqual(option(self.plan(["hub/enrich.py"])[0], "--test-command"),
+                         "/venv/python -m unittest tests.test_enrich tests.test_enrich_people tests.test_person_films")
+
     def test_a_file_without_tests_falls_back_on_the_whole_suite(self):
         self.write("hub/urls.py")
         self.assertEqual(option(self.plan(["hub/urls.py"])[0], "--test-command"), "/venv/python -m unittest discover")

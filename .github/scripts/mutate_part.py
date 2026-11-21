@@ -21,9 +21,10 @@ from pathlib import Path
 
 BATCH_LINES = 400     # hub/server/app.py : 3300 lignes et 850 mutations, soit une centaine par tranche
 SURVIVED = 3          # code de sortie de mutator quand un mutant survit
-# Modules dont les tests ne portent pas le nom : sans cela, toute la suite pour chaque mutant.
+# Modules dont les tests ne portent pas (tous) le nom : sans cela, toute la suite pour chaque mutant, ou de faux survivants.
 OWN_TESTS = {
     "__main__": "tests/test_cli.py",
+    "enrich": "tests/test_enrich*.py tests/test_person_films.py",     # person_films et fetch_person vivent dans enrich.py
     "people": "tests/test_enrich_people.py tests/test_person_films.py",
 }
 
