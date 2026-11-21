@@ -179,6 +179,26 @@ class TestUploadRight(unittest.TestCase):
         self.assertFalse(accounts.public(accounts.by_id(self.db, self.alice["id"]))["can_upload"])
 
 
+class TestRemoteDownloadRight(unittest.TestCase):
+    """« Télécharger à distance » : donné par défaut, retiré par l'administrateur, jamais à un administrateur."""
+
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        self.db = Database(root / "hub.db")
+        self.boss = accounts.create(self.db, "boss", "un-mot-de-passe")
+        self.alice = accounts.create(self.db, "alice", "un-mot-de-passe")
+
+    def test_a_new_account_may_download_remotely_until_the_right_is_taken_back(self):
+        self.assertTrue(accounts.can_download_remotely(self.alice))
+        row = accounts.set_remote_download(self.db, self.alice["id"], False)
+        self.assertFalse(accounts.can_download_remotely(row))
+        self.assertFalse(accounts.public(accounts.by_id(self.db, self.alice["id"]))["remote_download"])
+
+    def test_the_administrator_always_may_whatever_the_column_says(self):
+        self.assertTrue(accounts.can_download_remotely({**self.boss, "remote_download": 0}))
+
+
 class TestRename(unittest.TestCase):
     """Un compte change de nom : l'identifiant reste, donc tout ce qui lui est attaché aussi."""
 

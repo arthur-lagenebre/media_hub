@@ -116,6 +116,11 @@ class TestPlay(MediaCase):
         self.assertEqual(out["video"], {"codec": "h264", "width": 1920, "height": 1080, "hdr": False})
         self.assertEqual(out["next"], {"id": "e2", "title": "Titre e2", "season": 1, "number": 2})
 
+    def test_the_next_episode_says_where_the_account_stopped_in_it(self):
+        self.db.save_progress(ME, "e2", 40, 100, False)
+        progress = self.play().json()["next"]["progress"]
+        self.assertEqual((progress["position"], progress["duration"], progress["done"]), (40, 100, False))
+
     def test_the_duration_is_the_one_of_the_probe_or_else_the_one_of_the_file(self):
         self.assertEqual(self.play().json()["duration"], 100.0)
         self.probe["duration"] = 90.5
