@@ -63,10 +63,11 @@ def clean(text):
 
 
 def comparable(text):
-    """Le texte tel qu'on compare deux noms (celui du renommage des bibliothèques et des demandes d'artistes, voir requests.py) : formes de compatibilité (pleine largeur, ligatures) ramenées à la normale, sans casse ni accents, espaces (insécables compris) réduits à un seul.
+    """Le texte tel qu'on compare deux noms (celui du renommage des bibliothèques et des demandes d'artistes, voir requests.py) : formes de compatibilité (pleine largeur, ligatures) ramenées à la normale, apostrophes et guillemets droits comme media_library les écrit
+    (« Guns N’ Roses » = « Guns N' Roses »), sans casse ni accents, espaces (insécables compris) réduits à un seul.
     Les homoglyphes d'un autre alphabet (« Ｆ » est repéré, pas le « Ϝ » grec ni le « Ѕ » cyrillique) ne sont pas détectés."""
-    from libraries.common.text import fold          # ici et pas en tête : seul un renommage s'en sert, et ce module est importé (par hub.inbox, hub.__main__) avant que media_library soit sur le chemin
-    return " ".join(fold(unicodedata.normalize("NFKC", text)).split())
+    from libraries.common.text import fold, straight_quotes          # ici et pas en tête : seul un renommage s'en sert, et ce module est importé (par hub.inbox, hub.__main__) avant que media_library soit sur le chemin
+    return " ".join(fold(straight_quotes(unicodedata.normalize("NFKC", text))).split())
 
 
 def _taken_by_another(db, libraries, lib, text):

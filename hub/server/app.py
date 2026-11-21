@@ -1580,7 +1580,7 @@ def saga_json(saga, seen):
     return out
 
 
-UNKNOWN_ARTISTS = ("artiste inconnu", "various artists", "artistes divers")        # rangés en dernier : ce ne sont pas des artistes qu'on cherche par leur nom
+UNKNOWN_ARTISTS = hub_requests.UNKNOWN_ARTISTS        # rangés en dernier : ce ne sont pas des artistes qu'on cherche par leur nom (et qu'on ne demande pas)
 
 
 def artist_name(grp):
@@ -2320,6 +2320,7 @@ def save_artist_edits(h, lib, artist_id, changes, resets):
     """Garde les corrections de l'artiste et répond `{"ok": true, "edited": [champs corrigés]}`."""
     with artistedit.LOCK:
         kept = artistedit.save(h.hub.db, lib.id, artist_id, changes, resets)
+    h.hub.db.items_changed()            # ce que la musique montre a changé (nom corrigé) : ce que les demandes en ont tiré, gardé jusqu'au prochain scan, est à refaire
     h.send_json({"ok": True, "edited": artistedit.listed(kept)})
 
 

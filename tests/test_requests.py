@@ -201,7 +201,7 @@ class TestAsking(RequestCase):
         self.assertEqual({r["tmdb"]: r["cover"] for r in self.mine(self.alice)}, {2: "/img/film/2", 3: ""})
 
     def test_a_bad_body_is_a_400_in_french_and_nothing_is_stored(self):
-        cases = [({"kind": "album", "tmdb": 2}, "sorte de demande inconnue (movie ou show)"), ({"tmdb": 2}, "sorte de demande inconnue (movie ou show)")]
+        cases = [({"kind": "album", "tmdb": 2}, "sorte de demande inconnue (movie, show ou artist)"), ({"tmdb": 2}, "sorte de demande inconnue (movie, show ou artist)")]
         cases += [({"kind": "movie", "tmdb": bad}, "identifiant TMDB attendu : un entier positif") for bad in ("2", 0, -3, True, 1.5, None, [2], 1 << 60)]
         cases += [({"kind": "movie", "tmdb": 2, "note": "x" * 201}, "message trop long (200 caractères au plus)"), ({"kind": "movie", "tmdb": 2, "note": 5}, "message : un texte est attendu"),
                   ({"kind": "movie", "tmdb": 99, "title": "x" * 201}, "titre trop long (200 caractères au plus)"), ({"kind": "movie", "tmdb": 99, "year": "99"}, "année attendue : 4 chiffres"),
@@ -1251,6 +1251,79 @@ class TestArtistArrival(ArtistCase):
         self.assertEqual([r["artist"]["name"] for r in self.home(self.alice)], ["Aphex Twin"])
 
 
+class TestArtistSpelling(ArtistCase):
+    """La médiathèque écrit ses noms avec l'apostrophe droite (media_library) : une demande tapée avec l'apostrophe courbe d'un clavier de téléphone doit retrouver l'artiste."""
+
+    def test_a_curly_and_a_straight_apostrophe_are_the_same_name(self):
+        rid = self.ask_artist(self.alice, "Guns N’ Roses").json()["id"]
+        joined = self.ask_artist(self.bob, "guns n' roses")
+        self.assertEqual((joined.status, joined.json()["id"]), (200, rid))
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 1)
+        self.assertEqual(self.mine(self.alice)[0]["title"], "Guns N’ Roses")                 # tel que le premier l'a tapé
+
+    def test_asking_with_a_curly_apostrophe_for_an_artist_written_with_a_straight_one_is_a_409(self):
+        self.scanned("musique", self.album("musique", "a1", "Guns N' Roses"))
+        reply = self.ask_artist(self.alice, "Guns N’ Roses")
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "déjà dans la médiathèque", "artist": {"lib": "musique", "id": "ar1", "name": "Guns N' Roses"}}))
+
+    def test_a_request_with_a_curly_apostrophe_arrives_with_the_album_written_with_a_straight_one(self):
+        self.ask_artist(self.alice, "Guns N’ Roses")
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")
+        self.scanned("musique", self.album("musique", "a1", "Guns N' Roses"))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "added")
+
+
+class TestArtistCorrected(ArtistCase):
+    """« Modifier l'artiste » change le nom que montre la musique (artistedit) sans toucher aux étiquettes : la demande suit ce que le compte voit, et les deux noms comptent."""
+
+    def setUp(self):
+        super().setUp()
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+
+    def correct(self, body):
+        reply = self.post(self.boss, "/api/artist/musique/ar1/edit", body)
+        self.assertEqual(reply.status, 200, reply.body)
+
+    def test_an_artist_asked_by_its_corrected_name_is_a_409_and_by_its_old_name_too(self):
+        self.correct({"name": "Les Robots"})
+        reply = self.ask_artist(self.alice, "les robots")
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "déjà dans la médiathèque", "artist": {"lib": "musique", "id": "ar1", "name": "Les Robots"}}))
+        reply = self.ask_artist(self.alice, "Daft Punk")
+        self.assertEqual((reply.status, reply.json()["artist"]), (409, {"lib": "musique", "id": "ar1", "name": "Les Robots"}))          # le nom rendu est celui que montre la musique
+
+    def test_a_pending_request_turns_added_right_after_the_correction_without_a_scan(self):
+        self.ask_artist(self.alice, "Les Robots")
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")                    # la médiathèque est lue et gardée
+        self.correct({"name": "Les Robots"})
+        got = self.mine(self.alice)[0]
+        self.assertEqual((got["status"], got["artist"]), ("added", {"lib": "musique", "id": "ar1", "name": "Les Robots"}))
+        self.assertEqual([r["artist"]["name"] for r in self.home(self.alice)], ["Les Robots"])
+
+    def test_the_arrival_by_the_old_name_shows_the_corrected_name(self):
+        self.fill("musique", [])
+        rid = self.ask_artist(self.alice, "daft punk").json()["id"]
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        self.correct({"name": "Les Robots"})
+        got = self.everything()[0]
+        self.assertEqual((got["id"], got["title"], got["artist"]["name"]), (rid, "daft punk", "Les Robots"))
+
+    def test_giving_the_name_back_stops_the_corrected_name_from_counting(self):
+        self.correct({"name": "Les Robots"})
+        self.correct({"name": None})
+        reply = self.ask_artist(self.alice, "Les Robots")
+        self.assertEqual((reply.status, reply.json()["status"]), (201, "pending"))
+        self.assertEqual(self.ask_artist(self.bob, "Daft Punk").status, 409)
+
+
+class TestNamesThatAreNotAnArtist(ArtistCase):
+    def test_the_names_the_music_page_puts_last_are_refused(self):
+        for name in ("Artiste inconnu", "ARTISTE INCONNU", "Various Artists", "various  artists", "Artistes divers", "Artistes  Divers", "Ａｒｔｉｓｔｅ　ｉｎｃｏｎｎｕ"):
+            reply = self.ask_artist(self.alice, name)
+            self.assertEqual((reply.status, reply.json()), (400, {"error": "ce nom ne désigne pas un artiste"}), name)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 0)
+        self.assertEqual(self.ask_artist(self.alice, "Various Artists Orchestra").status, 201)
+
+
 class TestMigration(unittest.TestCase):
     def test_a_version_7_base_gains_the_requests_and_keeps_everything_else(self):
         root = Path(tempfile.mkdtemp())
@@ -1275,6 +1348,7 @@ class TestMigration(unittest.TestCase):
         self.assertEqual([tuple(r) for r in db.query("SELECT p.name, t.entry_id FROM playlists p JOIN playlist_tracks t ON t.playlist_id = p.id")], [("Été", "t1")])
         self.assertEqual(db.ratings_for(alice["id"]), {"m1": "up"})
         self.assertEqual(db.query("SELECT * FROM requests"), [])
+        self.assertEqual(sorted(r["name"] for r in db.query("SELECT name FROM sqlite_master WHERE tbl_name='requests' AND type='index' AND sql IS NOT NULL")), ["requests_artist", "requests_tmdb"])
         self.assertTrue(accounts.public(accounts.by_id(db, alice["id"]))["can_request"])
         self.assertEqual(Database(path).kv_get("schema"), database.SCHEMA_VERSION)          # rouverte : rien n'est rejoué
 

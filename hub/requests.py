@@ -24,6 +24,7 @@ KINDS = ("movie", "show")       # ce que TMDB connaît : ce que la recherche des
 ARTIST = "artist"               # une demande faite par un simple nom, sans TMDB (voir `named`)
 ALL_KINDS = (*KINDS, ARTIST)
 STATUSES = ("pending", "added", "declined")
+UNKNOWN_ARTISTS = ("artiste inconnu", "various artists", "artistes divers")        # les noms (comparables) qui ne désignent aucun artiste : la musique les range en dernier, une demande les refuse
 MAX_TEXT = 200                  # message, motif de refus, titre, nom d'un artiste
 YEAR_RE = re.compile(r"[0-9]{4}")
 TMDB_PATHS = {"movie": "movie", "show": "tv"}     # où TMDB range chaque sorte, sur son site comme dans son API
@@ -123,18 +124,21 @@ def _gathered(rows):
 
 
 def _artists(db, music):
-    """{("artist", nom comparable): [(id de la fiche ou "", bibliothèque, nom), …]} des artistes d'album (`grp`) de ces bibliothèques de musique (identifiants), un par nom et par bibliothèque. Les albums manquants n'y sont pas : ils ne sont pas des éléments."""
+    """{("artist", nom comparable): [(id de la fiche ou "", bibliothèque, nom), …]} des artistes d'album (`grp`) de ces bibliothèques de musique (identifiants), un par nom et par bibliothèque. Les albums manquants n'y sont pas : ils ne sont pas des éléments.
+    Un artiste que « Modifier l'artiste » a renommé (voir artistedit) est là sous ses deux noms, celui des étiquettes et le corrigé, et rend le corrigé : c'est celui que la musique montre."""
     if not music:
         return {}
+    from . import artistedit            # ici et pas en tête : il importe db, qui importe ce module
     named = {}
     for row in db.query(f"SELECT lib, grp, meta FROM items WHERE type='album' AND grp != '' AND lib IN ({','.join('?' * len(music))})", music):
         if not named.get((row["lib"], row["grp"])):
             named[(row["lib"], row["grp"])] = _artist_id(row["meta"])
+    corrected = {lib: artistedit.names(db, lib) for lib in music}
     found = {}
     for (lib, name), ident in named.items():
-        key = labels.comparable(name)
-        if key:
-            found.setdefault((ARTIST, key), []).append((ident, lib, name))
+        shown = corrected[lib].get(ident) or name
+        for key in {labels.comparable(name), labels.comparable(shown)} - {""}:
+            found.setdefault((ARTIST, key), []).append((ident, lib, shown))
     return found
 
 
@@ -326,10 +330,14 @@ def _text(value, what, limit=MAX_TEXT):
     return value
 
 
+KIND_MESSAGES = {KINDS: "sorte de demande inconnue (movie ou show)",              # écrits en entier : l'interface les traduit d'après leur texte
+                 ALL_KINDS: "sorte de demande inconnue (movie, show ou artist)"}
+
+
 def _kind(value, allowed=KINDS):
-    """La sorte de demande : une de `allowed` (par défaut celles de TMDB, que la recherche propose) ; 400 sinon."""
+    """La sorte de demande : une de `allowed` (par défaut celles de TMDB, que la recherche propose) ; 400 sinon, qui nomme ce qui est accepté."""
     if value not in allowed:
-        raise RequestError(400, "sorte de demande inconnue (movie ou show)")
+        raise RequestError(400, KIND_MESSAGES[allowed])
     return value
 
 
@@ -346,6 +354,8 @@ def _artist_name(value):
     key = labels.comparable(name)
     if not key:
         raise RequestError(400, "nom d'artiste vide")
+    if key in UNKNOWN_ARTISTS:
+        raise RequestError(400, "ce nom ne désigne pas un artiste")
     return name, key
 
 
