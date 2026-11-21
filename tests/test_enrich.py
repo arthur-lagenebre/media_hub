@@ -885,14 +885,18 @@ class TestCredits(unittest.TestCase):
 
 class TestPersonFreshness(unittest.TestCase):
     def test_a_sheet_kept_for_less_than_the_delay_is_fresh_unless_forced(self):
-        self.assertTrue(enrich.is_fresh({"at": 100, "films": []}, 100 + enrich.PERSON_STALE - 1, False))
-        self.assertFalse(enrich.is_fresh({"at": 100, "films": []}, 100 + enrich.PERSON_STALE, False))
-        self.assertFalse(enrich.is_fresh({"at": 100, "films": []}, 101, True))
+        self.assertTrue(enrich.is_fresh({"at": 100, "films": [], "info": {}}, 100 + enrich.PERSON_STALE - 1, False))
+        self.assertFalse(enrich.is_fresh({"at": 100, "films": [], "info": {}}, 100 + enrich.PERSON_STALE, False))
+        self.assertFalse(enrich.is_fresh({"at": 100, "films": [], "info": {}}, 101, True))
         self.assertFalse(enrich.is_fresh(None, 101, False))
 
     def test_a_sheet_without_a_date_is_as_old_as_can_be(self):
-        self.assertFalse(enrich.is_fresh({"films": []}, enrich.PERSON_STALE, False))
-        self.assertTrue(enrich.is_fresh({"films": []}, enrich.PERSON_STALE - 1, False))
+        self.assertFalse(enrich.is_fresh({"films": [], "info": {}}, enrich.PERSON_STALE, False))
+        self.assertTrue(enrich.is_fresh({"films": [], "info": {}}, enrich.PERSON_STALE - 1, False))
+
+    def test_a_sheet_kept_before_the_sheet_existed_is_never_fresh(self):
+        """Gardée avant la fiche (des films, pas d'`info`) : la demande suivante la complète, sans attendre trente jours."""
+        self.assertFalse(enrich.is_fresh({"at": 100, "films": []}, 101, False))
 
 
 class TestEnrichPerson(TempCase):
@@ -906,13 +910,13 @@ class TestEnrichPerson(TempCase):
         return result, log, client, fetch
 
     def test_a_fresh_sheet_is_not_asked_again_by_default_and_gives_its_count(self):
-        result, log, client, fetch = self.enrich_person({"at": int(time.time()), "films": [{"tmdb": 1}, {"tmdb": 2}, {"tmdb": 3}]})
+        result, log, client, fetch = self.enrich_person({"at": int(time.time()), "films": [{"tmdb": 1}, {"tmdb": 2}, {"tmdb": 3}], "info": {}})
         self.assertEqual((result, log), ({"films": 3, "failed": 0}, []))
         client.assert_not_called()
         fetch.assert_not_called()
 
     def test_a_fresh_sheet_without_a_list_of_films_counts_none(self):
-        result, _, client, _ = self.enrich_person({"at": int(time.time()), "films": None})
+        result, _, client, _ = self.enrich_person({"at": int(time.time()), "films": None, "info": {}})
         self.assertEqual(result, {"films": 0, "failed": 0})
         client.assert_not_called()
 

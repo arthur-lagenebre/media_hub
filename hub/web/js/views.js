@@ -1281,12 +1281,86 @@
     return { el: el, nav: '#/search' };
   });
 
+  // --- La fiche d'une personne (`info` de /api/person, gardée par la passe des personnes) ---------------
+  // Le métier principal selon TMDB (`department`, en anglais) : un nom de métier, sans genre (« Acteur » ou « Actrice » ne se devine pas). Un métier inconnu s'écrit tel quel.
+  var TRADES = { Acting: H.t('Interprétation'), Directing: H.t('Réalisation'), Writing: H.t('Scénario'), Production: H.t('Production'), Sound: H.t('Son'), Camera: H.t('Prise de vues'),
+    Editing: H.t('Montage'), Art: H.t('Décors'), 'Costume & Make-Up': H.t('Costumes et maquillage'), 'Visual Effects': H.t('Effets visuels'), Lighting: H.t('Lumière'),
+    Crew: H.t('Équipe technique'), Creator: H.t('Création') };
+  function personTrade(dept) { return Object.prototype.hasOwnProperty.call(TRADES, dept) ? TRADES[dept] : dept; }
+  // [année, mois, jour] d'une date ISO (AAAA-MM-JJ), ou null.
+  function isoParts(iso) { var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? [+m[1], +m[2], +m[3]] : null; }
+  // « 3 mars 1960 » dans la langue de l'interface ; une date qui ne se lit pas s'écrit telle quelle. Lue en heure locale : `new Date('1960-03-03')` serait minuit UTC, la veille à l'ouest de Greenwich.
+  function longDate(iso) {
+    var p = isoParts(iso);
+    return p ? new Date(p[0], p[1] - 1, p[2]).toLocaleDateString(H.locale, { day: 'numeric', month: 'long', year: 'numeric' }) : iso;
+  }
+  // L'âge à la date `now` d'une personne née le `iso` ; null si la date ne se lit pas.
+  function ageOn(iso, now) {
+    var p = isoParts(iso);
+    if (!p) return null;
+    var month = now.getMonth() + 1, age = now.getFullYear() - p[0];
+    if (month < p[1] || (month === p[1] && now.getDate() < p[2])) age--;
+    return age >= 0 ? age : null;
+  }
+  // « Naissance : 3 mars 1960, Lyon · 66 ans · Décès : … », sans accord de genre ; l'âge seulement pour une personne vivante.
+  function personDates(info, now) {
+    var born = [info.birthday ? longDate(info.birthday) : '', info.place_of_birth].filter(Boolean).join(', ');
+    var age = info.birthday && !info.deathday ? ageOn(info.birthday, now) : null;
+    return [born ? H.t('Naissance : {when}', { when: born }) : '', age === null ? '' : H.plural(age, 'an'),
+      info.deathday ? H.t('Décès : {when}', { when: longDate(info.deathday) }) : ''].filter(Boolean).join(' · ');
+  }
+
   // --- Une personne ----------------------------------------------------------------
   // #/person?n=<nom> : ce qu'un réalisateur ou un acteur a fait dans les bibliothèques que ce compte voit.
   H.route(/^\/person$/, function (m, query) {
     var name = (query.n || '').trim(), out = h('div', { class: 'results' });
     var title = h('h1', null, name), roles = h('p', { class: 'roles', hidden: true }), actions = h('p', { class: 'actions', hidden: true });
     var el = h('section', { class: 'person' }, title, roles, actions, out);
+    // L'en-tête de la fiche, sur le modèle de celui d'un artiste : photo (seulement s'il y en a une : pas de case vide), nom, métier, rôles, dates, biographie repliée, bouton.
+    // Construit au premier `info` qui arrive, puis mis à jour sans déplacer ses nœuds (un nœud déplacé perd le focus de la télécommande). Sans `info`, la page reste celle d'avant.
+    var head = null, inner = null, trade = h('p', { class: 'meta trade' }), dates = h('p', { class: 'credit dates' }), bio = h('p', { class: 'synopsis bio' });
+    var more = H.button(H.t('Lire la suite'), null, { class: 'more', 'data-key': 'person-more', 'aria-expanded': 'false', hidden: true, onclick: function () { fold(!bio.classList.contains('open')); } });
+    function fold(open) {
+      bio.classList.toggle('open', open);
+      more.setAttribute('aria-expanded', open ? 'true' : 'false');
+      more.querySelector('.lbl').textContent = open ? H.t('Réduire') : H.t('Lire la suite');
+    }
+    // « Lire la suite » n'apparaît que si la biographie dépasse ses lignes : cela se mesure sur la page dessinée (la place dépend de l'écran), et se remesure quand la fenêtre change.
+    function measure() { if (head && H.focus.shown(el)) more.hidden = !bio.classList.contains('open') && bio.scrollHeight <= bio.clientHeight + 1; }
+    // Une fiche disparue d'une réponse à l'autre (un homonyme scanné entre-temps, un droit retiré) : l'en-tête s'en va, le titre, les rôles et le bouton reprennent leur place d'avant. Le bouton garde le focus s'il l'avait.
+    function unsheet() {
+      if (!head) return;
+      var had = document.activeElement === button;
+      [title, roles, actions].forEach(function (n) { el.insertBefore(n, head); });
+      el.removeChild(head);
+      head = inner = null;
+      fold(false);
+      more.hidden = true;
+      if (had) H.focus.set(button, true);
+    }
+    function sheet(info) {
+      if (!info) { unsheet(); return; }
+      if (!head) {
+        var had = document.activeElement === button;
+        inner = h('div', { class: 'hero-in' }, h('div', { class: 'info' }, title, trade, roles, dates, bio, more, actions));
+        head = h('div', { class: 'hero' }, inner);
+        el.insertBefore(head, out);
+        if (had) H.focus.set(button, true);
+      }
+      Array.prototype.slice.call(head.querySelectorAll('.hero-bg, .hero-in > .poster')).forEach(function (n) { n.parentNode.removeChild(n); });
+      var face = info.photo && info.tmdb ? '/img/person/' + info.tmdb : '';
+      if (face) {
+        head.insertBefore(h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320)' }), inner);
+        inner.insertBefore(H.picture(face + '?w=480', shown, 'big'), inner.firstChild);
+      }
+      inner.classList.toggle('solo', !face);
+      trade.textContent = info.department ? personTrade(info.department) : '';
+      dates.textContent = personDates(info, new Date());
+      bio.textContent = info.biography || '';
+      [trade, dates, bio].forEach(function (p) { p.hidden = !p.textContent; });
+      requestAnimationFrame(measure);
+    }
+    window.addEventListener('resize', measure);
     var ROLE_LABELS = [['director', H.t('Réalisateur')], ['actor', H.t('Acteur')]];
     var ROLE_NAMES = {};
     ROLE_LABELS.forEach(function (r) { ROLE_NAMES[r[0]] = r[1]; });
@@ -1349,6 +1423,7 @@
       var focus = document.activeElement && out.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
       title.textContent = shown;
       showButton(!!res.enrichable && H.isAdmin());
+      sheet(res.info);
       var counts = ROLE_LABELS.filter(function (r) { return res.roles && res.roles[r[0]] > 0; }).map(function (r) { return r[1] + ' · ' + H.plural(res.roles[r[0]], 'titre'); });
       roles.textContent = counts.join(' · ');
       roles.hidden = !counts.length;
@@ -1360,7 +1435,7 @@
     }
     function load() { return H.api('/api/person?name=' + encodeURIComponent(name)).then(function (res) { show(res); return res; }).catch(function (e) { say(e.message); }); }
     if (!name) say(H.t('Aucun nom n’est indiqué.')); else load();
-    return { el: el, nav: '#/search', refresh: name ? load : null, destroy: function () { gone = true; clearTimeout(timer); } };      // au retour d'une fiche : les pastilles « vu » ont pu changer
+    return { el: el, nav: '#/search', refresh: name ? load : null, destroy: function () { gone = true; clearTimeout(timer); window.removeEventListener('resize', measure); } };      // au retour d'une fiche : les pastilles « vu » ont pu changer
   });
 
   // --- Demandes : « Mes demandes » et l'onglet de l'administrateur ----------------------------------

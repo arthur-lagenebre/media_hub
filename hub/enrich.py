@@ -276,18 +276,28 @@ def enrich_ratings(cfg, db, lib, log=print, force=False, since=None):
 
 def download_poster(tmdb, posters, film, title, log, force):
     """Le nom du fichier de l'affiche de `film` (sa fiche TMDB : `id` et `poster_path`), sous `posters`, téléchargée si elle n'y est pas (ou avec `force`) ; vide quand elle ne vient pas. Les sagas et les personnes partagent ces fichiers."""
-    name = missing.poster_name(film["id"])
     try:
-        if force or not (posters / name).is_file():
-            partial = posters / (name + ".tmp")
-            tmdb.save_image(film["poster_path"], "w342", partial)
-            os.replace(partial, posters / name)         # d'un bloc : une écriture coupée ne laisse pas une affiche tronquée qu'on ne retélécharge plus
-        return name
-    except TmdbAuthError:
-        raise
+        return download_image(tmdb, posters, missing.poster_name(film["id"]), film["poster_path"], "w342", force)
     except (TmdbError, OSError) as e:
-        log(f"  {title} : pas d'affiche ({e})")
+        log(f"  {title} : pas d'affiche ({e})")          # texte exact : l'interface le traduit (lang-en.js, H.srv.en)
         return ""
+
+
+def download_photo(tmdb, posters, person_id, image_path, log, force):
+    """Pose la photo de la personne `person_id` (missing.photo_name) sous `posters`, comme une affiche ; quand elle ne vient pas, une ligne au journal et la fiche reste sans photo."""
+    try:
+        download_image(tmdb, posters, missing.photo_name(person_id), image_path, PHOTO_SIZE, force)
+    except (TmdbError, OSError) as e:
+        log(f"  personne {person_id} : pas de photo ({e})")
+
+
+def download_image(tmdb, posters, name, image_path, size, force):
+    """`name`, l'image TMDB `image_path` posée sous `posters` (en taille `size`) si elle n'y est pas (ou avec `force`). Une erreur de TMDB ou d'écriture remonte, une clé refusée aussi."""
+    if force or not (posters / name).is_file():
+        partial = posters / (name + ".tmp")
+        tmdb.save_image(image_path, size, partial)
+        os.replace(partial, posters / name)         # d'un bloc : une écriture coupée ne laisse pas une image tronquée qu'on ne retélécharge plus
+    return name
 
 
 class SagaPass:
@@ -430,7 +440,7 @@ def is_top_billed(film):
 
 
 def person_films(credits):
-    """[{tmdb, title, year, date, role, poster_path}] des films que TMDB dit d'une personne (`person/<id>/movie_credits`), du plus récent au plus ancien, `MAX_FILMS` au plus.
+    """[{tmdb, title, year, date, role, poster_path}] des films que TMDB dit d'une personne (le bloc `movie_credits` de `person/<id>`, voir ask_person), du plus récent au plus ancien, `MAX_FILMS` au plus.
 
     Réalisateur : `job` vaut « Director ». Acteur : voir `is_top_billed`. Seulement des films sortis (voir missing.released) ; un film réalisé **et** joué n'est listé qu'une fois, comme réalisé."""
     chosen = [(film, "director") for film in _credits(credits, "crew") if film.get("job") == "Director"] + [(film, "actor") for film in _credits(credits, "cast") if is_top_billed(film)]
@@ -443,28 +453,59 @@ def person_films(credits):
 
 
 def is_fresh(known, now, force):
-    """La filmographie gardée d'une personne est-elle assez récente (moins de `PERSON_STALE`) pour ne pas la redemander ? Jamais avec `force`."""
-    return bool(known) and not force and now - known.get("at", 0) < PERSON_STALE
+    """La filmographie gardée d'une personne est-elle assez récente (moins de `PERSON_STALE`) pour ne pas la redemander ? Jamais avec `force`, ni gardée avant la fiche (sans `info`) : elle se complète à la demande suivante, sans attendre trente jours."""
+    return bool(known) and "info" in known and not force and now - known.get("at", 0) < PERSON_STALE
+
+
+PERSON_FIELDS = ("biography", "birthday", "deathday", "place_of_birth", "known_for_department", "profile_path")     # la fiche d'une personne, gardée sous `info` ; les dates en ISO (AAAA-MM-JJ), comme TMDB les donne
+PHOTO_SIZE = "h632"                 # le plus grand portrait de TMDB avant l'original : /img/person le réduit à la demande (?w=)
+
+
+def texts(data, fields):
+    """{champ: texte} des `fields` de la réponse `data` ; ce qui n'est pas du texte (null de TMDB compris) devient une chaîne vide."""
+    data = data if isinstance(data, dict) else {}
+    return {field: data[field] if isinstance(data.get(field), str) else "" for field in fields}
+
+
+def ask_person(tmdb, person_id):
+    """(fiche, crédits) de la personne `person_id` : sa fiche (`PERSON_FIELDS`) et ses films (`movie_credits`) en **un** appel, en français ; un second, en anglais, seulement pour une biographie française vide (fréquent sur TMDB)."""
+    details = tmdb.get(f"person/{person_id}?append_to_response=movie_credits")
+    info = texts(details, PERSON_FIELDS)
+    if not info["biography"].strip():
+        info["biography"] = english_biography(tmdb, person_id)
+    return info, details.get("movie_credits") if isinstance(details, dict) else None
+
+
+def english_biography(tmdb, person_id):
+    """La biographie anglaise de la personne ; vide si TMDB n'en a pas ou ne répond pas (la fiche se garde sans). Une clé refusée remonte."""
+    try:
+        return texts(tmdb.get(f"person/{person_id}", "en-US"), ("biography",))["biography"]
+    except TmdbAuthError:
+        raise
+    except TmdbError:
+        return ""
 
 
 def fetch_person(tmdb, posters, db, person_id, now, log, force, owned=()):
-    """Demande à TMDB les films de la personne `person_id` et les garde sous `personinfo:<id>` ; `{"films": n, "failed": 0}`, ou `{"films": 0, "failed": 1}` (et une ligne au journal) quand TMDB refuse cette personne : ce qui était gardé reste.
-    Pas d'affiche pour les films de `owned` (ceux qu'on a : ils n'en ont pas besoin, et c'est ce qui fait la différence sur des milliers de personnes) ; une clé refusée arrête tout (RuntimeError)."""
+    """Demande à TMDB la fiche et les films de la personne `person_id` (voir ask_person) et les garde sous `personinfo:<id>`, sa photo à côté des affiches (missing.photo_name) ; `{"films": n, "failed": 0}`, ou `{"films": 0, "failed": 1}` (et une ligne au journal) quand TMDB refuse cette personne : ce qui était gardé reste.
+    Pas d'affiche pour les films de `owned` (ceux qu'on a : ils n'en ont pas besoin, et c'est ce qui fait la différence sur des milliers de personnes) ; une photo qui ne vient pas laisse la fiche sans photo ; une clé refusée arrête tout (RuntimeError)."""
     try:
-        films = person_films(tmdb.get(f"person/{person_id}/movie_credits"))
+        info, credits = ask_person(tmdb, person_id)
         kept = [{**{k: v for k, v in film.items() if k != "poster_path"},
-                 "poster": download_poster(tmdb, posters, {"id": film["tmdb"], "poster_path": film["poster_path"]}, film["title"], log, force) if film["poster_path"] and film["tmdb"] not in owned else ""} for film in films]
+                 "poster": download_poster(tmdb, posters, {"id": film["tmdb"], "poster_path": film["poster_path"]}, film["title"], log, force) if film["poster_path"] and film["tmdb"] not in owned else ""} for film in person_films(credits)]
+        if info["profile_path"]:
+            download_photo(tmdb, posters, person_id, info["profile_path"], log, force)
     except TmdbAuthError as e:
         raise RuntimeError(f"TMDB : {e}")
     except TmdbError as e:
         log(f"  personne {person_id} : {e}")
         return {"films": 0, "failed": 1}
-    db.kv_set(person_key(person_id), {"at": now, "films": kept})
+    db.kv_set(person_key(person_id), {"at": now, "films": kept, "info": info})
     return {"films": len(kept), "failed": 0}
 
 
 def enrich_person(cfg, db, person_id, log=print, force=False):
-    """Les films que TMDB attribue à la personne `person_id` (réalisés ou joués, voir `person_films`), gardés sous `personinfo:<id>` avec leurs affiches (HUB_DATA/tmdb) : `{"at", "films": [{tmdb, title, year, date, role, poster}]}`.
+    """Les films que TMDB attribue à la personne `person_id` (réalisés ou joués, voir `person_films`), gardés sous `personinfo:<id>` avec leurs affiches (HUB_DATA/tmdb) et sa fiche : `{"at", "films": [{tmdb, title, year, date, role, poster}], "info": {biography, birthday, deathday, place_of_birth, known_for_department, profile_path}}` ; sa photo est `missing.photo_name(id)`, à côté des affiches. Une fiche gardée avant la fiche n'a pas `info` : elle se complète à la demande suivante.
 
     Les films qu'on a ne sont pas retirés ici : cela se calcule à chaque requête (voir missing.of_person), la médiathèque change plus vite que TMDB. Une personne connue depuis moins de `PERSON_STALE` n'est pas redemandée (ni même le client TMDB créé), sauf avec `force`. Un échec de TMDB laisse ce qui était gardé."""
     known = db.kv_get(person_key(person_id))

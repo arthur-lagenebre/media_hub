@@ -119,14 +119,14 @@ class FakeMany:
     """TMDB avec une réponse par personne (`credits` : {adresse: réponse}, ou une exception à lever)."""
 
     def __init__(self, credits):
-        self.credits, self.asked, self.saved = credits, [], []
+        self.credits, self.asked, self.saved, self.photos = credits, [], [], {}
 
-    def get(self, endpoint):
+    def get(self, endpoint, language=None):
         self.asked.append(endpoint)
         found = self.credits[endpoint]
         if isinstance(found, Exception):
             raise found
-        return found
+        return {"biography": "Une vie.", "profile_path": self.photos.get(endpoint), "movie_credits": found}
 
     def save_image(self, path, size, dest):
         self.saved.append(path)
@@ -140,9 +140,9 @@ class TestEnrichPeople(TempCase):
         super().setUp()
         self.db.replace_library("films", [film(1, ["Réal"], ["A", "B"], {"Réal": 100, "A": 201, "B": 202}), film(2, [], ["A"], {"A": 201})], [])
         self.credits = {
-            "person/100/movie_credits": {"crew": [crew(1, "Film 1", poster="/p1.jpg"), crew(50, "Film 50", date="2010-01-01", poster="/p50.jpg")]},
-            "person/201/movie_credits": {"cast": [cast(1, "Film 1", poster="/p1.jpg"), cast(60, "Film 60", date="2012-01-01", poster="/p60.jpg")]},
-            "person/202/movie_credits": {"cast": [cast(1, "Film 1", poster="/p1.jpg")]}}
+            "person/100?append_to_response=movie_credits": {"crew": [crew(1, "Film 1", poster="/p1.jpg"), crew(50, "Film 50", date="2010-01-01", poster="/p50.jpg")]},
+            "person/201?append_to_response=movie_credits": {"cast": [cast(1, "Film 1", poster="/p1.jpg"), cast(60, "Film 60", date="2012-01-01", poster="/p60.jpg")]},
+            "person/202?append_to_response=movie_credits": {"cast": [cast(1, "Film 1", poster="/p1.jpg")]}}
 
     def run_pass(self, credits=None, force=None, now=1_000_000_000, libs=(LIB,), key="cle", all_libs=None):
         """`force` None : on ne le donne pas, la passe prend son réglage par défaut."""
@@ -160,10 +160,20 @@ class TestEnrichPeople(TempCase):
 
     def test_each_person_is_asked_once_and_kept(self):
         counts, tmdb, log, client = self.run_pass()
-        self.assertEqual(sorted(tmdb.asked), ["person/100/movie_credits", "person/201/movie_credits", "person/202/movie_credits"])
+        self.assertEqual(sorted(tmdb.asked), ["person/100?append_to_response=movie_credits", "person/201?append_to_response=movie_credits", "person/202?append_to_response=movie_credits"])
         self.assertEqual(counts, {"people": 3, "asked": 3, "fresh": 0, "failed": 0, "films": 5})
         self.assertEqual([f["tmdb"] for f in self.db.kv_get("personinfo:100")["films"]], [1, 50])          # du plus récent au plus ancien
         self.assertEqual(client.call_count, 1)                                                      # un seul client pour toute la passe
+
+    def test_the_photos_are_downloaded_during_the_pass_even_for_people_whose_films_we_have(self):
+        tmdb = FakeMany(self.credits)
+        tmdb.photos = {"person/100?append_to_response=movie_credits": "/real.jpg", "person/202?append_to_response=movie_credits": "/b.jpg"}
+        (self.tmp / "tmdb").mkdir()
+        with mock.patch.object(enrich, "tmdb_client", return_value=(tmdb, self.tmp / "tmdb")), mock.patch.object(missing, "today", return_value="2026-11-08"):
+            enrich.enrich_people(types.SimpleNamespace(tmdb_key="cle", data=self.tmp, libraries=[LIB]), self.db, [LIB], lambda line: None)
+        self.assertEqual(sorted(p.name for p in (self.tmp / "tmdb").glob("person-*")), ["person-100.jpg", "person-202.jpg"])
+        self.assertEqual(self.db.kv_get("personinfo:100")["info"]["biography"], "Une vie.")
+        self.assertEqual(len(tmdb.asked), 3)          # un appel par personne : la biographie française suffit
 
     def test_no_poster_is_downloaded_for_a_film_we_have(self):
         _, tmdb, _, _ = self.run_pass()
@@ -176,20 +186,27 @@ class TestEnrichPeople(TempCase):
         shows = types.SimpleNamespace(id="tele", kind="shows")
         self.db.replace_library("films", [film(2, ["Réal"], [], {"Réal": 100})], [])               # le film 1 n'est plus là...
         self.db.replace_library("tele", [item("a1", "show", lib="tele")], [base.entry("e1", "a1", lib="tele", meta={"info": {"tmdb": "movie/1"}})])          # ... il est rangé dans une bibliothèque de séries
-        _, tmdb, _, _ = self.run_pass({"person/100/movie_credits": self.credits["person/100/movie_credits"]}, libs=(LIB, shows))
+        _, tmdb, _, _ = self.run_pass({"person/100?append_to_response=movie_credits": self.credits["person/100?append_to_response=movie_credits"]}, libs=(LIB, shows))
         self.assertEqual(tmdb.saved, ["/p50.jpg"])
 
     def test_a_film_we_have_in_another_library_than_the_one_of_the_pass_is_not_downloaded_either(self):
         shows = types.SimpleNamespace(id="tele", kind="shows")
         self.db.replace_library("tele", [item("a1", "show", lib="tele", meta={"actors": [{"name": "A", "role": ""}], "person_ids": {"A": 201}})], [])
         self.db.replace_library("films", [film(1, [], [], {})], [])                                          # le film 1 est dans Films ; la passe ne porte que sur la bibliothèque de séries
-        _, tmdb, _, _ = self.run_pass({"person/201/movie_credits": self.credits["person/201/movie_credits"]}, libs=(shows,), all_libs=(LIB, shows))
+        _, tmdb, _, _ = self.run_pass({"person/201?append_to_response=movie_credits": self.credits["person/201?append_to_response=movie_credits"]}, libs=(shows,), all_libs=(LIB, shows))
         self.assertEqual(tmdb.saved, ["/p60.jpg"])
 
     def test_a_person_known_for_less_than_thirty_days_is_not_asked_again(self):
         self.run_pass(now=1_000_000_000)
         counts, tmdb, _, _ = self.run_pass(now=1_000_000_000 + enrich.PERSON_STALE - 1)
         self.assertEqual((tmdb.asked, counts), ([], {"people": 3, "asked": 0, "fresh": 3, "failed": 0, "films": 0}))
+
+    def test_a_person_known_recently_without_a_sheet_is_asked_again(self):
+        self.run_pass(now=1_000_000_000)
+        kept = self.db.kv_get("personinfo:100")
+        self.db.kv_set("personinfo:100", {k: v for k, v in kept.items() if k != "info"})          # Réal, gardé avant la fiche
+        counts, tmdb, _, _ = self.run_pass(now=1_000_000_000 + 60)
+        self.assertEqual((tmdb.asked, counts["asked"], counts["fresh"]), (["person/100?append_to_response=movie_credits"], 1, 2))
 
     def test_a_person_known_for_thirty_days_is_asked_again_and_so_is_everybody_with_force(self):
         self.run_pass(now=1_000_000_000)
@@ -199,13 +216,13 @@ class TestEnrichPeople(TempCase):
         self.assertEqual(len(tmdb.asked), 3)
 
     def test_only_the_missing_part_is_asked_after_an_interruption(self):
-        self.run_pass({"person/100/movie_credits": self.credits["person/100/movie_credits"], "person/201/movie_credits": TmdbAuthError("clé refusée"), "person/202/movie_credits": {}})
+        self.run_pass({"person/100?append_to_response=movie_credits": self.credits["person/100?append_to_response=movie_credits"], "person/201?append_to_response=movie_credits": TmdbAuthError("clé refusée"), "person/202?append_to_response=movie_credits": {}})
         counts, tmdb, _, _ = self.run_pass()
-        self.assertEqual(sorted(tmdb.asked), ["person/201/movie_credits", "person/202/movie_credits"])          # Réal avait été gardé avant l'arrêt
+        self.assertEqual(sorted(tmdb.asked), ["person/201?append_to_response=movie_credits", "person/202?append_to_response=movie_credits"])          # Réal avait été gardé avant l'arrêt
         self.assertEqual((counts["fresh"], counts["asked"]), (1, 2))
 
     def test_a_person_tmdb_refuses_is_counted_and_the_others_go_on(self):
-        credits = {**self.credits, "person/201/movie_credits": TmdbError("introuvable sur TMDB (HTTP 404)")}
+        credits = {**self.credits, "person/201?append_to_response=movie_credits": TmdbError("introuvable sur TMDB (HTTP 404)")}
         counts, _, log, _ = self.run_pass(credits)
         self.assertEqual((counts["failed"], counts["asked"], counts["films"]), (1, 3, 3))
         self.assertIsNone(self.db.kv_get("personinfo:201"))
@@ -223,7 +240,7 @@ class TestEnrichPeople(TempCase):
         self.assertIsNone(self.db.kv_get("personinfo:100"))
 
     def test_a_success_in_between_starts_the_count_again(self):
-        credits = {**self.credits, "person/100/movie_credits": TmdbError("panne"), "person/202/movie_credits": TmdbError("panne")}          # échec, réussite (201), échec
+        credits = {**self.credits, "person/100?append_to_response=movie_credits": TmdbError("panne"), "person/202?append_to_response=movie_credits": TmdbError("panne")}          # échec, réussite (201), échec
         with mock.patch.object(enrich, "PEOPLE_MAX_FAILS", 2):
             counts, tmdb, _, _ = self.run_pass(credits)
         self.assertEqual((counts["failed"], counts["asked"], len(tmdb.asked)), (2, 3, 3))
@@ -238,11 +255,11 @@ class TestEnrichPeople(TempCase):
         self.assertIn("3 en échec", log[3])
 
     def test_a_refused_key_stops_everything_and_keeps_what_was_done(self):
-        credits = {**self.credits, "person/201/movie_credits": TmdbAuthError("clé refusée")}
+        credits = {**self.credits, "person/201?append_to_response=movie_credits": TmdbAuthError("clé refusée")}
         counts, tmdb, _, _ = self.run_pass(credits)
         self.assertIsInstance(counts, RuntimeError)
         self.assertIn("TMDB : clé refusée", str(counts))
-        self.assertEqual(tmdb.asked, ["person/100/movie_credits", "person/201/movie_credits"])      # 202 n'est pas demandé
+        self.assertEqual(tmdb.asked, ["person/100?append_to_response=movie_credits", "person/201?append_to_response=movie_credits"])      # 202 n'est pas demandé
         self.assertIsNotNone(self.db.kv_get("personinfo:100"))
 
     def test_no_key_is_a_clear_error(self):
@@ -285,9 +302,9 @@ class TestEnrichPeople(TempCase):
     def test_the_leading_actors_are_those_the_person_pages_count(self):
         names = [f"P{n}" for n in range(enrich.MAX_ORDER + 3)]
         self.db.replace_library("films", [film(1, [], names, {name: 1000 + n for n, name in enumerate(names)})], [])
-        credits = {f"person/{1000 + n}/movie_credits": {} for n in range(len(names))}
+        credits = {f"person/{1000 + n}?append_to_response=movie_credits": {} for n in range(len(names))}
         _, tmdb, _, _ = self.run_pass(credits)
-        self.assertEqual(sorted(tmdb.asked), sorted(f"person/{1000 + n}/movie_credits" for n in range(enrich.MAX_ORDER + 1)))          # les rôles 0 à MAX_ORDER, pas un de plus ni de moins
+        self.assertEqual(sorted(tmdb.asked), sorted(f"person/{1000 + n}?append_to_response=movie_credits" for n in range(enrich.MAX_ORDER + 1)))          # les rôles 0 à MAX_ORDER, pas un de plus ni de moins
 
     def test_nobody_to_ask_is_not_an_error(self):
         self.db.replace_library("films", [film(1, ["Sans id"], [])], [])

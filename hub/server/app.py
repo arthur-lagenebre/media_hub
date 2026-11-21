@@ -1303,7 +1303,16 @@ def person_extras(hub, person, libs):
     known = hub.db.kv_get(enrich.person_key(ident)) if ident else None
     films = known.get("films") if isinstance(known, dict) else None
     absent = missing.of_person(films, missing.owned_films(hub.db, libs)) if films else []
-    return {"enrichable": bool(ident and hub.cfg.tmdb_key), **({"missing": absent} if absent else {})}
+    return {"enrichable": bool(ident and hub.cfg.tmdb_key), **({"missing": absent} if absent else {}), **person_sheet(hub.cfg, ident, known)}
+
+
+def person_sheet(cfg, ident, known):
+    """`{"info": {biography, birthday, deathday, place_of_birth, department, photo, tmdb}}` : la fiche que la passe des personnes a gardée (`known`, voir enrich.fetch_person), dates en ISO, `photo` vrai quand son fichier est là, `tmdb` l'identifiant de la personne (la photo est `/img/person/<tmdb>`). Rien sans fiche : pas d'identifiant unique, jamais demandée, ou gardée avant la fiche. Rien n'est demandé en ligne."""
+    info = known.get("info") if isinstance(known, dict) else None
+    if not isinstance(info, dict):
+        return {}
+    shown = {field: info.get(field) or "" for field in ("biography", "birthday", "deathday", "place_of_birth")}
+    return {"info": {**shown, "department": info.get("known_for_department") or "", "photo": (cfg.data / "tmdb" / missing.photo_name(ident)).is_file(), "tmdb": ident}}
 
 
 @route("POST", r"/api/enrich/people")
@@ -3085,8 +3094,20 @@ def film_image(h, m, q):
     send_poster(h, q, f"film:{m.group(1)}", h.hub.cfg.data / "tmdb" / missing.poster_name(m.group(1)))
 
 
-def send_poster(h, q, ref, path):
-    """Envoie l'affiche `path` (HUB_DATA/tmdb), réduite à `?w=` et gardée sous `ref` ; 404 quand le fichier n'y est pas."""
+PERSON_ID_RE = re.compile(r"[0-9]{1,9}")          # un identifiant TMDB de personne : des chiffres ASCII (\d laisserait passer les chiffres d'autres écritures), neuf au plus
+
+
+@route("GET", r"/img/person/([^/]*)")
+def person_image(h, m, q):
+    """La photo d'une personne (HUB_DATA/tmdb, voir missing.photo_name), posée par la passe des personnes : rien n'est demandé en ligne ici. 400 pour un identifiant qui n'est pas un nombre de neuf chiffres au plus, 404 sans photo."""
+    ident = m.group(1)
+    if not PERSON_ID_RE.fullmatch(ident):
+        raise HttpError(400, "identifiant de personne invalide : un nombre de 9 chiffres au plus")
+    send_poster(h, q, f"person:{ident}", h.hub.cfg.data / "tmdb" / missing.photo_name(ident), "pas de photo")
+
+
+def send_poster(h, q, ref, path, absent="pas d'affiche"):
+    """Envoie l'affiche `path` (HUB_DATA/tmdb), réduite à `?w=` et gardée sous `ref` ; 404 (`absent`) quand le fichier n'y est pas."""
     path = path if path.is_file() else None
     try:
         width = int(q.get("w", 0))
@@ -3094,7 +3115,7 @@ def send_poster(h, q, ref, path):
         width = 0
     served = h.hub.images.file(ref, path, width) if path else None
     if served is None:
-        raise HttpError(404, "pas d'affiche")
+        raise HttpError(404, absent)
     data, mime, key = served
     tag = f'"{key}"'
     if h.headers.get("If-None-Match") == tag:
