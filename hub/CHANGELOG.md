@@ -1,3 +1,8 @@
+## 0.52.0 — 2026-11-21
+- L'administrateur peut corriger la fiche d'une personne depuis sa page : sa biographie, son métier, ses dates et son lieu de naissance. Une nouvelle recherche sur TMDB ne défait pas ces corrections, et « Tout reprendre de TMDB » les efface.
+- Il peut aussi lui donner une autre photo, la recadrer, ou revenir à celle de TMDB.
+- Les photos de personnes envoyées sont gardées dans la sauvegarde du hub.
+
 ## 0.51.0 — 2026-11-21
 - La page d'une personne commence maintenant par sa fiche : sa photo, son métier, sa biographie, ses dates et son lieu de naissance (et de décès), avec « Lire la suite » quand la biographie est longue.
 - La fiche se remplit pendant la recherche des films manquants, sans rien demander de plus à TMDB ; la biographie est en anglais quand TMDB n'en a pas en français.

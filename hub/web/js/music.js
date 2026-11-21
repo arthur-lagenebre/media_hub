@@ -211,6 +211,7 @@
       h('div', { class: 't' }, w.title), h('div', { class: 's' }, [w.year, H.t('Manquant')].join(' · ')));
   }
   // Recadrer une photo : un cadre carré (la vignette) sur l'image qu'on déplace et qu'on agrandit. `src` est l'image à montrer ; `onOk(cadre)` envoie le cadre (x, y, largeur, hauteur en fractions de l'image) et rend une promesse : la fenêtre se ferme si elle réussit, reste ouverte avec le message si elle échoue. Ce qui est hors du cadre ne sera pas gardé.
+  H.cropPhoto = cropPhoto;          // la page d'une personne recadre sa photo de la même façon (views.js)
   function cropPhoto(src, onOk, onClosed) {
     var S = 0, pad = 0, F = 0;       // côté de la fenêtre de l'image, marge autour du cadre, côté du cadre (voir size)
     var nw = 0, nh = 0, base = 1, zoom = 1, ox = 0, oy = 0, busy = false, drag = null;

@@ -6587,6 +6587,150 @@ class TestPersonSheetUi(UiCase):
         self.assertEqual(self.page.evaluate("Hub.missing"), [])
 
 
+class TestPersonSheetEditUi(UiCase):
+    """L'administrateur corrige la fiche d'une personne depuis sa page : « Modifier la fiche » (une fenêtre de champs), « Changer la photo » (le recadrage d'un artiste), « Photo de TMDB ». Hors télé, et seulement l'administrateur."""
+
+    PEOPLE = {"Vivante Test": 8400, "Sans Fiche": 8402}
+
+    @classmethod
+    def add_media(cls, root):
+        films = root / "srv" / "Films"
+        fixtures.write_mkv(films / "Film Correction (2005)" / "Film Correction (2005).mkv", fixtures.movie_blocks("Film Correction", "Un.", "2005-01-01", "movie/9700", "Drame", [], list(cls.PEOPLE), person_ids=dict(cls.PEOPLE)))
+
+    def setUp(self):
+        super().setUp()
+        hub = self.run_.hub
+        hub.db.kv_set("personinfo:8400", {"at": 1, "films": [], "info": {"biography": "Née sur scène.", "birthday": "1960-03-03", "deathday": "", "place_of_birth": "Lyon, France",
+                                                                        "known_for_department": "Acting", "profile_path": "/v.jpg"}})
+        hub.db.kv_set("personinfo:8402", {"at": 1, "films": []})
+        folder = hub.cfg.data / "tmdb"
+        folder.mkdir(exist_ok=True)
+        (folder / "person-8400.jpg").write_bytes(solid_png(60, 90))
+        own = hub.cfg.data / "people"
+        self.addCleanup(lambda: [f.unlink() for f in own.glob("*")] if own.is_dir() else None)
+        self.addCleanup(hub.db.execute, "DELETE FROM kv WHERE key LIKE 'personinfo:%' OR key LIKE 'personedit:%'")
+
+    def person(self, name="Vivante Test"):
+        self.open("#/person?n=" + name.replace(" ", "%20"))
+        self.view(".shelf .card").first.wait_for()
+
+    def edits(self):
+        return self.run_.hub.db.kv_get("personedit:8400")
+
+    def open_form(self):
+        self.person()
+        self.view(".hero [data-key=person-edit]").click()
+        self.page.locator(".menu.form").wait_for()
+        return self.page.locator(".menu.form")
+
+    def field(self, form, label):
+        return form.locator(".flab", has_text=label).locator("input, textarea")
+
+    def test_the_buttons_are_there_for_the_administrator_and_not_without_a_sheet(self):
+        self.person()
+        for key in ("person-edit", "person-photo", "person-crop"):
+            expect(self.view(f".hero [data-key={key}]")).to_be_visible()
+            expect(self.view(f".hero [data-key={key}]")).to_have_class(re.compile(r"\bf\b"))
+        expect(self.view(".hero [data-key=person-unphoto]")).to_be_hidden()             # la photo est celle de TMDB : rien à retirer
+        self.person("Sans Fiche")
+        for key in ("person-edit", "person-photo", "person-crop", "person-unphoto"):
+            expect(self.view(f"[data-key={key}]")).to_be_hidden()
+        expect(self.view("> .actions")).to_be_hidden()
+
+    def test_on_the_tv_and_for_an_ordinary_account_there_is_nothing_to_edit(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.person()
+        expect(self.view(".hero .bio")).to_have_text("Née sur scène.")
+        expect(self.view("[data-key=person-edit]")).to_be_hidden()
+        expect(self.view("[data-key=person-photo]")).to_be_hidden()
+        self.use_context(viewport={"width": 1920, "height": 1080})
+        self.open("#/search")
+        self.page.evaluate("Hub.session.auth = true; Hub.session.user = { id: 'x', name: 'bob', role: 'user' }; location.hash = '#/person?n=Vivante%20Test';")
+        self.view(".hero .bio").wait_for()
+        expect(self.view("[data-key=person-edit]")).to_be_hidden()
+        expect(self.view("[data-key=person-photo]")).to_be_hidden()
+
+    def test_a_corrected_text_is_shown_and_only_what_changed_is_sent(self):
+        form = self.open_form()
+        expect(self.field(form, "Biographie")).to_have_value("Née sur scène.")
+        expect(self.field(form, "Métier")).to_have_value("Interprétation")
+        expect(self.field(form, "Naissance (AAAA-MM-JJ)")).to_have_value("1960-03-03")
+        self.field(form, "Biographie").fill("Corrigée à la main.")
+        self.field(form, "Lieu de naissance").fill("Villeurbanne")
+        with self.page.expect_response(lambda r: r.url.endswith("/api/person/8400/sheet")):
+            form.locator(".btn", has_text="Enregistrer").click()
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        expect(self.view(".hero .bio")).to_have_text("Corrigée à la main.")
+        expect(self.view(".hero .dates")).to_contain_text("Villeurbanne")
+        expect(self.view(".hero .trade")).to_have_text("Interprétation")
+        self.assertEqual(self.edits(), {"biography": "Corrigée à la main.", "place_of_birth": "Villeurbanne"})          # le métier, inchangé, n'est pas envoyé : il suit TMDB
+
+    def test_a_bad_date_keeps_the_form_open_with_the_message(self):
+        form = self.open_form()
+        self.field(form, "Décès (AAAA-MM-JJ)").fill("2/11/2001")
+        form.locator(".btn", has_text="Enregistrer").click()
+        expect(form.locator(".formerr")).to_have_text("date de décès invalide : AAAA-MM-JJ attendu")
+        expect(form).to_be_visible()
+        self.assertIsNone(self.edits())
+        self.errors[:] = [e for e in self.errors if "status of 400" not in e]                     # le navigateur journalise la réponse refusée : c'est voulu ici
+
+    def test_in_english_the_buttons_the_form_and_the_refusal_are_translated(self):
+        self.page.context.add_cookies([{"name": "hub_lang", "value": "en", "url": self.base}])
+        self.person()
+        expect(self.view(".hero [data-key=person-edit]")).to_have_text("Edit sheet")
+        self.view(".hero [data-key=person-edit]").click()
+        form = self.page.locator(".menu.form")
+        self.field(form, "Died (YYYY-MM-DD)").fill("2/11/2001")
+        form.locator(".btn", has_text="Save").click()
+        expect(form.locator(".formerr")).to_have_text("invalid date of death: YYYY-MM-DD expected")
+        self.assertEqual(self.page.evaluate("Hub.missing"), [])
+        self.errors[:] = [e for e in self.errors if "status of 400" not in e]                     # le navigateur journalise la réponse refusée : c'est voulu ici
+
+    def test_everything_can_be_given_back_to_tmdb(self):
+        self.run_.hub.db.kv_set("personedit:8400", {"biography": "Corrigée.", "department": "Chant"})
+        form = self.open_form()
+        expect(self.field(form, "Métier")).to_have_value("Chant")
+        with self.page.expect_response(lambda r: r.url.endswith("/api/person/8400/sheet")):
+            form.locator(".btn", has_text="Tout reprendre de TMDB").click()
+        expect(self.view(".hero .bio")).to_have_text("Née sur scène.")
+        expect(self.view(".hero .trade")).to_have_text("Interprétation")
+        self.assertIsNone(self.edits())
+
+    def test_a_new_photo_is_cropped_saved_and_shown_square_then_tmdb_comes_back(self):
+        self.person()
+        expect(self.view(".hero .poster")).not_to_have_class(re.compile(r"\bsq\b"))                # celle de TMDB : un portrait
+        with self.page.expect_file_chooser() as chooser:
+            self.view(".hero [data-key=person-photo]").click()
+        chooser.value.set_files(files=[{"name": "moi.png", "mimeType": "image/png", "buffer": solid_png(300, 200)}])
+        self.page.wait_for_function("(() => { var b = document.querySelector('.menu.crop .btn.primary'); return b && !b.disabled })()")
+        with self.page.expect_response(lambda r: "/api/person/8400/photo?crop=" in r.url) as sent:
+            self.page.locator(".menu.crop .btn", has_text="Valider").click()
+        self.assertEqual(sent.value.status, 200)
+        expect(self.page.locator(".menu.crop")).to_have_count(0)
+        expect(self.view(".hero .poster")).to_have_class(re.compile(r"\bsq\b"))                    # envoyée : carrée, comme son cadre
+        expect(self.view(".hero .poster img")).to_have_attribute("src", re.compile(r"^/img/person/8400\?w=\d+&v=\d+$"))
+        unphoto = self.view(".hero [data-key=person-unphoto]")
+        expect(unphoto).to_be_visible()
+        self.assertEqual(len(list((self.run_.hub.cfg.data / "people").glob("8400.*"))), 1)
+        unphoto.click()
+        self.page.locator(".menu .btn.danger").click()
+        expect(unphoto).to_be_hidden()
+        expect(self.view(".hero [data-key=person-photo]")).to_be_focused()
+        expect(self.view(".hero .poster")).not_to_have_class(re.compile(r"\bsq\b"))
+        self.assertEqual(list((self.run_.hub.cfg.data / "people").glob("8400.*")), [])
+
+    def test_the_photo_of_tmdb_can_be_cropped_with_the_keyboard(self):
+        self.person()
+        self.view(".hero [data-key=person-crop]").focus()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_function("(() => { var b = document.querySelector('.menu.crop .btn.primary'); return b && !b.disabled })()")
+        with self.page.expect_response(lambda r: r.url.endswith("/api/person/8400/photo/crop")) as sent:
+            self.page.keyboard.press("Enter")                                                   # Entrée valide le cadre
+        self.assertEqual(sent.value.status, 200)
+        expect(self.view(".hero [data-key=person-unphoto]")).to_be_visible()
+        expect(self.view(".hero [data-key=person-crop]")).to_be_focused()                       # le focus reste sur le bouton : la télécommande ne repart pas au début
+
+
 class TestPersonMissingUi(UiCase):
     """La page d'une personne dit aussi ses films qu'on n'a pas : un bouton pour l'administrateur qui les demande à TMDB, puis des cases grisées que la télécommande ne vise pas."""
 
