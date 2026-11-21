@@ -1,5 +1,6 @@
 """Le lanceur de mutator de la passe de nuit (`.github/scripts/mutate_part.py`) : ce qu'il lance, et ce qu'il conclut."""
 import importlib.util
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -159,6 +160,23 @@ class TestOutcome(unittest.TestCase):
     def test_a_failure_of_the_first_command_stops_everything(self):
         # Il mesure la couverture : sans elle, les suivants n'auraient rien à lire.
         self.assertEqual(self.run_plan([1, 0, 0]), ((1, False), 1))
+
+
+class TestServerSharesOfTheNightlyPass(unittest.TestCase):
+    """Les parts « serveur » de nightly.yml, sur le vrai hub/server : une tranche de app.py par job, et rien d'autre avec elle.
+    Une tranche prend jusqu'à 4 h 30 ; deux dans le même job, ou une tranche avec jobs.py, dépassent la limite de 350 min (run 44890954001)."""
+
+    def test_each_tranche_of_app_py_has_a_job_to_itself(self):
+        workflow = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+        shares = {int(n) for n in re.findall(r"share: \d+/(\d+), paths: hub/server", workflow)}
+        self.assertEqual(len(shares), 1, "toutes les parts « serveur » doivent avoir le même N")
+        n = shares.pop()
+        self.assertEqual(sorted(int(k) for k in re.findall(rf"share: (\d+)/{n}, paths: hub/server", workflow)), list(range(1, n + 1)))
+        for k in range(1, n + 1):
+            files = [command[-1] for command in part.plan_part(ROOT, ["hub/server"], "", python="python", mutator="mutator", share=(k, n))]
+            if "hub/server/app.py" in files:
+                self.assertEqual(files, ["hub/server/app.py"],
+                                 f"la part {k}/{n} a une tranche de app.py et autre chose : ajouter une part « serveur » dans nightly.yml")
 
 
 if __name__ == "__main__":

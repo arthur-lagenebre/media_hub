@@ -2,7 +2,7 @@ name: Nuit
 
 # Les passes longues de « faire bien » (skill ub-mode), sur tout hub/, une fois par nuit plutôt qu'à chaque PR :
 #   crapper : aucune fonction de hub/ au-dessus de CRAP 10, avec l'interface dans Chromium (Playwright) pour la couverture ;
-#   mutator : la passe de mutation, en parties parallèles (hub/server sur dix jobs), sans Playwright, chacune avec son cache différentiel
+#   mutator : la passe de mutation, en parties parallèles (hub/server sur onze jobs), sans Playwright, chacune avec son cache différentiel
 #             et ses seuls modules de tests (toute la suite par mutant ne tenait pas dans un job : voir « tests »).
 #             .github/scripts/mutate_part.py la lance fichier par fichier, et par tranches pour un long fichier :
 #             une partie arrêtée à la limite du job reprend à la passe suivante.
@@ -26,7 +26,7 @@ env:
   # Les deux outils ne sont pas versionnés : on les épingle, pour qu'une passe se rejoue à l'identique.
   # crapper l'est dans .github/actions/setup, au même commit que dans mutator.yml.
   MUTATOR_REF: a5a0cb803b66e0cdb8bf471b3b08af701d424a41
-  # Les modules de tests des dix parts de « serveur » (voir la matrice de mutator) : ceux du serveur, plus ceux qui
+  # Les modules de tests des onze parts de « serveur » (voir la matrice de mutator) : ceux du serveur, plus ceux qui
   # appellent ses routes sans porter son nom (activité, sauvegarde, téléchargements, étiquettes, avis, demandes,
   # suggestions). Sans eux, la tranche des demandes et des suggestions gardait 29 survivants pour 6 tués (run 44567224895).
   # Environ un tiers de temps en plus par mutant ; une tranche de 140 mutations prend alors un peu plus de 4 h.
@@ -102,20 +102,22 @@ jobs:
       # Coût accepté : un mutant tué seulement par un test d'un autre module passe pour survivant.
       matrix:
         include:
-          # hub/server sur dix jobs, une tranche de 400 lignes de app.py chacun (le premier : __init__.py et jobs.py).
+          # hub/server sur onze jobs, une tranche de 400 lignes de app.py chacun (le premier : __init__.py et jobs.py).
           # mutator repère un mutant par sa position dans le fichier : une ligne ajoutée en haut de app.py fait refaire
           # tout le fichier, environ 15 h de calcul. En un seul job, il ne finissait jamais (runs 44282081246, 44504034976).
-          # Tests : SERVEUR_TESTS. Si app.py dépasse 3600 lignes, un job reçoit deux tranches : ajouter une part.
-          - {part: serveur-1, share: 1/10, paths: hub/server}
-          - {part: serveur-2, share: 2/10, paths: hub/server}
-          - {part: serveur-3, share: 3/10, paths: hub/server}
-          - {part: serveur-4, share: 4/10, paths: hub/server}
-          - {part: serveur-5, share: 5/10, paths: hub/server}
-          - {part: serveur-6, share: 6/10, paths: hub/server}
-          - {part: serveur-7, share: 7/10, paths: hub/server}
-          - {part: serveur-8, share: 8/10, paths: hub/server}
-          - {part: serveur-9, share: 9/10, paths: hub/server}
-          - {part: serveur-10, share: 10/10, paths: hub/server}
+          # Tests : SERVEUR_TESTS. Si app.py dépasse 4000 lignes, un job reçoit une tranche et autre chose, et dépasse
+          # 350 min (run 44890954001) : ajouter une part. tests.test_ci_mutate_part le signale dès la PR qui franchit le seuil.
+          - {part: serveur-1, share: 1/11, paths: hub/server}
+          - {part: serveur-2, share: 2/11, paths: hub/server}
+          - {part: serveur-3, share: 3/11, paths: hub/server}
+          - {part: serveur-4, share: 4/11, paths: hub/server}
+          - {part: serveur-5, share: 5/11, paths: hub/server}
+          - {part: serveur-6, share: 6/11, paths: hub/server}
+          - {part: serveur-7, share: 7/11, paths: hub/server}
+          - {part: serveur-8, share: 8/11, paths: hub/server}
+          - {part: serveur-9, share: 9/11, paths: hub/server}
+          - {part: serveur-10, share: 10/11, paths: hub/server}
+          - {part: serveur-11, share: 11/11, paths: hub/server}
           # scan et media ont fait perdre leur machine deux fois quand ils étaient ensemble (cause non établie : mémoire ?).
           # Séparés pour savoir lequel, moins de mutants à la fois, et une limite de mémoire par lancement de tests.
           - part: scan
