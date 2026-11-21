@@ -884,6 +884,373 @@ class TestWithTheFakeLibrary(unittest.TestCase):
         self.assertEqual(self.files(), before)
 
 
+class ArtistCase(RequestCase):
+    """RequestCase avec deux bibliothèques de musique de plus : « musique » (que tous voient) et « musprive » (que Bob ne voit pas)."""
+
+    def setUp(self):
+        super().setUp()
+        for ident in ("musique", "musprive"):
+            lib = config.Library(ident, ident.title(), "music", self.root / ident)
+            lib.path.mkdir()
+            self.hub.cfg.libraries.append(lib)
+        accounts.set_rights(self.db, self.bob["id"], {lib.id for lib in self.hub.cfg.libraries}, {"prive": {"view": False}, "musprive": {"view": False}})
+
+    def ask_artist(self, who, name, **more):
+        return self.post(who, "/api/requests", {"kind": "artist", "name": name, **more})
+
+    def album(self, lib, ident, artist, artist_id="ar1"):
+        return item(ident, "album", lib=lib, title=f"Album {ident}", grp=artist, meta={"artist_id": artist_id} if artist_id else {})
+
+    def scanned(self, lib, *albums):
+        """Ces albums `albums` arrivent dans la bibliothèque de musique `lib` (ceux d'avant y restent)."""
+        rows = [dict(r) for r in self.db.query("SELECT * FROM items WHERE lib=?", (lib,))]
+        self.fill(lib, rows + list(albums))
+
+    def kinds(self, who):
+        return [(r["kind"], r["title"], r["status"]) for r in self.mine(who)]
+
+    def home(self, who):
+        return self.get(who, "/api/home").json()["requests_ready"]
+
+    def stored_artists(self):
+        return [tuple(r) for r in self.db.query("SELECT r.kind, r.status FROM requests r JOIN request_users u ON u.request_id = r.id WHERE r.kind='artist'")]
+
+
+class TestAskingForAnArtist(ArtistCase):
+    def test_an_artist_is_asked_by_a_name_and_the_answer_says_nothing_about_tmdb(self):
+        first = self.ask_artist(self.alice, "Daft Punk", note="Pour la voiture")
+        rid = first.json()["id"]
+        self.assertEqual((first.status, first.json()), (201, {"id": rid, "kind": "artist", "status": "pending", "mine": True}))
+        shown = self.mine(self.alice)
+        self.assertEqual(len(shown), 1)
+        got = shown[0]
+        self.assertEqual((got["id"], got["kind"], got["title"], got["status"], got["note"], got["ack"], got["mine"]), (rid, "artist", "Daft Punk", "pending", "Pour la voiture", False, True))
+        self.assertFalse(got.get("cover"))
+        self.assertFalse(got.get("poster"))
+        self.assertNotIn("tmdb", got)
+        self.assertNotIn("url", got)
+        self.assertNotIn("item", got)
+
+    def test_the_name_is_kept_as_the_first_requester_typed_it_without_the_edge_spaces(self):
+        self.ask_artist(self.alice, "  daft   Punk  ")
+        self.ask_artist(self.bob, "DAFT PUNK")
+        self.assertEqual([r["title"] for r in self.mine(self.alice)], ["daft   Punk"])
+        self.assertEqual([r["title"] for r in self.mine(self.bob)], ["daft   Punk"])
+
+    def test_the_same_name_written_differently_joins_the_same_request(self):
+        for first, second in (("Daft Punk", "daft  punk"), ("Beyoncé", "Beyonce"), ("Björk", "BJORK"), ("Daft Punk", "Ｄａｆｔ　Ｐｕｎｋ"), ("Sigur Rós", "Sigur Rós")):
+            with self.subTest(first=first, second=second):
+                self.db.execute("DELETE FROM request_users")
+                self.db.execute(hub_requests.ORPHANS)
+                rid = self.ask_artist(self.alice, first).json()["id"]
+                joined = self.ask_artist(self.bob, second)
+                self.assertEqual((joined.status, joined.json()), (200, {"id": rid, "kind": "artist", "status": "pending", "mine": True}))
+                self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 1)
+                self.assertEqual(self.db.one("SELECT COUNT(*) FROM request_users WHERE request_id=?", (rid,))[0], 2)
+
+    def test_the_same_account_asking_again_changes_nothing_and_another_name_is_another_request(self):
+        rid = self.ask_artist(self.alice, "Air", note="d'abord").json()["id"]
+        again = self.ask_artist(self.alice, "air", note="ensuite")
+        self.assertEqual((again.status, again.json()["id"]), (200, rid))
+        self.assertEqual(self.mine(self.alice)[0]["note"], "d'abord")
+        self.assertEqual(self.ask_artist(self.alice, "Airs").status, 201)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 2)
+
+    def test_an_artist_and_a_film_never_meet_whatever_the_name(self):
+        self.ask(self.alice, 2)
+        self.assertEqual(self.ask_artist(self.alice, "Film 2").status, 201)
+        self.assertEqual(sorted(self.kinds(self.alice)), [("artist", "Film 2", "pending"), ("movie", "Film 2", "pending")])
+
+    def test_the_admin_sees_the_requesters_of_an_artist_and_their_messages(self):
+        rid = self.ask_artist(self.alice, "Daft Punk", note="un").json()["id"]
+        self.ask_artist(self.bob, "daft punk", note="deux")
+        listed = self.everything()
+        self.assertEqual([(r["id"], r["kind"], r["title"]) for r in listed], [(rid, "artist", "Daft Punk")])
+        self.assertEqual(sorted((u["name"], u["note"]) for u in listed[0]["users"]), [("alice", "un"), ("bob", "deux")])
+        self.assertNotIn("tmdb", listed[0])
+        self.assertNotIn("url", listed[0])
+
+    def test_a_name_goes_from_one_to_two_hundred_characters_without_control_characters(self):
+        control = "nom d'artiste : aucun caractère de contrôle permis"
+        bad = {"": "nom d'artiste vide", "   ": "nom d'artiste vide", "́": "nom d'artiste vide", "x" * 201: "nom d'artiste trop long (200 caractères au plus)",
+               "Dai\x00ft": control, "Daft\nPunk": control, "Daft\tPunk": control, "Daft​Punk": control, "Daft Punk": control}
+        for name, message in bad.items():
+            reply = self.ask_artist(self.alice, name)
+            self.assertEqual((reply.status, reply.json()), (400, {"error": message}), repr(name))
+        for value in (None, 7, ["Air"], {"x": 1}, True):
+            reply = self.ask_artist(self.alice, value)
+            self.assertEqual((reply.status, reply.json()), (400, {"error": "nom d'artiste attendu : un texte"}), repr(value))
+        reply = self.post(self.alice, "/api/requests", {"kind": "artist"})
+        self.assertEqual((reply.status, reply.json()), (400, {"error": "nom d'artiste attendu : un texte"}))
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 0)
+        self.assertEqual(self.ask_artist(self.alice, "x").status, 201)
+        self.assertEqual(self.ask_artist(self.alice, "é" * 200).status, 201)
+        self.assertEqual(self.ask_artist(self.alice, "  " + "y" * 200 + "  ").status, 201)            # les espaces de bord ne comptent pas
+
+    def test_a_message_too_long_is_refused_for_an_artist_too_and_a_tmdb_number_is_ignored(self):
+        reply = self.ask_artist(self.alice, "Air", note="x" * 201)
+        self.assertEqual((reply.status, reply.json()), (400, {"error": "message trop long (200 caractères au plus)"}))
+        self.assertEqual(self.ask_artist(self.alice, "Air", tmdb=603, year="1999").status, 201)
+        got = self.mine(self.alice)[0]
+        self.assertEqual((got["title"], got["year"]), ("Air", ""))
+        self.assertNotIn("tmdb", got)
+
+    def test_a_film_still_needs_its_tmdb_number_and_never_a_name(self):
+        reply = self.post(self.alice, "/api/requests", {"kind": "movie", "name": "Matrix"})
+        self.assertEqual((reply.status, reply.json()), (400, {"error": "identifiant TMDB attendu : un entier positif"}))
+        self.assertEqual(self.post(self.alice, "/api/requests", {"kind": "album", "name": "Air"}).status, 400)
+
+    def test_an_artist_request_has_no_poster_and_the_poster_route_says_404(self):
+        rid = self.ask_artist(self.alice, "Air").json()["id"]
+        (self.hub.cfg.data / "tmdb").mkdir()
+        (self.hub.cfg.data / "tmdb" / "None.jpg").write_bytes(b"jpeg")
+        self.assertEqual(self.get(self.alice, f"/img/request/{rid}").status, 404)
+        self.assertFalse(self.mine(self.alice)[0].get("cover"))
+
+    def test_asking_for_an_artist_never_starts_the_poster_task(self):
+        self.ask_artist(self.alice, "Air")
+        self.hub.jobs.request_posters.assert_not_called()
+
+
+class TestRequestPoster(RequestCase):
+    """`GET /img/request/<id>` : l'affiche d'une série demandée, pour ses demandeurs et l'administrateur seulement ; jamais pour un artiste."""
+
+    def setUp(self):
+        super().setUp()
+        (self.hub.cfg.data / "tmdb").mkdir()
+        (self.hub.cfg.data / "tmdb" / "5.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"poster" * 10)
+        self.rid = self.ask(self.alice, 5, "show", title="Une série").json()["id"]
+        self.hub.images.file.return_value = (b"image", "image/jpeg", "clé")
+
+    def test_the_asker_and_the_admin_get_the_poster_another_account_and_an_unknown_request_do_not(self):
+        for who, status in ((self.alice, 200), (self.boss, 200), (self.bob, 404)):
+            self.assertEqual(self.get(who, f"/img/request/{self.rid}").status, status, who["name"])
+        reply = self.get(self.alice, "/img/request/9999")
+        self.assertEqual((reply.status, reply.json()), (404, {"error": "pas d'affiche"}))
+        self.assertEqual({call.args[1] for call in self.hub.images.file.call_args_list}, {self.hub.cfg.data / "tmdb" / "5.jpg"})
+
+    def test_an_artist_request_never_gives_one_even_for_the_admin_or_with_a_file_that_looks_right(self):
+        (self.hub.cfg.data / "tmdb" / "None.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"x" * 40)
+        artist = self.post(self.alice, "/api/requests", {"kind": "artist", "name": "Air"}).json()["id"]
+        for who in (self.alice, self.boss):
+            self.assertEqual(self.get(who, f"/img/request/{artist}").status, 404)
+        self.hub.images.file.assert_not_called()
+
+
+class TestArtistRules(ArtistCase):
+    def test_the_right_to_request_is_the_same_one(self):
+        self.post(self.boss, f"/api/user/{self.alice['id']}/request", {"request": False})
+        reply = self.ask_artist(self.alice, "Air")
+        self.assertEqual((reply.status, reply.json()), (403, {"error": FORBIDDEN}))
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 0)
+        self.assertEqual(self.ask_artist(self.boss, "Air").status, 201)
+
+    def test_the_ceiling_counts_artists_with_films_and_the_admin_has_none(self):
+        self.hub.cfg.request_max = 2
+        self.ask(self.alice, 2)
+        self.ask_artist(self.alice, "Air")
+        reply = self.ask_artist(self.alice, "Daft Punk")
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "trop de demandes en attente (2)"}))
+        self.assertEqual(self.ask(self.alice, 3).status, 409)
+        self.ask_artist(self.bob, "Phoenix")
+        self.assertEqual(self.ask_artist(self.alice, "Phoenix").status, 409)                  # rejoindre compte aussi
+        self.assertEqual(self.ask_artist(self.alice, "AIR").status, 200)                     # ce qu'on a déjà demandé n'ajoute rien
+        for name in ("a", "b", "c", "d"):
+            self.assertEqual(self.ask_artist(self.boss, name).status, 201)
+
+    def test_an_arrived_artist_no_longer_counts_toward_the_ceiling(self):
+        self.hub.cfg.request_max = 1
+        rid = self.ask_artist(self.alice, "Air").json()["id"]
+        self.assertEqual(self.ask_artist(self.alice, "Daft Punk").status, 409)
+        self.set_status(rid, "added")
+        self.assertEqual(self.ask_artist(self.alice, "Daft Punk").status, 201)
+
+    def test_a_declined_artist_blocks_a_new_request_whatever_the_spelling(self):
+        rid = self.ask_artist(self.alice, "Daft Punk").json()["id"]
+        self.assertEqual(self.set_status(rid, "declined", "introuvable").json()["status"], "declined")
+        for who, name in ((self.alice, "Daft Punk"), (self.bob, "daft  punk")):
+            reply = self.ask_artist(who, name)
+            self.assertEqual((reply.status, reply.json()), (409, {"error": "cette demande a été refusée : introuvable"}), name)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM request_users")[0], 1)
+        self.assertEqual(self.set_status(rid, "declined", "").json()["reason"], "")
+        self.assertEqual(self.ask_artist(self.bob, "Daft Punk").json(), {"error": "cette demande a été refusée"})
+
+    def test_asking_is_always_known_as_already_asked_without_a_name_or_a_number(self):
+        rid = self.ask_artist(self.alice, "Daft Punk", note="secret d'Alice").json()["id"]
+        joined = self.ask_artist(self.bob, "daft punk")
+        self.assertEqual((joined.status, joined.json()), (200, {"id": rid, "kind": "artist", "status": "pending", "mine": True}))
+        self.assertNotIn(b"alice", joined.body)
+        self.assertNotIn(b"secret", joined.body)
+        self.assertEqual(set(self.mine(self.bob)[0]), {"id", "kind", "title", "year", "status", "reason", "created", "updated", "cover", "note", "ack", "asked", "mine"})
+        self.assertNotIn(b"secret", self.get(self.bob, "/api/requests?mine=1").body)
+        self.assertEqual(self.get(self.bob, "/api/requests").status, 403)
+        carol = accounts.create(self.db, "carol", PASSWORD)
+        self.assertEqual(self.mine(carol), [])
+        self.assertEqual(self.post(carol, f"/api/requests/{rid}/delete").json(), UNKNOWN)
+
+    def test_an_account_withdraws_its_part_and_the_last_one_takes_the_request_away(self):
+        rid = self.ask_artist(self.alice, "Air").json()["id"]
+        self.ask_artist(self.bob, "air")
+        self.assertEqual(self.post(self.alice, f"/api/requests/{rid}/delete").json(), {"ok": True})
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 1)
+        self.assertEqual(self.post(self.bob, f"/api/requests/{rid}/delete").json(), {"ok": True})
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 0)
+        self.assertEqual(self.ask_artist(self.alice, "Air").status, 201)
+
+    def test_deleting_an_account_drops_its_artist_requests_and_the_orphans(self):
+        self.ask_artist(self.alice, "Air")
+        self.ask_artist(self.alice, "Phoenix")
+        self.ask_artist(self.bob, "phoenix")
+        accounts.delete(self.db, self.alice["id"])
+        self.assertEqual([r["title"] for r in self.db.query("SELECT title FROM requests")], ["Phoenix"])
+
+    def test_the_admin_marks_an_artist_added_or_declined_by_hand_and_counts_it_pending(self):
+        rid = self.ask_artist(self.alice, "Dayft Punk").json()["id"]                  # une faute de frappe ne se reconnaît pas
+        self.assertEqual(self.get(self.boss, "/api/state").json()["requests_pending"], 1)
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")
+        marked = self.set_status(rid, "added").json()
+        self.assertEqual((marked["status"], marked["kind"], "artist" in marked), ("added", "artist", False))        # arrivée à la main : aucune fiche à ouvrir
+        self.assertEqual(self.get(self.boss, "/api/state").json()["requests_pending"], 0)
+        self.assertEqual(self.home(self.alice), [])
+        self.assertEqual(self.set_status(rid, "pending").json()["status"], "pending")
+
+
+class TestArtistArrival(ArtistCase):
+    def test_a_request_turns_added_when_an_album_artist_of_that_name_arrives_and_stays_so(self):
+        rid = self.ask_artist(self.alice, "Daft Punk").json()["id"]
+        self.ask_artist(self.bob, "daft punk")
+        self.assertEqual(self.kinds(self.alice), [("artist", "Daft Punk", "pending")])
+        self.scanned("musique", self.album("musique", "a1", "Daft  PUNK", "ar9"))
+        self.assertEqual(self.stored_artists(), [("artist", "pending")] * 2)              # rien ne tourne en fond : c'est la lecture qui le voit
+        got = self.mine(self.alice)[0]
+        self.assertEqual((got["status"], got["artist"]), ("added", {"lib": "musique", "id": "ar9", "name": "Daft  PUNK"}))
+        self.assertNotIn("item", got)
+        self.assertEqual(self.stored_artists(), [("artist", "added")] * 2)
+        self.fill("musique", [])
+        self.assertEqual((self.mine(self.alice)[0]["status"], self.everything()[0]["id"]), ("added", rid))      # l'artiste reparti, la demande reste arrivée
+
+    def test_the_arrival_goes_by_the_normalised_name_accents_and_case_included(self):
+        self.ask_artist(self.alice, "Beyonce")
+        self.scanned("musique", self.album("musique", "a1", "Beyoncé"))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "added")
+
+    def test_a_missing_album_does_not_make_the_artist_arrive(self):
+        self.ask_artist(self.alice, "Daft Punk")
+        self.db.kv_set("wanted:musique", {"ar1": [{"year": "1997", "title": "Homework", "key": "k", "cover": ""}]})
+        self.scanned("musique", self.album("musique", "a2", "Air", "ar2"))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")
+        self.assertEqual(self.home(self.alice), [])
+
+    def test_only_the_album_artist_of_a_music_library_counts(self):
+        self.ask_artist(self.alice, "Daft Punk")
+        credited = self.album("musique", "a1", "Various Artists", "var")                    # il n'est crédité que sur une piste
+        credited["meta"] = json.dumps({"artist_id": "var", "artist": "Daft Punk", "artists": ["Daft Punk"]})
+        self.scanned("musique", credited)
+        self.fill("films", [dict(r) for r in self.db.query("SELECT * FROM items WHERE lib='films'")] + [item("saga", "movie", lib="films", grp="Daft Punk", title="Daft Punk")])    # un film du même nom
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")
+
+    def test_an_album_without_a_stable_artist_page_gives_the_name_only(self):
+        self.ask_artist(self.alice, "Air")
+        self.scanned("musique", self.album("musique", "a1", "Air", artist_id=""))
+        self.assertEqual(self.mine(self.alice)[0]["artist"], {"lib": "musique", "name": "Air"})
+        self.assertEqual([r["artist"] for r in self.home(self.alice)], [{"lib": "musique", "name": "Air"}])
+
+    def test_the_home_lists_an_arrived_artist_until_it_is_acknowledged(self):
+        rid = self.ask_artist(self.alice, "Daft Punk").json()["id"]
+        self.ask_artist(self.bob, "daft punk")
+        self.assertEqual(self.home(self.alice), [])
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        self.assertEqual(self.home(self.alice), [{"id": rid, "kind": "artist", "title": "Daft Punk", "year": "", "artist": {"lib": "musique", "id": "ar1", "name": "Daft Punk"}}])
+        self.assertEqual(self.post(self.alice, f"/api/requests/{rid}/ack").json(), {"ok": True})
+        self.assertEqual(self.home(self.alice), [])
+        self.assertEqual(len(self.home(self.bob)), 1)                                                       # chacun acquitte pour soi
+        self.assertEqual(self.mine(self.alice)[0]["ack"], True)
+
+    def test_the_home_shows_films_and_artists_together_each_in_its_shape(self):
+        self.ask(self.alice, 2)
+        self.ask_artist(self.alice, "Air")
+        self.own("films", "m2", 2)
+        self.scanned("musique", self.album("musique", "a1", "Air", "ar2"))
+        got = {r["kind"]: r for r in self.home(self.alice)}
+        self.assertEqual(set(got), {"movie", "artist"})
+        self.assertEqual((got["movie"]["item"], got["movie"]["card"]["id"], got["movie"]["tmdb"]), ("m2", "m2", 2))
+        self.assertNotIn("card", got["artist"])
+        self.assertNotIn("tmdb", got["artist"])
+
+    def test_an_arrival_in_a_library_the_account_cannot_see_waits_for_one_it_sees(self):
+        rid = self.ask_artist(self.bob, "Air").json()["id"]
+        self.scanned("musprive", self.album("musprive", "p1", "Air", "ar7"))
+        self.assertEqual(self.everything()[0]["artist"], {"lib": "musprive", "id": "ar7", "name": "Air"})                # l'administrateur voit tout
+        shown = self.mine(self.bob)[0]
+        self.assertEqual(shown["status"], "added")
+        self.assertNotIn("artist", shown)
+        self.assertEqual(self.home(self.bob), [])
+        self.scanned("musique", self.album("musique", "a1", "Air", "ar2"))
+        self.assertEqual(self.mine(self.bob)[0]["artist"]["lib"], "musique")
+        self.assertEqual([r["id"] for r in self.home(self.bob)], [rid])
+
+    def test_asking_for_an_artist_already_in_a_library_the_account_sees_is_a_409_with_the_artist(self):
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        reply = self.ask_artist(self.alice, "daft punk")
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "déjà dans la médiathèque", "artist": {"lib": "musique", "id": "ar1", "name": "Daft Punk"}}))
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 0)
+
+    def test_an_artist_only_in_a_library_the_account_cannot_see_is_asked_and_already_added(self):
+        self.scanned("musprive", self.album("musprive", "p1", "Daft Punk"))
+        reply = self.ask_artist(self.bob, "Daft Punk")
+        self.assertEqual((reply.status, reply.json()["status"]), (201, "added"))
+        self.assertEqual(self.home(self.bob), [])
+
+    def test_the_admin_cannot_put_back_on_hold_an_artist_that_is_there(self):
+        rid = self.ask_artist(self.alice, "Daft Punk").json()["id"]
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        self.mine(self.alice)
+        reply = self.set_status(rid, "pending")
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "L'élément est déjà dans la médiathèque : la demande ne peut pas rester en attente."}))
+        self.assertEqual(self.set_status(rid, "declined", "non").status, 200)
+
+    def test_the_library_is_read_once_for_many_reads_until_the_next_scan(self):
+        self.ask_artist(self.alice, "Air")
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        self.mine(self.alice)
+        for target in ("/api/requests?mine=1", "/api/home", "/api/state"):
+            self.assertEqual([s for s in self.statements_of(self.alice, target) if "FROM items" in s and "album" in s], [], target)
+        self.scanned("musique", self.album("musique", "a2", "Air", "ar2"))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "added")
+
+    def test_requests_for_films_only_never_make_the_albums_be_read(self):
+        self.ask(self.alice, 2)
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        self.own("films", "m2", 2)
+        for target in ("/api/requests?mine=1", "/api/requests", "/api/home", "/api/state", "/api/item/m1"):
+            self.assertEqual([s for s in self.statements_of(self.boss, target) if "type='album'" in s], [], target)
+
+    def test_a_request_arrives_from_a_real_scan_and_a_missing_album_is_not_enough(self):
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, True)
+        folders = fixtures.build_library(base / "srv")
+        lib = config.Library("reel", "Réel", "music", folders["musique"])
+        self.hub.cfg.libraries.append(lib)
+
+        def scan():
+            scanning.scan_library(self.db, lib, log=lambda _m: None)
+        scan()
+        self.assertEqual(self.ask_artist(self.alice, "daft punk").status, 409)                  # Daft Punk est déjà là
+        rid = self.ask_artist(self.alice, "Aphex Twin").json()["id"]
+        homework = self.ask_artist(self.alice, "Homework").json()["id"]
+        (folders["musique"] / "Daft Punk" / "1997 - Homework.png").write_bytes(fixtures.PNG)         # un album manquant : une pochette seule
+        scan()
+        self.assertEqual([w["title"] for albums in self.db.kv_get("wanted:reel").values() for w in albums], ["Homework"])
+        self.assertEqual({r["id"]: r["status"] for r in self.mine(self.alice)}, {rid: "pending", homework: "pending"})           # il n'est pas un artiste de la médiathèque
+        fixtures.write_flac(folders["musique"] / "Aphex Twin" / "1992 - Selected Ambient Works" / "01 - Xtal.flac", "Xtal", "Selected Ambient Works", "Aphex Twin", 1, 1)
+        scan()
+        got = next(r for r in self.mine(self.alice) if r["id"] == rid)
+        album = self.db.one("SELECT meta FROM items WHERE lib='reel' AND grp='Aphex Twin'")
+        self.assertEqual((got["id"], got["status"], got["artist"]["lib"], got["artist"]["name"], got["artist"].get("id")), (rid, "added", "reel", "Aphex Twin", json.loads(album["meta"]).get("artist_id")))
+        self.assertEqual([r["artist"]["name"] for r in self.home(self.alice)], ["Aphex Twin"])
+
+
 class TestMigration(unittest.TestCase):
     def test_a_version_7_base_gains_the_requests_and_keeps_everything_else(self):
         root = Path(tempfile.mkdtemp())
@@ -980,6 +1347,14 @@ class TestRequestsTableMigration(unittest.TestCase):
         db.execute("INSERT INTO requests(kind, name_key, title, created, updated) VALUES('artist', 'daft punk', 'Daft Punk', 200, 200)")
         db.execute("INSERT INTO requests(kind, tmdb, created, updated) VALUES('movie', 7, 200, 200)")
         self.assertEqual([r["id"] for r in db.query("SELECT id FROM requests WHERE id > 5 ORDER BY id")], [7, 8])
+        self.assertEqual([tuple(r) for r in db.query("SELECT name, seq FROM sqlite_sequence WHERE name LIKE 'requests%'")], [("requests", 8)])          # une seule ligne de suite, celle de la nouvelle table
+
+    def test_the_sequence_is_kept_even_when_no_request_is_left(self):
+        self.v11_base("DELETE FROM request_users; DELETE FROM requests;")
+        db = Database(self.path)
+        self.assertEqual(db.query("SELECT id FROM requests"), [])
+        self.assertEqual(db.execute("INSERT INTO requests(kind, tmdb, created, updated) VALUES('movie', 7, 1, 1)").lastrowid, 7)
+        self.assertEqual([tuple(r) for r in db.query("SELECT name, seq FROM sqlite_sequence WHERE name LIKE 'requests%'")], [("requests", 7)])
 
     def test_the_table_accepts_what_it_must_and_refuses_what_it_must_not(self):
         self.v11_base()

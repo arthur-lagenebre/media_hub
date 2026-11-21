@@ -62,8 +62,8 @@ def clean(text):
     return text
 
 
-def _comparable(text):
-    """Le texte tel qu'on compare deux noms : formes de compatibilité (pleine largeur, ligatures) ramenées à la normale, sans casse ni accents, espaces (insécables compris) réduits à un seul.
+def comparable(text):
+    """Le texte tel qu'on compare deux noms (celui du renommage des bibliothèques et des demandes d'artistes, voir requests.py) : formes de compatibilité (pleine largeur, ligatures) ramenées à la normale, sans casse ni accents, espaces (insécables compris) réduits à un seul.
     Les homoglyphes d'un autre alphabet (« Ｆ » est repéré, pas le « Ϝ » grec ni le « Ѕ » cyrillique) ne sont pas détectés."""
     from libraries.common.text import fold          # ici et pas en tête : seul un renommage s'en sert, et ce module est importé (par hub.inbox, hub.__main__) avant que media_library soit sur le chemin
     return " ".join(fold(unicodedata.normalize("NFKC", text)).split())
@@ -72,11 +72,11 @@ def _comparable(text):
 def _taken_by_another(db, libraries, lib, text):
     """Le nom (affiché ou d'origine) d'une AUTRE bibliothèque que `text` reprend, ou celui qu'une bibliothèque absente de la configuration (dossier non monté) s'est choisi et retrouvera
     à son retour ; None sinon. Comparaison à la casse, aux accents et à la forme Unicode près."""
-    wanted = _comparable(text)
+    wanted = comparable(text)
     kept = stored(db)
     names = [name for other in libraries if other.id != lib.id for name in (shown(db, other), other.label)]
     names += [name for lib_id, name in kept.items() if lib_id not in {other.id for other in libraries}]
-    return next((name for name in names if _comparable(name) == wanted), None)
+    return next((name for name in names if comparable(name) == wanted), None)
 
 
 def rename(db, libraries, lib, text):

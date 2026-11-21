@@ -3626,11 +3626,18 @@ def requests_state(h):
 
 
 def requests_ready(h, seen, quality, ratings):
-    """Pour l'accueil : les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack`), chacune avec la vignette de l'élément (`card`, comme celles des rayons). Vide quand il n'en a pas."""
+    """Pour l'accueil : les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack`). Un film ou une série : sa vignette (`card`, comme celles des rayons) ; un artiste : sa fiche (`artist`, voir requests.arrival), sans vignette. Vide quand il n'en a pas."""
     found = hub_requests.ready(h.hub.db, h.hub.cfg, h.user["id"], h.visible_ids())
-    rows = {row["id"]: row for row in items_by_id(h.hub.db, {item for _, item in found})} if found else {}
-    return [{"id": request["id"], "kind": request["kind"], "tmdb": request["tmdb"], "title": request["title"], "year": request["year"], "item": item, "card": with_seen(rows[item], seen, quality, ratings)}
-            for request, item in found if item in rows]
+    wanted = {place for request, place in found if request["kind"] != hub_requests.ARTIST}
+    rows = {row["id"]: row for row in items_by_id(h.hub.db, wanted)} if wanted else {}
+    return [requests_ready_entry(request, place, rows, seen, quality, ratings) for request, place in found if request["kind"] == hub_requests.ARTIST or place in rows]
+
+
+def requests_ready_entry(request, place, rows, seen, quality, ratings):
+    """Une demande arrivée pour l'accueil (voir requests_ready) : `place` est l'identifiant de l'élément (`rows` : ses lignes) ou, pour un artiste, sa fiche."""
+    if request["kind"] == hub_requests.ARTIST:
+        return {"id": request["id"], "kind": request["kind"], "title": request["title"], "year": request["year"], "artist": place}
+    return {"id": request["id"], "kind": request["kind"], "tmdb": request["tmdb"], "title": request["title"], "year": request["year"], "item": place, "card": with_seen(rows[place], seen, quality, ratings)}
 
 
 def mark_requests(h, *lists):
@@ -3668,7 +3675,8 @@ def api_requests(h, m, q):
 
 @route("POST", r"/api/requests")
 def api_request_create(h, m, q):
-    """Le compte demande un film ou une série : `{"kind": "movie" | "show", "tmdb": <entier>, "note": "…", "title": "…", "year": "AAAA"}` (titre et année ne servent que si le serveur ne connaît pas le film).
+    """Le compte demande un film ou une série : `{"kind": "movie" | "show", "tmdb": <entier>, "note": "…", "title": "…", "year": "AAAA"}` (titre et année ne servent que si le serveur ne connaît pas le film),
+    ou un artiste : `{"kind": "artist", "name": "…", "note"?: "…"}` (1 à 200 caractères sans caractère de contrôle ; deux noms qui ne diffèrent que par la casse, les accents ou les espaces sont la même demande).
     201 : nouvelle demande ; 200 : le compte rejoint une demande existante, ou l'avait déjà faite. L'administrateur n'a pas de plafond."""
     if not h.user["can_request"]:
         h.discard_body()
@@ -3681,9 +3689,19 @@ def api_request_create(h, m, q):
     if done is None:
         return
     row, new = done
-    h.send_json({"id": row["id"], "kind": row["kind"], "tmdb": row["tmdb"], "status": row["status"], "mine": True}, 201 if new else 200)
-    if new and row["status"] == "pending" and describe is not None:
+    h.send_json(request_reply(row), 201 if new else 200)
+    if wants_posters(row, new, describe):
         fetch_request_posters(hub)
+
+
+def request_reply(row):
+    """La réponse à une demande faite ou rejointe : son identifiant, sa sorte, son état et `mine` ; `tmdb` sauf pour un artiste, qui n'en a pas."""
+    return {"id": row["id"], "kind": row["kind"], **({} if row["kind"] == hub_requests.ARTIST else {"tmdb": row["tmdb"]}), "status": row["status"], "mine": True}
+
+
+def wants_posters(row, new, describe):
+    """Faut-il lancer la tâche « Affiches des demandes » : après une demande **nouvelle** et en attente, quand le serveur a une clé TMDB (`describe`), sauf pour un artiste, qui n'a pas d'affiche."""
+    return new and row["status"] == "pending" and describe is not None and row["kind"] != hub_requests.ARTIST
 
 
 def fetch_request_posters(hub):
@@ -3731,7 +3749,7 @@ def request_image(h, m, q):
     hub = h.hub
     row = hub.db.one("SELECT r.kind, r.tmdb FROM requests r WHERE r.id=? AND (? OR EXISTS (SELECT 1 FROM request_users u WHERE u.request_id = r.id AND u.user_id=?))",
                      (int(m.group(1)), h.user["role"] == "admin", h.user["id"]))
-    if row is None:
+    if row is None or row["kind"] == hub_requests.ARTIST:              # un artiste n'a pas d'affiche
         raise HttpError(404, "pas d'affiche")
     send_poster(h, q, f"request:{row['kind']}:{row['tmdb']}", hub.cfg.data / "tmdb" / hub_requests.poster_file(row["kind"], row["tmdb"]))
 

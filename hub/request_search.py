@@ -273,7 +273,7 @@ def fetch_posters(cfg, db, log, make=client):
         return counts
     folder = cfg.data / "tmdb"
     folder.mkdir(parents=True, exist_ok=True)
-    rows = db.query("SELECT kind, tmdb, title FROM requests WHERE status != 'declined' ORDER BY created DESC, id DESC")
+    rows = db.query("SELECT kind, tmdb, title FROM requests WHERE status != 'declined' AND kind != ? ORDER BY created DESC, id DESC", (hub_requests.ARTIST,))        # un artiste n'a pas d'affiche
     found = hub_requests.owned(db, cfg.libraries) if rows else {}
     todo = [r for r in rows if (r["kind"], r["tmdb"]) not in found and not (folder / hub_requests.poster_file(r["kind"], r["tmdb"])).is_file()]
     tmdb = make(cfg)
