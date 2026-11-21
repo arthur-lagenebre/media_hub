@@ -22,6 +22,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 import zlib
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -6445,6 +6446,129 @@ class FakePersonTmdb:
 
     def save_image(self, image_path, size, dest):
         Path(dest).write_bytes(fixtures.PNG)
+
+
+class TestPersonSheetUi(UiCase):
+    """L'en-tête de la page d'une personne quand `/api/person` rend sa fiche (`info`, gardée par la passe des personnes) : photo, nom, métier, dates, biographie repliée. Sans fiche, la page d'avant."""
+
+    PEOPLE = {"Vivante Test": 8400, "Disparu Test": 8401, "Sans Fiche": 8402, "Longue Bio": 8403}
+    LONG = " ".join(["Une phrase de biographie qui prend de la place sur la ligne."] * 40) + " <b>gras</b> FIN"
+
+    @classmethod
+    def add_media(cls, root):
+        films = root / "srv" / "Films"
+        ids = {name: ident for name, ident in cls.PEOPLE.items()}
+        fixtures.write_mkv(films / "Film Fiche (2004)" / "Film Fiche (2004).mkv", fixtures.movie_blocks("Film Fiche", "Un.", "2004-01-01", "movie/9600", "Drame", ["Disparu Test"], ["Vivante Test", "Sans Fiche", "Longue Bio"], person_ids=ids))
+
+    def setUp(self):
+        super().setUp()
+        hub = self.run_.hub
+        sheet = lambda **over: {"biography": "Née sur scène.", "birthday": "1960-03-03", "deathday": "", "place_of_birth": "Lyon, France", "known_for_department": "Acting", "profile_path": "/v.jpg", **over}
+        kept = {8400: sheet(), 8401: sheet(biography="Un réalisateur.", birthday="1930-05-12", deathday="2001-11-02", place_of_birth="", known_for_department="Directing", profile_path=""),
+                8403: sheet(biography=self.LONG, profile_path="")}
+        for ident, info in kept.items():
+            hub.db.kv_set(f"personinfo:{ident}", {"at": 1, "films": [], "info": info})
+        hub.db.kv_set("personinfo:8402", {"at": 1, "films": []})          # une fiche d'avant : des films, pas d'info
+        folder = hub.cfg.data / "tmdb"
+        folder.mkdir(exist_ok=True)
+        (folder / "person-8400.jpg").write_bytes(fixtures.PNG)
+        self.addCleanup(hub.db.execute, "DELETE FROM kv WHERE key LIKE 'personinfo:%'")
+
+    def person(self, name):
+        self.open("#/person?n=" + name.replace(" ", "%20"))
+        self.view(".shelf .card").first.wait_for()
+
+    def age(self, born):
+        today = date.today()
+        return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+    def test_a_person_with_a_sheet_has_her_photo_name_trade_dates_and_biography(self):
+        self.person("Vivante Test")
+        head = self.view(".hero")
+        expect(head.locator("h1")).to_have_text("Vivante Test")
+        expect(head.locator("img")).to_have_attribute("src", re.compile(r"^/img/person/8400\?w=\d+$"))
+        expect(head.locator(".trade")).to_have_text("Interprétation")
+        expect(head.locator(".dates")).to_have_text(f"Naissance : 3 mars 1960, Lyon, France · {self.age(date(1960, 3, 3))} ans")
+        expect(head.locator(".bio")).to_have_text("Née sur scène.")
+        expect(head.locator(".more")).to_be_hidden()                                 # une biographie courte n'a rien à déplier
+        expect(self.view(".shelf .card").first).to_be_focused()                      # la filmographie reste juste en dessous, et le focus y va
+
+    def test_a_dead_person_has_the_date_of_death_and_no_age(self):
+        self.person("Disparu Test")
+        head = self.view(".hero")
+        expect(head.locator(".trade")).to_have_text("Réalisation")
+        expect(head.locator(".dates")).to_have_text("Naissance : 12 mai 1930 · Décès : 2 novembre 2001")
+        expect(head.locator(".dates")).not_to_contain_text("ans")
+
+    def test_without_a_photo_there_is_no_empty_box(self):
+        self.person("Disparu Test")
+        head = self.view(".hero")
+        expect(head.locator("h1")).to_have_text("Disparu Test")
+        expect(head.locator(".poster, img, .hero-bg")).to_have_count(0)
+
+    def test_without_a_sheet_the_page_is_unchanged(self):
+        self.person("Sans Fiche")
+        expect(self.view("> h1")).to_have_text("Sans Fiche")
+        for part in (".hero", ".bio", ".dates", ".more"):
+            expect(self.view(part)).to_have_count(0)
+        self.assertEqual(self.page.locator("#views > .view.person:visible").evaluate("e => Array.from(e.children).map(c => c.tagName + '.' + c.className)"),
+                         ["H1.", "P.roles", "P.actions", "DIV.results"])
+
+    def test_a_long_biography_is_folded_and_read_more_works_with_the_keyboard(self):
+        self.person("Longue Bio")
+        bio, more = self.view(".hero .bio"), self.view(".hero .more")
+        expect(more).to_be_visible()
+        expect(more).to_have_text("Lire la suite")
+        expect(more).to_have_class(re.compile(r"\bf\b"))                             # atteignable à la télécommande
+        folded = bio.evaluate("e => e.scrollHeight > e.clientHeight + 1")
+        self.assertTrue(folded)
+        more.focus()
+        self.page.keyboard.press("Enter")
+        expect(more).to_have_text("Réduire")
+        expect(more).to_have_attribute("aria-expanded", "true")
+        self.until(lambda: bio.evaluate("e => e.scrollHeight <= e.clientHeight + 1"))
+        expect(more).to_be_focused()
+        self.page.keyboard.press("Enter")
+        expect(more).to_have_text("Lire la suite")
+        expect(more).to_have_attribute("aria-expanded", "false")
+
+    def test_on_the_tv_read_more_is_reached_with_the_remote_and_the_films_stay_just_below(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.person("Longue Bio")
+        card, more, shelf = self.view(".shelf .card").first, self.view(".hero .more"), self.view(".shelf .head").first
+        expect(card).to_be_focused()                                                   # la filmographie d'abord : l'en-tête ne prend pas le focus
+        self.page.keyboard.press("ArrowUp")
+        expect(shelf).to_be_focused()                                                  # le titre du rayon, puis l'en-tête juste au-dessus
+        self.page.keyboard.press("ArrowUp")
+        expect(more).to_be_focused()
+        self.page.keyboard.press("Enter")
+        expect(more).to_have_attribute("aria-expanded", "true")
+        self.page.keyboard.press("ArrowDown")
+        expect(shelf).to_be_focused()
+        self.page.keyboard.press("ArrowDown")
+        expect(card).to_be_focused()
+
+    def test_a_biography_with_html_stays_text(self):
+        self.person("Longue Bio")
+        bio = self.view(".hero .bio")
+        expect(bio).to_contain_text("<b>gras</b> FIN")
+        expect(bio.locator("b")).to_have_count(0)
+
+    def test_it_reads_on_a_phone(self):
+        self.use_context(viewport={"width": 390, "height": 800}, has_touch=True)
+        self.person("Longue Bio")
+        expect(self.view(".hero .more")).to_be_visible()
+        self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 391)
+        box = self.view(".hero .info").bounding_box()
+        self.assertLessEqual(box["x"] + box["width"], 391)
+
+    def test_in_english_the_trade_and_the_dates_are_translated(self):
+        self.page.context.add_cookies([{"name": "hub_lang", "value": "en", "url": self.base}])
+        self.person("Disparu Test")
+        head = self.view(".hero")
+        expect(head.locator(".trade")).to_have_text("Directing")
+        expect(head.locator(".dates")).to_have_text("Born: 12 May 1930 · Died: 2 November 2001")
+        self.assertEqual(self.page.evaluate("Hub.missing"), [])
 
 
 class TestPersonMissingUi(UiCase):

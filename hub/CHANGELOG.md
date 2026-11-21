@@ -1,3 +1,7 @@
+## 0.51.0 — 2026-11-21
+- La page d'une personne commence maintenant par sa fiche : sa photo, son métier, sa biographie, ses dates et son lieu de naissance (et de décès), avec « Lire la suite » quand la biographie est longue.
+- La fiche se remplit pendant la recherche des films manquants, sans rien demander de plus à TMDB ; la biographie est en anglais quand TMDB n'en a pas en français.
+
 ## 0.50.3 — 2026-11-21
 - Corrections internes.
 
