@@ -353,8 +353,11 @@ html[data-device="phone"] .info .credit .who, html[data-device="tablet"] .info .
 .menu.form .flab { display: block; padding: 0 0.6rem; margin-bottom: 0.4rem; color: var(--mute); font-size: 0.9rem; }
 .menu.form .flab .field { display: block; margin: 0.2rem 0 0; }
 .menu.form .field.big { font-size: 1.05rem; padding: 0.5rem 0.9rem; }
-.menu.form .fld { position: relative; }                          /* un champ (ou des puces) avec son petit « Rétablir » en haut à droite, hors du label : un bouton ne se met pas dans un label */
-.menu.form .fld .restore { position: absolute; top: -0.15rem; right: 0.6rem; padding: 0.15rem 0.7rem; border-radius: 2rem; font-size: 0.8rem; }
+.menu.form .fld { display: flex; flex-direction: column; }      /* un champ (ou des puces) avec son petit « Rétablir » dans une ligne à lui, sous le champ et à droite (l'ordre du clavier est celui de l'écran) : sa place est réservée, il ne recouvre jamais le libellé, même replié sur deux lignes */
+.menu.form .fld .flab { margin-bottom: 0.2rem; }
+.menu.form .fld .restore { align-self: flex-end; margin: 0 0.6rem 0.5rem; padding: 0.15rem 0.7rem; border-radius: 2rem; font-size: 0.8rem; }
+.menu.form .fld .restore:focus { outline-width: 0.25rem; }       /* le focus se voit de loin : un petit bouton, un gros contour */
+html[data-device="phone"] .menu.form .fld .restore, html[data-device="tablet"] .menu.form .fld .restore { min-height: 2.75rem; min-width: 2.75rem; padding: 0.4rem 1rem; font-size: 0.9rem; }     /* au doigt : une cible d'au moins 2,5 rem */
 .menu.form h3 { padding-bottom: 0.4rem; }
 .menu.form .formerr { min-height: 1.2em; }                      /* la place de l'erreur est réservée : les boutons ne sautent pas quand elle paraît */
 .menu.form .formerr:empty { display: block; }

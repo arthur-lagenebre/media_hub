@@ -1399,7 +1399,7 @@
     var EDIT_FIELDS = [['biography', H.t('Biographie'), 'textarea', 10000], ['department', H.t('Métier'), 'text', 80], ['birthday', H.t('Naissance (AAAA-MM-JJ)'), 'text', 10],
       ['place_of_birth', H.t('Lieu de naissance'), 'text', 200], ['deathday', H.t('Décès (AAAA-MM-JJ)'), 'text', 10]];
     // Une valeur comme H.form la rend : un texte long sans espaces autour, un texte court sans espaces en trop.
-    function tidy(value, type) { return type === 'textarea' ? value.trim() : value.replace(/\s+/g, ' ').trim(); }
+    function tidy(value, type) { return type === 'textarea' ? value.trim() : H.tidy(value); }
     // La fenêtre « Modifier la fiche » : chaque champ prérempli de ce qui est montré ; seuls les champs changés partent (un champ resté tel quel suit TMDB, même s'il change là-bas). « Tout reprendre de TMDB » vide toutes les corrections.
     function editSheet() {
       var info = current, start = {};

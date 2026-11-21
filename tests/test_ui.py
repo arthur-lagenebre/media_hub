@@ -7210,6 +7210,78 @@ class TestAlbumEditUi(UiCase):
         self.save(form)
         self.assertEqual(self.sheet()["edited"], ["label"])
 
+    def put_back(self, row):
+        """Le titre et les genres lus dans les fichiers, remis après les corrections : une correction rétablie rend ce qu'elle a gardé comme valeur d'origine."""
+        self.api(f"/api/item/{self.album['id']}/edit", self.ALL_NULL)
+        self.run_.hub.db.execute("UPDATE items SET title=?, genres=? WHERE id=?", (row[0], row[1], self.album["id"]))
+
+    def test_a_field_left_alone_is_not_sent_even_when_its_text_has_odd_spaces(self):
+        """Le formulaire normalise les espaces de ce qu'il rend (espace insécable, fine insécable, doubles) : un champ que l'administrateur n'a pas touché ne doit pas partir pour autant."""
+        row = self.run_.hub.db.execute("SELECT title, genres FROM items WHERE id=?", (self.album["id"],)).fetchone()
+        self.addCleanup(self.put_back, row)
+        self.run_.hub.db.execute("UPDATE items SET title=?, genres=? WHERE id=?", ("Discovery : live", json.dumps(["Electronic", "House Music", "Deep  Funk"]), self.album["id"]))
+        form = self.open_form()
+        self.field(form, "Année").fill("1999")
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator(".btn", has_text="Enregistrer").click()
+        self.assertEqual(sent.value.request.post_data_json, {"year": "1999"})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        self.assertEqual(self.sheet()["edited"], ["year"])
+
+    def test_restoring_one_field_keeps_what_was_typed_in_the_others(self):
+        self.api(f"/api/item/{self.album['id']}/edit", {"title": "Autre titre"})
+        form = self.open_form()
+        self.field(form, "Label").fill("  Virgin   Records ")
+        self.field(form, "Genres").fill("Electronic")             # tel qu'il était : rien à envoyer
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator("[data-key=restore-title]").click()
+        self.assertEqual(sent.value.request.post_data_json, {"title": None, "label": "Virgin Records"})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        expect(self.view(".info h1")).to_have_text("Discovery")
+        self.assertEqual(self.sheet()["edited"], ["label"])
+
+    def test_restoring_the_release_type_keeps_what_was_typed_in_the_fields(self):
+        self.api(f"/api/item/{self.album['id']}/edit", {"type": "ep"})
+        form = self.open_form()
+        self.field(form, "Année").fill("1999")
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator("[data-key=restore-type]").click()
+        self.assertEqual(sent.value.request.post_data_json, {"type": None, "year": "1999"})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        self.assertEqual(self.sheet()["edited"], ["year"])
+
+    def test_the_restore_buttons_have_their_own_room_and_a_big_target_on_a_phone_and_a_tablet(self):
+        self.api(f"/api/item/{self.album['id']}/edit", {"title": "Autre titre", "year": 1999, "genres": ["Rock"], "label": "Virgin", "type": "ep"})
+        for device, width in (("phone", 360), ("tablet", 800)):
+            with self.subTest(device=device):
+                context = self.browser.new_context(viewport={"width": width, "height": 800}, has_touch=True)
+                self.addCleanup(context.close)
+                context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+                self.page = context.new_page()
+                self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                watch_requests(self, self.page)
+                form = self.open_form()
+                self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), device)
+                expect(form.locator("[data-key^=restore-]")).to_have_count(5)
+                crossings = form.evaluate("""form => {
+                    var out = [], hit = function (a, b) { return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom; };
+                    form.querySelectorAll('.fld').forEach(function (fld) {
+                        var button = fld.querySelector('.restore').getBoundingClientRect(), what = fld.querySelector('.restore').dataset.key;
+                        if (button.height < 40) out.push(what + ' trop basse : ' + button.height);
+                        var rects = [];
+                        Array.prototype.forEach.call(fld.children, function (kid) {
+                            if (kid.classList.contains('restore')) return;
+                            var range = document.createRange();
+                            range.selectNodeContents(kid);                                   // chaque ligne de texte, chaque champ, chaque puce
+                            rects = rects.concat(Array.prototype.slice.call(range.getClientRects()), Array.prototype.map.call(kid.querySelectorAll('input, .chip'), function (e) { return e.getBoundingClientRect(); }));
+                        });
+                        rects.forEach(function (r) { if (r.width && hit(button, r)) out.push(what + ' recouvre un voisin'); });
+                    });
+                    return out;
+                }""")
+                self.assertEqual(crossings, [])
+                self.assertFalse(self.page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth"))
+
     def test_restore_gives_back_the_value_of_the_tags_one_field_at_a_time(self):
         self.api(f"/api/item/{self.album['id']}/edit", {"title": "Autre titre", "year": 1999})
         form = self.open_form()

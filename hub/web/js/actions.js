@@ -240,9 +240,9 @@
   // Seuls les champs changés partent ; chaque champ déjà corrigé (`edited` de la fiche) porte son « Rétablir », qui rend la valeur lue dans les étiquettes.
   var ALBUM_FIELDS = [['title', H.t('Titre'), 300], ['year', H.t('Année'), 4], ['genres', H.t('Genres (séparés par des virgules)'), 1500], ['label', H.t('Label'), 200]];
   function genreList(text) { return text.split(',').map(function (g) { return g.trim(); }).filter(function (g, i, all) { return g && all.indexOf(g) === i; }); }
-  // Ce que la fiche montre aujourd'hui, champ par champ, dans la forme où la fenêtre le saisit.
+  // Ce que la fiche montre aujourd'hui, champ par champ, dans la forme où la fenêtre le rend (H.form normalise les espaces : un champ qu'on n'a pas touché doit se retrouver égal à son départ, sinon il part comme corrigé).
   function albumStart(d) {
-    return { title: d.title || '', year: d.year ? String(d.year) : '', genres: (d.genres || []).join(', '), label: d.label || '', type: (d.release_types || [])[0] || null };
+    return { title: H.tidy(d.title || ''), year: d.year ? String(d.year) : '', genres: (d.genres || []).map(H.tidy).join(', '), label: H.tidy(d.label || ''), type: (d.release_types || [])[0] || null };
   }
   // Ce qui a changé entre ce que la fenêtre a reçu (`start`) et ce qui y est saisi (`values`, plus `type`, le type choisi).
   function albumChanges(start, values, type) {
@@ -258,7 +258,8 @@
     var edited = d.edited || [], start = albumStart(d);
     var type = H.suggestions.choice(Object.keys(types).map(function (k) { return [k, types[k]]; }), start.type, H.t('Type de sortie'), 'ae-type-');
     function send(body, message) { return H.api('/api/item/' + d.id + '/edit', body).then(function () { return message; }); }
-    function restore(field) { var body = {}; body[field] = null; return function () { return send(body, H.t('Valeur d’origine rétablie')); }; }
+    // « Rétablir » rend la valeur d'origine du champ, et envoie dans le même coup ce qui a été saisi ailleurs : on ne jette pas une saisie en rétablissant un autre champ.
+    function restore(field) { return function (values) { var body = albumChanges(start, values, type.current()); body[field] = null; return send(body, H.t('Valeur d’origine rétablie')); }; }
     H.form({ title: H.t('Modifier l’album'), ok: H.t('Enregistrer'),
       lead: [H.t('La correction ne vaut que dans le hub. Pour corriger le fichier, passe par l’atelier.')],
       fields: ALBUM_FIELDS.map(function (f) { return { key: f[0], label: f[1], maxlength: f[2], value: start[f[0]], restore: edited.indexOf(f[0]) >= 0 ? restore(f[0]) : null }; }),
