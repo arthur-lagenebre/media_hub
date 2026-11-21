@@ -2925,9 +2925,6 @@ def api_item_poster(h, m, q):
 # ---------------------------------------------------------------------------
 # Corriger un album dans le hub
 # ---------------------------------------------------------------------------
-EDIT_LOCK = threading.Lock()          # lire-modifier-écrire des corrections d'un album : deux administrateurs en même temps ne s'écrasent pas
-
-
 def edited_fields(hub, item):
     """Les champs d'un album que l'administrateur a corrigés, dans l'ordre de `edits.FIELDS`, puis `poster` si une pochette a été choisie."""
     kept = edits.kept(hub.db.kv_get(edits.key(item["lib"], item["id"])))
@@ -2948,7 +2945,7 @@ def api_item_edit(h, m, q):
         changes, resets = edits.parse(h.body_json())
     except edits.Invalid as e:
         raise HttpError(400, str(e))
-    with EDIT_LOCK:
+    with edits.LOCK:          # le même verrou que le scan : deux administrateurs ne s'écrasent pas, et un scan n'écrit pas la bibliothèque entre la lecture de la ligne et sa réécriture
         edits.save(h.hub.db, h.hub.item(item["id"]), changes, resets)          # la ligne est relue sous le verrou : celle d'avant peut avoir changé (un autre enregistrement, un scan)
         if "poster" in resets:
             h.hub.images.clear_poster(item["id"])

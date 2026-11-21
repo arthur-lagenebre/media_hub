@@ -31,7 +31,8 @@ def scan_library(db, lib, log=print):
     if not items and known:             # un partage démonté se présente souvent en dossier vide : on garde la bibliothèque telle quelle
         log(f"[{labels.shown(db, lib)}] dossier vide alors que la bibliothèque avait {len(known)} élément(s) : volume démonté ? Rien n'a été retiré.")
         return {"lib": lib.id, "error": "dossier vide : volume démonté ? rien n'a été retiré", "items": 0, "entries": 0}
-    db.replace_library(lib.id, edits.apply_all(items, edits.of_library(db, lib.id)), entries)          # les corrections de l'administrateur, lues au dernier moment : un enregistrement pendant la lecture des dossiers n'est pas perdu
+    with edits.LOCK:          # lire les corrections et écrire la bibliothèque d'un seul tenant : un enregistrement ne passe ni entre les deux, ni entre la lecture et la réécriture de sa ligne ; la lecture des dossiers, elle, ne le tient pas
+        db.replace_library(lib.id, edits.apply_all(items, edits.of_library(db, lib.id)), entries)
     for key, value in getattr(counts, "kv", {}).items():
         db.kv_set(key, value)
     seconds = round(time.time() - started, 1)

@@ -8,6 +8,7 @@ Pour que « Rétablir » rende la valeur des étiquettes sans attendre un scan, 
 from __future__ import annotations
 
 import json
+import threading
 import time
 import unicodedata
 
@@ -19,6 +20,7 @@ FIELDS = ("title", "year", "genres", "label", "type")        # l'ordre où `edit
 RELEASE_TYPES = ("album", "ep", "single", "compilation", "live", "soundtrack", "remix")
 TITLE_MAX, GENRES_MAX, GENRE_MAX, LABEL_MAX, YEAR_MIN = 300, 20, 60, 200, 1000
 PREFIX = "edit:"
+LOCK = threading.Lock()          # lire la ligne puis la réécrire (save), et lire les corrections puis écrire la bibliothèque (scan_library) : l'un après l'autre, jamais entrelacés. On ne prend que `db.write_lock` à l'intérieur, jamais l'inverse
 
 
 class Invalid(ValueError):

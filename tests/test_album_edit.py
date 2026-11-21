@@ -6,11 +6,14 @@ Une vraie médiathèque d'essai (de vrais .flac), un vrai scan, les routes appel
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests import fixtures
 from tests.rig import call
@@ -237,6 +240,78 @@ class TestACorrectionLastsAndCanBeUndone(AlbumCase):
         shutil.move(self.lib.path / "Daft Punk" / "2001 - Discovery ailleurs", self.lib.path / "Daft Punk" / "2001 - Discovery")
         self.scan()
         self.assertEqual(self.titles("q=zebre"), ["Zèbre"])
+
+
+class TestSavingAndScanningTakeTurns(AlbumCase):
+    """L'enregistrement d'une correction et l'écriture d'une bibliothèque par le scan ne se croisent pas : les deux restent présents, la correction et ce que le scan vient de lire."""
+    WAIT = 0.5          # le temps qu'un fil laisse à l'autre pour passer s'il le pouvait : un fil qui attend le verrou est encore là après
+
+    def setUp(self):
+        super().setUp()
+        self.inside, self.release = threading.Event(), threading.Event()
+        self.addCleanup(self.release.set)                         # un test qui échoue ne laisse pas de fil bloqué
+        track = fixtures.add_tags(self.lib.path / "Daft Punk" / "2001 - Homework" / "01 - Homework.flac", ("LABEL", "Nouveau label"))
+        os.utime(track, (time.time() + 60, time.time() + 60))          # le scan relit ce qui a bougé : la date change à coup sûr
+
+    def holding(self, real):
+        """Une version de `real` qui s'arrête à l'intérieur jusqu'à `release` : le fil qui l'appelle tient alors tout ce qu'il a pris."""
+        def wait(*args, **kw):
+            self.inside.set()
+            self.assertTrue(self.release.wait(10))
+            return real(*args, **kw)
+        return wait
+
+    def patch(self, owner, name):
+        patch = mock.patch.object(owner, name, self.holding(getattr(owner, name)))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def thread(self, target):
+        found = threading.Thread(target=target, daemon=True)
+        found.start()
+        return found
+
+    def check_both_are_there(self):
+        row = self.row(self.homework)
+        self.assertEqual((row["title"], json.loads(row["meta"])["label"]), ("Zèbre", "Nouveau label"))
+        self.assertEqual(self.db.kv_get(f"edit:{LIBRARY}:{self.homework}"), {"title": "Zèbre"})
+
+    def test_a_scan_waits_for_a_save_that_has_read_the_row(self):
+        self.patch(self.db, "rewrite_item")
+        saving = self.thread(lambda: self.edit(self.homework, {"title": "Zèbre"}))
+        self.assertTrue(self.inside.wait(10))                     # l'enregistrement a lu la ligne d'avant et va la réécrire
+        scanning_thread = self.thread(self.scan)
+        scanning_thread.join(self.WAIT)
+        self.assertTrue(scanning_thread.is_alive(), "le scan a écrit la bibliothèque entre la lecture de la ligne et sa réécriture")
+        self.release.set()
+        saving.join(10)
+        scanning_thread.join(10)
+        self.check_both_are_there()
+
+    def test_a_save_waits_for_a_scan_that_has_read_the_corrections(self):
+        self.patch(self.db, "replace_library")
+        scanning_thread = self.thread(self.scan)
+        self.assertTrue(self.inside.wait(10))                     # le scan a lu les corrections et va écrire la bibliothèque
+        saving = self.thread(lambda: self.edit(self.homework, {"title": "Zèbre"}))
+        saving.join(self.WAIT)
+        self.assertTrue(saving.is_alive(), "la correction est passée entre la lecture des corrections et l'écriture de la bibliothèque")
+        self.release.set()
+        scanning_thread.join(10)
+        saving.join(10)
+        self.check_both_are_there()
+
+    def test_a_save_does_not_wait_for_the_scan_to_read_the_files(self):
+        patch = mock.patch.dict(scanning.SCANNERS, music=self.holding(scanning.SCANNERS["music"]))
+        patch.start()
+        self.addCleanup(patch.stop)
+        scanning_thread = self.thread(self.scan)
+        self.assertTrue(self.inside.wait(10))                     # le scan lit encore les dossiers : il ne tient rien
+        saving = self.thread(lambda: self.edit(self.homework, {"title": "Zèbre"}))
+        saving.join(10)
+        self.assertFalse(saving.is_alive(), "l'enregistrement attend la lecture des fichiers")
+        self.release.set()
+        scanning_thread.join(10)
+        self.check_both_are_there()                               # lue au dernier moment, la correction n'est pas perdue
 
 
 class TestACoverIsChosenInTheHub(AlbumCase):
