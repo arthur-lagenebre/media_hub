@@ -227,10 +227,18 @@ class TestEnrichPerson(TempCase):
         client.assert_not_called()          # pas même un client TMDB : la clé n'est pas utile
 
     def test_the_default_is_not_to_force_and_a_known_person_reports_her_films(self):
-        self.db.kv_set(f"personinfo:{CRUZ}", {"at": int(time.time()), "films": [{"tmdb": 1}, {"tmdb": 2}]})
+        self.db.kv_set(f"personinfo:{CRUZ}", {"at": int(time.time()), "films": [{"tmdb": 1}, {"tmdb": 2}], "info": {}})
         with mock.patch.object(enrich, "tmdb_client") as client:
             counts = enrich.enrich_person(types.SimpleNamespace(tmdb_key="cle", data=self.tmp), self.db, CRUZ)
         self.assertEqual((counts, client.called), ({"films": 2, "failed": 0}, False))
+
+    def test_a_recent_sheet_kept_before_the_sheet_existed_is_asked_again_without_force(self):
+        """Une fiche d'avant (des films, pas d'info), gardée hier : « Chercher ses films manquants » (sans force) la complète, sans attendre trente jours."""
+        self.db.kv_set(f"personinfo:{CRUZ}", {"at": 1_000_000_000 - 86400, "films": [{"tmdb": 1}]})
+        tmdb = FakeTmdb(self.CREDITS)
+        _, _, client = self.run_pass(tmdb, now=1_000_000_000)
+        self.assertEqual((client.call_args.kwargs["read"], len(tmdb.asked)), (True, 1))          # pas forcée : le cache de TMDB se lit
+        self.assertEqual(self.db.kv_get(f"personinfo:{CRUZ}")["info"]["biography"], "Actrice espagnole.")
 
     def test_what_was_kept_without_a_date_is_asked_again(self):
         self.db.kv_set(f"personinfo:{CRUZ}", {"films": [{"tmdb": 1}]})

@@ -201,6 +201,13 @@ class TestEnrichPeople(TempCase):
         counts, tmdb, _, _ = self.run_pass(now=1_000_000_000 + enrich.PERSON_STALE - 1)
         self.assertEqual((tmdb.asked, counts), ([], {"people": 3, "asked": 0, "fresh": 3, "failed": 0, "films": 0}))
 
+    def test_a_person_known_recently_without_a_sheet_is_asked_again(self):
+        self.run_pass(now=1_000_000_000)
+        kept = self.db.kv_get("personinfo:100")
+        self.db.kv_set("personinfo:100", {k: v for k, v in kept.items() if k != "info"})          # Réal, gardé avant la fiche
+        counts, tmdb, _, _ = self.run_pass(now=1_000_000_000 + 60)
+        self.assertEqual((tmdb.asked, counts["asked"], counts["fresh"]), (["person/100?append_to_response=movie_credits"], 1, 2))
+
     def test_a_person_known_for_thirty_days_is_asked_again_and_so_is_everybody_with_force(self):
         self.run_pass(now=1_000_000_000)
         counts, tmdb, _, _ = self.run_pass(now=1_000_000_000 + enrich.PERSON_STALE)

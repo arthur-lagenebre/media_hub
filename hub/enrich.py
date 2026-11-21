@@ -453,8 +453,8 @@ def person_films(credits):
 
 
 def is_fresh(known, now, force):
-    """La filmographie gardée d'une personne est-elle assez récente (moins de `PERSON_STALE`) pour ne pas la redemander ? Jamais avec `force`."""
-    return bool(known) and not force and now - known.get("at", 0) < PERSON_STALE
+    """La filmographie gardée d'une personne est-elle assez récente (moins de `PERSON_STALE`) pour ne pas la redemander ? Jamais avec `force`, ni gardée avant la fiche (sans `info`) : elle se complète à la demande suivante, sans attendre trente jours."""
+    return bool(known) and "info" in known and not force and now - known.get("at", 0) < PERSON_STALE
 
 
 PERSON_FIELDS = ("biography", "birthday", "deathday", "place_of_birth", "known_for_department", "profile_path")     # la fiche d'une personne, gardée sous `info` ; les dates en ISO (AAAA-MM-JJ), comme TMDB les donne
