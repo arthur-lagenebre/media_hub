@@ -5986,6 +5986,11 @@ class TestPosters(UiCase):
             name = images.db.kv_get(key)
             images.db.kv_delete(key)
             path = images._poster_file(name)
+            for _ in range(50):
+                try:
+                    return path.unlink(missing_ok=True) if path else None
+                except PermissionError:                  # Windows : le serveur lit encore le fichier pour la page qui vient de se recharger
+                    time.sleep(0.1)
             if path:
                 path.unlink(missing_ok=True)
         self.addCleanup(forget)
@@ -6043,11 +6048,6 @@ class TestPosters(UiCase):
         self.page.locator("#toast.on", has_text="pas une image").wait_for()
         self.assertNotEqual(self.served(item), b"du texte")
         del self.errors[:]                      # le navigateur note la réponse 415, attendue ici
-
-    def test_an_album_has_no_poster_button(self):
-        self.open("#/i/" + self.item("musique", "Discovery")["id"])
-        self.view(".actions .btn").first.wait_for()
-        self.assertEqual(self.view(".actions .btn", has_text="Changer l’affiche").count(), 0)
 
     def test_a_television_has_no_poster_button(self):
         self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
@@ -7139,6 +7139,238 @@ class TestMusicReleaseCounters(UiCase):
         expect(self.view(".count")).to_have_text("1 artist · 0 albums · 1 single")
         self.view(".tools input").fill("maxi")
         expect(self.view(".count")).to_have_text("1 artist · 0 albums · 1 EP")
+
+
+class TestAlbumEditUi(UiCase):
+    """L'administrateur corrige un album depuis sa fiche (« Modifier l'album » : titre, année, genres, label, type ; « Changer la pochette » et « Rétablir la pochette ») : tout vit dans la base du hub, rien dans la médiathèque. Hors télé, et seulement l'administrateur."""
+
+    ALL_NULL = {"title": None, "year": None, "genres": None, "label": None, "type": None, "poster": None}
+
+    def setUp(self):
+        super().setUp()
+        self.album = self.item("musique", "Discovery")
+        self.addCleanup(lambda: self.api(f"/api/item/{self.album['id']}/edit", self.ALL_NULL))          # la classe partage une médiathèque : le test rétablit tout
+
+    def sheet(self):
+        return self.api("/api/item/" + self.album["id"])
+
+    def open_sheet(self):
+        self.open("#/i/" + self.album["id"])
+        self.view(".trk").first.wait_for()
+
+    def open_form(self):
+        self.open_sheet()
+        self.view(".actions [data-key=album-edit]").click()
+        return self.ready(self.page.locator(".menu.form"))
+
+    def ready(self, form):
+        """Attend que la fenêtre ait donné le focus à son premier champ : elle le fait un instant après s'être ouverte, et ce qu'on saisit avant irait dans le mauvais champ."""
+        expect(form.locator("input").first).to_be_focused()
+        return form
+
+    def field(self, form, label):
+        return form.locator(".flab", has_text=label).locator("input")
+
+    def save(self, form):
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")):
+            form.locator(".btn", has_text="Enregistrer").click()
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+
+    def served(self):
+        return urllib.request.urlopen(self.base + "/img/item/" + self.album["id"]).read()
+
+    def as_ordinary_account(self, hash):
+        self.open("#/search")
+        self.page.evaluate("Hub.session.auth = true; Hub.session.user = { id: 'x', name: 'bob', role: 'user' }; location.hash = " + json.dumps(hash))
+
+    def test_the_title_and_a_genre_are_corrected_and_the_sheet_and_the_list_show_it(self):
+        self.open("#/l/musique")
+        self.view(".grid .card", has_text="Discovery").click()
+        self.view(".trk").first.wait_for()
+        self.view(".actions [data-key=album-edit]").click()
+        form = self.ready(self.page.locator(".menu.form"))
+        expect(form).to_contain_text("La correction ne vaut que dans le hub. Pour corriger le fichier, passe par l’atelier.")
+        expect(self.field(form, "Titre")).to_have_value("Discovery")
+        expect(self.field(form, "Année")).to_have_value("2001")
+        expect(self.field(form, "Genres")).to_have_value("Electronic")
+        self.field(form, "Titre").fill("Discovery (corrigé)")
+        self.field(form, "Genres").fill("Electronic, House")
+        self.save(form)
+        expect(self.view(".info h1")).to_have_text("Discovery (corrigé)")
+        expect(self.view(".info .genres a")).to_have_text(["Electronic", "House"])
+        self.assertEqual(self.sheet()["edited"], ["title", "genres"])
+        self.page.go_back()                                                          # la liste gardée derrière la fiche se relit au retour
+        expect(self.view(".grid .card", has_text="Discovery (corrigé)")).to_have_count(1)
+        self.open("#/l/musique?genre=House")
+        expect(self.view(".grid .card", has_text="Discovery (corrigé)")).to_have_count(1)
+
+    def test_a_field_left_as_it_was_is_not_sent(self):
+        form = self.open_form()
+        self.field(form, "Label").fill("Virgin")
+        self.save(form)
+        self.assertEqual(self.sheet()["edited"], ["label"])
+
+    def put_back(self, row):
+        """Le titre et les genres lus dans les fichiers, remis après les corrections : une correction rétablie rend ce qu'elle a gardé comme valeur d'origine."""
+        self.api(f"/api/item/{self.album['id']}/edit", self.ALL_NULL)
+        self.run_.hub.db.execute("UPDATE items SET title=?, genres=? WHERE id=?", (row[0], row[1], self.album["id"]))
+
+    def test_a_field_left_alone_is_not_sent_even_when_its_text_has_odd_spaces(self):
+        """Le formulaire normalise les espaces de ce qu'il rend (espace insécable, fine insécable, doubles) : un champ que l'administrateur n'a pas touché ne doit pas partir pour autant."""
+        row = self.run_.hub.db.execute("SELECT title, genres FROM items WHERE id=?", (self.album["id"],)).fetchone()
+        self.addCleanup(self.put_back, row)
+        self.run_.hub.db.execute("UPDATE items SET title=?, genres=? WHERE id=?", ("Discovery : live", json.dumps(["Electronic", "House Music", "Deep  Funk"]), self.album["id"]))
+        form = self.open_form()
+        self.field(form, "Année").fill("1999")
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator(".btn", has_text="Enregistrer").click()
+        self.assertEqual(sent.value.request.post_data_json, {"year": "1999"})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        self.assertEqual(self.sheet()["edited"], ["year"])
+
+    def test_restoring_one_field_keeps_what_was_typed_in_the_others(self):
+        self.api(f"/api/item/{self.album['id']}/edit", {"title": "Autre titre"})
+        form = self.open_form()
+        self.field(form, "Label").fill("  Virgin   Records ")
+        self.field(form, "Genres").fill("Electronic")             # tel qu'il était : rien à envoyer
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator("[data-key=restore-title]").click()
+        self.assertEqual(sent.value.request.post_data_json, {"title": None, "label": "Virgin Records"})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        expect(self.view(".info h1")).to_have_text("Discovery")
+        self.assertEqual(self.sheet()["edited"], ["label"])
+
+    def test_restoring_the_release_type_keeps_what_was_typed_in_the_fields(self):
+        self.api(f"/api/item/{self.album['id']}/edit", {"type": "ep"})
+        form = self.open_form()
+        self.field(form, "Année").fill("1999")
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator("[data-key=restore-type]").click()
+        self.assertEqual(sent.value.request.post_data_json, {"type": None, "year": "1999"})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        self.assertEqual(self.sheet()["edited"], ["year"])
+
+    def test_the_restore_buttons_have_their_own_room_and_a_big_target_on_a_phone_and_a_tablet(self):
+        self.api(f"/api/item/{self.album['id']}/edit", {"title": "Autre titre", "year": 1999, "genres": ["Rock"], "label": "Virgin", "type": "ep"})
+        for device, width in (("phone", 360), ("tablet", 800)):
+            with self.subTest(device=device):
+                context = self.browser.new_context(viewport={"width": width, "height": 800}, has_touch=True)
+                self.addCleanup(context.close)
+                context.add_init_script(f"localStorage.setItem('hub.device', JSON.stringify('{device}'))")
+                self.page = context.new_page()
+                self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+                watch_requests(self, self.page)
+                form = self.open_form()
+                self.assertEqual(self.page.evaluate("document.documentElement.getAttribute('data-device')"), device)
+                expect(form.locator("[data-key^=restore-]")).to_have_count(5)
+                crossings = form.evaluate("""form => {
+                    var out = [], hit = function (a, b) { return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom; };
+                    form.querySelectorAll('.fld').forEach(function (fld) {
+                        var button = fld.querySelector('.restore').getBoundingClientRect(), what = fld.querySelector('.restore').dataset.key;
+                        if (button.height < 40) out.push(what + ' trop basse : ' + button.height);
+                        var rects = [];
+                        Array.prototype.forEach.call(fld.children, function (kid) {
+                            if (kid.classList.contains('restore')) return;
+                            var range = document.createRange();
+                            range.selectNodeContents(kid);                                   // chaque ligne de texte, chaque champ, chaque puce
+                            rects = rects.concat(Array.prototype.slice.call(range.getClientRects()), Array.prototype.map.call(kid.querySelectorAll('input, .chip'), function (e) { return e.getBoundingClientRect(); }));
+                        });
+                        rects.forEach(function (r) { if (r.width && hit(button, r)) out.push(what + ' recouvre un voisin'); });
+                    });
+                    return out;
+                }""")
+                self.assertEqual(crossings, [])
+                self.assertFalse(self.page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth"))
+
+    def test_restore_gives_back_the_value_of_the_tags_one_field_at_a_time(self):
+        self.api(f"/api/item/{self.album['id']}/edit", {"title": "Autre titre", "year": 1999})
+        form = self.open_form()
+        expect(self.field(form, "Titre")).to_have_value("Autre titre")
+        expect(form.locator("[data-key=restore-title]")).to_have_text("Rétablir")
+        expect(form.locator("[data-key=restore-year]")).to_have_text("Rétablir")
+        expect(form.locator("[data-key^=restore-]")).to_have_count(2)                # ni genres, ni label, ni type : rien n'y est corrigé
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator("[data-key=restore-title]").click()
+        self.assertEqual(sent.value.request.post_data_json, {"title": None})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        expect(self.view(".info h1")).to_have_text("Discovery")
+        self.assertEqual(self.sheet()["edited"], ["year"])
+        self.assertEqual(self.sheet()["year"], "1999")
+
+    def test_a_release_type_changed_to_ep_changes_the_line_and_the_counters(self):
+        form = self.open_form()
+        expect(form.locator(".chip")).to_have_text(["✓Album", "✓EP", "✓Single", "✓Compilation", "✓Live", "✓Bande originale", "✓Remix"])
+        form.locator("[data-key=ae-type-ep]").click()
+        expect(form.locator("[data-key=ae-type-ep]")).to_have_attribute("aria-pressed", "true")
+        self.save(form)
+        expect(self.view(".info .meta")).to_contain_text("EP")
+        self.assertEqual(self.sheet()["release_types"][0], "ep")
+        self.open("#/l/musique")
+        self.view(".grid .card").first.wait_for()
+        expect(self.view(".count")).to_have_text("1 artiste · 0 album · 1 EP")
+
+    def test_a_refused_bound_shows_its_message_in_the_window(self):
+        form = self.open_form()
+        self.field(form, "Année").fill("12")
+        form.locator(".btn", has_text="Enregistrer").click()
+        expect(form.locator(".formerr")).to_have_text("année : quatre chiffres, de 1000 à l'an prochain")
+        expect(form).to_be_visible()
+        self.assertEqual(self.sheet()["edited"], [])
+        self.errors[:] = [e for e in self.errors if "status of 400" not in e]        # le navigateur journalise la réponse refusée : c'est voulu ici
+
+    def test_there_is_nothing_to_correct_for_an_ordinary_account(self):
+        self.as_ordinary_account("#/i/" + self.album["id"])
+        self.view(".trk").first.wait_for()
+        expect(self.view(".actions .btn").first).to_be_visible()
+        for key in ("album-edit", "poster", "poster-reset"):
+            expect(self.view(f"[data-key={key}]")).to_have_count(0)
+
+    def test_there_is_nothing_to_correct_on_the_tv(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.open_sheet()
+        expect(self.view(".actions .btn").first).to_be_visible()
+        for key in ("album-edit", "poster", "poster-reset"):
+            expect(self.view(f"[data-key={key}]")).to_have_count(0)
+
+    def test_the_chosen_cover_is_shown_and_giving_it_back_removes_it(self):
+        chosen = solid_png(60, 60)
+        original = self.served()
+        self.open_sheet()
+        expect(self.view("[data-key=poster-reset]")).to_have_count(0)                # rien à rétablir tant qu'aucune pochette n'est choisie
+        with self.page.expect_file_chooser() as chooser:
+            self.view(".actions .btn", has_text="Changer la pochette").click()
+        chooser.value.set_files(files=[{"name": "pochette.png", "mimeType": "image/png", "buffer": chosen}])
+        reset = self.view(".actions [data-key=poster-reset]")
+        expect(reset).to_have_text("Rétablir la pochette")
+        self.assertEqual(self.served(), chosen)
+        self.assertEqual(self.sheet()["edited"], ["poster"])
+        expect(self.view(".hero .poster img")).to_have_js_property("naturalWidth", 60)      # l'image choisie est chargée dans l'en-tête, pas celle d'avant
+        self.page.evaluate("location.hash = '#/l/musique'")
+        expect(self.view(".grid .card", has_text="Discovery").locator(".poster img")).to_have_js_property("naturalWidth", 60)      # et sur la carte de la liste
+        self.page.go_back()
+        self.view(".actions [data-key=poster-reset]").wait_for()
+        reset.click()
+        self.page.locator(".menu .btn.danger").click()
+        expect(reset).to_have_count(0)
+        expect(self.view(".actions .btn", has_text="Changer la pochette")).to_be_focused()
+        self.assertEqual(self.served(), original)
+        self.assertEqual(self.sheet()["edited"], [])
+
+    def test_in_english_the_buttons_the_form_and_the_refusal_are_translated(self):
+        self.api(f"/api/item/{self.album['id']}/edit", {"title": "Autre titre"})
+        self.page.context.add_cookies([{"name": "hub_lang", "value": "en", "url": self.base}])
+        self.open_sheet()
+        expect(self.view(".actions [data-key=album-edit]")).to_have_text("Edit album")
+        expect(self.view(".actions", has_text="Change cover")).to_be_visible()
+        self.view(".actions [data-key=album-edit]").click()
+        form = self.ready(self.page.locator(".menu.form"))
+        expect(form).to_contain_text("This correction only applies in the hub. To fix the file itself, use the workshop.")
+        expect(form.locator("[data-key=restore-title]")).to_have_text("Restore")
+        self.field(form, "Year").fill("12")
+        form.locator(".btn", has_text="Save").click()
+        expect(form.locator(".formerr")).to_have_text("year: four digits, from 1000 to next year")
+        self.assertEqual(self.page.evaluate("Hub.missing"), [])
+        self.errors[:] = [e for e in self.errors if "status of 400" not in e]
 
 
 class TestMusicPreload(UiCase):

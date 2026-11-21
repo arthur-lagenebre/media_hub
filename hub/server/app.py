@@ -64,7 +64,8 @@ from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
 from ..media import tracks
-from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, to_jpeg, write_atomic
+from ..media.images import POSTER_KEY, ConvertError, Images, NoConverter, crop_box, sniff, to_jpeg, write_atomic
+from ..scan import edits
 from ..scan.common import STACK_MAX
 from .jobs import Jobs
 
@@ -1990,6 +1991,7 @@ def api_item(h, m, q):
         mark_requests(h, *[saga.get("missing") for saga in out.get("sagas", [])])
     if item["type"] == "album":
         out["tracks_total"] = len(rows)
+        out.update(edited_sheet(h, item))
     h.send_json(out)
 
 
@@ -2883,22 +2885,27 @@ def send_sup(h, hub, entry, path, kind, index, cache):
 # ---------------------------------------------------------------------------
 # Images
 # ---------------------------------------------------------------------------
-POSTER_TYPES = ("movie", "show")
+POSTER_TYPES = ("movie", "show", "album")
+
+
+def admin_item(h, ident, types, refusal):
+    """L'item `ident` (administrateur seulement ; 404 s'il n'existe pas) quand son type est l'un de `types` ; 400 `refusal` sinon."""
+    require_admin(h)
+    item = h.hub.item(ident)
+    if item["type"] not in types:
+        h.discard_body()
+        raise HttpError(400, refusal)
+    return item
 
 
 def poster_item(h, ident):
-    """L'item dont on change l'affiche (administrateur) : un film ou une série."""
-    require_admin(h)
-    item = h.hub.item(ident)
-    if item["type"] not in POSTER_TYPES:
-        h.discard_body()
-        raise HttpError(400, "seuls un film ou une série ont une affiche à changer")
-    return item
+    """L'item dont on change l'affiche (administrateur) : un film, une série ou un album."""
+    return admin_item(h, ident, POSTER_TYPES, "seuls un film, une série ou un album ont une affiche à changer")
 
 
 @route("POST", r"/api/item/(\w+)/poster")
 def api_item_poster(h, m, q):
-    """Remplace l'affiche d'un film ou d'une série par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). Un WebP est converti en JPEG ; 415 s'il ne se lit pas, 501 si rien ne sait le convertir. L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque. Il n'y a pas de retour à l'affiche d'avant : la nouvelle devient l'affiche."""
+    """Remplace l'affiche d'un film ou d'une série, ou la pochette d'un album, par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). Un WebP est converti en JPEG ; 415 s'il ne se lit pas, 501 si rien ne sait le convertir. L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque. Une autre image remplace celle-ci ; pour revenir à l'image d'origine d'un album, `POST /api/item/<id>/edit` avec `{"poster": null}`."""
     item = poster_item(h, m.group(1))
     data = h.body_bytes(PHOTO_UPLOAD_MAX)
     ext = enrich.image_ext(data)
@@ -2913,6 +2920,36 @@ def api_item_poster(h, m, q):
             raise HttpError(415, str(e))
     h.hub.images.set_poster(item["id"], data, ext)
     h.send_json({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Corriger un album dans le hub
+# ---------------------------------------------------------------------------
+def edited_fields(hub, item):
+    """Les champs d'un album que l'administrateur a corrigés, dans l'ordre de `edits.FIELDS`, puis `poster` si une pochette a été choisie."""
+    kept = edits.kept(hub.db.kv_get(edits.key(item["lib"], item["id"])))
+    return edits.listed(kept) + (["poster"] if hub.db.kv_get(POSTER_KEY + item["id"]) else [])
+
+
+def edited_sheet(h, item):
+    """`{"edited": [...]}` pour l'administrateur seul : les autres comptes ne savent pas qu'un album a été corrigé."""
+    return {"edited": edited_fields(h.hub, item)} if h.user["role"] == "admin" else {}
+
+
+@route("POST", r"/api/item/(\w+)/edit")
+def api_item_edit(h, m, q):
+    """Corrige un album dans le hub (administrateur seulement), sans rien écrire dans la médiathèque : `{"title", "year", "genres", "label", "type", "poster"}`, un ou plusieurs champs ; `null` rétablit la valeur lue dans les étiquettes (pour `poster`, l'image d'origine : la pochette se choisit par `POST /api/item/<id>/poster`).
+    Titre de 1 à 300 caractères, année de quatre chiffres (de 1000 à l'an prochain), 20 genres de 60 caractères au plus, label de 200 au plus, type parmi `album`, `ep`, `single`, `compilation`, `live`, `soundtrack`, `remix` (le premier des types de sortie). 400 au moindre champ refusé : rien n'est gardé. Rend `{"ok": true, "edited": [champs corrigés]}`."""
+    item = admin_item(h, m.group(1), ("album",), "seul un album se corrige")
+    try:
+        changes, resets = edits.parse(h.body_json())
+    except edits.Invalid as e:
+        raise HttpError(400, str(e))
+    with edits.LOCK:          # le même verrou que le scan : deux administrateurs ne s'écrasent pas, et un scan n'écrit pas la bibliothèque entre la lecture de la ligne et sa réécriture
+        edits.save(h.hub.db, h.hub.item(item["id"]), changes, resets)          # la ligne est relue sous le verrou : celle d'avant peut avoir changé (un autre enregistrement, un scan)
+        if "poster" in resets:
+            h.hub.images.clear_poster(item["id"])
+    h.send_json({"ok": True, "edited": edited_fields(h.hub, item)})
 
 
 # ---------------------------------------------------------------------------

@@ -2451,7 +2451,8 @@ class TestAccountPermissions(AccountsCase):
     def setUp(self):
         super().setUp()
         self.bob = self.new_user("bob")
-        self.artist = next(i for i in self.bob.json("/api/library/musique")[1]["items"] if i["title"] == "Discovery")["artist_id"]
+        album = next(i for i in self.bob.json("/api/library/musique")[1]["items"] if i["title"] == "Discovery")
+        self.artist, self.album = album["artist_id"], album["id"]
 
     def restricted(self):
         """Ce qu'un compte `user` n'a pas le droit de faire : (méthode, chemin, corps)."""
@@ -2459,6 +2460,7 @@ class TestAccountPermissions(AccountsCase):
         return [("POST", "/api/scan", {}), ("POST", "/api/scan", {"lib": "films"}), ("POST", "/api/enrich", {"lib": "musique"}), ("POST", "/api/enrich/person", {"name": "Leonardo DiCaprio"}), ("POST", "/api/images/refresh", {"lib": "films"}), ("POST", "/api/cleanup", {"apply": True}),
                 ("POST", f"/api/artist/musique/{self.artist}/photo", fixtures.PNG),
                 ("POST", f"/api/artist/musique/{self.artist}/photo/crop", {"x": 0, "y": 0, "w": 1, "h": 1}),
+                ("POST", f"/api/item/{self.album}/edit", {"title": "intrus"}), ("POST", f"/api/item/{self.album}/edit", {"poster": None}), ("POST", f"/api/item/{self.album}/poster", fixtures.PNG),
                 ("GET", "/api/sagas", None), ("POST", "/api/sagas", {"sagas": []}), ("POST", "/api/sagas/add", {"name": "intrus", "films": [1]}), ("GET", "/api/sagas/films", None), ("POST", "/api/sagas/ignore", {"tmdb": 1}),
                 ("GET", "/api/users", None), ("POST", "/api/users", {"name": "intrus", "password": self.PASSWORD}),
                 ("POST", f"/api/user/{admin}/password", {"password": "piratage-1"}), ("POST", f"/api/user/{admin}/delete", {})]
@@ -2481,6 +2483,16 @@ class TestAccountPermissions(AccountsCase):
         self.assertEqual(self.bob.json("/api/state")[1]["user"], {"id": self.bob.account["id"], "name": "bob", "role": "user", "can_upload": False, "can_request": True, "remote_download": True})
         for path in ("/api/home", "/api/library/films", "/api/jobs", "/api/playlists", f"/api/artist/musique/{self.artist}", "/api/search?q=dark"):
             self.assertEqual(self.bob.get(path)[0], 200, path)
+
+    def test_a_correction_of_the_administrator_shows_to_a_plain_account_and_survives_a_scan(self):
+        self.addCleanup(self.admin.json, f"/api/item/{self.album}/edit", {"title": None, "genres": None})
+        self.assertEqual(self.admin.json(f"/api/item/{self.album}/edit", {"title": "Corrigé", "genres": ["Rock"]}), (200, {"ok": True, "edited": ["title", "genres"]}))
+        self.hub.jobs.scan(self.hub.cfg.library("musique"))
+        self.run_.wait_jobs()
+        found = [i["title"] for i in self.bob.json("/api/library/musique?genre=Rock")[1]["items"]]
+        self.assertEqual(found, ["Corrigé"])
+        self.assertNotIn("edited", self.bob.json(f"/api/item/{self.album}")[1])
+        self.assertEqual(self.admin.json(f"/api/item/{self.album}")[1]["edited"], ["title", "genres"])
 
     def test_the_jobs_log_is_for_the_administrator_only(self):
         for log in ("1", "1&x=2"):

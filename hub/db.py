@@ -347,6 +347,12 @@ class Database:
             self.execute(f"UPDATE items SET {', '.join(sets)} WHERE id=?", (*params, item_id))
             self.items_changed()
 
+    def rewrite_item(self, row):
+        """Réécrit titre, tri, initiale, année, genres et `meta` d'un item d'après `row` (le résultat de scan.edits.apply) : une correction faite dans le hub, qui peut aussi retirer une clé de `meta`, ce que `update_item_meta` ne fait pas."""
+        self.execute("UPDATE items SET title=?, sort=?, letter=?, year=?, genres=?, meta=? WHERE id=?",
+                     (row["title"], row["sort"], row["letter"], row["year"], row["genres"], row["meta"], row["id"]))
+        self.items_changed()
+
     # --- Progression ---------------------------------------------------------
     def save_progress(self, profile, entry_id, position, duration, done):
         self.execute(

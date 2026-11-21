@@ -128,7 +128,15 @@
 
   // --- Vignettes -------------------------------------------------------------
   function initial(title) { var c = (title || '?').replace(/^[^A-Za-zÀ-ÿ0-9]+/, '').charAt(0); return (c || '?').toUpperCase(); }
+  // L'image d'un élément (`/img/item/<id>`) garde la même adresse quand l'administrateur en choisit une autre, et le navigateur remontre l'ancienne : une fois changée (`H.coverChanged`), son adresse prend un `v` neuf, partout (fiche, cartes, pages gardées).
+  var coverStamps = {};
+  H.coverChanged = function (id) { coverStamps[id] = Date.now(); };
+  H.coverSrc = function (src) {
+    var m = /^\/img\/item\/(\w+)/.exec(src || '');
+    return m && coverStamps[m[1]] ? src + (src.indexOf('?') < 0 ? '?' : '&') + 'v=' + coverStamps[m[1]] : src;
+  };
   H.picture = function (src, title, cls) {
+    src = H.coverSrc(src);
     var ph = h('span', { class: 'ph', style: '--h:' + H.hue(title || '') }, initial(title));
     if (!src) return h('div', { class: 'poster ' + (cls || '') }, ph);       // pas d'image à demander : la lettre sur fond de couleur
     var img = h('img', { src: src, alt: '', loading: 'lazy', decoding: 'async', onload: function () { this.classList.add('in'); }, onerror: function () { if (this.parentNode) this.parentNode.removeChild(this); } });
@@ -851,6 +859,7 @@
         H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Introuvable')), h('p', null, e.message), h('a', { class: 'btn f', href: '#/', 'data-autofocus': '1' }, H.t('Accueil'))));
       });
     }
+    function coverChanged() { H.coverChanged(id); return load(); }
     function setSeen(done, seasonNo) { H.api('/api/item/' + id + '/seen', { done: done, season: seasonNo === undefined ? null : seasonNo }).then(load); }
 
     // Ce que la fiche tire de ses fichiers : où reprendre, la position en cours, et si tout est vu.
@@ -861,7 +870,7 @@
     function totalDuration(entries) { return entries.reduce(function (s, e) { return s + (e.duration || 0); }, 0); }
 
     // Les types de sortie MusicBrainz (RELEASETYPE), dits en français ; un type inconnu s'affiche tel quel, avec une majuscule.
-    var RELEASE_TYPES = { album: 'Album', single: 'Single', ep: 'EP', compilation: 'Compilation', live: 'Live', soundtrack: H.t('Bande originale'), remix: 'Remix' };
+    var RELEASE_TYPES = { album: 'Album', ep: 'EP', single: 'Single', compilation: 'Compilation', live: 'Live', soundtrack: H.t('Bande originale'), remix: 'Remix' };          // dans l'ordre des puces de « Modifier l'album »
     function releaseTypes(d) {
       return (d.release_types || []).filter(function (t) { return typeof t === 'string' && t; }).map(function (t) { return RELEASE_TYPES[t] || t.charAt(0).toUpperCase() + t.slice(1); }).join(', ');
     }
@@ -982,7 +991,7 @@
       if (d.type === 'movie' && d.tmdb && H.isAdmin() && H.sagas) out.push(H.button(H.t('Ajouter à une saga'), 'plus', { 'data-key': 'saga-add', onclick: function () { H.sagas.addTo(d, load); } }));      // sans identifiant TMDB, un film ne peut pas entrer dans une saga
       if (entries.length && H.actions.canDownload(d.library && d.library.id)) out.push(H.button(d.type === 'album' ? H.t('Télécharger l’album') : H.t('Télécharger'), 'download', { 'data-key': 'download', onclick: function () { H.actions.downloadItem(d); } }));
       out.push(H.button(H.t('Signaler un problème'), 'flag', { 'data-key': 'report', onclick: function () { H.actions.report({ item: d.id, title: d.title }); } }));
-      return out.concat(H.actions.posterTools(d, load), H.actions.tmdbTools(d, load),
+      return out.concat(H.actions.albumTools(d, load, RELEASE_TYPES), H.actions.posterTools(d, coverChanged), H.actions.tmdbTools(d, load),
         (d.links || []).map(function (l) { return h('a', { class: 'btn f', href: l.url, target: '_blank', rel: 'noopener noreferrer' }, H.tr(l.label)); }));
     }
     function actionsRow(d, view) {
@@ -1029,7 +1038,7 @@
       return info;
     }
     function heroBlock(d, info) {
-      return h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(/img/item/' + d.id + '?w=300)' }),
+      return h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + H.coverSrc('/img/item/' + d.id + '?w=300') + ')' }),
         h('div', { class: 'hero-in' }, H.picture('/img/item/' + d.id + '?w=500', d.title, d.type === 'album' ? 'sq big' : 'big'), info));
     }
 
@@ -1390,7 +1399,7 @@
     var EDIT_FIELDS = [['biography', H.t('Biographie'), 'textarea', 10000], ['department', H.t('Métier'), 'text', 80], ['birthday', H.t('Naissance (AAAA-MM-JJ)'), 'text', 10],
       ['place_of_birth', H.t('Lieu de naissance'), 'text', 200], ['deathday', H.t('Décès (AAAA-MM-JJ)'), 'text', 10]];
     // Une valeur comme H.form la rend : un texte long sans espaces autour, un texte court sans espaces en trop.
-    function tidy(value, type) { return type === 'textarea' ? value.trim() : value.replace(/\s+/g, ' ').trim(); }
+    function tidy(value, type) { return type === 'textarea' ? value.trim() : H.tidy(value); }
     // La fenêtre « Modifier la fiche » : chaque champ prérempli de ce qui est montré ; seuls les champs changés partent (un champ resté tel quel suit TMDB, même s'il change là-bas). « Tout reprendre de TMDB » vide toutes les corrections.
     function editSheet() {
       var info = current, start = {};

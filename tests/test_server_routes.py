@@ -857,7 +857,7 @@ class TestPosterRoutes(RouteCase):
 
     def setUp(self):
         super().setUp()
-        self.fill([item("m1", "movie", title="Film"), item("s1", "show", title="Serie"), item("a1", "album", title="Album")], [])
+        self.fill([item("m1", "movie", title="Film"), item("s1", "show", title="Serie"), item("a1", "album", title="Album"), item("b1", "series", title="Livres")], [])
 
     def test_a_poster_is_sent_as_the_body_and_kept_with_its_extension(self):
         reply = self.post("/api/item/m1/poster", self.PNG)
@@ -873,8 +873,12 @@ class TestPosterRoutes(RouteCase):
         self.assertEqual(self.post("/api/item/m1/poster", too_big).status, 413)
         self.hub.images.set_poster.assert_not_called()
 
-    def test_only_films_and_shows_have_a_poster_to_change(self):
-        reply = self.post("/api/item/a1/poster", self.PNG)
+    def test_an_album_has_a_poster_to_change_like_a_film_and_a_show(self):
+        self.assertEqual(self.post("/api/item/a1/poster", self.PNG).status, 200)
+        self.hub.images.set_poster.assert_called_once_with("a1", self.PNG, ".png")
+
+    def test_only_films_shows_and_albums_have_a_poster_to_change(self):
+        reply = self.post("/api/item/b1/poster", self.PNG)
         self.assertEqual((reply.status, "affiche" in reply.json()["error"]), (400, True))
         self.assertEqual(self.post("/api/item/inconnu/poster", self.PNG).status, 404)
         self.hub.images.set_poster.assert_not_called()

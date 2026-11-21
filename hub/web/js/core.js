@@ -422,7 +422,10 @@
   // ok: libellé du bouton, danger, kind (« form » par défaut s'il y a des champs), cls (modificateur), submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse,
   // alt: {label, submit(valeurs)} (facultatif) : une seconde action, entre la première et Annuler (« Rétablir »), qui passe par le même chemin que `submit` (un seul envoi à la fois, erreur dans la fenêtre),
   // done(résultat) une fois la fenêtre fermée, cancel() une fois fermée sans avoir agi}. Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
+  // `restore: function (valeurs)` sur un champ ajoute sous lui, à droite, un petit bouton « Rétablir » (même chemin que `submit`, et `valeurs` est ce qui est saisi : la valeur rendue part dans le même envoi que ce que l'appelant y ajoute, ce qu'on a tapé ailleurs n'est pas perdu) ; un élément de `extra` peut être une fonction qui reçoit `restoreButton(clé, action)` et rend le nœud (un réglage en puces qui se rétablit aussi).
   // `value` préremplit le premier champ, qui s'ouvre alors sélectionné (comme H.prompt). Un `textarea` (un texte long) garde ses retours à la ligne, qui s'écrivent avec Maj+Entrée : Entrée seule passe au champ suivant ou valide, comme ailleurs.
+  // Un texte d'une ligne comme la fenêtre le rend : espaces de toute sorte (insécables compris) ramenés à un seul, rien aux bords. Qui compare à ce qu'une fenêtre a rendu normalise de même.
+  H.tidy = function (text) { return text.replace(/\s+/g, ' ').trim(); };
   H.form = function (o) {
     var fields = o.fields || [], inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
     var box = H.box((o.kind || (fields.length ? 'form' : 'confirm')) + (fields.length > 1 || o.alt ? ' stacked' : '') + (o.cls ? ' ' + o.cls : ''), o.title);
@@ -431,7 +434,7 @@
     function send(act) {
       if (busy) return;
       var values = {};
-      fields.forEach(function (f) { var v = inputs[f.key].value; values[f.key] = f.type === 'password' ? v : f.type === 'textarea' ? v.trim() : v.replace(/\s+/g, ' ').trim(); });
+      fields.forEach(function (f) { var v = inputs[f.key].value; values[f.key] = f.type === 'password' ? v : f.type === 'textarea' ? v.trim() : H.tidy(v); });
       act = act || o.submit;
       var r = act ? act(values) : Promise.resolve();
       if (typeof r === 'string') { show(r); return; }
@@ -439,6 +442,7 @@
       r.then(function (res) { H.overlay.close(function () { if (o.done) o.done(res); }); },
         function (e) { busy = false; show(e.message); });
     }
+    function restoreButton(key, act) { return H.button(H.t('Rétablir'), null, { class: 'restore', type: 'button', 'data-key': 'restore-' + key, onclick: function () { send(act); } }); }
     fields.forEach(function (f, i) {
       var long = f.type === 'textarea';
       var input = h(long ? 'textarea' : 'input', { class: 'f field big', type: long ? null : f.type === 'password' ? 'password' : 'text', rows: long ? '5' : null, maxlength: String(f.maxlength || (f.type === 'password' ? 200 : 40)), autocomplete: f.auto || 'off',
@@ -450,9 +454,10 @@
         } });
       input.value = f.value || '';
       inputs[f.key] = input; list.push(input);
-      box.appendChild(h('label', { class: 'flab' }, f.label, input));
+      var label = h('label', { class: 'flab' }, f.label, input);
+      box.appendChild(f.restore ? h('div', { class: 'fld' }, label, restoreButton(f.key, f.restore)) : label);
     });
-    (o.extra || []).forEach(function (x) { box.appendChild(x); });
+    (o.extra || []).forEach(function (x) { box.appendChild(typeof x === 'function' ? x(restoreButton) : x); });
     box.appendChild(err);
     ok = H.button(o.ok || H.t('Valider'), o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: function () { send(); } });
     box.appendChild(h('div', { class: 'btns' }, ok, o.alt ? H.button(o.alt.label, null, { 'data-key': 'form-alt', onclick: function () { send(o.alt.submit); } }) : null, H.button(H.t('Annuler'), null, { 'data-autofocus': fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));   // sans champ, le focus part sur Annuler : Entrée ne détruit rien
@@ -469,7 +474,7 @@
     opts = opts || {};
     var input = h('input', { class: 'f field big', type: 'text', value: initial || '', maxlength: String(opts.maxlength || 80), placeholder: opts.placeholder || null, 'aria-label': title, 'data-autofocus': '1', autocomplete: 'off' });
     function submit() {
-      var text = input.value.replace(/\s+/g, ' ').trim();
+      var text = H.tidy(input.value);
       if (!text) { input.focus(); return; }
       H.overlay.close(function () { onOk(text); });
     }
