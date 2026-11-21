@@ -1307,12 +1307,12 @@ def person_extras(hub, person, libs):
 
 
 def person_sheet(cfg, ident, known):
-    """`{"info": {biography, birthday, deathday, place_of_birth, department, photo}}` : la fiche que la passe des personnes a gardée (`known`, voir enrich.fetch_person), dates en ISO, `photo` vrai quand son fichier est là (`/img/person/<ident>`). Rien sans fiche : pas d'identifiant unique, jamais demandée, ou gardée avant la fiche. Rien n'est demandé en ligne."""
+    """`{"info": {biography, birthday, deathday, place_of_birth, department, photo, tmdb}}` : la fiche que la passe des personnes a gardée (`known`, voir enrich.fetch_person), dates en ISO, `photo` vrai quand son fichier est là, `tmdb` l'identifiant de la personne (la photo est `/img/person/<tmdb>`). Rien sans fiche : pas d'identifiant unique, jamais demandée, ou gardée avant la fiche. Rien n'est demandé en ligne."""
     info = known.get("info") if isinstance(known, dict) else None
     if not isinstance(info, dict):
         return {}
     shown = {field: info.get(field) or "" for field in ("biography", "birthday", "deathday", "place_of_birth")}
-    return {"info": {**shown, "department": info.get("known_for_department") or "", "photo": (cfg.data / "tmdb" / missing.photo_name(ident)).is_file()}}
+    return {"info": {**shown, "department": info.get("known_for_department") or "", "photo": (cfg.data / "tmdb" / missing.photo_name(ident)).is_file(), "tmdb": ident}}
 
 
 @route("POST", r"/api/enrich/people")

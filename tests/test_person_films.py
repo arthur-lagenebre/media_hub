@@ -525,7 +525,7 @@ class TestSheetInThePerson(PersonCase):
     """`info` de `/api/person` : la fiche que la passe a gardée, telle quelle, sans rien demander en ligne."""
 
     SHEET = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "known_for_department": "Acting", "profile_path": "/cruz.jpg"}
-    SHOWN = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "department": "Acting"}
+    SHOWN = {"biography": "Actrice espagnole.", "birthday": "1974-04-28", "deathday": "", "place_of_birth": "Madrid, Espagne", "department": "Acting", "tmdb": CRUZ}          # `tmdb` : de quoi faire /img/person/<tmdb>
 
     def keep(self, ident=CRUZ, **over):
         self.db.kv_set(f"personinfo:{ident}", {"at": 1, "films": [self.film(5)], "info": {**self.SHEET, **over}})
