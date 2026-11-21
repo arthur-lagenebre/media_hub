@@ -276,22 +276,28 @@ def enrich_ratings(cfg, db, lib, log=print, force=False, since=None):
 
 def download_poster(tmdb, posters, film, title, log, force):
     """Le nom du fichier de l'affiche de `film` (sa fiche TMDB : `id` et `poster_path`), sous `posters`, téléchargée si elle n'y est pas (ou avec `force`) ; vide quand elle ne vient pas. Les sagas et les personnes partagent ces fichiers."""
-    return download_image(tmdb, posters, missing.poster_name(film["id"]), film["poster_path"], "w342", f"{title} : pas d'affiche", log, force)
-
-
-def download_image(tmdb, posters, name, image_path, size, failure, log, force):
-    """`name`, l'image TMDB `image_path` posée sous `posters` (en taille `size`) si elle n'y est pas (ou avec `force`) ; vide quand elle ne vient pas (`failure` au journal, avec la raison). Une clé refusée remonte."""
     try:
-        if force or not (posters / name).is_file():
-            partial = posters / (name + ".tmp")
-            tmdb.save_image(image_path, size, partial)
-            os.replace(partial, posters / name)         # d'un bloc : une écriture coupée ne laisse pas une image tronquée qu'on ne retélécharge plus
-        return name
-    except TmdbAuthError:
-        raise
+        return download_image(tmdb, posters, missing.poster_name(film["id"]), film["poster_path"], "w342", force)
     except (TmdbError, OSError) as e:
-        log(f"  {failure} ({e})")
+        log(f"  {title} : pas d'affiche ({e})")          # texte exact : l'interface le traduit (lang-en.js, H.srv.en)
         return ""
+
+
+def download_photo(tmdb, posters, person_id, image_path, log, force):
+    """Pose la photo de la personne `person_id` (missing.photo_name) sous `posters`, comme une affiche ; quand elle ne vient pas, une ligne au journal et la fiche reste sans photo."""
+    try:
+        download_image(tmdb, posters, missing.photo_name(person_id), image_path, PHOTO_SIZE, force)
+    except (TmdbError, OSError) as e:
+        log(f"  personne {person_id} : pas de photo ({e})")
+
+
+def download_image(tmdb, posters, name, image_path, size, force):
+    """`name`, l'image TMDB `image_path` posée sous `posters` (en taille `size`) si elle n'y est pas (ou avec `force`). Une erreur de TMDB ou d'écriture remonte, une clé refusée aussi."""
+    if force or not (posters / name).is_file():
+        partial = posters / (name + ".tmp")
+        tmdb.save_image(image_path, size, partial)
+        os.replace(partial, posters / name)         # d'un bloc : une écriture coupée ne laisse pas une image tronquée qu'on ne retélécharge plus
+    return name
 
 
 class SagaPass:
@@ -488,7 +494,7 @@ def fetch_person(tmdb, posters, db, person_id, now, log, force, owned=()):
         kept = [{**{k: v for k, v in film.items() if k != "poster_path"},
                  "poster": download_poster(tmdb, posters, {"id": film["tmdb"], "poster_path": film["poster_path"]}, film["title"], log, force) if film["poster_path"] and film["tmdb"] not in owned else ""} for film in person_films(credits)]
         if info["profile_path"]:
-            download_image(tmdb, posters, missing.photo_name(person_id), info["profile_path"], PHOTO_SIZE, f"personne {person_id} : pas de photo", log, force)
+            download_photo(tmdb, posters, person_id, info["profile_path"], log, force)
     except TmdbAuthError as e:
         raise RuntimeError(f"TMDB : {e}")
     except TmdbError as e:
