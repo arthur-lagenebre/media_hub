@@ -24,7 +24,7 @@ from libraries.video import tmdb as tmdb_module
 from libraries.video.tmdb import TmdbAuthError, TmdbError
 
 KEY = "cle-tmdb-tres-secrete-0123456789"
-SEARCH_FORBIDDEN = "tu n'as pas le droit de demander des films ni des séries"
+SEARCH_FORBIDDEN = "tu n'as pas le droit de demander des films, des séries ni des artistes"
 UNREACHABLE = {"error": "TMDB ne répond pas, réessaie plus tard"}
 
 

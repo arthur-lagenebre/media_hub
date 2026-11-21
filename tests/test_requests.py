@@ -28,7 +28,7 @@ from hub.db import Database
 
 PASSWORD = "un mot de passe assez long"
 UNKNOWN = {"error": "demande inconnue"}
-FORBIDDEN = "tu n'as pas le droit de demander des films ni des séries"
+FORBIDDEN = "tu n'as pas le droit de demander des films, des séries ni des artistes"
 MB1 = "11111111-1111-1111-1111-111111111111"
 MB2 = "22222222-2222-2222-2222-222222222222"
 MB3 = "33333333-3333-3333-3333-333333333333"

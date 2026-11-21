@@ -3718,7 +3718,7 @@ def fetch_request_posters(hub):
 def require_requester(h):
     """403 quand le compte n'a pas le droit « Peut demander »."""
     if not h.user["can_request"]:
-        raise HttpError(403, "tu n'as pas le droit de demander des films ni des séries")
+        raise HttpError(403, "tu n'as pas le droit de demander des films, des séries ni des artistes")
 
 
 @route("GET", r"/api/requests/search")

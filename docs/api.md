@@ -478,7 +478,7 @@ Un compte demande un film, une série ou un artiste qui n'est pas dans la média
 | Code | Message (`error`) | Cas |
 | --- | --- | --- |
 | 401 | `connexion requise` | pas connecté |
-| 403 | `tu n'as pas le droit de demander des films ni des séries` | l'administrateur a retiré ce droit au compte |
+| 403 | `tu n'as pas le droit de demander des films, des séries ni des artistes` | l'administrateur a retiré ce droit au compte |
 | 413 | `corps trop gros` | corps de plus de 1 Mo, comme partout |
 | 400 | `le corps doit être un objet JSON` | corps vide, illisible ou qui n'est pas un objet |
 | 400 | `sorte de demande inconnue (movie, show ou artist)` | `kind` absent ou autre que `movie`, `show` et `artist` (la recherche dans TMDB, qui ne connaît pas `artist`, dit `movie ou show`) |
@@ -533,7 +533,7 @@ Un compte demande un film, une série ou un artiste qui n'est pas dans la média
 | Code | Message (`error`) | Cas |
 | --- | --- | --- |
 | 401 | `connexion requise` | pas connecté |
-| 403 | `tu n'as pas le droit de demander des films ni des séries` | le compte n'a pas le droit « Peut demander » |
+| 403 | `tu n'as pas le droit de demander des films, des séries ni des artistes` | le compte n'a pas le droit « Peut demander » |
 | 400 | `texte à chercher : de 1 à 200 caractères` | `q` absent, vide (aucun caractère utile : hors contrôle, format, blancs et séparateurs) ou de plus de 200 caractères |
 | 429 | `trop de recherches : réessaie dans N s` | plus de 30 recherches en une minute **pour ce compte**, y compris celles que la mémoire sert (ce n'est pas la cadence des recherches TMDB : chaque service a la sienne) |
 | 503 | `la recherche d'artistes est occupée : tu peux envoyer le nom tel quel` | une autre recherche garde la place depuis plus de 5 s |
@@ -558,7 +558,7 @@ Un compte demande un film, une série ou un artiste qui n'est pas dans la média
 | Code | Message (`error`) | Cas |
 | --- | --- | --- |
 | 401 | `connexion requise` | pas connecté |
-| 403 | `tu n'as pas le droit de demander des films ni des séries` | le compte n'a pas le droit « Peut demander » |
+| 403 | `tu n'as pas le droit de demander des films, des séries ni des artistes` | le compte n'a pas le droit « Peut demander » |
 | 400 | `texte à chercher : de 2 à 100 caractères` | `q` absent ; une fois les blancs de bord retirés, moins de 2 caractères **utiles** (hors caractères de contrôle, de format, blancs et séparateurs : catégories Unicode C* et Z*), ou plus de 100 caractères en tout |
 | 400 | `sorte de demande inconnue (movie ou show)` | `kind` autre que `movie` ou `show` |
 | 503 | `la recherche n'est pas configurée sur ce serveur` | le serveur n'a pas de clé TMDB (`request_search` vaut alors `false` dans `/api/state`) |

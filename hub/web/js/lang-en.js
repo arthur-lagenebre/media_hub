@@ -1302,7 +1302,7 @@
     "la boîte de réception du serveur est inutilisable : préviens l'administrateur": 'the server’s inbox is unusable: tell the administrator',
 
     // --- Demandes (hub/requests.py, routes /api/requests) : « {what} » est « message », « motif » ou « titre », traduit à part ---
-    "tu n'as pas le droit de demander des films ni des séries": 'you’re not allowed to request movies or series',
+    "tu n'as pas le droit de demander des films, des séries ni des artistes": 'you’re not allowed to request movies, series or artists',
     'sorte de demande inconnue (movie ou show)': 'unknown kind of request (movie or show)',
     'sorte de demande inconnue (movie, show ou artist)': 'unknown kind of request (movie, show or artist)',
     'ce nom ne désigne pas un artiste': 'this name doesn’t name an artist',
