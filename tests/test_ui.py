@@ -6617,11 +6617,16 @@ class TestPersonSheetEditUi(UiCase):
     def edits(self):
         return self.run_.hub.db.kv_get("personedit:8400")
 
+    def shown_form(self):
+        """La fenêtre de champs, une fois H.form installé : il sélectionne le texte du premier champ ~30 ms après l'ouverture (le focus, lui, y est dès l'ouverture) ; un `fill` plus tôt peut écrire dans ce champ."""
+        form = self.page.locator(".menu.form")
+        self.page.wait_for_function("(() => { var f = document.querySelector('.menu.form textarea, .menu.form input'); return f && document.activeElement === f && f.value && f.selectionStart === 0 && f.selectionEnd === f.value.length })()")
+        return form
+
     def open_form(self):
         self.person()
         self.view(".hero [data-key=person-edit]").click()
-        self.page.locator(".menu.form").wait_for()
-        return self.page.locator(".menu.form")
+        return self.shown_form()
 
     def field(self, form, label):
         return form.locator(".flab", has_text=label).locator("input, textarea")
@@ -6679,7 +6684,7 @@ class TestPersonSheetEditUi(UiCase):
         self.person()
         expect(self.view(".hero [data-key=person-edit]")).to_have_text("Edit sheet")
         self.view(".hero [data-key=person-edit]").click()
-        form = self.page.locator(".menu.form")
+        form = self.shown_form()
         self.field(form, "Died (YYYY-MM-DD)").fill("2/11/2001")
         form.locator(".btn", has_text="Save").click()
         expect(form.locator(".formerr")).to_have_text("invalid date of death: YYYY-MM-DD expected")
