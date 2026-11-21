@@ -52,6 +52,7 @@ from .. import prefs
 from .. import recommend
 from .. import requests as hub_requests
 from .. import request_search
+from .. import artist_search
 from .. import suggestions
 from .. import urls
 from ..activity import Activity, attempt_id
@@ -123,6 +124,7 @@ class Hub:
         self.throttle = accounts.Throttle()                    # les essais de connexion ratés, par adresse
         self.inbox = Inbox(cfg, self.db)                       # les envois des comptes (voir inbox.py)
         self.finder = request_search.Finder(cfg)                # la recherche dans TMDB des titres à demander (voir request_search.py)
+        self.artist_finder = artist_search.Finder(cfg)          # la recherche dans MusicBrainz des artistes à demander (voir artist_search.py)
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
         self.active = 0                                        # les flux ffmpeg en cours (voir count_stream)
         self.active_lock = threading.Lock()
@@ -561,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_failure(self, status, message):
         """Une erreur du serveur (500, 502 et plus) au journal ; le jeton n'y va pas : masqué d'après les clés décodées (`?%74oken=` aussi)."""
         split = urlsplit(self.path)
-        hidden = {"token", "q"} if unquote(split.path) == "/api/requests/search" else {"token"}         # le texte d'une recherche dans TMDB ne va pas au journal
+        hidden = {"token", "q"} if unquote(split.path) in ("/api/requests/search", "/api/requests/artists") else {"token"}         # le texte d'une recherche dans TMDB ou dans MusicBrainz ne va pas au journal
         pairs = [(k, "***" if k in hidden else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
         shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
         print(f"{status} {self.command} {shown} : {request_search.without_key(message, self.hub.cfg.tmdb_key)}", file=sys.stderr)
@@ -3637,7 +3639,7 @@ def requests_ready(h, seen, quality, ratings):
 def requests_ready_entry(request, place, rows, seen, quality, ratings):
     """Une demande arrivée pour l'accueil (voir requests_ready) : `place` est l'identifiant de l'élément (`rows` : ses lignes) ou, pour un artiste, sa fiche."""
     if request["kind"] == hub_requests.ARTIST:
-        return {"id": request["id"], "kind": request["kind"], "title": request["title"], "year": request["year"], "artist": place}
+        return {"id": request["id"], "kind": request["kind"], "title": request["title"], "year": request["year"], "artist": place, **hub_requests.mbid_fields(request)}
     return {"id": request["id"], "kind": request["kind"], "tmdb": request["tmdb"], "title": request["title"], "year": request["year"], "item": place, "card": with_seen(rows[place], seen, quality, ratings)}
 
 
@@ -3742,6 +3744,19 @@ def api_request_search(h, m, q):
         if item:
             result["item"] = item
     h.send_json({"results": results})
+
+
+@route("GET", r"/api/requests/artists")
+def api_request_artists(h, m, q):
+    """Cherche dans MusicBrainz un artiste à demander : `q`, 1 à 200 caractères. Au plus 10 résultats, dans l'ordre de MusicBrainz : `{"results": [{"mbid", "name", "type", "country", "disambiguation", "begin", "end", "url", "request"?, "artist"?}]}` ;
+    `url` : sa fiche sur le site de MusicBrainz, `request` : la demande de ce nom (comme les résultats de TMDB), `artist` : l'artiste d'une bibliothèque de musique que le compte voit, quand il y est déjà (la règle du 409). Garde-fous : voir artist_search.py.
+    MusicBrainz injoignable, ou la recherche occupée : 502 ou 503 en français, qui disent d'envoyer le nom tel quel (`POST /api/requests` sans `mbid`)."""
+    require_requester(h)
+    text = request_call(artist_search.search_text, q.get("q"))
+    hub = h.hub
+    request_call(hub.artist_finder.pace.take, h.user["id"])
+    results = request_call(hub.artist_finder.search, text)
+    h.send_json({"results": hub_requests.artist_results(hub.db, hub.cfg, h.user["id"], results, h.visible_ids())})
 
 
 @route("GET", r"/img/request/([0-9]{1,15})")

@@ -20,7 +20,7 @@ config.use_media_library(fixtures.REPO)
 from hub.db import Database  # noqa: E402
 from hub.sagas import Sagas  # noqa: E402
 from hub.server import app  # noqa: E402
-from hub import request_search  # noqa: E402
+from hub import artist_search, request_search  # noqa: E402
 
 
 class Reply:
@@ -53,6 +53,7 @@ class MiniHub(app.Hub):
         self.throttle = accounts.Throttle()
         self.inbox = inbox.Inbox(self.cfg, self.db)
         self.finder = request_search.Finder(self.cfg)
+        self.artist_finder = artist_search.Finder(self.cfg)
         self.streams = threading.BoundedSemaphore(2)
         self.active = 0
         self.active_lock = threading.Lock()

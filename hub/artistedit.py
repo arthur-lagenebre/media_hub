@@ -12,6 +12,7 @@ import re
 import threading
 import unicodedata
 
+from .requests import MBID
 from .scan.common import clean_text
 from .scan.edits import Invalid, genre_list, required, still_valid, text
 
@@ -19,7 +20,7 @@ FIELDS = ("name", "genres", "summary", "country", "active", "mbid")        # l'o
 SHEET_FIELDS = ("summary", "country", "active")                             # ce qui corrige la fiche de MusicBrainz et Wikipédia
 NAME_MAX, SUMMARY_MAX, COUNTRY_MAX, ACTIVE_MAX = 200, 5000, 100, 60
 PREFIX = "artistedit:"
-MBID_RE = re.compile(r"(?:https?://(?:www\.)?musicbrainz\.org/artist/)?([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})/?", re.IGNORECASE)      # l'identifiant, ou l'adresse de la fiche
+MBID_RE = re.compile(rf"(?:https?://(?:www\.)?musicbrainz\.org/artist/)?({MBID})/?", re.IGNORECASE)      # l'identifiant (sa forme est celle des demandes, voir requests.MBID), ou l'adresse de la fiche
 LOCK = threading.Lock()          # lire puis réécrire `artistedit:` : deux administrateurs ne s'écrasent pas
 
 

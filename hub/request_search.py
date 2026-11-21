@@ -57,14 +57,19 @@ def without_key(text, key):
     return text.replace(key, "…") if key else text
 
 
-def search_text(value):
-    """Le texte cherché, blancs de bord retirés ; 400 s'il a moins de 2 caractères utiles (ni contrôle, ni format, ni blanc, ni séparateur : catégories Unicode C* et Z*)
-    ou plus de 100 caractères en tout."""
+def bounded_text(value, minimum, maximum, message):
+    """Le texte cherché, blancs de bord retirés ; 400 `message` s'il a moins de `minimum` caractères utiles (ni contrôle, ni format, ni blanc, ni séparateur : catégories Unicode C* et Z*) ou plus de `maximum` caractères en tout.
+    Celui de la recherche dans TMDB (`search_text`) et celui de la recherche d'artistes (artist_search.py)."""
     text = (value or "").strip()
     useful = sum(not unicodedata.category(c).startswith(("C", "Z")) for c in text)
-    if useful < MIN_TEXT or len(text) > MAX_TEXT:
-        raise RequestError(400, BAD_TEXT)
+    if useful < minimum or len(text) > maximum:
+        raise RequestError(400, message)
     return text
+
+
+def search_text(value):
+    """Le texte cherché dans TMDB : de 2 à 100 caractères (voir `bounded_text`)."""
+    return bounded_text(value, MIN_TEXT, MAX_TEXT, BAD_TEXT)
 
 
 def search_kinds(value):

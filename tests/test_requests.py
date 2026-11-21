@@ -20,7 +20,7 @@ from urllib.parse import quote
 from tests import fixtures
 from tests.rig import MiniHub, call
 from tests.test_server_views import entry, item
-from hub import accounts, config, missing
+from hub import accounts, config, enrich, missing
 from hub import db as database
 from hub import requests as hub_requests
 from hub import scan as scanning
@@ -29,6 +29,10 @@ from hub.db import Database
 PASSWORD = "un mot de passe assez long"
 UNKNOWN = {"error": "demande inconnue"}
 FORBIDDEN = "tu n'as pas le droit de demander des films ni des séries"
+MB1 = "11111111-1111-1111-1111-111111111111"
+MB2 = "22222222-2222-2222-2222-222222222222"
+MB3 = "33333333-3333-3333-3333-333333333333"
+BAD_MBID = "mbid : l'identifiant MusicBrainz de l'artiste (8-4-4-4-12 chiffres hexadécimaux)"
 
 
 def film(tmdb, title=None, year="2001"):
@@ -898,8 +902,10 @@ class ArtistCase(RequestCase):
     def ask_artist(self, who, name, **more):
         return self.post(who, "/api/requests", {"kind": "artist", "name": name, **more})
 
-    def album(self, lib, ident, artist, artist_id="ar1"):
-        return item(ident, "album", lib=lib, title=f"Album {ident}", grp=artist, meta={"artist_id": artist_id} if artist_id else {})
+    def album(self, lib, ident, artist, artist_id="ar1", mbid=None):
+        """Un album de cet artiste ; `mbid` : l'identifiant MusicBrainz que ses étiquettes donnent à son artiste."""
+        meta = {**({"artist_id": artist_id} if artist_id else {}), **({"artist_mbid": mbid} if mbid else {})}
+        return item(ident, "album", lib=lib, title=f"Album {ident}", grp=artist, meta=meta)
 
     def scanned(self, lib, *albums):
         """Ces albums `albums` arrivent dans la bibliothèque de musique `lib` (ceux d'avant y restent)."""
@@ -1324,6 +1330,197 @@ class TestNamesThatAreNotAnArtist(ArtistCase):
         self.assertEqual(self.ask_artist(self.alice, "Various Artists Orchestra").status, 201)
 
 
+class TestAskingWithAnMbid(ArtistCase):
+    def ask(self, who, name, mbid=None, **more):
+        return self.post(who, "/api/requests", {"kind": "artist", "name": name, **({"mbid": mbid} if mbid is not None else {}), **more})
+
+    def stored(self):
+        return [tuple(r) for r in self.db.query("SELECT title, mbid, status FROM requests ORDER BY id")]
+
+    def test_the_mbid_chosen_is_kept_and_shown_with_the_page_of_the_artist(self):
+        first = self.ask(self.alice, "Daft Punk", MB1.upper(), note="pour la voiture")
+        rid = first.json()["id"]
+        self.assertEqual((first.status, first.json()), (201, {"id": rid, "kind": "artist", "status": "pending", "mine": True}))
+        self.assertEqual(self.stored(), [("Daft Punk", MB1, "pending")])
+        got = self.mine(self.alice)[0]
+        self.assertEqual((got["mbid"], got["url"]), (MB1, f"https://musicbrainz.org/artist/{MB1}"))
+        self.assertNotIn("tmdb", got)
+        listed = self.everything()[0]
+        self.assertEqual((listed["mbid"], listed["url"]), (MB1, f"https://musicbrainz.org/artist/{MB1}"))
+
+    def test_a_name_typed_as_it_is_has_no_mbid_and_no_link(self):
+        self.ask(self.alice, "Daft Punk")
+        got = self.mine(self.alice)[0]
+        self.assertNotIn("mbid", got)
+        self.assertNotIn("url", got)
+        self.assertEqual(self.stored(), [("Daft Punk", None, "pending")])
+
+    def test_an_mbid_is_one_identifier_in_the_form_of_a_uuid_or_nothing(self):
+        for bad in ("", "pas un identifiant", f"https://musicbrainz.org/artist/{MB1}", MB1 + "0", MB1[:-1], "x" * 500, " " + MB1, 7, True, [MB1], {"id": MB1}):
+            reply = self.ask(self.alice, "Air", bad)
+            self.assertEqual((reply.status, reply.json()), (400, {"error": BAD_MBID}), repr(bad))
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 0)
+        self.assertEqual(self.post(self.alice, "/api/requests", {"kind": "artist", "name": "Air", "mbid": None}).status, 201)
+        self.assertEqual(self.stored(), [("Air", None, "pending")])
+
+    def test_a_bad_name_is_still_told_before_a_bad_mbid(self):
+        self.assertEqual(self.ask(self.alice, "", "faux").json(), {"error": "nom d'artiste vide"})
+
+    def test_a_film_ignores_an_mbid(self):
+        reply = self.post(self.alice, "/api/requests", {"kind": "movie", "tmdb": 2, "mbid": MB1})
+        self.assertEqual(reply.status, 201)
+        self.assertIsNone(self.db.one("SELECT mbid FROM requests")["mbid"])
+
+    def test_the_grouping_stays_by_the_name_so_a_typed_name_and_a_chosen_one_are_one_request(self):
+        rid = self.ask(self.alice, "Daft Punk").json()["id"]
+        joined = self.ask(self.bob, "daft  punk", MB1)
+        self.assertEqual((joined.status, joined.json()["id"]), (200, rid))
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM requests")[0], 1)
+        self.assertEqual(self.stored(), [("Daft Punk", MB1, "pending")])                  # l'mbid arrive, le nom reste celui du premier
+
+    def test_the_first_mbid_received_is_kept(self):
+        self.ask(self.alice, "Daft Punk", MB1)
+        carol = accounts.create(self.db, "carol", "un mot de passe assez long")
+        self.ask(self.bob, "Daft Punk", MB2)
+        self.ask(carol, "Daft Punk")
+        self.assertEqual(self.stored(), [("Daft Punk", MB1, "pending")])
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM request_users")[0], 3)
+
+    def test_two_namesakes_with_the_same_comparable_name_stay_one_request_a_known_limit(self):
+        self.ask(self.alice, "Air", MB1)
+        self.assertEqual(self.ask(self.bob, "AIR", MB2).status, 200)
+        self.assertEqual(self.stored(), [("Air", MB1, "pending")])
+
+    def test_the_same_account_asking_again_with_another_mbid_changes_nothing(self):
+        self.ask(self.alice, "Air")
+        self.assertEqual(self.ask(self.alice, "Air", MB1).status, 200)
+        self.assertEqual(self.stored(), [("Air", None, "pending")])
+
+    def test_the_mbid_follows_the_request_in_every_answer(self):
+        rid = self.ask(self.alice, "Daft Punk", MB1).json()["id"]
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        self.assertEqual(self.mine(self.alice)[0]["mbid"], MB1)
+        [ready] = self.home(self.alice)
+        self.assertEqual((ready["id"], ready["mbid"], ready["url"]), (rid, MB1, f"https://musicbrainz.org/artist/{MB1}"))
+        done = self.set_status(rid, "declined", "non").json()
+        self.assertEqual((done["mbid"], done["url"]), (MB1, f"https://musicbrainz.org/artist/{MB1}"))
+
+    def test_a_declined_request_blocks_whatever_the_mbid(self):
+        rid = self.ask(self.alice, "Daft Punk", MB1).json()["id"]
+        self.set_status(rid, "declined", "introuvable")
+        reply = self.ask(self.bob, "Daft Punk", MB2)
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "cette demande a été refusée : introuvable"}))
+
+
+class TestArrivalByMbid(ArtistCase):
+    def ask(self, who, name, mbid=None):
+        return self.post(who, "/api/requests", {"kind": "artist", "name": name, **({"mbid": mbid} if mbid else {})})
+
+    def test_an_artist_known_by_its_mbid_on_both_sides_arrives_under_another_name(self):
+        self.ask(self.alice, "Daft Punk", MB1)
+        self.scanned("musique", self.album("musique", "a1", "Les Robots", "ar9", mbid=MB1))
+        got = self.mine(self.alice)[0]
+        self.assertEqual((got["status"], got["artist"]), ("added", {"lib": "musique", "id": "ar9", "name": "Les Robots"}))
+
+    def test_asking_for_an_artist_the_library_has_under_that_mbid_is_a_409_whatever_the_name(self):
+        self.scanned("musique", self.album("musique", "a1", "Les Robots", "ar9", mbid=MB1))
+        reply = self.ask(self.alice, "Daft Punk", MB1)
+        self.assertEqual((reply.status, reply.json()), (409, {"error": "déjà dans la médiathèque", "artist": {"lib": "musique", "id": "ar9", "name": "Les Robots"}}))
+
+    def test_two_different_mbids_are_not_the_same_artist_even_with_the_same_name(self):
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk", "ar1", mbid=MB1))
+        reply = self.ask(self.alice, "Daft Punk", MB2)
+        self.assertEqual((reply.status, reply.json()["status"]), (201, "pending"))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")
+        self.assertEqual(self.home(self.alice), [])
+
+    def test_a_name_alone_matches_by_name_whether_or_not_the_library_knows_an_mbid(self):
+        self.ask(self.alice, "Daft Punk")
+        self.ask(self.alice, "Air")
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk", "ar1", mbid=MB1), self.album("musique", "a2", "Air", "ar2"))
+        self.assertEqual([r["status"] for r in self.mine(self.alice)], ["added", "added"])
+
+    def test_an_artist_the_library_has_without_an_mbid_arrives_by_name(self):
+        self.ask(self.alice, "Daft Punk", MB2)
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk"))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "added")
+
+    def test_labels_that_are_damaged_never_break_the_reading_and_only_a_text_is_an_mbid(self):
+        self.ask(self.alice, "Daft Punk", MB1)
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk", "ar1"), self.album("musique", "a2", "Air", "ar2"), self.album("musique", "a3", "Phoenix", "ar3"), self.album("musique", "a4", "Justice", "ar4"))
+        for ident, meta in (("a1", "pas du json"), ("a2", '["liste"]'), ("a3", '{"artist_id": "ar3", "artist_mbid": 5}'), ("a4", '{"artist_id": 7, "artist_mbid": null}')):
+            self.db.execute("UPDATE items SET meta=? WHERE id=?", (meta, ident))
+        self.db.items_changed()
+        self.assertEqual(self.ask(self.alice, "Air").status, 409)            # des étiquettes illisibles : l'artiste est là, sans fiche
+        self.assertEqual(self.ask(self.alice, "Phoenix", MB2).json()["error"], "déjà dans la médiathèque")
+        self.assertEqual(self.ask(self.alice, "Justice").json()["artist"], {"lib": "musique", "name": "Justice"})
+        self.assertEqual(self.mine(self.alice)[0]["status"], "added")        # « Daft Punk » : le nom, faute d'étiquettes lisibles
+
+    def test_the_page_of_an_artist_is_the_one_of_its_first_album_that_has_one(self):
+        self.ask(self.alice, "Daft Punk")
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk", artist_id=""), self.album("musique", "a2", "Daft Punk", "ar1"), self.album("musique", "a3", "Daft Punk", "ar2"))
+        self.assertEqual(self.mine(self.alice)[0]["artist"], {"lib": "musique", "id": "ar1", "name": "Daft Punk"})
+
+    def test_a_missing_album_never_counts_even_with_the_mbid(self):
+        self.ask(self.alice, "Daft Punk", MB1)
+        self.db.kv_set("wanted:musique", {"ar1": [{"year": "1997", "title": "Homework", "key": "k", "cover": ""}]})
+        self.scanned("musique", self.album("musique", "a2", "Air", "ar2", mbid=MB3))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")
+
+    def test_an_arrival_by_mbid_in_a_library_the_account_cannot_see_waits_for_one_it_sees(self):
+        self.ask(self.bob, "Daft Punk", MB1)
+        self.scanned("musprive", self.album("musprive", "p1", "Les Robots", "ar7", mbid=MB1))
+        shown = self.mine(self.bob)[0]
+        self.assertEqual(shown["status"], "added")
+        self.assertNotIn("artist", shown)
+        self.assertEqual(self.everything()[0]["artist"]["lib"], "musprive")
+        self.scanned("musique", self.album("musique", "a1", "Les Robots", "ar2", mbid=MB1))
+        self.assertEqual(self.mine(self.bob)[0]["artist"]["lib"], "musique")
+
+    def test_a_request_created_for_an_artist_in_a_library_the_account_cannot_see_is_already_added(self):
+        self.scanned("musprive", self.album("musprive", "p1", "Les Robots", "ar7", mbid=MB1))
+        reply = self.ask(self.bob, "Daft Punk", MB1)
+        self.assertEqual((reply.status, reply.json()["status"]), (201, "added"))
+
+    def test_joining_with_an_mbid_can_make_a_pending_request_arrive(self):
+        self.ask(self.alice, "Daft Punk")
+        self.scanned("musprive", self.album("musprive", "p1", "Les Robots", "ar9", mbid=MB1))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")                     # le nom ne dit rien, la demande n'a pas d'mbid
+        joined = self.ask(self.bob, "Daft Punk", MB1)                                       # Bob ne voit pas « musprive » : pas de 409
+        self.assertEqual((joined.status, joined.json()["status"]), (200, "added"))
+        self.assertEqual(self.mine(self.alice)[0]["status"], "added")
+
+    def test_the_fiche_chosen_in_the_hub_is_the_mbid_of_the_artist_and_replaces_the_tags(self):
+        from tests import test_artist_edit as artist_edit          # ici : ce module en importe beaucoup d'autres
+
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk", "ar1", mbid=MB1))
+        self.ask(self.alice, "Daft Punk", MB2)
+        self.assertEqual(self.mine(self.alice)[0]["status"], "pending")                        # les étiquettes disent MB1
+        with mock.patch.object(enrich, "musicbrainz", return_value=artist_edit.FakeMusicBrainz()):
+            reply = self.post(self.boss, "/api/artist/musique/ar1/musicbrainz", {"mbid": MB2})
+        self.assertEqual(reply.status, 200, reply.body)
+        self.assertEqual(self.mine(self.alice)[0]["status"], "added")                          # sans scan : la fiche choisie est celle de l'artiste
+
+    def test_the_old_mbid_of_the_tags_no_longer_names_the_artist_once_another_fiche_is_chosen(self):
+        from tests import test_artist_edit as artist_edit
+
+        self.scanned("musique", self.album("musique", "a1", "Daft Punk", "ar1", mbid=MB1))
+        with mock.patch.object(enrich, "musicbrainz", return_value=artist_edit.FakeMusicBrainz()):
+            self.assertEqual(self.post(self.boss, "/api/artist/musique/ar1/musicbrainz", {"mbid": MB2}).status, 200)
+        self.assertEqual(self.ask(self.alice, "Daft Punk", MB1).status, 201)                    # un autre artiste du même nom
+        self.assertEqual(self.ask(self.bob, "Daft Punk", MB2).status, 409)
+        self.post(self.boss, "/api/artist/musique/ar1/musicbrainz", {"mbid": None})
+        self.assertEqual(self.ask(self.boss, "Daft Punk", MB1).status, 409)                    # revenu au rapprochement automatique : MB1 est de nouveau le sien
+
+
+class TestTheTableKeepsTheMbid(unittest.TestCase):
+    def test_the_hub_reads_the_same_form_of_mbid_as_the_artist_correction(self):
+        from hub import artistedit
+        self.assertEqual(artistedit.mbid(f"https://musicbrainz.org/artist/{MB1.upper()}/"), MB1)
+        self.assertTrue(hub_requests.MBID_RE.fullmatch(MB1))
+        self.assertIsNone(hub_requests.MBID_RE.fullmatch(f"https://musicbrainz.org/artist/{MB1}"))
+
+
 class TestMigration(unittest.TestCase):
     def test_a_version_7_base_gains_the_requests_and_keeps_everything_else(self):
         root = Path(tempfile.mkdtemp())
@@ -1411,7 +1608,7 @@ class TestRequestsTableMigration(unittest.TestCase):
         self.v11_base()
         db = Database(self.path)
         columns = {r["name"]: r["notnull"] for r in db.query("SELECT name, \"notnull\" FROM pragma_table_info('requests')")}
-        self.assertEqual((columns["tmdb"], "name_key" in columns), (0, True))
+        self.assertEqual((columns["tmdb"], "name_key" in columns, columns["mbid"]), (0, True, 0))          # `mbid` : l'identifiant MusicBrainz d'une demande d'artiste, facultatif
         self.assertEqual([r["name"] for r in db.query("SELECT name FROM sqlite_master WHERE name LIKE 'requests%' AND type='table'")], ["requests"])
         self.assertEqual(sorted(r["name"] for r in db.query(INDEXES_OF_REQUESTS)), ["requests_artist", "requests_tmdb"])
 
@@ -1440,6 +1637,17 @@ class TestRequestsTableMigration(unittest.TestCase):
                          (("show", None, "x"), "une série sans tmdb"), (("artist", None, None), "un artiste sans nom"), (("artist", None, ""), "un artiste au nom vide"), (("album", 1, None), "une sorte inconnue")):
             with self.assertRaises(sqlite3.IntegrityError, msg=why):
                 db.execute(insert, bad)
+
+    def test_the_mbid_belongs_to_an_artist_only_and_is_empty_for_every_request_that_was_there(self):
+        self.v11_base()
+        db = Database(self.path)
+        self.assertEqual([r["mbid"] for r in db.query("SELECT mbid FROM requests")], [None] * len(self.REQUESTS))
+        mbid = "11111111-1111-1111-1111-111111111111"
+        db.execute("INSERT INTO requests(kind, name_key, mbid, created, updated) VALUES('artist', 'daft punk', ?, 1, 1)", (mbid,))
+        self.assertEqual(db.one("SELECT mbid FROM requests WHERE name_key='daft punk'")["mbid"], mbid)
+        for kind, tmdb, name in (("movie", 700, None), ("show", 701, None)):
+            with self.assertRaises(sqlite3.IntegrityError, msg=kind):
+                db.execute("INSERT INTO requests(kind, tmdb, name_key, mbid, created, updated) VALUES(?,?,?,?,1,1)", (kind, tmdb, name, mbid))
 
     def test_a_migration_that_fails_halfway_leaves_the_old_table_and_says_why(self):
         self.v11_base()

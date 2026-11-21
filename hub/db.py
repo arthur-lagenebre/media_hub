@@ -77,7 +77,7 @@ def _create_request_indexes(conn):
 
 
 def _rebuild_requests(conn):
-    """12 : une demande peut ne pas venir de TMDB (`kind` `artist`, désignée par son nom : `tmdb` devient facultatif, `name_key` garde le nom comparable) ; l'unicité passe à deux index partiels (voir requests.py). La table d'une base passée par la 8 depuis la 7 est déjà à la nouvelle forme (SCHEMA l'a créée) : seuls les index se créent."""
+    """12 : une demande peut ne pas venir de TMDB (`kind` `artist`, désignée par son nom : `tmdb` devient facultatif, `name_key` garde le nom comparable, `mbid` l'identifiant MusicBrainz choisi) ; l'unicité passe à deux index partiels (voir requests.py). La table d'une base passée par la 8 depuis la 7 est déjà à la nouvelle forme (SCHEMA l'a créée) : seuls les index se créent."""
     if "name_key" not in [r["name"] for r in conn.execute("SELECT name FROM pragma_table_info('requests')")]:
         _recreate_requests(conn)
     _create_request_indexes(conn)
@@ -102,7 +102,7 @@ def _create_suggestions(conn):
 # 9 : les suggestions (table `suggestions`, voir suggestions.py), qui ne change aucune table existante.
 # 10 : les signalements : cinq colonnes ajoutées à `suggestions` (`item_id`, `entry_id`, `cause`, `subject`, `context`), vides pour les lignes d'avant ; aucune ligne ne change.
 # 11 : la colonne `users.remote_download` (« Télécharger à distance »), qui vaut 1 pour les comptes d'avant : rien ne change pour eux, l'administrateur retire le droit.
-# 12 : la table `requests` refaite (recopiée avec ses identifiants) : `tmdb` facultatif, colonne `name_key`, sorte `artist`, deux index uniques partiels à la place de UNIQUE(kind, tmdb) ; aucune ligne ne change.
+# 12 : la table `requests` refaite (recopiée avec ses identifiants) : `tmdb` facultatif, colonnes `name_key` et `mbid`, sorte `artist`, deux index uniques partiels à la place de UNIQUE(kind, tmdb) ; aucune ligne ne change.
 # (Une virgule doit précéder chaque numéro : .github/scripts/check_version.py lit ces clés dans le texte.)
 MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition="INTEGER NOT NULL DEFAULT 1"),
               5: partial(_add_column, table="users", column="can_upload", definition="INTEGER NOT NULL DEFAULT 0"),
@@ -113,7 +113,7 @@ MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition=
               10: _add_report_columns,
               11: partial(_add_column, table="users", column="remote_download", definition="INTEGER NOT NULL DEFAULT 1"),
               12: _rebuild_requests}
-SCHEMA_VERSION = 12         # 12 : la table `requests` accepte les demandes d'artistes (`tmdb` facultatif, `name_key`, index uniques partiels) ; 11 : colonne `users.remote_download` (le droit « Télécharger à distance ») ; 10 : colonnes `item_id`, `entry_id`, `cause`, `subject`, `context` de `suggestions` (signaler un titre qui pose problème) ; 9 : table `suggestions` (idées et remarques sur le hub, pour l'administrateur) ; 8 : tables `requests` et `request_users` (les demandes), colonne `users.can_request` ; 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+SCHEMA_VERSION = 12         # 12 : la table `requests` accepte les demandes d'artistes (`tmdb` facultatif, `name_key`, `mbid`, index uniques partiels) ; 11 : colonne `users.remote_download` (le droit « Télécharger à distance ») ; 10 : colonnes `item_id`, `entry_id`, `cause`, `subject`, `context` de `suggestions` (signaler un titre qui pose problème) ; 9 : table `suggestions` (idées et remarques sur le hub, pour l'administrateur) ; 8 : tables `requests` et `request_users` (les demandes), colonne `users.can_request` ; 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 RATINGS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS ratings(
