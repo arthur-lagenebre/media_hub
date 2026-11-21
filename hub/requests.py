@@ -18,25 +18,40 @@ from . import missing
 from . import sagas as sagafile
 from . import urls
 
-KINDS = ("movie", "show")
+KINDS = ("movie", "show")       # ce que TMDB connaît : ce que la recherche des demandes propose
+ARTIST = "artist"               # une demande faite par un simple nom, sans TMDB (voir `named`)
+ALL_KINDS = (*KINDS, ARTIST)
 STATUSES = ("pending", "added", "declined")
-MAX_TEXT = 200                  # message, motif de refus, titre
+MAX_TEXT = 200                  # message, motif de refus, titre, nom d'un artiste
 YEAR_RE = re.compile(r"[0-9]{4}")
 TMDB_PATHS = {"movie": "movie", "show": "tv"}     # où TMDB range chaque sorte, sur son site comme dans son API
 
-REQUESTS_TABLE = f"""
-CREATE TABLE IF NOT EXISTS requests(
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind    TEXT NOT NULL CHECK (kind IN ({", ".join(repr(k) for k in KINDS)})),
-    tmdb    INTEGER NOT NULL,                   -- l'identifiant TMDB du film ou de la série
-    title   TEXT NOT NULL DEFAULT '',
-    year    TEXT NOT NULL DEFAULT '',
-    status  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ({", ".join(repr(s) for s in STATUSES)})),
-    reason  TEXT NOT NULL DEFAULT '',           -- le motif d'un refus (vide sinon)
-    created INTEGER NOT NULL,
-    updated INTEGER NOT NULL,
-    UNIQUE(kind, tmdb)
+
+def requests_table(name="requests"):
+    """Le DDL de la table des demandes, sous le nom `name` : la migration 12 (db.py) la recrée sous un autre nom avant de remplacer l'ancienne (SQLite ne change pas une contrainte en place)."""
+    return f"""
+CREATE TABLE IF NOT EXISTS {name}(
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind     TEXT NOT NULL CHECK (kind IN ({", ".join(repr(k) for k in ALL_KINDS)})),
+    tmdb     INTEGER,                           -- l'identifiant TMDB du film ou de la série ; NULL pour un artiste
+    name_key TEXT,                              -- le nom d'un artiste tel qu'on le compare (labels.comparable) ; NULL pour un film ou une série
+    title    TEXT NOT NULL DEFAULT '',          -- le titre, ou le nom d'un artiste tel que le premier demandeur l'a tapé
+    year     TEXT NOT NULL DEFAULT '',
+    status   TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ({", ".join(repr(s) for s in STATUSES)})),
+    reason   TEXT NOT NULL DEFAULT '',          -- le motif d'un refus (vide sinon)
+    created  INTEGER NOT NULL,
+    updated  INTEGER NOT NULL,
+    CHECK (CASE WHEN kind = {ARTIST!r} THEN COALESCE(name_key, '') <> '' ELSE tmdb IS NOT NULL END)
 )"""
+
+
+REQUESTS_TABLE = requests_table()
+# Une seule demande par film ou série (par sorte et identifiant TMDB), et par artiste (par nom comparable). Pas dans TABLES : SCHEMA tourne aussi sur une base d'avant la version 12, dont la table n'a pas `name_key` ; ils se créent
+# avec la migration 12 et à l'ouverture d'une base neuve (db.Database._upgrade).
+REQUEST_INDEXES = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS requests_tmdb ON requests(kind, tmdb) WHERE tmdb IS NOT NULL",
+    f"CREATE UNIQUE INDEX IF NOT EXISTS requests_artist ON requests(kind, name_key) WHERE kind = {ARTIST!r}",
+)
 REQUEST_USERS_TABLE = """
 CREATE TABLE IF NOT EXISTS request_users(
     request_id INTEGER NOT NULL,                -- requests.id ; la dernière ligne d'une demande partie, la demande est supprimée avec elle

@@ -902,7 +902,7 @@ class TestMigration(unittest.TestCase):
         conn.close()
         db = Database(path)
         self.assertEqual(db.kv_get("schema"), database.SCHEMA_VERSION)
-        self.assertEqual(database.SCHEMA_VERSION, 11)
+        self.assertEqual(database.SCHEMA_VERSION, 12)
         self.assertEqual([tuple(r) for r in db.query("SELECT name, can_request FROM users ORDER BY name")], [("alice", 1), ("boss", 1)])
         self.assertEqual([tuple(r) for r in db.query("SELECT profile, entry_id, position FROM progress")], [(alice["id"], "e1", 12.5)])
         self.assertEqual([tuple(r) for r in db.query("SELECT p.name, t.entry_id FROM playlists p JOIN playlist_tracks t ON t.playlist_id = p.id")], [("Été", "t1")])
@@ -910,6 +910,123 @@ class TestMigration(unittest.TestCase):
         self.assertEqual(db.query("SELECT * FROM requests"), [])
         self.assertTrue(accounts.public(accounts.by_id(db, alice["id"]))["can_request"])
         self.assertEqual(Database(path).kv_get("schema"), database.SCHEMA_VERSION)          # rouverte : rien n'est rejoué
+
+
+V11_REQUESTS = """
+CREATE TABLE requests(
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind    TEXT NOT NULL CHECK (kind IN ('movie', 'show')),
+    tmdb    INTEGER NOT NULL,
+    title   TEXT NOT NULL DEFAULT '',
+    year    TEXT NOT NULL DEFAULT '',
+    status  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'added', 'declined')),
+    reason  TEXT NOT NULL DEFAULT '',
+    created INTEGER NOT NULL,
+    updated INTEGER NOT NULL,
+    UNIQUE(kind, tmdb)
+)"""
+REQUEST_COLUMNS = "id, kind, tmdb, title, year, status, reason, created, updated"
+USER_COLUMNS = "request_id, user_id, note, created, ack"
+INDEXES_OF_REQUESTS = "SELECT name FROM sqlite_master WHERE tbl_name='requests' AND type='index' AND sql IS NOT NULL"
+
+
+class TestRequestsTableMigration(unittest.TestCase):
+    """La version 12 refait la table `requests` (tmdb facultatif, nom normalisé, sorte `artist`) : SQLite ne change pas une contrainte en place, la table est recréée et rien de ce qu'elle gardait ne se perd."""
+
+    REQUESTS = [(1, "movie", 603, "Matrix", "1999", "pending", "", 100, 100), (2, "show", 1399, "Une série", "", "added", "", 110, 150),
+                (3, "movie", 27205, "Inception", "2010", "declined", "mauvaise version", 120, 160), (5, "movie", 11, "Un autre", "1977", "added", "", 130, 170)]
+    USERS = [(1, "u1", "pour ce soir", 100, 0), (1, "u2", "", 105, 0), (2, "u1", "", 110, 1), (3, "u2", "bof", 120, 0), (5, "u1", "", 130, 1), (5, "u3", "vite", 131, 0)]
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.path = self.root / "hub.db"
+
+    def v11_base(self, extra=""):
+        """Une base en version 11 : l'ancienne table `requests` (trois contraintes), des demandes dans chaque état, leurs demandeurs ; une demande est partie après la dernière (la suite des identifiants en garde la trace). `extra` : du SQL en plus."""
+        Database(self.path).connection().close()
+        conn = sqlite3.connect(self.path)
+        conn.executescript("DROP TABLE requests;" + V11_REQUESTS)
+        conn.executemany(f"INSERT INTO requests({REQUEST_COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?)", self.REQUESTS)
+        conn.execute("INSERT INTO requests(id, kind, tmdb, created, updated) VALUES(6, 'movie', 99, 1, 1)")
+        conn.execute("DELETE FROM requests WHERE id=6")                  # l'identifiant 6 ne doit jamais être redonné
+        conn.executemany(f"INSERT INTO request_users({USER_COLUMNS}) VALUES(?,?,?,?,?)", self.USERS)
+        conn.executescript(extra + "UPDATE kv SET value='11' WHERE key='schema';")
+        conn.commit()
+        conn.close()
+
+    def dump(self, db):
+        return ([tuple(r) for r in db.query(f"SELECT {REQUEST_COLUMNS} FROM requests ORDER BY id")], [tuple(r) for r in db.query(f"SELECT {USER_COLUMNS} FROM request_users ORDER BY request_id, user_id")])
+
+    def test_a_version_11_base_keeps_every_request_requester_message_status_and_ack(self):
+        self.v11_base()
+        db = Database(self.path)
+        self.assertEqual(db.kv_get("schema"), 12)
+        self.assertEqual(self.dump(db), (self.REQUESTS, self.USERS))
+        again = Database(self.path)
+        self.assertEqual((again.kv_get("schema"), self.dump(again)), (12, (self.REQUESTS, self.USERS)))          # rouverte : rien n'est rejoué
+
+    def test_the_new_table_has_the_new_shape_and_no_leftover(self):
+        self.v11_base()
+        db = Database(self.path)
+        columns = {r["name"]: r["notnull"] for r in db.query("SELECT name, \"notnull\" FROM pragma_table_info('requests')")}
+        self.assertEqual((columns["tmdb"], "name_key" in columns), (0, True))
+        self.assertEqual([r["name"] for r in db.query("SELECT name FROM sqlite_master WHERE name LIKE 'requests%' AND type='table'")], ["requests"])
+        self.assertEqual(sorted(r["name"] for r in db.query(INDEXES_OF_REQUESTS)), ["requests_artist", "requests_tmdb"])
+
+    def test_an_identifier_given_before_is_never_given_again(self):
+        self.v11_base()
+        db = Database(self.path)
+        db.execute("INSERT INTO requests(kind, name_key, title, created, updated) VALUES('artist', 'daft punk', 'Daft Punk', 200, 200)")
+        db.execute("INSERT INTO requests(kind, tmdb, created, updated) VALUES('movie', 7, 200, 200)")
+        self.assertEqual([r["id"] for r in db.query("SELECT id FROM requests WHERE id > 5 ORDER BY id")], [7, 8])
+
+    def test_the_table_accepts_what_it_must_and_refuses_what_it_must_not(self):
+        self.v11_base()
+        db = Database(self.path)
+        insert = "INSERT INTO requests(kind, tmdb, name_key, created, updated) VALUES(?,?,?,1,1)"
+        for ok in (("artist", None, "daft punk"), ("artist", None, "beyonce"), ("show", 603, None)):          # des artistes sans tmdb ; la valeur TMDB d'un film, pour une série
+            db.execute(insert, ok)
+        for bad, why in ((("movie", 603, None), "deux demandes du même film"), (("artist", None, "daft punk"), "deux demandes du même artiste"), (("movie", None, None), "un film sans tmdb"),
+                         (("show", None, "x"), "une série sans tmdb"), (("artist", None, None), "un artiste sans nom"), (("artist", None, ""), "un artiste au nom vide"), (("album", 1, None), "une sorte inconnue")):
+            with self.assertRaises(sqlite3.IntegrityError, msg=why):
+                db.execute(insert, bad)
+
+    def test_a_migration_that_fails_halfway_leaves_the_old_table_and_says_why(self):
+        self.v11_base()
+        with mock.patch.object(database, "REQUEST_INDEXES", ("CREATE UNIQUE INDEX requests_oups ON requests(colonne_inconnue)",)), self.assertRaises(RuntimeError) as caught:
+            Database(self.path)
+        message = str(caught.exception)
+        self.assertIn("vers la version 12 a échoué", message)
+        self.assertIn("colonne_inconnue", message)
+        self.assertIn("la base est restée en version 11", message)
+        conn = sqlite3.connect(self.path)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT value FROM kv WHERE key='schema'").fetchone()[0], "11")
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM pragma_table_info('requests') WHERE name='name_key'").fetchone()[0], 0)       # l'ancienne table, entière
+        self.assertEqual(conn.execute(f"SELECT {REQUEST_COLUMNS} FROM requests ORDER BY id").fetchall(), self.REQUESTS)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='requests_new'").fetchone()[0], 0)
+        self.assertEqual(self.dump(Database(self.path)), (self.REQUESTS, self.USERS))           # sans l'accident, la fois suivante elle passe
+
+    def test_a_trigger_or_a_view_on_the_table_stops_the_migration_with_nothing_touched(self):
+        for n, what in enumerate(("CREATE TRIGGER garde AFTER DELETE ON requests BEGIN SELECT 1; END;", "CREATE VIEW attentes AS SELECT id FROM requests WHERE status='pending';")):
+            with self.subTest(what=what):
+                self.path = self.root / f"trigger{n}.db"
+                self.v11_base(what)
+                with self.assertRaises(RuntimeError) as caught:
+                    Database(self.path)
+                self.assertIn("la base est restée en version 11", str(caught.exception))
+                self.assertIn("déclencheur ou une vue", str(caught.exception))
+                conn = sqlite3.connect(self.path)
+                self.addCleanup(conn.close)
+                self.assertEqual(conn.execute(f"SELECT {REQUEST_COLUMNS} FROM requests ORDER BY id").fetchall(), self.REQUESTS)
+
+    def test_a_new_base_has_the_indexes_from_the_start(self):
+        db = Database(self.path)
+        self.assertEqual(sorted(r["name"] for r in db.query(INDEXES_OF_REQUESTS)), ["requests_artist", "requests_tmdb"])
+        with self.assertRaises(sqlite3.IntegrityError):
+            for _ in range(2):
+                db.execute("INSERT INTO requests(kind, name_key, created, updated) VALUES('artist', 'x', 1, 1)")
 
 
 class TestStartup(unittest.TestCase):
