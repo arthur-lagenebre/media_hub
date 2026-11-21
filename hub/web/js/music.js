@@ -293,6 +293,84 @@
     if (box.scrollHeight > room || S > room - rest - 24) { size(Math.max(120, Math.min(S, room - rest - 24))); layout(); }
   }
 
+  // --- Corriger un artiste (administrateur, hors télé : saisir à la télécommande se fait mal) ---------------------
+  // Nom affiché, genres, résumé, pays, années d'activité, gardés dans la base du hub (POST /api/artist/<lib>/<id>/edit) : ni l'identifiant de l'artiste ni la médiathèque ne changent. Seuls les champs changés partent ;
+  // chaque champ déjà corrigé (`edited` de la fiche) porte son « Rétablir », qui envoie aussi ce qui a été saisi ailleurs (comme « Modifier l'album »).
+  // Le serveur ne rend pas à part le pays et les années (ils sont dans `facts`) : leur champ s'ouvre vide, et seul ce qu'on y écrit part.
+  var ARTIST_FIELDS = [['name', H.t('Nom affiché'), 200], ['genres', H.t('Genres (séparés par des virgules)'), 1500], ['summary', H.t('Résumé'), 5000, 'textarea'], ['country', H.t('Pays'), 100], ['active', H.t('Années d’activité'), 60]];
+  // Ce que la fiche montre aujourd'hui, dans la forme où la fenêtre le rend (H.form normalise les espaces d'une ligne, et retire ceux des bords d'un texte long).
+  function artistStart(d) {
+    var info = d.info || {}, summary = typeof info.summary === 'string' ? info.summary : (info.wiki && info.wiki.extract) || '';
+    return { name: H.tidy(d.name || ''), genres: (d.genres || []).map(H.tidy).join(', '), summary: summary.trim(), country: '', active: '' };
+  }
+  function artistChanges(start, values) {
+    var changed = {};
+    ['name', 'summary', 'country', 'active'].forEach(function (k) { if (values[k] !== start[k]) changed[k] = values[k]; });
+    var genres = H.actions.genreList(values.genres);
+    if (genres.join(', ') !== start.genres) changed.genres = genres;
+    return changed;
+  }
+  // `done(message)` : appelé une fois la correction gardée (la fiche se recharge).
+  function editArtist(lib, id, d, done) {
+    var edited = d.edited || [], start = artistStart(d);
+    function send(body, message) { return H.api('/api/artist/' + lib + '/' + id + '/edit', body).then(function () { return message; }); }
+    function restore(field) { return function (values) { var body = artistChanges(start, values); body[field] = null; return send(body, H.t('Valeur d’origine rétablie')); }; }
+    H.form({ title: H.t('Modifier l’artiste'), ok: H.t('Enregistrer'),
+      lead: [H.t('La correction ne vaut que dans le hub. Le nom de l’artiste dans les fichiers ne change pas.')],
+      fields: ARTIST_FIELDS.map(function (f) { return { key: f[0], label: f[1], maxlength: f[2], type: f[3], value: start[f[0]], restore: edited.indexOf(f[0]) >= 0 ? restore(f[0]) : null }; }),
+      submit: function (values) {
+        var changed = artistChanges(start, values);
+        return Object.keys(changed).length ? send(changed, H.t('Artiste corrigé')) : Promise.resolve(null);
+      },
+      done: function (message) { if (message) done(message); } });
+  }
+  // --- Choisir la fiche MusicBrainz d'un artiste (administrateur, hors télé) ------------------------------------
+  // Quand « Fiches artistes » l'a rapproché d'un homonyme. La recherche (par le serveur : GET …/musicbrainz?q=) part sur le nom de l'artiste, et se relance par Entrée ou « Chercher » : pas à chaque touche, MusicBrainz
+  // n'accepte qu'une requête par seconde. Le résultat choisi est demandé à MusicBrainz et gardé (POST …/musicbrainz) ; la fiche montrée est cochée. « Revenir au rapprochement automatique » n'est là que si une fiche
+  // a été choisie (`edited` contient `mbid`). Une fenêtre `wide picker`, comme le choix des films d'une saga ; une erreur reste dans la fenêtre.
+  var MB_ARTIST = /musicbrainz\.org\/artist\/([0-9a-f-]{36})/i;
+  function shownMbid(d) {
+    var link = ((d.info || {}).links || []).filter(function (l) { return l.label === 'MusicBrainz'; })[0], found = link && MB_ARTIST.exec(link.url);
+    return found ? found[1].toLowerCase() : '';
+  }
+  function pickMusicBrainz(lib, id, d, done) {
+    var base = '/api/artist/' + lib + '/' + id + '/musicbrainz', current = shownMbid(d), busy = false, seq = 0;
+    var input = h('input', { class: 'f field big', type: 'search', maxlength: '200', 'aria-label': H.t('Nom de l’artiste'), autocomplete: 'off',
+      onkeydown: function (e) { if (e.key === 'Enter') { e.preventDefault(); search(); } } });
+    input.value = d.name || '';
+    var list = h('div', { class: 'menu-list picklist' }), err = h('p', { class: 'formerr', role: 'alert' });
+    var box = H.box('wide picker', H.t('Choisir la fiche MusicBrainz'),
+      h('p', { class: 'lead' }, H.t('La fiche choisie est demandée à MusicBrainz tout de suite : résumé, membres et liens viennent d’elle.')), input, list, err,
+      h('div', { class: 'btns' }, H.button(H.t('Chercher'), 'search', { 'data-key': 'mb-search', onclick: search }),
+        (d.edited || []).indexOf('mbid') >= 0 ? H.button(H.t('Revenir au rapprochement automatique'), 'refresh', { 'data-key': 'mb-auto', onclick: function () { choose(null); } }) : null,
+        H.button(H.t('Fermer'), null, { 'data-key': 'mb-close', onclick: function () { H.overlay.close(); } })));
+    function choose(mbid) {
+      if (busy) return;
+      busy = true; err.textContent = '';
+      H.api(base, { mbid: mbid }).then(function () {
+        H.overlay.close(function () { done(mbid ? H.t('Fiche MusicBrainz enregistrée') : H.t('Rapprochement automatique rétabli')); });
+      }, function (e) { busy = false; err.textContent = e.message; });
+    }
+    function draw(results) {
+      H.clear(list);
+      results.forEach(function (r) {
+        var on = r.mbid === current;
+        list.appendChild(h('button', { class: 'opt f' + (on ? ' on' : ''), 'data-key': 'mb-' + r.mbid, onclick: function () { choose(r.mbid); } },
+          h('span', { class: 'mark' }, on ? H.icon('check') : null), h('span', { class: 'lbl' }, r.name), h('span', { class: 'det' }, [r.disambiguation, r.country].filter(Boolean).join(' · '))));
+      });
+      if (!results.length) list.appendChild(h('p', { class: 'muted' }, H.t('Aucun artiste trouvé.')));
+    }
+    function search() {
+      var text = H.tidy(input.value), mine = ++seq;
+      if (!text) { input.focus(); return; }
+      err.textContent = '';
+      H.api(base + '?q=' + encodeURIComponent(text)).then(function (r) { if (mine === seq) draw(r.results); }, function (e) { if (mine === seq) err.textContent = e.message; });
+    }
+    H.overlay.open(box, function () { seq++; });
+    setTimeout(function () { try { input.focus(); } catch (e) { /* tant pis */ } }, 30);
+    search();
+  }
+
   H.route(/^\/artist\/([\w-]+)\/(\w+)$/, function (m) {
     var lib = m[1], id = m[2], data = null, stamp = 0;
     var el = h('section', { class: 'detail artist', 'data-lib': lib });
@@ -316,16 +394,18 @@
         H.clear(el).appendChild(h('div', { class: 'blank' }, h('h1', null, H.t('Artiste introuvable')), h('p', null, e.message), h('a', { class: 'btn f', href: '#/l/' + lib, 'data-autofocus': '1' }, H.t('Retour à la musique'))));
       });
     }
-    // Les boutons de la fiche d'un artiste : lire, mettre en file, et pour l'administrateur la photo.
+    // Les boutons de la fiche d'un artiste : lire, mettre en file, et pour l'administrateur (hors télé) la photo, les corrections et le choix de la fiche MusicBrainz.
     function artistActions(d, list) {
-      var hear = canHear(d.library && d.library.id);
+      var hear = canHear(d.library && d.library.id), admin = H.device !== 'tv' && H.isAdmin();
       return h('div', { class: 'actions' },
         hear ? H.button(H.t('Tout lire'), 'play', { class: 'primary', 'data-autofocus': '1', disabled: !list.length, onclick: function () { H.audio.play(list, 0); } }) : null,
         hear ? H.button(H.t('Aléatoire'), 'shuffle', { disabled: !list.length, onclick: function () { H.audio.play(list, 0, true); } }) : null,
         hear ? H.button(H.t('Jouer ensuite'), null, { disabled: !list.length, onclick: function () { queueTracks(list, 'next', d.name); } }) : null,
         hear ? H.button(H.t('À la file'), 'queue', { disabled: !list.length, onclick: function () { queueTracks(list, 'end', d.name); } }) : null,
-        H.device === 'tv' || !H.isAdmin() ? null : H.button(H.t('Changer la photo'), 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }),       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
-        H.device === 'tv' || !H.isAdmin() || !d.photo ? null : H.button(H.t('Recadrer'), 'full', { 'data-key': 'crop', onclick: recrop }));
+        admin ? H.button(H.t('Changer la photo'), 'edit', { 'data-key': 'photo', onclick: function () { picker.click(); } }) : null,       // le sélecteur de fichiers d'une télé se pilote mal ; la photo est réservée à l'administrateur
+        admin && d.photo ? H.button(H.t('Recadrer'), 'full', { 'data-key': 'crop', onclick: recrop }) : null,
+        admin ? H.button(H.t('Modifier l’artiste'), 'edit', { 'data-key': 'artist-edit', onclick: function () { editArtist(lib, id, d, saved); } }) : null,
+        admin ? H.button(H.t('Choisir la fiche MusicBrainz'), 'search', { 'data-key': 'artist-mb', onclick: function () { pickMusicBrainz(lib, id, d, saved); } }) : null);
     }
     // Le texte à droite de la photo : nom, faits, genres, totaux, résumé Wikipédia, boutons.
     function artistInfo(d, info) {
@@ -335,10 +415,11 @@
       var facts = info && info.facts ? info.facts.split(' · ').map(function (part) { return H.tr(part); }) : [];
       if (info && info.disambiguation) facts.push(info.disambiguation);     // la description courte de MusicBrainz (« UK soul/jazz singer ») n'est pas un genre : elle va avec les faits
       if (facts.length) box.appendChild(h('p', { class: 'meta' }, facts.join(' · ')));
-      var tags = H.genreLine(lib, d.genres);
+      var tags = H.genreLine(lib, d.genres, d.genres_linkable);         // un genre corrigé que la bibliothèque n'a pas reste du texte
       if (tags) box.appendChild(tags);
       box.appendChild(h('p', { class: facts.length ? 'credit' : 'meta' }, meta));
-      if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, H.t('Wikipédia'))));
+      if (info && info.summary) box.appendChild(h('p', { class: 'synopsis own' }, info.summary));           // le résumé corrigé par l'administrateur : plus celui de Wikipédia, pas de lien vers lui
+      else if (info && info.wiki) box.appendChild(h('p', { class: 'synopsis' }, info.wiki.extract, ' ', h('a', { class: 'src', href: info.wiki.url, target: '_blank', rel: 'noopener noreferrer' }, H.t('Wikipédia'))));
       box.appendChild(artistActions(d, list));
       return box;
     }

@@ -153,13 +153,15 @@
   function sagaHref(libId, name) { return '#/saga/' + libId + '?g=' + encodeURIComponent(name); }
   function personHref(name) { return '#/person?n=' + encodeURIComponent(name); }
   // La ligne des genres d'une fiche (élément ou artiste) : « a, b, c » comme avant, chaque genre ouvrant la bibliothèque `libId` filtrée sur lui (la valeur exacte du filtre du serveur), ou null sans genre.
-  H.genreLine = function (libId, genres) {
+  // `linkable` (facultatif) : les seuls genres que le filtre connaît (`genres_linkable` d'un artiste) ; les autres restent du texte, pour ne jamais mener à une liste vide.
+  H.genreLine = function (libId, genres, linkable) {
     var list = (genres || []).filter(Boolean);
     if (!list.length) return null;
     var line = h('p', { class: 'genres' });
     list.forEach(function (genre, i) {
       if (i) line.appendChild(document.createTextNode(', '));
-      line.appendChild(h('a', { class: 'f who', href: '#/l/' + libId + '?genre=' + encodeURIComponent(genre), 'data-key': 'genre-' + genre }, genre));
+      line.appendChild(linkable && linkable.indexOf(genre) < 0 ? document.createTextNode(genre)
+        : h('a', { class: 'f who', href: '#/l/' + libId + '?genre=' + encodeURIComponent(genre), 'data-key': 'genre-' + genre }, genre));
     });
     return line;
   };

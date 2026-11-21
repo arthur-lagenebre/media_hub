@@ -31,21 +31,26 @@ def key(lib_id, item_id):
     return f"{PREFIX}{lib_id}:{item_id}"
 
 
-def _text(value, limit, what):
+def text(value, limit, what):
     """`value` nettoyé comme un titre lu dans une étiquette (sans marques invisibles ni espaces aux bords) ; texte seul, sans caractère de contrôle, d'au plus `limit` caractères."""
     if not isinstance(value, str) or any(unicodedata.category(c) == "Cc" for c in value):
         raise Invalid(f"{what} : du texte, sans caractère de contrôle")
-    text = clean_text(value)
-    if len(text) > limit:
+    cleaned = clean_text(value)
+    if len(cleaned) > limit:
         raise Invalid(f"{what} : {limit} caractères au plus")
-    return text
+    return cleaned
+
+
+def required(value, limit, what):
+    """Comme `text`, mais jamais vide : de 1 à `limit` caractères."""
+    cleaned = text(value, limit, what)
+    if not cleaned:
+        raise Invalid(f"{what} : de 1 à {limit} caractères")
+    return cleaned
 
 
 def _title(value):
-    title = _text(value, TITLE_MAX, "titre")
-    if not title:
-        raise Invalid(f"titre : de 1 à {TITLE_MAX} caractères")
-    return title
+    return required(value, TITLE_MAX, "titre")
 
 
 def _year(value):
@@ -55,17 +60,17 @@ def _year(value):
     return text
 
 
-def _genres(value):
+def genre_list(value):
     if not isinstance(value, list) or len(value) > GENRES_MAX:
         raise Invalid(f"genres : une liste de {GENRES_MAX} au plus")
-    genres = [_text(genre, GENRE_MAX, "genre") for genre in value]
+    genres = [text(genre, GENRE_MAX, "genre") for genre in value]
     if not all(genres):
         raise Invalid("genres : aucun genre vide")
     return list(dict.fromkeys(genres))          # une fois chacun, dans l'ordre
 
 
 def _label(value):
-    return _text(value, LABEL_MAX, "label")
+    return text(value, LABEL_MAX, "label")
 
 
 def _type(value):
@@ -74,7 +79,7 @@ def _type(value):
     return value
 
 
-PARSERS = {"title": _title, "year": _year, "genres": _genres, "label": _label, "type": _type}
+PARSERS = {"title": _title, "year": _year, "genres": genre_list, "label": _label, "type": _type}
 
 
 def parse(body):
@@ -94,15 +99,20 @@ def parse(body):
     return changes, resets
 
 
-def kept(stored):
-    """Les corrections gardées dans `kv`, celles qui sont encore valables : un champ abîmé (la base touchée à la main) est ignoré, jamais une erreur de scan."""
+def still_valid(parsers, stored):
+    """{champ: valeur} de `stored` (ce que `kv` garde) que `parsers` ({champ: lecteur}) acceptent encore : un champ inconnu ou abîmé (la base touchée à la main) est ignoré, jamais une erreur."""
     found = {}
     for field, value in (stored.items() if isinstance(stored, dict) else ()):
         try:
-            found[field] = PARSERS[field](value)
+            found[field] = parsers[field](value)
         except (KeyError, Invalid):
             pass
     return found
+
+
+def kept(stored):
+    """Les corrections gardées dans `kv`, celles qui sont encore valables : un champ abîmé est ignoré, jamais une erreur de scan."""
+    return still_valid(PARSERS, stored)
 
 
 def listed(corrections):

@@ -28,6 +28,7 @@ from unittest import mock
 
 from tests import fixtures
 from tests.test_server import FakeTmdb, Running
+from hub import enrich
 from hub.media import images
 
 try:
@@ -4862,6 +4863,154 @@ class TestArtistLinks(UiCase):
         self.open(f"#/artist/musique/{self.artist}")
         self.view(".actions .btn", has_text="Tout lire").wait_for()
         self.assertEqual(self.view(".links-out").count(), 0)
+
+
+MB_OTHER = "22222222-2222-2222-2222-222222222222"
+
+
+class FakeArtistMusicBrainz:
+    """MusicBrainz et Wikipédia sans réseau, pour choisir la fiche d'un artiste : la recherche rend un homonyme canadien, puis le groupe de la médiathèque."""
+    SHEETS = {MB_OTHER: {"type": "Person", "area": {"name": "Canada"}, "life-span": {"begin": "1980"}, "disambiguation": "homonyme", "relations": []},
+              ARTIST_MBID: {"type": "Group", "relations": []}}
+
+    def artist(self, mbid):
+        return {"id": mbid, **self.SHEETS[mbid]}
+
+    def external(self, url):
+        raise enrich.MusicBrainzError("pas d'article", 404)
+
+    def search_artists(self, name, limit=10):
+        return [{"id": MB_OTHER, "name": "Daft Punk", "type": "Person", "country": "CA", "disambiguation": "homonyme", "score": 100},
+                {"id": ARTIST_MBID, "name": "Daft Punk", "type": "Group", "country": "FR", "score": 90}]
+
+
+class TestArtistEditUi(UiCase):
+    """L'administrateur corrige la fiche d'un artiste (« Modifier l'artiste » : nom affiché, genres, résumé, pays, années ; « Choisir la fiche MusicBrainz ») : tout vit dans la base du hub, l'identifiant de l'artiste ne change pas. Hors télé, et seulement l'administrateur."""
+
+    def setUp(self):
+        super().setUp()
+        db = self.run_.hub.db
+        self.artist, undo = give_artist_a_sheet(db)
+        self.addCleanup(undo)
+        self.addCleanup(db.kv_delete, f"artistedit:musique:{self.artist}")
+        self.addCleanup(db.kv_delete, f"artist:{MB_OTHER}")
+
+    def sheet(self):
+        return self.api(f"/api/artist/musique/{self.artist}")
+
+    def open_sheet(self):
+        self.open(f"#/artist/musique/{self.artist}")
+        self.view(".actions .btn", has_text="Tout lire").wait_for()
+
+    def open_form(self):
+        self.open_sheet()
+        self.view(".actions [data-key=artist-edit]").click()
+        form = self.page.locator(".menu.form")
+        expect(form.locator("input").first).to_be_focused()            # la fenêtre donne le focus à son premier champ un instant après s'ouvrir
+        return form
+
+    def field(self, form, label):
+        return form.locator(".flab", has_text=label).locator("input, textarea")
+
+    def save(self, form):
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")):
+            form.locator(".btn", has_text="Enregistrer").click()
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+
+    def admin_buttons(self):
+        return self.view(".actions [data-key=artist-edit], .actions [data-key=artist-mb]")
+
+    def test_the_name_is_corrected_and_the_sheet_the_album_cards_the_artists_view_and_its_search_show_it(self):
+        self.addCleanup(lambda: self.api("/api/me/settings", {"music_view": "albums"}))
+        form = self.open_form()
+        expect(form).to_contain_text("La correction ne vaut que dans le hub. Le nom de l’artiste dans les fichiers ne change pas.")
+        expect(self.field(form, "Nom affiché")).to_have_value("Daft Punk")
+        expect(self.field(form, "Genres")).to_have_value("Electronic")
+        self.field(form, "Nom affiché").fill("Les Robots")
+        self.save(form)
+        expect(self.view(".info h1")).to_have_text("Les Robots")
+        self.assertEqual(self.sheet()["edited"], ["name"])
+        self.open("#/l/musique")
+        expect(self.view(".grid .card", has_text="Les Robots")).to_have_count(1)            # la carte de l'album porte le nom corrigé
+        self.api("/api/me/settings", {"music_view": "artists"})
+        self.open("#/l/musique")
+        expect(self.view(".grid .card", has_text="Les Robots")).to_have_count(1)
+        self.view("input[type=search]").fill("robots")
+        expect(self.view(".grid .card")).to_have_count(1)
+        self.view("input[type=search]").fill("daft")
+        expect(self.view(".grid .card")).to_have_count(0)
+
+    def test_a_field_left_as_it_was_is_not_sent(self):
+        form = self.open_form()
+        self.field(form, "Pays").fill("France")
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator(".btn", has_text="Enregistrer").click()
+        self.assertEqual(sent.value.request.post_data_json, {"country": "France"})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+
+    def test_restore_gives_back_the_name_of_the_files(self):
+        self.api(f"/api/artist/musique/{self.artist}/edit", {"name": "Les Robots"})
+        form = self.open_form()
+        expect(self.field(form, "Nom affiché")).to_have_value("Les Robots")
+        with self.page.expect_response(lambda r: r.url.endswith("/edit")) as sent:
+            form.locator("[data-key=restore-name]").click()
+        self.assertEqual(sent.value.request.post_data_json, {"name": None})
+        expect(self.page.locator(".menu.form")).to_have_count(0)
+        expect(self.view(".info h1")).to_have_text("Daft Punk")
+        self.assertEqual(self.sheet()["edited"], [])
+
+    def test_a_corrected_genre_the_library_does_not_have_is_not_a_link(self):
+        self.api(f"/api/artist/musique/{self.artist}/edit", {"genres": ["Electronic", "Inexistant"]})
+        self.open_sheet()
+        expect(self.view(".info .genres")).to_have_text("Electronic, Inexistant")
+        expect(self.view(".info .genres a")).to_have_text(["Electronic"])
+
+    def test_a_summary_with_html_stays_text(self):
+        text = "<b>gras</b> <img src=x onerror=\"window.pwned=1\">\nDeuxième ligne"
+        self.api(f"/api/artist/musique/{self.artist}/edit", {"summary": text})
+        self.open_sheet()
+        summary = self.view(".info .synopsis")
+        expect(summary).to_contain_text("<b>gras</b>")
+        self.assertEqual(summary.locator("b, img").count(), 0)
+        self.assertIsNone(self.page.evaluate("window.pwned"))
+        self.assertEqual(summary.locator("a.src").count(), 0)                                    # le texte n'est plus celui de Wikipédia : pas de lien vers lui
+
+    def test_a_musicbrainz_sheet_is_searched_chosen_then_given_up_for_the_automatic_one(self):
+        with mock.patch.object(enrich, "musicbrainz", return_value=FakeArtistMusicBrainz()):
+            self.open_sheet()
+            self.view(".actions [data-key=artist-mb]").click()
+            box = self.page.locator(".menu.picker")
+            expect(box.locator(".opt")).to_have_count(2)                                         # la recherche part toute seule, sur le nom de l'artiste
+            expect(box.locator(".opt").first).to_contain_text("Daft Punk")
+            expect(box.locator(".opt").first).to_contain_text("homonyme · CA")
+            expect(box.locator("[data-key=mb-auto]")).to_have_count(0)                              # rien n'est encore choisi : rien à quitter
+            with self.page.expect_response(lambda r: r.url.endswith("/musicbrainz") and r.request.method == "POST") as sent:
+                box.locator(".opt").first.click()
+            self.assertEqual(sent.value.request.post_data_json, {"mbid": MB_OTHER})
+            expect(self.page.locator(".menu")).to_have_count(0)
+            expect(self.view(".info p.meta").first).to_contain_text("Canada")
+            self.assertEqual(self.sheet()["edited"], ["mbid"])
+            self.view(".actions [data-key=artist-mb]").click()
+            box = self.page.locator(".menu.picker")
+            expect(box.locator(".opt.on")).to_contain_text("homonyme")                            # la fiche choisie est cochée
+            with self.page.expect_response(lambda r: r.url.endswith("/musicbrainz") and r.request.method == "POST") as sent:
+                box.locator("[data-key=mb-auto]").click()
+            self.assertEqual(sent.value.request.post_data_json, {"mbid": None})
+            expect(self.page.locator(".menu")).to_have_count(0)
+            expect(self.view(".info p.meta").first).not_to_contain_text("Canada")
+            self.assertEqual(self.sheet()["edited"], [])
+
+    def test_the_administrator_has_both_buttons_an_ordinary_account_and_a_television_none(self):
+        self.open_sheet()
+        expect(self.admin_buttons()).to_have_count(2)
+        self.open("#/search")                                                                     # une page neuve : la fiche gardée de l'administrateur ne sert pas
+        self.page.evaluate("Hub.session.auth = true; Hub.session.user = { id: 'x', name: 'bob', role: 'user' }; location.hash = " + json.dumps(f"#/artist/musique/{self.artist}"))
+        self.view(".actions .btn", has_text="Tout lire").wait_for()
+        self.assertEqual(self.admin_buttons().count(), 0)
+        self.use_context(viewport={"width": 1920, "height": 1080})
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.open_sheet()
+        self.assertEqual(self.admin_buttons().count(), 0)
 
 
 class TestBooksQuickAccess(UiCase):
