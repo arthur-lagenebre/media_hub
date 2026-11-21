@@ -1,3 +1,8 @@
+## 0.55.0 — 2026-11-22
+- Tu peux maintenant demander un artiste : choisis « Artiste » dans « Nouvelle demande », cherche-le parmi les fiches MusicBrainz, ou envoie simplement le nom que tu as tapé.
+- Ta demande passe à « Ajoutée » toute seule dès qu'un album de cet artiste arrive dans la musique, et elle s'affiche sur ton accueil comme celle d'un film.
+- Si plusieurs personnes demandent le même artiste, même écrit autrement (accents, majuscules, apostrophes), c'est une seule demande.
+
 ## 0.54.0 — 2026-11-21
 - L'administrateur peut corriger la fiche d'un artiste depuis sa page : son nom, ses genres, son résumé, son pays et ses années d'activité. Le nouveau nom se voit partout dans le hub : liste des artistes, albums, lecteur et recherche.
 - Quand un artiste a été confondu avec un homonyme, il peut choisir la bonne fiche MusicBrainz, ou revenir au choix automatique.
