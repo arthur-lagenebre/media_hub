@@ -1,10 +1,11 @@
-"""Les demandes : la liste d'attente des films et des séries qu'un compte aimerait voir arriver, que l'administrateur lit.
+"""Les demandes : la liste d'attente des films, des séries et des artistes qu'un compte aimerait voir arriver, que l'administrateur lit.
 
-Le hub ne télécharge rien et n'écrit pas dans la médiathèque : une demande n'est qu'une ligne que l'administrateur lit, puis qu'il marque « ajoutée » ou « refusée ». Une demande désigne un film ou une série par son identifiant TMDB (`kind` : `movie` ou `show`), une seule ligne par élément (`requests`), et chaque compte qui la fait s'y joint (`request_users`, avec son message facultatif et `ack` : il a vu qu'elle est arrivée).
+Le hub ne télécharge rien et n'écrit pas dans la médiathèque : une demande n'est qu'une ligne que l'administrateur lit, puis qu'il marque « ajoutée » ou « refusée ». Une demande désigne un film ou une série par son identifiant TMDB (`kind` : `movie` ou `show`), un artiste par son nom (`kind` : `artist`, comparé par `labels.comparable`), avec en plus, quand le demandeur l'a choisi dans une recherche MusicBrainz (voir artist_search.py), son identifiant MusicBrainz (`mbid`), une seule ligne par élément (`requests`), et chaque compte qui la fait s'y joint (`request_users`, avec son message facultatif et `ack` : il a vu qu'elle est arrivée).
 
 Confidentialité : un compte lit ses demandes, et seulement « quelqu'un d'autre l'a demandé » pour les autres (`mine: false`), sans nom ni nombre. Seul l'administrateur voit les demandeurs et leurs messages.
 
 L'état « ajouté » se calcule à la lecture : une demande en attente dont l'élément est dans la médiathèque (n'importe quelle bibliothèque : voir `owned`) passe à « added » et y reste, écrit par la première lecture qui le voit, en une requête pour toutes les demandes concernées.
+Un artiste est « là » quand l'artiste d'un album (`grp`) est dans une bibliothèque de musique : par son `mbid` quand la demande et la bibliothèque le connaissent (voir `_artists`), sinon par son nom comparable ; les albums manquants (clé `wanted:`) ne comptent pas, ils ne sont pas des éléments.
 """
 
 from __future__ import annotations
@@ -12,31 +13,53 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
 from functools import partial
 
-from . import missing
+from . import labels, missing
 from . import sagas as sagafile
 from . import urls
 
-KINDS = ("movie", "show")
+KINDS = ("movie", "show")       # ce que TMDB connaît : ce que la recherche des demandes propose
+ARTIST = "artist"               # une demande faite par un nom, sans TMDB, et un `mbid` MusicBrainz quand le demandeur l'a choisi
+ALL_KINDS = (*KINDS, ARTIST)
 STATUSES = ("pending", "added", "declined")
-MAX_TEXT = 200                  # message, motif de refus, titre
+UNKNOWN_ARTISTS = ("artiste inconnu", "various artists", "artistes divers")        # les noms (comparables) qui ne désignent aucun artiste : la musique les range en dernier, une demande les refuse
+MAX_TEXT = 200                  # message, motif de refus, titre, nom d'un artiste
 YEAR_RE = re.compile(r"[0-9]{4}")
+MBID = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"           # l'identifiant MusicBrainz d'un artiste ; artistedit.MBID_RE en tire sa forme
+MBID_RE = re.compile(MBID, re.IGNORECASE)
+BY_MBID = "mbid"                # la sorte des clés de `owned` qui désignent un artiste par son `mbid` (les autres : (sorte de demande, identifiant TMDB ou nom comparable))
 TMDB_PATHS = {"movie": "movie", "show": "tv"}     # où TMDB range chaque sorte, sur son site comme dans son API
 
-REQUESTS_TABLE = f"""
-CREATE TABLE IF NOT EXISTS requests(
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind    TEXT NOT NULL CHECK (kind IN ({", ".join(repr(k) for k in KINDS)})),
-    tmdb    INTEGER NOT NULL,                   -- l'identifiant TMDB du film ou de la série
-    title   TEXT NOT NULL DEFAULT '',
-    year    TEXT NOT NULL DEFAULT '',
-    status  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ({", ".join(repr(s) for s in STATUSES)})),
-    reason  TEXT NOT NULL DEFAULT '',           -- le motif d'un refus (vide sinon)
-    created INTEGER NOT NULL,
-    updated INTEGER NOT NULL,
-    UNIQUE(kind, tmdb)
+
+def requests_table(name="requests"):
+    """Le DDL de la table des demandes, sous le nom `name` : la migration 12 (db.py) la recrée sous un autre nom avant de remplacer l'ancienne (SQLite ne change pas une contrainte en place)."""
+    return f"""
+CREATE TABLE IF NOT EXISTS {name}(
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind     TEXT NOT NULL CHECK (kind IN ({", ".join(repr(k) for k in ALL_KINDS)})),
+    tmdb     INTEGER,                           -- l'identifiant TMDB du film ou de la série ; NULL pour un artiste
+    name_key TEXT,                              -- le nom d'un artiste tel qu'on le compare (labels.comparable) ; NULL pour un film ou une série
+    mbid     TEXT,                              -- l'identifiant MusicBrainz d'un artiste, le premier que ses demandeurs ont donné ; NULL sans (un nom tapé tel quel), et pour un film ou une série
+    title    TEXT NOT NULL DEFAULT '',          -- le titre, ou le nom d'un artiste tel que le premier demandeur l'a tapé
+    year     TEXT NOT NULL DEFAULT '',
+    status   TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ({", ".join(repr(s) for s in STATUSES)})),
+    reason   TEXT NOT NULL DEFAULT '',          -- le motif d'un refus (vide sinon)
+    created  INTEGER NOT NULL,
+    updated  INTEGER NOT NULL,
+    CHECK (CASE WHEN kind = {ARTIST!r} THEN COALESCE(name_key, '') <> '' ELSE tmdb IS NOT NULL END),
+    CHECK (mbid IS NULL OR kind = {ARTIST!r})
 )"""
+
+
+REQUESTS_TABLE = requests_table()
+# Une seule demande par film ou série (par sorte et identifiant TMDB), et par artiste (par nom comparable). Pas dans TABLES : SCHEMA tourne aussi sur une base d'avant la version 12, dont la table n'a pas `name_key` ; ils se créent
+# avec la migration 12 et à l'ouverture d'une base neuve (db.Database._upgrade).
+REQUEST_INDEXES = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS requests_tmdb ON requests(kind, tmdb) WHERE tmdb IS NOT NULL",
+    f"CREATE UNIQUE INDEX IF NOT EXISTS requests_artist ON requests(kind, name_key) WHERE kind = {ARTIST!r}",
+)
 REQUEST_USERS_TABLE = """
 CREATE TABLE IF NOT EXISTS request_users(
     request_id INTEGER NOT NULL,                -- requests.id ; la dernière ligne d'une demande partie, la demande est supprimée avec elle
@@ -86,6 +109,26 @@ def _owned_key(row):
     return ("show", ident) if ident is not None else None
 
 
+def _album_label(meta_text, key):
+    """Ce que le `meta` d'un album (du texte JSON, abîmé ou pas) dit sous `key` : une chaîne, "" sinon."""
+    try:
+        meta = json.loads(meta_text or "{}")
+    except ValueError:
+        return ""
+    value = meta.get(key) if isinstance(meta, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def _artist_id(meta_text):
+    """L'identifiant de la fiche d'un artiste (`/api/artist/<bibliothèque>/<id>`) que porte l'album, "" quand il n'en a pas (une fiche sans adresse stable)."""
+    return _album_label(meta_text, "artist_id")
+
+
+def _artist_mbid(meta_text):
+    """L'identifiant MusicBrainz que les étiquettes de l'album donnent à son artiste (`artist_mbid`, en minuscules), "" quand il n'en a pas."""
+    return _album_label(meta_text, "artist_mbid").lower()
+
+
 def _gathered(rows):
     """{(kind, identifiant TMDB): [(id de l'élément, bibliothèque), …]} des lignes de OWNED_SQL ; une ligne sans identifiant lisible est écartée, un élément n'y est qu'une fois."""
     found = {}
@@ -96,29 +139,95 @@ def _gathered(rows):
     return found
 
 
-def _owned_now(db, movies, shows):
-    """Ce que `owned` rend, lu dans la base pour ces bibliothèques de films et de séries (identifiants), en une requête ; rien sans bibliothèque vidéo."""
-    if not movies and not shows:
+def _artists(db, music):
+    """{clé: [(id de la fiche ou "", bibliothèque, nom, {mbid}), …]} des artistes d'album (`grp`) de ces bibliothèques de musique (identifiants), un par nom et par bibliothèque ; deux clés par artiste : `("artist", nom comparable)` et `("mbid", mbid)` pour chacun de ses `mbid`.
+    Les albums manquants n'y sont pas : ils ne sont pas des éléments. Un artiste que « Modifier l'artiste » a renommé (voir artistedit) est là sous ses deux noms, celui des étiquettes et le corrigé, et rend le corrigé : c'est celui que la musique montre.
+    Ses `mbid` sont ceux des étiquettes de ses albums, ou, quand l'administrateur a choisi sa fiche MusicBrainz, celui-là seul (c'est la fiche que la page de l'artiste montre)."""
+    if not music:
         return {}
-    sql = OWNED_SQL.format(movies=",".join("?" * len(movies)) or "NULL", shows=",".join("?" * len(shows)) or "NULL")
-    return _gathered(db.query(sql, [*movies, *shows, *shows, '%"movie/%']))
+    from . import artistedit            # ici et pas en tête : il importe db, qui importe ce module
+    named = {}
+    for row in db.query(f"SELECT lib, grp, meta FROM items WHERE type='album' AND grp != '' AND lib IN ({','.join('?' * len(music))})", music):
+        entry = named.setdefault((row["lib"], row["grp"]), ["", set()])
+        entry[0] = entry[0] or _artist_id(row["meta"])
+        entry[1].update(filter(None, [_artist_mbid(row["meta"])]))
+    fixes = {lib: artistedit.of_library(db, lib) for lib in music}
+    found = {}
+    for (lib, name), (ident, tagged) in named.items():
+        fix = fixes[lib].get(ident, {})
+        shown = fix.get("name") or name
+        mbids = frozenset({fix["mbid"]} if fix.get("mbid") else tagged)
+        place = (ident, lib, shown, mbids)
+        for key in ({(ARTIST, labels.comparable(name)), (ARTIST, labels.comparable(shown))} | {(BY_MBID, mbid) for mbid in mbids}) - {(ARTIST, "")}:
+            found.setdefault(key, []).append(place)
+    return found
 
 
-def owned(db, libs):
-    """{(kind, identifiant TMDB): [(id de l'élément, bibliothèque), …]} de ce que ces bibliothèques `libs` (objets Library) ont : les films comme `missing.owned_films` (y compris un film rangé dans une bibliothèque de séries, par l'étiquette de son fichier), les séries par leur fiche TMDB.
-    Une requête, gardée en mémoire jusqu'au prochain scan ou enrichissement (Database.derived)."""
-    movies, shows = [lib.id for lib in libs if lib.kind == "movies"], [lib.id for lib in libs if lib.kind == "shows"]
-    return db.derived("requests-owned:" + ",".join(movies) + "|" + ",".join(shows), partial(_owned_now, db, movies, shows))
+def _owned_now(db, movies, shows, music):
+    """Ce que `owned` rend, lu dans la base pour ces bibliothèques (identifiants) : une requête pour les films et les séries, une pour les artistes ; rien sans bibliothèque."""
+    found = {}
+    if movies or shows:
+        sql = OWNED_SQL.format(movies=",".join("?" * len(movies)) or "NULL", shows=",".join("?" * len(shows)) or "NULL")
+        found = _gathered(db.query(sql, [*movies, *shows, *shows, '%"movie/%']))
+    return {**found, **_artists(db, music)}
+
+
+def owned(db, libs, artists=False):
+    """{(kind, identifiant TMDB ou nom comparable d'un artiste): [(id de l'élément, bibliothèque), …]} de ce que ces bibliothèques `libs` (objets Library) ont : les films comme `missing.owned_films` (y compris un film rangé dans une bibliothèque de séries, par l'étiquette de son fichier), les séries par leur fiche TMDB,
+    les artistes, seulement si `artists`, par le nom de l'artiste de leurs albums (chacun : (id de sa fiche ou "", bibliothèque, nom, {mbid}), voir `_artists`) : un foyer qui ne demande que des films ne fait pas lire ses albums.
+    Une ou deux requêtes, gardées en mémoire jusqu'au prochain scan ou enrichissement (Database.derived)."""
+    movies, shows, music = ([lib.id for lib in libs if lib.kind == kind and (kind != "music" or artists)] for kind in ("movies", "shows", "music"))
+    return db.derived("requests-owned:" + ",".join(movies) + "|" + ",".join(shows) + "|" + ",".join(music), partial(_owned_now, db, movies, shows, music))
+
+
+def ref(row):
+    """Ce qui désigne la demande `row` parmi celles de sa sorte : l'identifiant TMDB d'un film ou d'une série, le nom comparable d'un artiste."""
+    return row["name_key"] if row["kind"] == ARTIST else row["tmdb"]
+
+
+def _seen(place, visible):
+    """Le lieu `place` (voir `owned`) est dans une bibliothèque de `visible` (None : toutes)."""
+    return visible is None or place[1] in visible
+
+
+def _visible(found, key, visible):
+    """Le premier de `found[key]` qui est dans une bibliothèque de `visible` (None : toutes), ou None."""
+    return next((place for place in found.get(key, []) if _seen(place, visible)), None)
+
+
+def _artist_place(found, key, mbid, visible):
+    """L'artiste d'une bibliothèque de `visible` qui répond à cette demande : celui qui porte son `mbid` quand elle en a un ; sinon, celui du même nom comparable `key`, sauf s'il est connu sous un autre `mbid` (deux identifiants différents sont deux artistes) ; None sinon."""
+    place = _visible(found, (BY_MBID, mbid), visible) if mbid else None
+    return place or next((p for p in found.get((ARTIST, key), []) if _seen(p, visible) and not (mbid and p[3])), None)
 
 
 def item_for(found, kind, tmdb, visible):
-    """L'élément (son identifiant) qui répond à cette demande dans une bibliothèque de `visible` (None : toutes), ou None."""
-    return next((item for item, lib in found.get((kind, tmdb), []) if visible is None or lib in visible), None)
+    """L'élément (son identifiant) qui répond à cette demande de film ou de série dans une bibliothèque de `visible` (None : toutes), ou None."""
+    place = _visible(found, (kind, tmdb), visible)
+    return place[0] if place else None
+
+
+def arrival(found, kind, ident, visible, mbid=None):
+    """Ce qui répond à une demande (`ident` : voir `ref` ; `mbid` : celui d'un artiste, voir `_artist_place`) dans une bibliothèque de `visible`, ou None : l'identifiant de l'élément pour un film ou une série, `{"lib", "name", "id"?}` pour un artiste (`id` : sa fiche, absent quand elle n'a pas d'adresse stable : on filtre alors la bibliothèque sur son nom)."""
+    if kind != ARTIST:
+        return item_for(found, kind, ident, visible)
+    place = _artist_place(found, ident, mbid, visible)
+    return {"lib": place[1], "name": place[2], **({"id": place[0]} if place[0] else {})} if place else None
+
+
+def placed(found, row, visible):
+    """Ce qui répond à la demande `row` (une ligne de `requests`, ou un dictionnaire qui en a les colonnes utiles), voir `arrival`."""
+    return arrival(found, row["kind"], ref(row), visible, row["mbid"] if row["kind"] == ARTIST else None)
+
+
+def _there(kind, place):
+    """`place` (voir `arrival`) sous son nom dans une réponse : `item` pour un film ou une série, `artist` pour un artiste."""
+    return {"artist" if kind == ARTIST else "item": place}
 
 
 def promote(db, rows, found):
     """Les demandes en attente de `rows` (dictionnaires, modifiés sur place) dont l'élément est dans `found` (voir `owned`) passent à « added », en une écriture pour toutes."""
-    ids = {r["id"] for r in rows if r["status"] == "pending" and (r["kind"], r["tmdb"]) in found}
+    ids = {r["id"] for r in rows if r["status"] == "pending" and placed(found, r, None)}
     if not ids:
         return rows
     now, listed = int(time.time()), sorted(ids)
@@ -134,7 +243,7 @@ def promote(db, rows, found):
 def refreshed(db, libs, rows):
     """(lignes, ce que la médiathèque a) : `rows` à jour de ce qui est arrivé. La médiathèque n'est regardée que s'il y a une demande en attente ou ajoutée."""
     rows = [dict(r) for r in rows]
-    found = owned(db, libs) if any(r["status"] in ("pending", "added") for r in rows) else {}
+    found = owned(db, libs, any(r["kind"] == ARTIST for r in rows)) if any(r["status"] in ("pending", "added") for r in rows) else {}
     return promote(db, rows, found), found
 
 
@@ -168,13 +277,28 @@ def cover(cfg, row, item):
 
 
 def shown(cfg, row, found, visible):
-    """Une demande telle que l'API la donne ; `item` (l'élément à ouvrir) quand elle est arrivée dans une bibliothèque que le compte voit."""
-    item = item_for(found, row["kind"], row["tmdb"], visible) if row["status"] == "added" else None
-    out = {"id": row["id"], "kind": row["kind"], "tmdb": row["tmdb"], "title": row["title"], "year": row["year"], "status": row["status"], "reason": row["reason"],
-           "created": row["created"], "updated": row["updated"], "cover": cover(cfg, row, item), "url": tmdb_url(row["kind"], row["tmdb"])}
-    if item:
-        out["item"] = item
+    """Une demande telle que l'API la donne ; `item` (l'élément à ouvrir) ou, pour un artiste, `artist` (sa fiche, voir `arrival`) quand elle est arrivée dans une bibliothèque que le compte voit.
+    Un artiste n'a pas de `tmdb`, sa `cover` est vide, et sa fiche MusicBrainz (`mbid`, `url`) n'y est que s'il l'a choisie dans la recherche (voir `mbid_fields`)."""
+    place = placed(found, row, visible) if row["status"] == "added" else None
+    out = {"id": row["id"], "kind": row["kind"], "title": row["title"], "year": row["year"], "status": row["status"], "reason": row["reason"], "created": row["created"], "updated": row["updated"]}
+    if row["kind"] == ARTIST:
+        out.update({"cover": "", **mbid_fields(row)})
+    else:
+        out.update({"tmdb": row["tmdb"], "cover": cover(cfg, row, place), "url": tmdb_url(row["kind"], row["tmdb"])})
+    if place:
+        out.update(_there(row["kind"], place))
     return out
+
+
+def musicbrainz_url(mbid):
+    """L'adresse de la fiche d'un artiste sur le site de MusicBrainz."""
+    from libraries.music.musicbrainz import artist_url          # ici et pas en tête : ce module est importé (par hub.accounts, hub.__main__) avant que media_library soit sur le chemin
+    return artist_url(mbid)
+
+
+def mbid_fields(row):
+    """`{"mbid", "url"}` d'une demande d'artiste choisie dans MusicBrainz (`url` : sa fiche sur le site, comme `url` d'un film vers TMDB) ; vide pour un nom tapé tel quel."""
+    return {"mbid": row["mbid"], "url": musicbrainz_url(row["mbid"])} if row["mbid"] else {}
 
 
 def mine(db, cfg, uid, visible):
@@ -201,17 +325,17 @@ def everything(db, cfg, uid, status=None):
 
 def pending_count(db, cfg):
     """Le nombre de demandes en attente (pour l'administrateur), une fois retirées celles qui sont arrivées."""
-    rows, _ = refreshed(db, cfg.libraries, db.query("SELECT id, kind, tmdb, status, updated FROM requests WHERE status='pending'"))
+    rows, _ = refreshed(db, cfg.libraries, db.query("SELECT id, kind, tmdb, name_key, mbid, status, updated FROM requests WHERE status='pending'"))
     return sum(1 for r in rows if r["status"] == "pending")
 
 
 def ready(db, cfg, uid, visible):
-    """Les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack` à 0) : [(demande, id de l'élément)]. Une lecture des demandes ; la médiathèque n'est regardée que si le compte en a."""
+    """Les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack` à 0) : [(demande, ce qui y répond : voir `arrival`)]. Une lecture des demandes ; la médiathèque n'est regardée que si le compte en a."""
     rows = db.query("SELECT r.* FROM requests r JOIN request_users u ON u.request_id = r.id WHERE u.user_id=? AND u.ack=0 AND r.status IN ('pending', 'added') ORDER BY r.updated DESC, r.id DESC", (uid,))
     if not rows:
         return []
     rows, found = refreshed(db, cfg.libraries, rows)
-    return [(r, item) for r in rows if r["status"] == "added" for item in [item_for(found, r["kind"], r["tmdb"], visible)] if item]
+    return [(r, place) for r in rows if r["status"] == "added" for place in [placed(found, r, visible)] if place]
 
 
 def marks(db, cfg, uid, kind="movie"):
@@ -240,6 +364,30 @@ def search_marks(db, cfg, uid, keys):
     return {(r["kind"], r["tmdb"]): _mark(r) for r in rows if (r["kind"], r["tmdb"]) in wanted}, found
 
 
+def artist_results(db, cfg, uid, results, visible):
+    """Les `results` d'une recherche d'artistes (voir artist_search.shaped) pour le compte `uid`, chacun avec `url` (sa fiche MusicBrainz), `request` (la demande de ce nom, comme celle d'une case grisée : voir `_mark`) quand quelqu'un l'a faite,
+    et `artist` (voir `arrival`) quand cet artiste est déjà dans une bibliothèque de `visible` : la règle du 409 « déjà dans la médiathèque ». Une lecture des demandes et un regard sur la médiathèque pour tous ; rien sans résultat.
+    Les demandes se retrouvent par le nom : deux homonymes de MusicBrainz qui ont le même nom comparable montrent la même demande (voir `checked`)."""
+    if not results:
+        return []
+    found = owned(db, cfg.libraries, True)
+    keys = [labels.comparable(r["name"]) for r in results]
+    asked = sorted(set(keys))
+    rows = db.query(f"SELECT r.id, r.kind, r.name_key, r.mbid, r.status, r.updated, MAX(u.user_id = ?) AS mine FROM requests r JOIN request_users u ON u.request_id = r.id "
+                    f"WHERE r.kind=? AND r.name_key IN ({','.join('?' * len(asked))}) GROUP BY r.id", (uid, ARTIST, *asked))
+    marks = {r["name_key"]: _mark(r) for r in promote(db, [dict(r) for r in rows], found)}
+    out = []
+    for result, key in zip(results, keys):
+        row = {**result, "url": musicbrainz_url(result["mbid"])}
+        if key in marks:
+            row["request"] = marks[key]
+        place = arrival(found, ARTIST, key, visible, result["mbid"])
+        if place:
+            row["artist"] = place
+        out.append(row)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Écrire
 # ---------------------------------------------------------------------------
@@ -255,10 +403,42 @@ def _text(value, what, limit=MAX_TEXT):
     return value
 
 
-def _kind(value):
-    if value not in KINDS:
-        raise RequestError(400, "sorte de demande inconnue (movie ou show)")
+KIND_MESSAGES = {KINDS: "sorte de demande inconnue (movie ou show)",              # écrits en entier : l'interface les traduit d'après leur texte
+                 ALL_KINDS: "sorte de demande inconnue (movie, show ou artist)"}
+
+
+def _kind(value, allowed=KINDS):
+    """La sorte de demande : une de `allowed` (par défaut celles de TMDB, que la recherche propose) ; 400 sinon, qui nomme ce qui est accepté."""
+    if value not in allowed:
+        raise RequestError(400, KIND_MESSAGES[allowed])
     return value
+
+
+def _artist_name(value):
+    """(nom, nom comparable) d'un nom d'artiste : un texte de 1 à MAX_TEXT caractères (espaces de bord retirés, le nom reste tel que tapé), sans caractère de contrôle ni de mise en forme ; 400 sinon.
+    Un nom sans rien de comparable (que des signes combinants) est vide."""
+    if not isinstance(value, str):
+        raise RequestError(400, "nom d'artiste attendu : un texte")
+    name = value.strip()
+    if any(unicodedata.category(c).startswith("C") or unicodedata.category(c) in ("Zl", "Zp") for c in name):
+        raise RequestError(400, "nom d'artiste : aucun caractère de contrôle permis")
+    if len(name) > MAX_TEXT:
+        raise RequestError(400, f"nom d'artiste trop long ({MAX_TEXT} caractères au plus)")
+    key = labels.comparable(name)
+    if not key:
+        raise RequestError(400, "nom d'artiste vide")
+    if key in UNKNOWN_ARTISTS:
+        raise RequestError(400, "ce nom ne désigne pas un artiste")
+    return name, key
+
+
+def _mbid(value):
+    """L'identifiant MusicBrainz facultatif d'un artiste, en minuscules : absent (ou nul), sinon un UUID tel quel (ni l'adresse de la fiche, ni espaces) ; 400 sinon."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not MBID_RE.fullmatch(value):
+        raise RequestError(400, "mbid : l'identifiant MusicBrainz de l'artiste (8-4-4-4-12 chiffres hexadécimaux)")
+    return value.lower()
 
 
 def _tmdb_id(value):
@@ -279,8 +459,14 @@ def _year(value):
 
 
 def checked(body):
-    """(kind, tmdb, message, titre, année) d'un corps de demande ; 400 en français pour ce qui ne va pas, dans cet ordre."""
-    return _kind(body.get("kind")), _tmdb_id(body.get("tmdb")), _text(body.get("note"), "message"), _text(body.get("title"), "titre"), _year(body.get("year"))
+    """(kind, ref, message, titre, année, mbid) d'un corps de demande (`ref` : voir `ref`) ; 400 en français pour ce qui ne va pas, dans cet ordre.
+    Un artiste : `{"kind": "artist", "name", "mbid"?, "note"?}`, son titre est son nom tel que tapé, sans année ; un film ou une série : `tmdb`, et `title` et `year` facultatifs (`mbid` : None)."""
+    kind = _kind(body.get("kind"), ALL_KINDS)
+    if kind == ARTIST:
+        name, key = _artist_name(body.get("name"))
+        mbid = _mbid(body.get("mbid"))
+        return kind, key, _text(body.get("note"), "message"), name, "", mbid
+    return kind, _tmdb_id(body.get("tmdb")), _text(body.get("note"), "message"), _text(body.get("title"), "titre"), _year(body.get("year")), None
 
 
 def _named(film):
@@ -308,6 +494,8 @@ def _described(db, kind, tmdb, title, year, describe, uid, limit):
     """(titre, année) d'une demande : ce que le serveur sait d'un film ; sinon, pour une demande nouvelle, ce que `describe(kind, tmdb)` en dit (TMDB, voir request_search.Finder.details :
     ses RequestError passent, rien n'est alors écrit) ; sinon (sans `describe`, ou demande qui existe déjà et garde son titre) ce que le corps a dit.
     Avant d'interroger TMDB, les 409 (refusée, plafond atteint) sont vérifiés : une demande perdue d'avance ne coûte pas d'appel. La transaction de `create` les revérifie."""
+    if kind == ARTIST:                      # un nom n'a rien à demander à TMDB
+        return title, year
     known = known_film(db, tmdb) if kind == "movie" else None
     if not known and describe is not None:
         conn = db.connection()
@@ -318,9 +506,9 @@ def _described(db, kind, tmdb, title, year, describe, uid, limit):
     return (known[0][:MAX_TEXT], known[1][:4]) if known else (title, year)
 
 
-def _existing(conn, kind, tmdb, uid):
-    """(la demande de cet élément ou None, ce compte en est-il) ; 409 quand elle a été refusée."""
-    row = conn.execute("SELECT * FROM requests WHERE kind=? AND tmdb=?", (kind, tmdb)).fetchone()
+def _existing(conn, kind, ident, uid):
+    """(la demande de cet élément (`ident` : voir `ref`) ou None, ce compte en est-il) ; 409 quand elle a été refusée."""
+    row = conn.execute("SELECT * FROM requests WHERE kind=? AND name_key=?" if kind == ARTIST else "SELECT * FROM requests WHERE kind=? AND tmdb=?", (kind, ident)).fetchone()
     if row is not None and row["status"] == "declined":
         raise RequestError(409, f"cette demande a été refusée : {row['reason']}" if row["reason"] else "cette demande a été refusée")
     mine = row is not None and conn.execute("SELECT 1 FROM request_users WHERE request_id=? AND user_id=?", (row["id"], uid)).fetchone() is not None
@@ -335,38 +523,42 @@ def _check_room(conn, row, uid, limit):
 
 
 def _store(conn, row, uid, fields, found, now):
-    """Écrit la demande (si `row` est None : nouvelle, déjà « added » si l'élément est là) et le compte parmi ses demandeurs ; rend l'identifiant de la demande. `fields` : (kind, tmdb, message, titre, année)."""
-    kind, tmdb, note, title, year = fields
+    """Écrit la demande (si `row` est None : nouvelle, déjà « added » si l'élément est là) et le compte parmi ses demandeurs ; rend l'identifiant de la demande. `fields` : (kind, ref, message, titre, année, mbid).
+    Une demande qu'on rejoint garde son titre, et son premier `mbid` : celui qu'un demandeur apporte ne sert que si elle n'en avait pas."""
+    kind, ident, note, title, year, mbid = fields
     if row is None:
-        status = "added" if (kind, tmdb) in found else "pending"
-        rid = conn.execute("INSERT INTO requests(kind, tmdb, title, year, status, reason, created, updated) VALUES(?,?,?,?,?,'',?,?)", (kind, tmdb, title, year, status, now, now)).lastrowid
+        status = "added" if arrival(found, kind, ident, None, mbid) else "pending"
+        tmdb, name_key = (None, ident) if kind == ARTIST else (ident, None)
+        rid = conn.execute("INSERT INTO requests(kind, tmdb, name_key, mbid, title, year, status, reason, created, updated) VALUES(?,?,?,?,?,?,?,'',?,?)", (kind, tmdb, name_key, mbid, title, year, status, now, now)).lastrowid
     else:
         rid = row["id"]
+        if mbid:
+            conn.execute("UPDATE requests SET mbid=? WHERE id=? AND mbid IS NULL", (mbid, rid))
     conn.execute("INSERT INTO request_users(request_id, user_id, note, created, ack) VALUES(?,?,?,?,0)", (rid, uid, note, now))
     return rid
 
 
 def create(db, cfg, uid, body, visible, limit, describe=None):
-    """Le compte `uid` demande un film ou une série (`body` : {kind, tmdb, note, title, year}) ; rend (demande, nouvelle ?). `visible` : les bibliothèques qu'il voit (None : toutes) ; `limit` : ses demandes en attente au plus (None : sans plafond).
+    """Le compte `uid` demande un film ou une série (`body` : {kind, tmdb, note, title, year}) ou un artiste (`body` : {kind: "artist", name, mbid?, note}, voir `checked`) ; rend (demande, nouvelle ?). `visible` : les bibliothèques qu'il voit (None : toutes) ; `limit` : ses demandes en attente au plus (None : sans plafond).
     `describe(kind, tmdb)` : (titre, année) d'un élément que le serveur ne connaît pas (voir `_described`), None pour s'en tenir au corps.
 
-    409 quand l'élément est déjà dans une bibliothèque qu'il voit (avec son identifiant, `item`), quand la demande a été refusée, ou au-delà de `limit`. Une demande qu'il a déjà faite rend la même, sans doublon."""
-    kind, tmdb, note, title, year = checked(body)
-    found = owned(db, cfg.libraries)
-    item = item_for(found, kind, tmdb, visible)
-    if item:
-        raise RequestError(409, "déjà dans la médiathèque", {"item": item})
-    title, year = _described(db, kind, tmdb, title, year, describe, uid, limit)
+    409 quand l'élément est déjà dans une bibliothèque qu'il voit (avec son identifiant, `item`, ou sa fiche, `artist`), quand la demande a été refusée, ou au-delà de `limit`. Une demande qu'il a déjà faite rend la même, sans doublon."""
+    kind, ident, note, title, year, mbid = checked(body)
+    found = owned(db, cfg.libraries, kind == ARTIST)
+    place = arrival(found, kind, ident, visible, mbid)
+    if place:
+        raise RequestError(409, "déjà dans la médiathèque", _there(kind, place))
+    title, year = _described(db, kind, ident, title, year, describe, uid, limit)
     now = int(time.time())
     with db.write_lock:
         conn = db.connection()
         try:
-            row, mine = _existing(conn, kind, tmdb, uid)
+            row, mine = _existing(conn, kind, ident, uid)
             if mine:
                 conn.rollback()
                 return dict(row), False
             _check_room(conn, row, uid, limit)
-            rid = _store(conn, row, uid, (kind, tmdb, note, title, year), found, now)
+            rid = _store(conn, row, uid, (kind, ident, note, title, year, mbid), found, now)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -401,8 +593,8 @@ def set_status(db, rid, status, reason, libs=()):
         raise RequestError(400, "statut inconnu (pending, added ou declined)")
     reason = _text(reason, "motif") if status == "declined" else ""
     if status == "pending":
-        row = db.one("SELECT kind, tmdb FROM requests WHERE id=?", (rid,))
-        if row is not None and (row["kind"], row["tmdb"]) in owned(db, libs):
+        row = db.one("SELECT kind, tmdb, name_key, mbid FROM requests WHERE id=?", (rid,))
+        if row is not None and placed(owned(db, libs, row["kind"] == ARTIST), row, None):
             raise RequestError(409, "L'élément est déjà dans la médiathèque : la demande ne peut pas rester en attente.")
     with db.write_lock:
         conn = db.connection()

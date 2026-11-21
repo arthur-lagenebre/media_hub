@@ -606,6 +606,9 @@ html:not([data-device="pc"]) .card.wanted.ask:hover:not(:focus) .rqbtn:not(.on) 
 .myrequests { padding-bottom: 3rem; }
 .myrequests h1 { padding: 1.4rem var(--gut) 0.6rem; }
 .myrequests .intro { margin: 0 var(--gut) 1rem; max-width: var(--prose); line-height: 1.5; }
+.poster.rqmusic { color: var(--mute); }
+.poster.rqmusic .ic { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+.poster.rqmusic .ic svg { width: 45%; height: 45%; }
 .reqrow .poster.rqpic { flex: none; width: 3rem; padding-top: 4.5rem; margin-right: 0.9rem; }
 .reqrow .what .rqstatus { color: var(--text); font-weight: 650; overflow-wrap: anywhere; }
 .reqrow[data-status="declined"] .what .rqstatus { color: #ffa595; }
@@ -640,13 +643,13 @@ html[data-device="phone"] .rqlink, html[data-device="tablet"] .rqlink { text-dec
 .panel.suggestions > .chips { margin-bottom: 0.5rem; }
 .menu.form textarea.field { resize: vertical; min-height: 7rem; line-height: 1.4; }
 .menu.sganswer .lead { white-space: pre-line; overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }
-/* Demander un film ou une série (#/request) : le champ et le choix de la sorte, puis les résultats de TMDB, en lignes de texte (pas d'affiche) */
+/* Demander un film, une série ou un artiste (#/request) : le champ et le choix de la sorte, puis les résultats de TMDB ou de MusicBrainz, en lignes de texte (pas d'affiche) */
 .reqsearch { padding-bottom: 3rem; }
 .reqsearch h1 { padding: 1.4rem var(--gut) 0.6rem; }
 .reqsearch .intro { margin: 0 var(--gut) 0.8rem; max-width: var(--prose); line-height: 1.5; }
 .reqsearch .tools .field { flex: 1 1 18rem; max-width: 40rem; min-width: 0; }
 .reqsearch .rqsay { margin: 0 var(--gut); min-height: 1.4em; }
-.reqsearch .rqsay.err { color: #ffa595; font-weight: 600; }
+.reqsearch .rqsay.bad { color: #ffa595; font-weight: 600; }
 .rqhits { margin: 0.4rem var(--gut) 0; }
 .rqhits[aria-busy="true"] { opacity: 0.55; }
 .rqhit .rqhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; }
@@ -657,6 +660,9 @@ html[data-device="phone"] .rqlink, html[data-device="tablet"] .rqlink { text-dec
 .line .what .rqstate { color: var(--text); font-weight: 650; }
 .rqhit .rqsum { margin: 0.3rem 0 0; max-width: 52rem; color: var(--mute); font-size: 0.9rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .rqhit > .btn { flex: none; }
+.rqhit .poster.rqpic { flex: none; width: 3rem; padding-top: 3rem; margin-right: 0.9rem; }          /* un artiste de MusicBrainz : la case à note de musique, carrée */
+.rqasis .btn { max-width: 100%; white-space: normal; text-align: left; }          /* le nom tapé peut être long : le bouton passe à la ligne au lieu de déborder */
+.rqasis .btn .lbl { min-width: 0; overflow-wrap: anywhere; }
 .panel code { background: var(--s2); border-radius: 0.3rem; padding: 0.05rem 0.35rem; font-size: 0.92em; color: var(--text); }
 .panel > p.muted { line-height: 1.5; }
 @media (max-width: 40rem) { .line .btn { margin: 0.5rem 0.6rem 0 0; } }

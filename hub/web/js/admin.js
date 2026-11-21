@@ -383,7 +383,7 @@
     function requestsTab(body) {
       if (reqList === null && !reqError && !reqLoading) loadRequests();
       var panel = h('section', { class: 'panel requests' }, h('h2', null, H.t('Demandes')),
-        h('p', { class: 'muted' }, H.t('Ce que les comptes ont demandé. Le hub ne télécharge rien : ajoute le film à la médiathèque, il passe « Ajouté » tout seul s’il porte son identifiant TMDB ; sinon, marque-le à la main.')));
+        h('p', { class: 'muted' }, H.t('Ce que les comptes ont demandé. Le hub ne télécharge rien : ajoute le film à la médiathèque, il passe « Ajouté » tout seul s’il porte son identifiant TMDB ; sinon, marque-le à la main. Un artiste passe « Ajouté » tout seul quand un album de ce nom arrive dans la musique.')));
       panel.appendChild(h('div', { class: 'chips', role: 'group', 'aria-label': H.t('Filtrer les demandes') }, REQ_FILTERS.map(function (f) {
         var on = reqFilter === f[0];
         return h('button', { class: 'chip f' + (on ? ' on' : ''), type: 'button', 'data-key': 'rf-' + f[0], 'aria-pressed': on ? 'true' : 'false',
@@ -404,11 +404,11 @@
       var what = h('div', { class: 'what' }, R.heading(r, R.title(r)), h('span', { class: 'rqstatus' }, R.status(r)),
         h('span', null, H.plural(who.length, 'demandeur') + ' · ' + H.t('demandée le {date}', { date: H.date(r.created) })), who.length ? list : null);
       var buttons = [];
-      if (r.item) buttons.push(R.open(r));
+      if (R.address(r)) buttons.push(R.open(r));
       if (r.status === 'pending') {
         buttons.push(H.button(H.t('Marquer ajouté'), 'check', { 'data-key': 'rq-added-' + r.id, onclick: function () { setRequest(r, 'added'); } }));
         buttons.push(H.button(H.t('Refuser'), 'close', { 'data-key': 'rq-declined-' + r.id, onclick: function () { declineRequest(r); } }));
-      } else if (!(r.status === 'added' && r.item)) buttons.push(H.button(H.t('Remettre en attente'), 'refresh', { 'data-key': 'rq-pending-' + r.id, onclick: function () { setRequest(r, 'pending'); } }));
+      } else if (!(r.status === 'added' && R.address(r))) buttons.push(H.button(H.t('Remettre en attente'), 'refresh', { 'data-key': 'rq-pending-' + r.id, onclick: function () { setRequest(r, 'pending'); } }));
       buttons.push(H.button(H.t('Supprimer'), 'trash', { 'data-key': 'rq-del-' + r.id, 'aria-label': H.t('Supprimer la demande de « {title} »', { title: R.title(r) }), onclick: function () { deleteRequest(r); } }));
       return h('div', { class: 'line reqrow', 'data-request': r.id, 'data-status': r.status }, R.picture(r), what, buttons);
     }

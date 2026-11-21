@@ -28,7 +28,7 @@ from unittest import mock
 
 from tests import fixtures
 from tests.test_server import FakeTmdb, Running
-from hub import enrich
+from hub import artist_search, enrich
 from hub.media import images
 
 try:
@@ -11632,7 +11632,8 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.open(page, "#/requests")
         self.count_rows(page, 2)
         first, second = (show, film) if self.rows(page).first.get_attribute("data-request") == str(show) else (film, show)
-        self.focused_key(page, f"rm-{first}")                                                               # le bouton de la ligne, pas le lien
+        self.focused_key(page, "req-new")                                                                   # l'arrivée est sur « Nouvelle demande » (toujours là pour qui peut demander)
+        self.view(page, f"[data-key=rm-{first}]").focus()                                                   # le bouton de la ligne, pas le lien
         page.keyboard.press("ArrowDown")
         self.focused_key(page, f"rm-{second}")                                                              # d'un bouton au bouton suivant
         page.keyboard.press("ArrowLeft")
@@ -11676,7 +11677,7 @@ class TestRequestsInTheUi(RequestsUiCase):
         self.open(page, "#/requests")
         self.count_rows(page, 2)
         first, second = (self.rows(page).nth(i).get_attribute("data-request") for i in range(2))
-        self.focused_key(page, f"rm-{first}")
+        self.view(page, f"[data-key=rm-{first}]").focus()
         page.keyboard.press("ArrowDown")
         self.focused_key(page, f"rm-{second}")                                                              # pas le lien du titre, pourtant plus proche
         page.keyboard.press("ArrowUp")
@@ -11801,6 +11802,25 @@ class FakeRequestTmdb:
 
     def save_image(self, image_path, size, dest):
         Path(dest).write_bytes(fixtures.PNG)
+
+
+class FakeMusicBrainz:
+    """MusicBrainz pour la recherche d'artistes des demandes (voir hub/artist_search.py) : `found` donne, pour un texte cherché (sans casse), les artistes tels que MusicBrainz les rend ; un texte inconnu n'en a aucun.
+    `error` est levée à chaque appel ; `asked` garde les textes cherchés. Jamais d'appel au vrai MusicBrainz."""
+
+    def __init__(self):
+        self.found, self.error, self.asked = {}, None, []
+
+    def search_artists(self, name, limit=10):
+        self.asked.append(name)
+        if self.error is not None:
+            raise self.error
+        return [dict(r) for r in self.found.get(name.casefold(), [])]
+
+
+def mb_artist(mbid, name, **more):
+    """Un artiste tel que la recherche de MusicBrainz le rend : un groupe français actif de 1995 à 2005, sauf indication contraire."""
+    return {"id": mbid, "name": name, "type": "Group", "country": "FR", "score": 100, "life-span": {"begin": "1995-03-01", "end": "2005-06-30"}, **more}
 
 
 class TestSuggestionsInTheUi(RequestsUiCase):
@@ -12322,9 +12342,8 @@ class TestReportsInTheUi(RequestsUiCase):
         self.assertEqual(self.view(page, "[data-key=tab-suggestions] .pend").inner_text(), "2")
 
 
-class TestRequestSearchInTheUi(RequestsUiCase):
-    """Demander un film ou une série que la médiathèque n'a pas : la page « Demander un film ou une série » (#/request), qui cherche dans TMDB par le serveur (TMDB simulé : FakeRequestTmdb),
-    ses entrées (« Nouvelle demande » dans « Mes demandes », « Pas trouvé ? » dans la recherche), ses erreurs, la télécommande, l'anglais, et les affiches qui arrivent après la demande."""
+class RequestSearchCase(RequestsUiCase):
+    """Le serveur des tests de la page « Demander » : TMDB simulé (FakeRequestTmdb) avec une clé, et les aides pour chercher et lire les résultats."""
     PAGE = "#/request"
 
     def setUp(self):
@@ -12341,6 +12360,10 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         hub.finder = request_search.Finder(hub.cfg, make=lambda cfg: self.tmdb)          # neuf à chaque test : la cadence (30 par minute) et la mémoire repartent de zéro
         self.addCleanup(self.run_.wait_jobs)                                             # la tâche des affiches finit avant que TMDB simulé et la clé ne s'en aillent
         self.addCleanup(self.tmdb.slow.set)
+        self.mb = FakeMusicBrainz()
+        self.enterContext(mock.patch.object(enrich, "musicbrainz", lambda cfg, **options: self.mb))          # la recherche d'artistes : jamais le vrai MusicBrainz
+        self.addCleanup(setattr, hub, "artist_finder", hub.artist_finder)
+        hub.artist_finder = artist_search.Finder(hub.cfg, sleep=lambda seconds: None)                        # neuf à chaque test : la mémoire et la cadence (30 par minute) repartent de zéro, sans attendre la seconde de MusicBrainz
 
     # --- Aides ---------------------------------------------------------------
     def searched(self, page):
@@ -12376,13 +12399,18 @@ class TestRequestSearchInTheUi(RequestsUiCase):
             self.view(page, "input[type=search]").fill(text)
         self.view(page, ".results > *").first.wait_for()
 
+
+class TestRequestSearchInTheUi(RequestSearchCase):
+    """Demander un film ou une série que la médiathèque n'a pas : la page « Demander un film ou une série » (#/request), qui cherche dans TMDB par le serveur (TMDB simulé : FakeRequestTmdb),
+    ses entrées (« Nouvelle demande » dans « Mes demandes », « Pas trouvé ? » dans la recherche), ses erreurs, la télécommande, l'anglais, et les affiches qui arrivent après la demande."""
+
     # --- Chercher et demander --------------------------------------------------------
     def test_a_film_is_found_requested_with_a_message_and_its_button_follows(self):
         page = self.session("alice")
         self.open(page, "#/requests")
         self.view(page, "[data-key=req-new]").click()
         self.shown(page, self.PAGE)
-        self.assertEqual(self.view(page, "h1").inner_text(), "Demander un film ou une série")
+        self.assertEqual(self.view(page, "h1").inner_text(), "Demander un film, une série ou un artiste")
         reply = self.search(page, "grand")
         self.assertIn("q=grand", reply.url)
         self.assertNotIn("kind=", reply.url)                                                                 # « Les deux » : films et séries
@@ -12430,7 +12458,7 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         choice.click()
         menu = self.dialog(page)
         self.assertTrue(menu.evaluate("e => e.classList.contains('choice')"))                                # une liste comme « Tri » ou « Genre »
-        self.assertEqual([t.strip() for t in menu.locator(".opt").all_inner_texts()], ["Les deux", "Films", "Séries"])
+        self.assertEqual([t.strip() for t in menu.locator(".opt").all_inner_texts()], ["Les deux", "Films", "Séries", "Artiste"])
         with self.searched(page) as info:                                                                    # changer de sorte relance la recherche
             menu.locator(".opt", has_text="Séries").click()
         self.assertIn("kind=show", info.value.url)
@@ -12567,19 +12595,17 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         self.library_search(page, "Inception")                                                               # quand la recherche trouve, rien
         self.assertEqual(self.view(page, "[data-key=req-notfound]").count(), 0)
 
-    def test_without_a_tmdb_key_nothing_leads_to_the_request_page(self):
+    def test_without_a_tmdb_key_nothing_searches_for_a_film(self):
+        """Sans clé, la page ne cherche rien dans TMDB : elle ne propose que l'artiste (voir TestArtistRequestsInTheUi) ; « Pas trouvé ? » n'apparaît pas."""
         self.hub.cfg.tmdb_key = ""
         self.ask("alice", 1000)
         page = self.session("alice")
         self.assertFalse(page.evaluate("Hub.session.requestSearch"))
-        self.open(page, "#/requests")
-        self.rows(page).first.wait_for()
-        self.assertEqual(self.view(page, "[data-key=req-new]").count(), 0)
         self.library_search(page, "Grand Voyage")
         self.assertEqual(self.view(page, "[data-key=req-notfound]").count(), 0)
         self.open(page, self.PAGE)
-        expect(self.view(page, "p")).to_contain_text("n’est pas configurée sur ce serveur")
-        self.assertEqual(self.view(page, "input").count(), 0)
+        self.assertEqual(self.view(page, "[data-key=rq-kind]").count(), 0)
+        self.assertEqual(self.view(page, ".rqhit").count(), 0)
         self.assertEqual(self.tmdb.calls, [])
 
     def test_without_the_right_to_request_the_page_is_closed_and_no_entry_leads_there(self):
@@ -12665,7 +12691,7 @@ class TestRequestSearchInTheUi(RequestsUiCase):
         self.open(page, "#/requests")
         expect(self.view(page, "[data-key=req-new]")).to_have_text("New request")
         self.open(page, self.PAGE)
-        self.assertEqual(self.view(page, "h1").inner_text(), "Request a movie or a series")
+        self.assertEqual(self.view(page, "h1").inner_text(), "Request a movie, a series or an artist")
         self.assertIn("Both", self.view(page, "[data-key=rq-kind]").inner_text())
         self.search(page, "grand")
         expect(self.hits(page)).to_have_count(3)
@@ -12766,6 +12792,752 @@ class TestRequestSearchInTheUi(RequestsUiCase):
                 sources = self.rows(page).locator(".rqpic img").evaluate_all("els => els.map(e => e.getAttribute('src'))")
                 self.assertTrue(any(s.startswith("/img/film/4001") for s in sources), sources)
                 self.assertTrue(any(s.startswith(f"/img/request/{show}") for s in sources), sources)
+
+
+class TestArtistRequestsInTheUi(RequestSearchCase):
+    """Demander un artiste par son nom : le choix « Artiste » de la page « Demander » (un champ texte à la place de la recherche TMDB), « Mes demandes », l'Administration et l'accueil.
+    Une demande d'artiste n'a ni affiche ni fiche TMDB : une case neutre avec une note de musique."""
+    NAME = "Zazie Test"
+    HOSTILE_NAME = "<img src=x onerror=window.pwned=1> Test"
+
+    def ask_artist(self, name, who="alice", note=None):
+        return self.call(who, "/api/requests", {"kind": "artist", "name": name, **({"note": note} if note else {})})
+
+    def field(self, page):
+        return self.view(page, "input[type=search]")
+
+    def pick_kind(self, page, label):
+        self.view(page, "[data-key=rq-kind]").click()
+        self.dialog(page).locator(".opt", has_text=label).click()
+
+    def pick_artist(self, page):
+        self.pick_kind(page, "Artiste")
+        expect(self.field(page)).to_have_attribute("placeholder", "Nom de l’artiste")
+
+    def type_and_ask(self, page, name):
+        """Cherche `name` (MusicBrainz simulé n'en connaît aucun) puis l'envoie tel quel : la fenêtre du message s'ouvre."""
+        self.field(page).fill(name)
+        self.view(page, "[data-key=rq-search]").click()
+        self.view(page, "[data-key=rq-asis]").click()
+        box = self.dialog(page)
+        box.wait_for()
+        return box
+
+    def toast(self, page):
+        return page.locator("#toast.on")
+
+    # --- Demander ---------------------------------------------------------------
+    def test_an_artist_is_asked_by_name_with_a_message_and_shows_in_my_requests(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        expect(self.view(page, "[data-key=rq-search]")).to_be_hidden()                                      # le bouton n'existe que pour un artiste
+        self.pick_artist(page)
+        self.assertIn("Artiste", self.view(page, "[data-key=rq-kind]").inner_text())
+        box = self.type_and_ask(page, self.NAME)
+        self.assertTrue(box.evaluate("e => e.classList.contains('form')"))                                  # la fenêtre des films : une famille « form »
+        self.assertEqual(box.locator("h3").inner_text(), f"Demander « {self.NAME} »")
+        self.assertIn("l’artiste", box.locator(".lead").inner_text())
+        self.assertEqual(box.locator("input").get_attribute("maxlength"), "200")
+        box.locator("input").fill("Pour   la route")
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 201)
+        self.assertEqual(info.value.request.post_data_json, {"kind": "artist", "name": self.NAME, "note": "Pour la route"})
+        box.wait_for(state="detached")
+        expect(self.toast(page)).to_have_text(f"Demandé : {self.NAME}")
+        self.assertEqual([(r["kind"], r["title"], r["note"], r["status"]) for r in self.mine("alice")], [("artist", self.NAME, "Pour la route", "pending")])
+        self.assertEqual(self.tmdb.calls, [])                                                               # aucune recherche : le nom n'est pas cherché
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        row = self.rows(page).first
+        self.assertEqual(row.locator(".what > b").inner_text(), self.NAME)
+        self.assertEqual(row.locator(".rqstatus").inner_text(), "En attente")
+        self.assertEqual(row.locator(".rqnote").inner_text(), "Ton message : « Pour la route »")
+        self.assertEqual(row.locator("img").count(), 0)                                                     # pas d'image cassée
+        expect(row.locator(".rqpic .ic")).to_have_count(1)                                                  # une case neutre, une note de musique
+        self.assertEqual(row.locator(".what a").count(), 0)                                                 # ni fiche TMDB, ni lien
+
+    def test_the_artist_name_alone_is_enough_and_enter_in_the_field_searches_then_the_name_is_sent_as_it_is(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.pick_artist(page)
+        self.field(page).fill(self.NAME)
+        self.field(page).press("Enter")
+        expect(self.dialog(page)).to_have_count(0)                                                          # Entrée cherche : rien n'est demandé tant qu'on n'a pas choisi
+        self.view(page, "[data-key=rq-asis]").click()
+        box = self.dialog(page)
+        box.wait_for()
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.request.post_data_json, {"kind": "artist", "name": self.NAME})            # sans message : pas de `note`
+        box.wait_for(state="detached")
+        self.assertEqual([r["title"] for r in self.mine("alice")], [self.NAME])
+
+    def test_an_empty_name_is_not_sent(self):
+        page = self.session("alice")
+        sent = []
+        page.on("request", lambda r: sent.append(r.url) if r.method == "POST" and r.url.endswith("/api/requests") else None)
+        self.open(page, self.PAGE)
+        self.pick_artist(page)
+        self.view(page, "[data-key=rq-search]").click()
+        expect(self.view(page, ".rqsay")).to_have_text("Écris le nom de l’artiste.")
+        self.field(page).fill("    ")
+        self.field(page).press("Enter")
+        expect(self.view(page, ".rqsay")).to_have_text("Écris le nom de l’artiste.")
+        expect(self.dialog(page)).to_have_count(0)                                                          # la fenêtre ne s'ouvre pas
+        self.assertEqual((sent, self.mine("alice"), self.mb.asked), ([], [], []))                           # ni envoyé, ni cherché
+        self.field(page).fill(self.NAME)
+        expect(self.view(page, ".rqsay")).to_have_text("")                                                  # le reproche part avec la frappe
+
+    # --- Regroupement et refus -----------------------------------------------------------
+    def test_a_second_account_typing_the_same_name_otherwise_is_told_it_is_already_asked(self):
+        self.ask_artist("  ZAZIE   test ", "bob", "Le message de Bob")
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.pick_artist(page)
+        box = self.type_and_ask(page, "zazie test")
+        self.assertNotIn("bob", page.locator("body").inner_text().lower())
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 200)                                                            # rejointe, pas créée
+        box.wait_for(state="detached")
+        expect(self.toast(page)).to_have_text("Déjà demandé : zazie test. Tu la retrouves dans « Mes demandes ».")
+        self.assertEqual([(r["title"], r["mine"]) for r in self.mine("alice")], [("ZAZIE   test", True)])    # le nom du premier demandeur reste, tel qu'il l'a tapé (espaces de bord retirés)
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        self.assertNotIn("Le message de Bob", page.content())
+        self.assertNotIn("bob", self.view(page).inner_text().lower())
+
+    def test_the_server_errors_stay_in_the_window(self):
+        declined = self.ask_artist("Refusée Test", "bob")["id"]
+        self.call("admin", f"/api/requests/{declined}/status", {"status": "declined", "reason": "Pas de ça ici"})
+        self.hub.cfg.request_max = 1
+        self.ask_artist("Une Autre", "alice")
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.pick_artist(page)
+        for name, message in (("refusée TEST", "cette demande a été refusée : Pas de ça ici"), ("Troisième", "trop de demandes en attente (1)"), ("Daft  Punk", "déjà dans la médiathèque")):
+            box = self.type_and_ask(page, name)
+            box.locator(".btn.primary").click()
+            box.locator(".formerr", has_text=message).wait_for()
+            box.locator(".btn", has_text="Annuler").click()
+            box.wait_for(state="detached")
+        self.assertEqual([r["title"] for r in self.mine("alice")], ["Une Autre"])
+
+    def test_the_name_errors_of_the_server_are_shown(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.pick_artist(page)
+        page.route(lambda url: url.endswith("/api/requests"), self.refuse(400, "nom d'artiste : aucun caractère de contrôle permis"))
+        box = self.type_and_ask(page, self.NAME)
+        box.locator(".btn.primary").click()
+        box.locator(".formerr", has_text="nom d'artiste : aucun caractère de contrôle permis").wait_for()
+
+    # --- Administration ----------------------------------------------------------------
+    def test_the_administrator_sees_both_requesters_of_an_artist_and_the_buttons_are_unchanged(self):
+        self.ask_artist(self.NAME, "alice", "Alice le veut")
+        self.ask_artist("zazie TEST", "bob", "Bob aussi")
+        page = self.session("admin")
+        self.open(page, "#/admin?tab=demandes")
+        self.count_rows(page, 1)
+        row = self.rows(page).first
+        self.assertEqual(row.locator(".what > b").inner_text(), self.NAME)
+        self.assertIn("2 demandeurs", row.inner_text())
+        people = row.locator(".rqusers li")
+        expect(people).to_have_count(2)
+        self.assertEqual([t.split(" · ")[0] for t in people.all_inner_texts()], ["alice", "bob"])
+        self.assertIn("Alice le veut", people.nth(0).inner_text())
+        self.assertIn("Bob aussi", people.nth(1).inner_text())
+        self.assertEqual(row.locator("img").count(), 0)
+        expect(row.locator(".rqpic .ic")).to_have_count(1)
+        self.assertEqual(row.locator(".what a").count(), 0)
+        self.assertEqual(row.locator("button .lbl").all_inner_texts(), ["Marquer ajouté", "Refuser", "Supprimer"])
+        row.locator("button", has_text="Refuser").click()
+        box = self.dialog(page)
+        box.locator("input").fill("Pas pour nous")
+        box.locator(".btn.primary").click()
+        row.locator(".rqstatus", has_text="Refusé : Pas pour nous").wait_for()
+        row.locator("button", has_text="Remettre en attente").click()
+        row.locator(".rqstatus", has_text="En attente").wait_for()
+        row.locator("button", has_text="Marquer ajouté").click()
+        row.locator(".rqstatus", has_text="Ajouté").wait_for()
+        self.assertEqual(row.locator("a:not([data-aside])").count(), 0)                                    # marquée à la main : rien à ouvrir
+        alice = self.mine("alice")[0]
+        self.assertEqual((alice["status"], "artist" in alice), ("added", False))
+
+    def test_a_refusal_with_its_reason_shows_in_my_requests(self):
+        rid = self.ask_artist(self.NAME)["id"]
+        self.call("admin", f"/api/requests/{rid}/status", {"status": "declined", "reason": "Pas dans le budget"})
+        page = self.session("alice")
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        self.assertEqual(self.rows(page).first.locator(".rqstatus").inner_text(), "Refusé : Pas dans le budget")
+
+
+    # --- Arrivée --------------------------------------------------------------------------
+    def arrive(self, artist):
+        """Un album de `artist` apparaît dans la musique (scan) ; la médiathèque est remise comme avant à la fin du test."""
+        folder = Path(self.tmp) / "srv" / "Musique" / artist
+        self.addCleanup(self.rescan_music)
+        self.addCleanup(shutil.rmtree, folder, True)
+        fixtures.write_flac(folder / "2003 - Arrivée" / "01 - Piste.flac", "Piste", "Arrivée", artist, 1, 1, year="2003")
+        self.rescan_music()
+
+    def rescan_music(self):
+        self.hub.jobs.scan(next(lib for lib in self.hub.cfg.libraries if lib.id == "musique"))
+        self.run_.wait_jobs()
+
+    def test_an_arrived_artist_is_on_the_home_and_opens_his_page(self):
+        self.ask_artist("Air Test")
+        self.arrive("Air Test")
+        got = self.mine("alice")[0]
+        address = f"#/artist/{got['artist']['lib']}/{got['artist']['id']}"
+        page = self.session("alice")
+        shelf = self.view(page, ".shelf.ready")
+        shelf.wait_for()
+        self.assertEqual(shelf.locator("h2").inner_text(), "Tes demandes sont arrivées")
+        card = shelf.locator(".card")
+        expect(card).to_have_count(1)
+        self.assertEqual(card.locator(".t").inner_text(), "Air Test")
+        self.assertTrue(card.evaluate("e => e.classList.contains('f')"))                                    # atteignable à la télécommande
+        expect(card).to_have_attribute("href", address)
+        self.assertEqual(card.locator("img").count(), 0)
+        expect(card.locator(".poster .ic")).to_have_count(1)
+        with page.expect_response(lambda r: r.url.endswith("/ack")):
+            card.click()
+        page.wait_for_function("location.hash.indexOf('#/artist/') === 0")
+        self.assertTrue(self.mine("alice")[0]["ack"])
+        page.go_back()
+        self.shown(page, "#/")
+        page.wait_for_function("!document.querySelector('#views > .view:not([style*=\"none\"]) .shelf.ready')")
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        expect(self.rows(page).first.locator("a", has_text="Ouvrir")).to_have_attribute("href", address)    # « Mes demandes » mène à la fiche arrivée
+        self.assertEqual(self.rows(page).first.locator(".rqstatus").inner_text(), "Ajouté")
+
+    def test_an_arrived_artist_without_a_page_opens_the_library_filtered_on_his_name(self):
+        self.ask_artist("Air Test")
+        self.arrive("Air Test")
+        page = self.session("alice")
+
+        def without_id(route):
+            answer = route.fetch().json()
+            for r in answer["requests_ready"]:
+                del r["artist"]["id"]
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(answer))
+        page.route(lambda url: url.endswith("/api/home"), without_id)
+        page.reload()
+        card = self.view(page, ".shelf.ready .card")
+        card.wait_for()
+        expect(card).to_have_attribute("href", "#/l/musique?q=Air%20Test")
+        card.click()
+        self.shown(page, "#/l/musique?q=Air%20Test")
+        expect(self.field(page)).to_have_value("Air Test")                                                  # la bibliothèque est filtrée sur le nom
+        expect(self.view(page, ".card .t")).to_have_text(["Arrivée"])
+
+    # --- Sécurité --------------------------------------------------------------------------
+    def test_a_name_with_html_stays_text_everywhere(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.pick_artist(page)
+        box = self.type_and_ask(page, self.HOSTILE_NAME)
+        self.assertEqual(box.locator("h3").inner_text(), f"Demander « {self.HOSTILE_NAME} »")
+        box.locator("input").fill(HOSTILE)
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 201)
+        box.wait_for(state="detached")
+        expect(self.toast(page)).to_have_text(f"Demandé : {self.HOSTILE_NAME}")
+        self.assertEqual(self.mine("alice")[0]["title"], self.HOSTILE_NAME)
+        for name, target in (("alice", "#/requests"), ("admin", "#/admin?tab=demandes")):
+            seen = self.session(name)
+            self.open(seen, target)
+            self.count_rows(seen, 1)
+            row = self.rows(seen).first
+            self.assertEqual(row.locator(".what > b").inner_text(), self.HOSTILE_NAME)
+            self.assertIn(HOSTILE, row.inner_text())                                                         # le message aussi
+            self.assertEqual(row.locator("img").count(), 0)
+            self.assertIsNone(seen.evaluate("window.pwned"))
+        self.assertIsNone(page.evaluate("window.pwned"))
+
+    # --- La recherche dans MusicBrainz ----------------------------------------------------------
+    AIR, AIR_OTHER, AIR_BARE = "a1a1a1a1-0000-4000-8000-000000000001", "a1a1a1a1-0000-4000-8000-000000000002", "a1a1a1a1-0000-4000-8000-000000000003"
+    SEARCH_FAILED = "MusicBrainz ne répond pas : tu peux envoyer le nom tel quel"
+    SEARCH_BUSY = "la recherche d'artistes est occupée : tu peux envoyer le nom tel quel"
+
+    def air(self):
+        """Trois « Air » dans MusicBrainz : un groupe français, un homonyme américain, et un résultat sans rien d'autre que son nom."""
+        self.mb.found["air"] = [
+            mb_artist(self.AIR, "Air", disambiguation="groupe français de musique électronique"),
+            mb_artist(self.AIR_OTHER, "Air", type="Person", country="US", disambiguation="homonyme", **{"life-span": {"begin": "1950", "end": "1999"}}),
+            {"id": self.AIR_BARE, "name": "Air"}]
+
+    def find(self, page, text):
+        """Tape `text`, clique « Chercher » et rend la réponse de la recherche."""
+        self.field(page).fill(text)
+        with page.expect_response(lambda r: "/api/requests/artists" in r.url) as info:
+            self.view(page, "[data-key=rq-search]").click()
+        return info.value
+
+    def artist_page(self, who="alice", **options):
+        page = self.session(who, **options)
+        self.open(page, self.PAGE)
+        self.pick_artist(page)
+        return page
+
+    def test_a_search_tells_the_namesakes_apart_and_the_chosen_one_is_asked_with_its_mbid(self):
+        self.air()
+        page = self.artist_page()
+        reply = self.find(page, "Air")
+        self.assertIn("q=Air", reply.url)
+        hits = self.hits(page)
+        expect(hits).to_have_count(3)
+        group, person, bare = hits.nth(0), hits.nth(1), hits.nth(2)
+        self.assertEqual([h.locator(".rqtitle").inner_text() for h in (group, person, bare)], ["Air", "Air", "Air"])
+        for needle in ("groupe français de musique électronique", "Groupe", "France", "1995 – 2005"):
+            self.assertIn(needle, group.inner_text())
+        for needle in ("homonyme", "Personne", "États-Unis", "1950 – 1999"):
+            self.assertIn(needle, person.inner_text())
+        self.assertEqual((bare.locator(".rqsum").count(), bare.locator(".rqyear").count()), (0, 0))         # rien d'affiché de vide : ni ligne, ni tiret
+        self.assertNotIn("–", bare.inner_text())
+        self.assertNotIn("·", bare.inner_text())
+        expect(hits.locator(".rqpic .ic")).to_have_count(3)                                                  # la case neutre à note de musique
+        self.assertEqual(hits.locator("img").count(), 0)
+        person.locator("button").click()
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertEqual(box.locator("h3").inner_text(), "Demander « Air »")
+        box.locator("input").fill("Celui des années 50")
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 201)
+        self.assertEqual(info.value.request.post_data_json, {"kind": "artist", "name": "Air", "mbid": self.AIR_OTHER, "note": "Celui des années 50"})
+        box.wait_for(state="detached")
+        expect(self.toast(page)).to_have_text("Demandé : Air")
+        expect(person.locator("button")).to_have_text("Demandé")                                             # le résultat suit, sans relancer la recherche
+        self.focused_key(page, "rq-artist-" + self.AIR_OTHER)
+        self.assertEqual(self.mb.asked, ["Air"])
+        self.assertEqual([(r["kind"], r["title"], r["mbid"]) for r in self.mine("alice")], [("artist", "Air", self.AIR_OTHER)])
+        address = f"https://musicbrainz.org/artist/{self.AIR_OTHER}"
+        for name, target in (("alice", "#/requests"), ("admin", "#/admin?tab=demandes")):
+            seen = self.session(name)
+            self.open(seen, target)
+            self.count_rows(seen, 1)
+            link = self.rows(seen).first.locator(".what > b a")
+            expect(link).to_have_attribute("href", address)
+            expect(link).to_have_attribute("target", "_blank")
+            self.assertIn("noopener", link.get_attribute("rel").split())
+            expect(link).to_have_attribute("aria-label", "Ouvrir « Air » sur MusicBrainz (nouvel onglet)")
+            self.assertEqual(self.rows(seen).first.locator("a[href*='themoviedb']").count(), 0)             # le lien MusicBrainz tient la place de celui de TMDB
+
+    def test_a_search_without_result_says_so_and_the_name_is_sent_without_an_mbid(self):
+        page = self.artist_page()
+        self.find(page, "Zazie  Test")
+        expect(self.view(page, ".rqsay")).to_have_text("Aucun artiste trouvé dans MusicBrainz pour « Zazie Test ».")
+        self.assertEqual(self.hits(page).count(), 0)
+        asis = self.view(page, "[data-key=rq-asis]")
+        expect(asis).to_have_text("Demander « Zazie Test » tel quel")
+        asis.click()
+        box = self.dialog(page)
+        box.wait_for()
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.request.post_data_json, {"kind": "artist", "name": "Zazie Test"})        # le nom tapé, sans mbid
+        box.wait_for(state="detached")
+        expect(self.toast(page)).to_have_text("Demandé : Zazie Test")
+        expect(self.field(page)).to_have_value("")
+        self.assertEqual(self.view(page, "[data-key=rq-asis]").count(), 0)
+        self.assertEqual(["mbid" in r for r in self.mine("alice")], [False])
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        self.assertEqual(self.rows(page).first.locator(".what a").count(), 0)                               # sans mbid, pas de lien MusicBrainz
+
+    def test_the_typed_name_can_always_be_sent_under_the_results(self):
+        self.air()
+        page = self.artist_page()
+        self.find(page, "Air")
+        expect(self.hits(page)).to_have_count(3)
+        expect(self.view(page, "[data-key=rq-asis]")).to_have_text("Demander « Air » tel quel")
+        self.assertEqual(self.view(page, ".rqhits > :last-child [data-key=rq-asis]").count(), 1)             # sous les résultats, pas avant
+
+    def test_a_failing_search_shows_the_message_and_the_name_can_still_be_sent(self):
+        page = self.artist_page()
+        self.mb.error = enrich.MusicBrainzError("délai dépassé")
+        self.find(page, "Air")
+        say = self.view(page, ".rqsay")
+        expect(say).to_have_text(self.SEARCH_FAILED)
+        self.assertTrue(say.evaluate("e => e.classList.contains('bad')"))
+        self.assertLess(say.bounding_box()["height"], 100)                                                   # une ligne de la page, pas le panneau d'erreur du lecteur qui couvre tout
+        expect(self.view(page, "[data-key=rq-asis]")).to_have_text("Demander « Air » tel quel")
+        self.mb.error = None
+        self.view(page, "[data-key=rq-asis]").click()
+        box = self.dialog(page)
+        box.wait_for()
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.request.post_data_json, {"kind": "artist", "name": "Air"})
+        box.wait_for(state="detached")
+        self.assertEqual([r["title"] for r in self.mine("alice")], ["Air"])
+
+    def test_a_busy_search_shows_the_message_and_the_name_can_still_be_sent(self):
+        page = self.artist_page()
+        page.route(lambda url: "/api/requests/artists" in url, self.refuse(503, self.SEARCH_BUSY))
+        self.find(page, "Air")
+        expect(self.view(page, ".rqsay")).to_have_text(self.SEARCH_BUSY)
+        self.view(page, "[data-key=rq-asis]").click()
+        box = self.dialog(page)
+        box.wait_for()
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.request.post_data_json, {"kind": "artist", "name": "Air"})
+        box.wait_for(state="detached")
+        self.assertEqual([r["title"] for r in self.mine("alice")], ["Air"])
+
+    def test_nothing_is_searched_while_typing_only_on_enter_or_the_button(self):
+        self.air()
+        page = self.artist_page()
+        sent = []
+        page.on("request", lambda r: sent.append(r.url) if "/api/requests/artists" in r.url else None)
+        self.field(page).click()
+        page.keyboard.type("Air", delay=120)
+        page.evaluate("new Promise(done => setTimeout(done, 700))")                                          # plus que les 400 ms de la recherche de films : une frappe n'a rien lancé
+        self.assertEqual((sent, self.mb.asked), ([], []))
+        self.assertEqual(self.hits(page).count(), 0)
+        with page.expect_response(lambda r: "/api/requests/artists" in r.url):
+            page.keyboard.press("Enter")
+        expect(self.hits(page)).to_have_count(3)
+        self.assertEqual((len(sent), self.mb.asked), (1, ["Air"]))
+        page.keyboard.type(" Test", delay=120)                                                              # retaper ne cherche pas non plus, et les résultats restent
+        page.evaluate("new Promise(done => setTimeout(done, 700))")
+        self.assertEqual((len(sent), self.hits(page).count()), (1, 3))
+
+    def test_a_result_already_asked_shows_its_state_and_one_in_the_library_opens_its_page(self):
+        self.mb.found["daft"] = [mb_artist(self.AIR_BARE, "Daft Punk"), mb_artist(self.AIR, "Air")]
+        self.ask_artist("Air", "bob")
+        page = self.artist_page()
+        self.find(page, "daft")
+        hits = self.hits(page)
+        expect(hits).to_have_count(2)
+        library, other = hits.nth(0), hits.nth(1)
+        link = library.locator("a.btn")
+        expect(link).to_have_text("Ouvrir la fiche")
+        self.assertRegex(link.get_attribute("href"), r"^#/artist/musique/")
+        self.assertEqual(library.locator("button").count(), 0)                                               # rien à demander : il est là
+        self.assertEqual(library.locator(".rqstate").count(), 0)
+        expect(other.locator(".rqstate")).to_have_text("Déjà demandé")                                       # un autre compte l'a demandé : ni qui, ni combien
+        expect(other.locator("button")).to_have_text("Demander aussi")
+        self.assertNotIn("bob", page.locator("body").inner_text().lower())
+        link.click()
+        page.wait_for_function("location.hash.indexOf('#/artist/musique/') === 0")
+
+    def test_my_own_asked_result_says_so_and_can_be_withdrawn(self):
+        self.air()
+        self.ask_artist("Air", "alice")
+        page = self.artist_page()
+        self.find(page, "air")
+        hits = self.hits(page)
+        expect(hits).to_have_count(3)
+        self.assertEqual([hits.nth(n).locator("button").inner_text().strip() for n in range(3)], ["Demandé"] * 3)      # la demande est celle du nom, pour les trois homonymes
+        hits.nth(1).locator("button").click()
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertEqual(box.locator("h3").inner_text(), "Retirer ta demande ?")
+        box.locator(".btn.danger").click()
+        box.wait_for(state="detached")
+        expect(self.toast(page)).to_have_text("Demande retirée : Air")
+        expect(hits.nth(1).locator("button")).to_have_text("Demander")
+        self.assertEqual(self.mine("alice"), [])
+
+    def test_html_in_a_name_or_a_disambiguation_stays_text(self):
+        self.mb.found[self.HOSTILE_NAME.casefold()] = [mb_artist(self.AIR, self.HOSTILE_NAME, disambiguation=HOSTILE)]
+        page = self.artist_page()
+        self.find(page, self.HOSTILE_NAME)
+        hit = self.hits(page).first
+        hit.wait_for()
+        self.assertEqual(hit.locator(".rqtitle").inner_text(), self.HOSTILE_NAME)
+        self.assertIn(HOSTILE, hit.locator(".rqsum").inner_text())
+        self.assertEqual(hit.locator(".rqsum *, .rqtitle a *").count(), 0)                                     # du texte, pas des éléments
+        self.assertEqual(hit.locator("img").count(), 0)
+        expect(self.view(page, "[data-key=rq-asis]")).to_have_text(f"Demander « {self.HOSTILE_NAME} » tel quel")
+        hit.locator("button").click()
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertEqual(box.locator("h3").inner_text(), f"Demander « {self.HOSTILE_NAME} »")
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        box.wait_for(state="detached")
+        self.assertEqual(info.value.status, 201)
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        self.assertEqual(self.rows(page).first.locator(".what > b").inner_text(), self.HOSTILE_NAME)
+        self.assertIsNone(page.evaluate("window.pwned"))
+
+    def test_only_a_musicbrainz_address_becomes_a_link(self):
+        self.call("alice", "/api/requests", {"kind": "artist", "name": "Air", "mbid": self.AIR})
+        page = self.session("alice")
+        shown = {"url": None}
+
+        def rewrite(route):
+            answer = route.fetch().json()
+            for r in answer["requests"]:
+                r["url"] = shown["url"]
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(answer))
+        page.route(lambda url: url.endswith("/api/requests?mine=1"), rewrite)
+        self.open(page, "#/requests")
+        for bad in ("https://evil.example/artist/x", "javascript:window.pwned=1", "http://musicbrainz.org/artist/x", "https://musicbrainz.org.evil.example/x", ""):
+            shown["url"] = bad
+            page.reload()                                                                                    # la page redemande ses demandes, avec l'adresse de ce tour
+            self.shown(page, "#/requests")
+            self.count_rows(page, 1)
+            self.assertEqual(self.rows(page).first.locator("a").count(), 0, bad)
+        shown["url"] = "https://musicbrainz.org/artist/" + self.AIR
+        page.reload()
+        self.shown(page, "#/requests")
+        self.count_rows(page, 1)
+        expect(self.rows(page).first.locator(".what > b a")).to_have_attribute("href", shown["url"])
+        self.assertIsNone(page.evaluate("window.pwned"))
+
+    def test_on_the_tv_the_title_of_an_asked_artist_is_plain_text(self):
+        self.call("alice", "/api/requests", {"kind": "artist", "name": "Air", "mbid": self.AIR})
+        page = self.session("alice", device="tv")
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        self.assertEqual(self.rows(page).first.locator(".what a").count(), 0)                                # rien à y atteindre à la télécommande
+
+    # --- Le droit retiré, sans clé TMDB ---------------------------------------------------------
+    def test_without_the_right_the_closed_page_and_the_lines_speak_of_films_series_and_artists(self):
+        from hub import accounts
+        accounts.set_can_request(self.hub.db, self.bob["id"], False)
+        page = self.session("bob")
+        self.open(page, self.PAGE)
+        self.assertEqual(self.view(page, "h1").inner_text(), "Demander")                                    # un titre neutre : ni film, ni artiste
+        expect(self.view(page, "p")).to_have_text("L’administrateur t’a retiré le droit de demander des films, des séries ou des artistes.")
+        self.open(page, "#/requests")
+        expect(self.view(page, ".reqlist p.muted")).to_have_text("L’administrateur t’a retiré le droit de demander des films, des séries ou des artistes ; tes demandes déjà faites restent ici.")
+        self.open(page, "#/settings?tab=compte")
+        expect(self.view(page, "[data-key=my-requests]").locator("xpath=ancestor::div[contains(@class,'line')][1]")).to_contain_text("Tu ne peux plus demander de film, de série ni d’artiste ; tes demandes déjà faites restent visibles")
+        english = self.session("bob", lang="en")
+        self.open(english, self.PAGE)
+        self.assertEqual(self.view(english, "h1").inner_text(), "Request")
+        expect(self.view(english, "p")).to_have_text("The administrator took away your right to request movies, series or artists.")
+        self.open(english, "#/requests")
+        expect(self.view(english, ".reqlist p.muted")).to_have_text("The administrator took away your right to request movies, series or artists; the requests you already made stay here.")
+        self.open(english, "#/settings?tab=compte")
+        expect(self.view(english, "[data-key=my-requests]").locator("xpath=ancestor::div[contains(@class,'line')][1]")).to_contain_text("You can no longer request movies, series or artists; the requests you already made stay visible")
+        self.assertEqual(english.evaluate("Hub.missing"), [])
+
+    def test_with_a_tmdb_key_the_artist_intro_does_not_repeat_the_greyed_out_box_sentence(self):
+        page = self.artist_page()
+        self.assertNotIn("case grisée", self.view(page, ".intro").inner_text())
+
+    # --- Télécommande, téléphone ---------------------------------------------------------------
+    def test_the_remote_searches_goes_down_the_results_chooses_and_back_returns_to_the_field(self):
+        self.air()
+        page = self.session("alice", device="tv")
+        self.open(page, self.PAGE)
+        self.focused_key(page, "rq-kind")
+        self.assertNotEqual(page.evaluate("getComputedStyle(document.activeElement).outlineStyle"), "none")   # le focus se voit
+        page.keyboard.press("Enter")
+        self.dialog(page).wait_for()
+        for _ in range(3):
+            page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        self.dialog(page).wait_for(state="detached")
+        self.focused_key(page, "rq-kind")
+        page.keyboard.press("ArrowRight")
+        self.focused_key(page, "rq-search")                                                                  # le bouton « Chercher » s'atteint aux flèches
+        self.assertNotEqual(page.evaluate("getComputedStyle(document.activeElement).outlineStyle"), "none")
+        page.keyboard.press("ArrowLeft")
+        self.focused_key(page, "rq-kind")
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_function("document.activeElement && document.activeElement.type === 'search'")
+        page.keyboard.type("Air")
+        with page.expect_response(lambda r: "/api/requests/artists" in r.url):
+            page.keyboard.press("Enter")
+        self.focused_key(page, "rq-artist-" + self.AIR)                                                      # Entrée mène au premier résultat
+        expect(self.hits(page)).to_have_count(3)
+        page.keyboard.press("ArrowDown")
+        self.focused_key(page, "rq-artist-" + self.AIR_OTHER)
+        page.keyboard.press("ArrowDown")
+        self.focused_key(page, "rq-artist-" + self.AIR_BARE)
+        page.keyboard.press("ArrowDown")
+        self.focused_key(page, "rq-asis")                                                                    # puis le nom tel quel
+        self.assertNotEqual(page.evaluate("getComputedStyle(document.activeElement).outlineStyle"), "none")
+        page.keyboard.press("ArrowUp")
+        page.keyboard.press("ArrowUp")
+        self.focused_key(page, "rq-artist-" + self.AIR_OTHER)
+        page.keyboard.press("Enter")                                                                         # Entrée choisit : la fenêtre du message
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertEqual(box.locator("h3").inner_text(), "Demander « Air »")
+        page.wait_for_function("document.activeElement && document.activeElement.tagName === 'INPUT' && !!document.activeElement.closest('.veil')")
+        page.keyboard.press("Escape")
+        page.wait_for_function("document.activeElement && document.activeElement.tagName !== 'INPUT'")
+        self.escape_the_dialog(page)
+        self.focused_key(page, "rq-artist-" + self.AIR_OTHER)                                                # Retour ferme la fenêtre, le focus revient sur le résultat
+        self.assertEqual(self.mine("alice"), [])
+        page.keyboard.press("Escape")                                                                        # Retour revient au champ
+        page.wait_for_function("document.activeElement && document.activeElement.type === 'search'")
+        self.assertEqual(self.hits(page).count(), 3)                                                         # les résultats restent
+        page.keyboard.press("Escape")                                                                        # puis sort du champ…
+        self.focused_key(page, "rq-kind")
+        page.keyboard.press("Escape")                                                                        # … puis remonte d'une page
+        self.shown(page, "#/")
+
+    def test_the_search_button_alone_searches_and_the_remote_goes_down_to_the_results(self):
+        self.air()
+        page = self.session("alice", device="tv")
+        self.open(page, self.PAGE + "?kind=artist&q=Air")
+        expect(self.view(page, "[data-key=rq-search]")).to_be_visible()
+        self.assertEqual(self.mb.asked, [])                                                                  # une adresse ne cherche rien toute seule
+        self.focused_key(page, "rq-kind")
+        page.keyboard.press("ArrowRight")
+        self.focused_key(page, "rq-search")
+        with page.expect_response(lambda r: "/api/requests/artists" in r.url):
+            page.keyboard.press("Enter")
+        expect(self.hits(page)).to_have_count(3)
+        self.focused_key(page, "rq-artist-" + self.AIR)                                                      # comme Entrée dans le champ : le premier résultat
+        page.keyboard.press("ArrowUp")
+        self.focused_key(page, "rq-search")                                                                  # et Haut revient au bouton
+
+    def test_the_artist_results_fit_a_phone(self):
+        self.mb.found["air"] = [mb_artist(self.AIR, "Air " + "très long nom " * 8, disambiguation="une précision très longue " * 8), mb_artist(self.AIR_OTHER, "Air")]
+        page = self.artist_page(device="phone", width=390)
+        self.find(page, "Air")
+        expect(self.hits(page)).to_have_count(2)
+        self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+        self.assertTrue(self.hits(page).locator("button").evaluate_all("els => els.every(e => e.getBoundingClientRect().height >= 32 && e.getBoundingClientRect().right <= 390)"))
+        asis = self.view(page, "[data-key=rq-asis]")
+        self.assertTrue(asis.evaluate("e => e.getBoundingClientRect().right <= 390 && e.getBoundingClientRect().height >= 32"))
+
+    def test_the_artist_search_is_in_english(self):
+        self.air()
+        page = self.session("alice", lang="en")
+        self.open(page, self.PAGE)
+        self.pick_kind(page, "Artist")
+        self.find(page, "Air")
+        hits = self.hits(page)
+        expect(hits).to_have_count(3)
+        for needle in ("Artist", "Group", "France", "1995 – 2005"):
+            self.assertIn(needle, hits.nth(0).inner_text())
+        self.assertIn("Person", hits.nth(1).inner_text())
+        self.assertIn("United States", hits.nth(1).inner_text())
+        expect(self.view(page, "[data-key=rq-asis]")).to_have_text("Request “Air” as it is")
+        expect(self.view(page, "[data-key=rq-search]")).to_have_text("Search")
+        self.mb.error = enrich.MusicBrainzError("délai dépassé")
+        self.find(page, "Air again")
+        expect(self.view(page, ".rqsay")).to_have_text("MusicBrainz isn’t responding: you can send the name as it is")
+        self.mb.error = None
+        self.find(page, "Nobody")
+        expect(self.view(page, ".rqsay")).to_have_text("No artist found in MusicBrainz for “Nobody”.")
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+
+    # --- Droits, films, séries -------------------------------------------------------------
+    def test_without_a_tmdb_key_the_page_offers_the_artist_alone(self):
+        self.hub.cfg.tmdb_key = ""
+        page = self.session("alice")
+        self.assertFalse(page.evaluate("Hub.session.requestSearch"))
+        self.open(page, "#/requests")
+        self.view(page, ".reqempty").wait_for()
+        self.view(page, "[data-key=req-new]").click()
+        self.shown(page, self.PAGE)
+        self.assertEqual(self.view(page, "h1").inner_text(), "Demander un artiste")
+        self.assertIn("Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée.", self.view(page, ".intro").inner_text())      # le seul moyen de demander un film
+        self.assertEqual(self.view(page, "[data-key=rq-kind]").count(), 0)                                   # un seul choix : pas de menu
+        expect(self.field(page)).to_have_attribute("placeholder", "Nom de l’artiste")
+        box = self.type_and_ask(page, self.NAME)
+        with self.sent(page) as info:
+            box.locator(".btn.primary").click()
+        self.assertEqual(info.value.status, 201)
+        box.wait_for(state="detached")
+        self.assertEqual([r["title"] for r in self.mine("alice")], [self.NAME])
+        self.assertEqual(self.tmdb.calls, [])
+
+    def test_going_back_to_films_restores_the_search_and_a_film_is_still_asked(self):
+        page = self.session("alice")
+        searches = []
+        page.on("request", lambda r: searches.append(r.url) if "/api/requests/search" in r.url else None)
+        self.open(page, self.PAGE)
+        self.pick_artist(page)
+        self.field(page).fill("grand")
+        self.field(page).press("Enter")                                                                      # en mode artiste, Entrée cherche dans MusicBrainz, jamais dans TMDB
+        self.view(page, "[data-key=rq-asis]").wait_for()
+        self.assertEqual((searches, self.tmdb.calls, self.mb.asked), ([], [], ["grand"]))
+        with self.searched(page):
+            self.pick_kind(page, "Films")                                                                    # revenir aux films relance la recherche du texte tapé
+        expect(self.field(page)).to_have_attribute("placeholder", "Titre d’un film ou d’une série")
+        expect(self.view(page, "[data-key=rq-search]")).to_be_hidden()
+        expect(self.view(page, "[data-key=rq-asis]")).to_have_count(0)                                       # les résultats d'artistes sont partis
+        voyage = self.hit(page, "Le Grand Voyage")
+        voyage.locator("button").click()
+        box = self.dialog(page)
+        with self.sent(page) as sent:
+            box.locator(".btn.primary").click()
+        self.assertEqual(sent.value.status, 201)
+        self.assertEqual([(r["kind"], r["tmdb"]) for r in self.mine("alice")], [("movie", 4001)])
+
+    def test_the_menu_lists_the_artist_after_the_films_and_series(self):
+        page = self.session("alice")
+        self.open(page, self.PAGE)
+        self.assertEqual(self.view(page, "h1").inner_text(), "Demander un film, une série ou un artiste")
+        self.view(page, "[data-key=rq-kind]").click()
+        self.assertEqual([t.strip() for t in self.dialog(page).locator(".opt").all_inner_texts()], ["Les deux", "Films", "Séries", "Artiste"])
+
+    # --- Télécommande, anglais ---------------------------------------------------------------
+    def test_the_remote_alone_asks_an_artist(self):
+        page = self.session("alice", device="tv")
+        self.open(page, self.PAGE)
+        self.focused_key(page, "rq-kind")
+        page.keyboard.press("Enter")
+        menu = self.dialog(page)
+        menu.wait_for()
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        menu.wait_for(state="detached")
+        self.focused_key(page, "rq-kind")
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_function("document.activeElement && document.activeElement.type === 'search'")
+        page.keyboard.type(self.NAME)
+        page.keyboard.press("Enter")
+        self.focused_key(page, "rq-asis")                                                                   # aucun résultat : Entrée mène au nom tel quel
+        page.keyboard.press("Enter")
+        box = self.dialog(page)
+        box.wait_for()
+        self.assertEqual(box.locator("h3").inner_text(), f"Demander « {self.NAME} »")
+        page.wait_for_function("document.activeElement && document.activeElement.tagName === 'INPUT' && !!document.activeElement.closest('.veil')")      # le message, prêt à être tapé
+        page.keyboard.press("Escape")
+        page.wait_for_function("document.activeElement && document.activeElement.tagName !== 'INPUT'")
+        self.escape_the_dialog(page)
+        self.assertEqual(self.mine("alice"), [])                                                            # rien n'est demandé
+        self.focused_key(page, "rq-asis")                                                                   # le focus revient sur ce qui avait ouvert la fenêtre
+        page.keyboard.press("Escape")
+        page.wait_for_function("document.activeElement && document.activeElement.type === 'search'")             # Retour revient au champ
+
+    def test_the_artist_request_is_in_english(self):
+        self.ask_artist(self.NAME, "bob")
+        page = self.session("alice", lang="en")
+        self.open(page, self.PAGE)
+        self.assertEqual(self.view(page, "h1").inner_text(), "Request a movie, a series or an artist")
+        self.view(page, "[data-key=rq-kind]").click()
+        self.assertEqual([t.strip() for t in self.dialog(page).locator(".opt").all_inner_texts()], ["Both", "Movies", "Series", "Artist"])
+        self.dialog(page).locator(".opt", has_text="Artist").click()
+        expect(self.field(page)).to_have_attribute("placeholder", "Artist name")
+        self.view(page, "[data-key=rq-search]").click()
+        expect(self.view(page, ".rqsay")).to_have_text("Type the artist’s name.")
+        box = self.type_and_ask(page, self.NAME.lower())
+        self.assertEqual(box.locator("h3").inner_text(), f"Request “{self.NAME.lower()}”")
+        self.assertIn("the artist", box.locator(".lead").inner_text())
+        box.locator(".btn.primary").click()
+        expect(self.toast(page)).to_have_text(f"Already requested: {self.NAME.lower()}. You will find it in “My requests”.")
+        self.open(page, "#/requests")
+        self.count_rows(page, 1)
+        self.assertEqual(page.evaluate("Hub.missing"), [])
+        admin = self.session("admin", lang="en")
+        self.open(admin, "#/admin?tab=demandes")
+        self.count_rows(admin, 1)
+        self.assertEqual(admin.evaluate("Hub.missing"), [])
 
 
 class TestRecommendationsInTheUi(unittest.TestCase):

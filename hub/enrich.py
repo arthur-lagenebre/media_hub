@@ -774,8 +774,9 @@ def other_photos(legacy, artist_id, mbid, home):
     return stale + [home / f"{PHOTO_STEM}.webp"] if home else stale
 
 
-def musicbrainz(cfg):
-    return MusicBrainz(user_agent=MB_USER_AGENT, cache=tmdb_cache.Cache(folder=cfg.data / "musicbrainz-cache", read=True))
+def musicbrainz(cfg, **options):
+    """Le client de MusicBrainz : le `User-Agent` du hub et le cache disque de HUB_DATA ; `options` (`timeout`, `attempts`) : ce que `MusicBrainz` accepte en plus (la recherche des demandes ne s'attarde pas, voir artist_search.py)."""
+    return MusicBrainz(user_agent=MB_USER_AGENT, cache=tmdb_cache.Cache(folder=cfg.data / "musicbrainz-cache", read=True), **options)
 
 
 def album_artists(db, lib):

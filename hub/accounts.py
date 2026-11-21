@@ -182,7 +182,7 @@ def can_upload(row):
 
 
 def can_request(row):
-    """Le compte peut-il demander un film ou une série (voir requests.py) ? Un administrateur toujours, un autre compte tant que l'administrateur ne lui a pas retiré ce droit (donné par défaut)."""
+    """Le compte peut-il demander un film, une série ou un artiste (voir requests.py) ? Un administrateur toujours, un autre compte tant que l'administrateur ne lui a pas retiré ce droit (donné par défaut)."""
     return row["role"] == "admin" or bool(row["can_request"])
 
 

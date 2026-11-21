@@ -93,6 +93,10 @@ class TestRename(LabelCase):
             self.assertEqual(self.rename("films", {"label": same})[0], 400, same)
         self.assertEqual(self.label_of("films"), "Films")
 
+    def test_a_curly_and_a_straight_apostrophe_are_the_same_name(self):
+        self.assertEqual(self.rename("series", {"label": "L'été"})[0], 200)
+        self.assertEqual(self.rename("films", {"label": "L’été"}), (400, {"error": "« L'été » est déjà le nom d'une autre bibliothèque"}))
+
     def test_the_name_another_library_was_given_is_refused_too(self):
         self.rename("series", {"label": "Feuilletons"})
         self.assertEqual(self.rename("films", {"label": "feuilletons"}), (400, {"error": "« Feuilletons » est déjà le nom d'une autre bibliothèque"}))

@@ -57,14 +57,19 @@ def without_key(text, key):
     return text.replace(key, "…") if key else text
 
 
-def search_text(value):
-    """Le texte cherché, blancs de bord retirés ; 400 s'il a moins de 2 caractères utiles (ni contrôle, ni format, ni blanc, ni séparateur : catégories Unicode C* et Z*)
-    ou plus de 100 caractères en tout."""
+def bounded_text(value, minimum, maximum, message):
+    """Le texte cherché, blancs de bord retirés ; 400 `message` s'il a moins de `minimum` caractères utiles (ni contrôle, ni format, ni blanc, ni séparateur : catégories Unicode C* et Z*) ou plus de `maximum` caractères en tout.
+    Celui de la recherche dans TMDB (`search_text`) et celui de la recherche d'artistes (artist_search.py)."""
     text = (value or "").strip()
     useful = sum(not unicodedata.category(c).startswith(("C", "Z")) for c in text)
-    if useful < MIN_TEXT or len(text) > MAX_TEXT:
-        raise RequestError(400, BAD_TEXT)
+    if useful < minimum or len(text) > maximum:
+        raise RequestError(400, message)
     return text
+
+
+def search_text(value):
+    """Le texte cherché dans TMDB : de 2 à 100 caractères (voir `bounded_text`)."""
+    return bounded_text(value, MIN_TEXT, MAX_TEXT, BAD_TEXT)
 
 
 def search_kinds(value):
@@ -273,7 +278,7 @@ def fetch_posters(cfg, db, log, make=client):
         return counts
     folder = cfg.data / "tmdb"
     folder.mkdir(parents=True, exist_ok=True)
-    rows = db.query("SELECT kind, tmdb, title FROM requests WHERE status != 'declined' ORDER BY created DESC, id DESC")
+    rows = db.query("SELECT kind, tmdb, title FROM requests WHERE status != 'declined' AND kind != ? ORDER BY created DESC, id DESC", (hub_requests.ARTIST,))        # un artiste n'a pas d'affiche
     found = hub_requests.owned(db, cfg.libraries) if rows else {}
     todo = [r for r in rows if (r["kind"], r["tmdb"]) not in found and not (folder / hub_requests.poster_file(r["kind"], r["tmdb"])).is_file()]
     tmdb = make(cfg)

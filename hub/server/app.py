@@ -52,6 +52,7 @@ from .. import prefs
 from .. import recommend
 from .. import requests as hub_requests
 from .. import request_search
+from .. import artist_search
 from .. import suggestions
 from .. import urls
 from ..activity import Activity, attempt_id
@@ -123,6 +124,7 @@ class Hub:
         self.throttle = accounts.Throttle()                    # les essais de connexion ratés, par adresse
         self.inbox = Inbox(cfg, self.db)                       # les envois des comptes (voir inbox.py)
         self.finder = request_search.Finder(cfg)                # la recherche dans TMDB des titres à demander (voir request_search.py)
+        self.artist_finder = artist_search.Finder(cfg)          # la recherche dans MusicBrainz des artistes à demander (voir artist_search.py)
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
         self.active = 0                                        # les flux ffmpeg en cours (voir count_stream)
         self.active_lock = threading.Lock()
@@ -561,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_failure(self, status, message):
         """Une erreur du serveur (500, 502 et plus) au journal ; le jeton n'y va pas : masqué d'après les clés décodées (`?%74oken=` aussi)."""
         split = urlsplit(self.path)
-        hidden = {"token", "q"} if unquote(split.path) == "/api/requests/search" else {"token"}         # le texte d'une recherche dans TMDB ne va pas au journal
+        hidden = {"token", "q"} if unquote(split.path) in ("/api/requests/search", "/api/requests/artists") else {"token"}         # le texte d'une recherche dans TMDB ou dans MusicBrainz ne va pas au journal
         pairs = [(k, "***" if k in hidden else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
         shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
         print(f"{status} {self.command} {shown} : {request_search.without_key(message, self.hub.cfg.tmdb_key)}", file=sys.stderr)
@@ -1580,7 +1582,7 @@ def saga_json(saga, seen):
     return out
 
 
-UNKNOWN_ARTISTS = ("artiste inconnu", "various artists", "artistes divers")        # rangés en dernier : ce ne sont pas des artistes qu'on cherche par leur nom
+UNKNOWN_ARTISTS = hub_requests.UNKNOWN_ARTISTS        # rangés en dernier : ce ne sont pas des artistes qu'on cherche par leur nom (et qu'on ne demande pas)
 
 
 def artist_name(grp):
@@ -2320,6 +2322,7 @@ def save_artist_edits(h, lib, artist_id, changes, resets):
     """Garde les corrections de l'artiste et répond `{"ok": true, "edited": [champs corrigés]}`."""
     with artistedit.LOCK:
         kept = artistedit.save(h.hub.db, lib.id, artist_id, changes, resets)
+    h.hub.db.items_changed()            # ce que la musique montre a changé (nom corrigé) : ce que les demandes en ont tiré, gardé jusqu'au prochain scan, est à refaire
     h.send_json({"ok": True, "edited": artistedit.listed(kept)})
 
 
@@ -3626,11 +3629,18 @@ def requests_state(h):
 
 
 def requests_ready(h, seen, quality, ratings):
-    """Pour l'accueil : les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack`), chacune avec la vignette de l'élément (`card`, comme celles des rayons). Vide quand il n'en a pas."""
+    """Pour l'accueil : les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack`). Un film ou une série : sa vignette (`card`, comme celles des rayons) ; un artiste : sa fiche (`artist`, voir requests.arrival), sans vignette. Vide quand il n'en a pas."""
     found = hub_requests.ready(h.hub.db, h.hub.cfg, h.user["id"], h.visible_ids())
-    rows = {row["id"]: row for row in items_by_id(h.hub.db, {item for _, item in found})} if found else {}
-    return [{"id": request["id"], "kind": request["kind"], "tmdb": request["tmdb"], "title": request["title"], "year": request["year"], "item": item, "card": with_seen(rows[item], seen, quality, ratings)}
-            for request, item in found if item in rows]
+    wanted = {place for request, place in found if request["kind"] != hub_requests.ARTIST}
+    rows = {row["id"]: row for row in items_by_id(h.hub.db, wanted)} if wanted else {}
+    return [requests_ready_entry(request, place, rows, seen, quality, ratings) for request, place in found if request["kind"] == hub_requests.ARTIST or place in rows]
+
+
+def requests_ready_entry(request, place, rows, seen, quality, ratings):
+    """Une demande arrivée pour l'accueil (voir requests_ready) : `place` est l'identifiant de l'élément (`rows` : ses lignes) ou, pour un artiste, sa fiche."""
+    if request["kind"] == hub_requests.ARTIST:
+        return {"id": request["id"], "kind": request["kind"], "title": request["title"], "year": request["year"], "artist": place, **hub_requests.mbid_fields(request)}
+    return {"id": request["id"], "kind": request["kind"], "tmdb": request["tmdb"], "title": request["title"], "year": request["year"], "item": place, "card": with_seen(rows[place], seen, quality, ratings)}
 
 
 def mark_requests(h, *lists):
@@ -3668,7 +3678,8 @@ def api_requests(h, m, q):
 
 @route("POST", r"/api/requests")
 def api_request_create(h, m, q):
-    """Le compte demande un film ou une série : `{"kind": "movie" | "show", "tmdb": <entier>, "note": "…", "title": "…", "year": "AAAA"}` (titre et année ne servent que si le serveur ne connaît pas le film).
+    """Le compte demande un film ou une série : `{"kind": "movie" | "show", "tmdb": <entier>, "note": "…", "title": "…", "year": "AAAA"}` (titre et année ne servent que si le serveur ne connaît pas le film),
+    ou un artiste : `{"kind": "artist", "name": "…", "note"?: "…"}` (1 à 200 caractères sans caractère de contrôle ; deux noms qui ne diffèrent que par la casse, les accents ou les espaces sont la même demande).
     201 : nouvelle demande ; 200 : le compte rejoint une demande existante, ou l'avait déjà faite. L'administrateur n'a pas de plafond."""
     if not h.user["can_request"]:
         h.discard_body()
@@ -3681,9 +3692,19 @@ def api_request_create(h, m, q):
     if done is None:
         return
     row, new = done
-    h.send_json({"id": row["id"], "kind": row["kind"], "tmdb": row["tmdb"], "status": row["status"], "mine": True}, 201 if new else 200)
-    if new and row["status"] == "pending" and describe is not None:
+    h.send_json(request_reply(row), 201 if new else 200)
+    if wants_posters(row, new, describe):
         fetch_request_posters(hub)
+
+
+def request_reply(row):
+    """La réponse à une demande faite ou rejointe : son identifiant, sa sorte, son état et `mine` ; `tmdb` sauf pour un artiste, qui n'en a pas."""
+    return {"id": row["id"], "kind": row["kind"], **({} if row["kind"] == hub_requests.ARTIST else {"tmdb": row["tmdb"]}), "status": row["status"], "mine": True}
+
+
+def wants_posters(row, new, describe):
+    """Faut-il lancer la tâche « Affiches des demandes » : après une demande **nouvelle** et en attente, quand le serveur a une clé TMDB (`describe`), sauf pour un artiste, qui n'a pas d'affiche."""
+    return new and row["status"] == "pending" and describe is not None and row["kind"] != hub_requests.ARTIST
 
 
 def fetch_request_posters(hub):
@@ -3697,7 +3718,7 @@ def fetch_request_posters(hub):
 def require_requester(h):
     """403 quand le compte n'a pas le droit « Peut demander »."""
     if not h.user["can_request"]:
-        raise HttpError(403, "tu n'as pas le droit de demander des films ni des séries")
+        raise HttpError(403, "tu n'as pas le droit de demander des films, des séries ni des artistes")
 
 
 @route("GET", r"/api/requests/search")
@@ -3725,13 +3746,26 @@ def api_request_search(h, m, q):
     h.send_json({"results": results})
 
 
+@route("GET", r"/api/requests/artists")
+def api_request_artists(h, m, q):
+    """Cherche dans MusicBrainz un artiste à demander : `q`, 1 à 200 caractères. Au plus 10 résultats, dans l'ordre de MusicBrainz : `{"results": [{"mbid", "name", "type", "country", "disambiguation", "begin", "end", "url", "request"?, "artist"?}]}` ;
+    `url` : sa fiche sur le site de MusicBrainz, `request` : la demande de ce nom (comme les résultats de TMDB), `artist` : l'artiste d'une bibliothèque de musique que le compte voit, quand il y est déjà (la règle du 409). Garde-fous : voir artist_search.py.
+    MusicBrainz injoignable, ou la recherche occupée : 502 ou 503 en français, qui disent d'envoyer le nom tel quel (`POST /api/requests` sans `mbid`)."""
+    require_requester(h)
+    text = request_call(artist_search.search_text, q.get("q"))
+    hub = h.hub
+    request_call(hub.artist_finder.pace.take, h.user["id"])
+    results = request_call(hub.artist_finder.search, text)
+    h.send_json({"results": hub_requests.artist_results(hub.db, hub.cfg, h.user["id"], results, h.visible_ids())})
+
+
 @route("GET", r"/img/request/([0-9]{1,15})")
 def request_image(h, m, q):
     """L'affiche d'une demande (HUB_DATA/tmdb, voir request_search.fetch_posters), pour ses demandeurs et l'administrateur ; 404 sans affiche, et pour la demande d'un autre (comme une inconnue)."""
     hub = h.hub
     row = hub.db.one("SELECT r.kind, r.tmdb FROM requests r WHERE r.id=? AND (? OR EXISTS (SELECT 1 FROM request_users u WHERE u.request_id = r.id AND u.user_id=?))",
                      (int(m.group(1)), h.user["role"] == "admin", h.user["id"]))
-    if row is None:
+    if row is None or row["kind"] == hub_requests.ARTIST:              # un artiste n'a pas d'affiche
         raise HttpError(404, "pas d'affiche")
     send_poster(h, q, f"request:{row['kind']}:{row['tmdb']}", hub.cfg.data / "tmdb" / hub_requests.poster_file(row["kind"], row["tmdb"]))
 
