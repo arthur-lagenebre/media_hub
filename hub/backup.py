@@ -69,9 +69,15 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def _read_only(path, **options):
+    """Une connexion qui ne peut pas écrire dans la base `path` (ni la créer).
+    `uri=True` ne sert que sous Windows : le SQLite de Linux lit déjà « file: » comme une URI, son mutant y est équivalent."""
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True, **options)
+
+
 def _schema_of(path):
     """Le numéro de schéma gardé dans la base (`kv` « schema ») ; None s'il n'y en a pas."""
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn = _read_only(path)
     try:
         row = conn.execute("SELECT value FROM kv WHERE key='schema'").fetchone()
     finally:
@@ -81,7 +87,7 @@ def _schema_of(path):
 
 def _copy_base(db_path, out):
     """Copie cohérente de la base, journal WAL compris, par l'API de sauvegarde de SQLite."""
-    source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
+    source = _read_only(db_path, timeout=30)
     target = sqlite3.connect(out)
     try:
         source.backup(target)
@@ -223,7 +229,7 @@ def _check_and_extract(archive, stage):
 
 def _check_base(path):
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = _read_only(path)
         try:
             ok = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         finally:

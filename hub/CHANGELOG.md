@@ -1,3 +1,6 @@
+## 0.50.3 — 2026-11-21
+- Corrections internes.
+
 ## 0.50.2 — 2026-11-20
 - Une sauvegarde abîmée est refusée avec un message clair au moment de la restaurer, au lieu de s'arrêter sur une erreur incompréhensible.
 - Corrections internes.

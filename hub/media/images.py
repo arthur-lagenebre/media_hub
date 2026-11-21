@@ -249,7 +249,7 @@ class Images:
         return found[0] if found else None
 
     def _book_cover(self, path, meta):
-        volume = shelf.Volume(path, "", "", "", "", 0, 0, meta.get("format", ""), meta.get("info") or {})        # rangs, taille et date ne servent pas à read_cover : leurs mutants sont équivalents, gardés pour lire un vrai Volume
+        volume = shelf.Volume(path, "", "", "", "", None, None, meta.get("format", ""), meta.get("info") or {})        # rangs, taille et date ne servent pas à read_cover : vides plutôt qu'inventés
         try:
             return shelf.read_cover(volume)
         except Exception:
