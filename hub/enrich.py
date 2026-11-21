@@ -28,6 +28,7 @@ from libraries.music import artistinfo
 from libraries.music.musicbrainz import MusicBrainz, MusicBrainzError
 from libraries.video.tmdb import Tmdb, TmdbAuthError, TmdbError
 
+from . import artistedit
 from .media import images
 from . import missing
 from . import people as peoplefile
@@ -792,6 +793,17 @@ def album_artists(db, lib):
     return artists, ids, homes
 
 
+def keep_artist(db, mbid, info):
+    db.kv_set(artist_key(mbid), {"fetched": date.today().isoformat(), "info": info})
+
+
+def choose_artist(cfg, db, mbid):
+    """La fiche `mbid` demandée à MusicBrainz et gardée, quand l'administrateur la choisit pour un artiste (voir artistedit) : tout de suite, sans attendre « Fiches artistes ». MusicBrainzError si MusicBrainz ne répond pas ou ne la connaît pas ; rien n'est alors gardé."""
+    info = fetch_artist(musicbrainz(cfg), mbid)
+    keep_artist(db, mbid, info)
+    return info
+
+
 def sheet_is_fresh(kept):
     """La fiche gardée se passe d'être refaite : récente et de la version d'aujourd'hui."""
     return bool(kept) and not artistinfo.stale(kept) and kept["info"].get("sheet") == SHEET_VERSION
@@ -804,6 +816,8 @@ def enrich_artists(cfg, db, lib, log=print, force=False):
     """
     mb = musicbrainz(cfg)
     artists = album_artists(db, lib)[0]
+    for mbid in artistedit.pinned(db, lib.id):          # une fiche choisie dans le hub (voir artistedit) se refait comme celles des albums
+        artists.setdefault(mbid, mbid)
     done = failed = 0
     for mbid, name in sorted(artists.items(), key=lambda kv: kv[1].casefold()):
         if not force and sheet_is_fresh(db.kv_get(artist_key(mbid))):
@@ -814,7 +828,7 @@ def enrich_artists(cfg, db, lib, log=print, force=False):
             log(f"  {name} : {e}")
             failed += 1
             continue
-        db.kv_set(artist_key(mbid), {"fetched": date.today().isoformat(), "info": info})
+        keep_artist(db, mbid, info)
         done += 1
         log(f"  {name} : {artistinfo.facts(info) or 'fiche vide'}")
     return {"enriched": done, "failed": failed}
