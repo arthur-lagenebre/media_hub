@@ -214,18 +214,64 @@
     }).catch(fail).then(function () { opening = false; });
   };
 
-  // --- Changer l'affiche (administrateur) ---------------------------------------------------
-  // L'image envoyée reste dans HUB_DATA : la médiathèque n'est pas touchée. Elle devient l'affiche, sans retour à l'ancienne. Le sélecteur de fichiers d'une télé se pilote mal : rien n'y est proposé.
-  // `d` : la fiche (/api/item) ; `done` est appelé une fois l'affiche changée. Rend les éléments à poser parmi les boutons de la fiche.
+  // --- Changer l'affiche d'un film ou d'une série, la pochette d'un album (administrateur) ------------------
+  // L'image envoyée reste dans HUB_DATA : la médiathèque n'est pas touchée. Elle devient l'affiche, sans retour à l'ancienne, sauf pour un album, dont « Rétablir la pochette » rend celle des fichiers (`edited` de la fiche en dit
+  // une choisie). Le sélecteur de fichiers d'une télé se pilote mal : rien n'y est proposé.
+  // `d` : la fiche (/api/item) ; `done` est appelé une fois l'image changée. Rend les éléments à poser parmi les boutons de la fiche.
   A.posterTools = function (d, done) {
-    if ((d.type !== 'movie' && d.type !== 'show') || !H.isAdmin() || H.device === 'tv') return [];
+    var album = d.type === 'album';
+    if ((d.type !== 'movie' && d.type !== 'show' && !album) || !H.isAdmin() || H.device === 'tv') return [];
     var picker = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', hidden: 'hidden', 'aria-hidden': 'true', onchange: function () {
       var file = this.files && this.files[0];
       this.value = '';
-      if (file) H.api('/api/item/' + d.id + '/poster', file, { raw: true }).then(function () { H.toast(H.t('Affiche enregistrée')); done(); }).catch(fail);
+      if (file) H.api('/api/item/' + d.id + '/poster', file, { raw: true }).then(function () { H.toast(album ? H.t('Pochette enregistrée') : H.t('Affiche enregistrée')); done(); }).catch(fail);
     } });
-    var tools = [picker, H.button(H.t('Changer l’affiche'), 'edit', { 'data-key': 'poster', onclick: function () { picker.click(); } })];
+    var change = H.button(album ? H.t('Changer la pochette') : H.t('Changer l’affiche'), 'edit', { 'data-key': 'poster', onclick: function () { picker.click(); } });
+    var tools = [picker, change];
+    if (album && (d.edited || []).indexOf('poster') >= 0) tools.push(H.button(H.t('Rétablir la pochette'), 'refresh', { 'data-key': 'poster-reset', onclick: function () {
+      H.confirm({ title: H.t('Rétablir la pochette ?'), lead: [H.t('La pochette choisie est supprimée : celle des fichiers revient.')], ok: H.t('Supprimer la pochette choisie'), danger: true,
+        submit: function () { return H.api('/api/item/' + d.id + '/edit', { poster: null }); },
+        done: function () { H.toast(H.t('Pochette d’origine rétablie')); try { change.focus(); } catch (e) { /* tant pis */ } done(); } });      // son bouton disparaît : le focus va à « Changer la pochette »
+    } }));
     return tools;
+  };
+  // --- Corriger un album (administrateur) ----------------------------------------------------
+  // Titre, année, genres, label et type de sortie, gardés dans la base du hub : la médiathèque n'est pas touchée, et un scan ne les efface pas (docs/decisions.md, « Corriger dans le hub »). Pas sur télé (saisir à la télécommande se fait mal).
+  // Seuls les champs changés partent ; chaque champ déjà corrigé (`edited` de la fiche) porte son « Rétablir », qui rend la valeur lue dans les étiquettes.
+  var ALBUM_FIELDS = [['title', H.t('Titre'), 300], ['year', H.t('Année'), 4], ['genres', H.t('Genres (séparés par des virgules)'), 1500], ['label', H.t('Label'), 200]];
+  function genreList(text) { return text.split(',').map(function (g) { return g.trim(); }).filter(function (g, i, all) { return g && all.indexOf(g) === i; }); }
+  // Ce que la fiche montre aujourd'hui, champ par champ, dans la forme où la fenêtre le saisit.
+  function albumStart(d) {
+    return { title: d.title || '', year: d.year ? String(d.year) : '', genres: (d.genres || []).join(', '), label: d.label || '', type: (d.release_types || [])[0] || null };
+  }
+  // Ce qui a changé entre ce que la fenêtre a reçu (`start`) et ce qui y est saisi (`values`, plus `type`, le type choisi).
+  function albumChanges(start, values, type) {
+    var changed = {};
+    ['title', 'year', 'label'].forEach(function (k) { if (values[k] !== start[k]) changed[k] = values[k]; });
+    var genres = genreList(values.genres);
+    if (genres.join(', ') !== start.genres) changed.genres = genres;
+    if (type !== start.type) changed.type = type;
+    return changed;
+  }
+  // `types` : {valeur du serveur : libellé}, dans l'ordre où les puces se montrent.
+  function editAlbum(d, done, types) {
+    var edited = d.edited || [], start = albumStart(d);
+    var type = H.suggestions.choice(Object.keys(types).map(function (k) { return [k, types[k]]; }), start.type, H.t('Type de sortie'), 'ae-type-');
+    function send(body, message) { return H.api('/api/item/' + d.id + '/edit', body).then(function () { return message; }); }
+    function restore(field) { var body = {}; body[field] = null; return function () { return send(body, H.t('Valeur d’origine rétablie')); }; }
+    H.form({ title: H.t('Modifier l’album'), ok: H.t('Enregistrer'),
+      lead: [H.t('La correction ne vaut que dans le hub. Pour corriger le fichier, passe par l’atelier.')],
+      fields: ALBUM_FIELDS.map(function (f) { return { key: f[0], label: f[1], maxlength: f[2], value: start[f[0]], restore: edited.indexOf(f[0]) >= 0 ? restore(f[0]) : null }; }),
+      extra: [function (restoreButton) { return edited.indexOf('type') < 0 ? type.el : h('div', { class: 'fld' }, type.el, restoreButton('type', restore('type'))); }],
+      submit: function (values) {
+        var changed = albumChanges(start, values, type.current());
+        return Object.keys(changed).length ? send(changed, H.t('Album corrigé')) : Promise.resolve(null);
+      },
+      done: function (message) { if (message) { H.toast(message); done(); } } });
+  }
+  A.albumTools = function (d, done, types) {
+    if (d.type !== 'album' || !H.isAdmin() || H.device === 'tv') return [];
+    return [H.button(H.t('Modifier l’album'), 'edit', { 'data-key': 'album-edit', onclick: function () { editAlbum(d, done, types); } })];
   };
   // --- Changer la fiche TMDB (administrateur, séries) ----------------------------
   // Quand la recherche sur le nom du dossier tombe sur un homonyme. Le choix reste dans la base du hub : la médiathèque n'est pas touchée.

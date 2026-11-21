@@ -422,6 +422,7 @@
   // ok: libellé du bouton, danger, kind (« form » par défaut s'il y a des champs), cls (modificateur), submit(valeurs) → texte (refus affiché dans la fenêtre) ou promesse,
   // alt: {label, submit(valeurs)} (facultatif) : une seconde action, entre la première et Annuler (« Rétablir »), qui passe par le même chemin que `submit` (un seul envoi à la fois, erreur dans la fenêtre),
   // done(résultat) une fois la fenêtre fermée, cancel() une fois fermée sans avoir agi}. Une erreur du serveur reste affichée dans la fenêtre, qui reste ouverte. Entrée passe au champ suivant, puis valide.
+  // `restore: function (valeurs)` sur un champ ajoute à côté de lui un petit bouton « Rétablir » (même chemin que `submit`) ; un élément de `extra` peut être une fonction qui reçoit `restoreButton(clé, action)` et rend le nœud (un réglage en puces qui se rétablit aussi).
   // `value` préremplit le premier champ, qui s'ouvre alors sélectionné (comme H.prompt). Un `textarea` (un texte long) garde ses retours à la ligne, qui s'écrivent avec Maj+Entrée : Entrée seule passe au champ suivant ou valide, comme ailleurs.
   H.form = function (o) {
     var fields = o.fields || [], inputs = {}, list = [], busy = false, ok, err = h('p', { class: 'formerr', role: 'alert' });
@@ -439,6 +440,7 @@
       r.then(function (res) { H.overlay.close(function () { if (o.done) o.done(res); }); },
         function (e) { busy = false; show(e.message); });
     }
+    function restoreButton(key, act) { return H.button(H.t('Rétablir'), null, { class: 'restore', type: 'button', 'data-key': 'restore-' + key, onclick: function () { send(act); } }); }
     fields.forEach(function (f, i) {
       var long = f.type === 'textarea';
       var input = h(long ? 'textarea' : 'input', { class: 'f field big', type: long ? null : f.type === 'password' ? 'password' : 'text', rows: long ? '5' : null, maxlength: String(f.maxlength || (f.type === 'password' ? 200 : 40)), autocomplete: f.auto || 'off',
@@ -450,9 +452,10 @@
         } });
       input.value = f.value || '';
       inputs[f.key] = input; list.push(input);
-      box.appendChild(h('label', { class: 'flab' }, f.label, input));
+      var label = h('label', { class: 'flab' }, f.label, input);
+      box.appendChild(f.restore ? h('div', { class: 'fld' }, label, restoreButton(f.key, f.restore)) : label);
     });
-    (o.extra || []).forEach(function (x) { box.appendChild(x); });
+    (o.extra || []).forEach(function (x) { box.appendChild(typeof x === 'function' ? x(restoreButton) : x); });
     box.appendChild(err);
     ok = H.button(o.ok || H.t('Valider'), o.danger ? 'trash' : 'check', { class: o.danger ? 'danger' : 'primary', onclick: function () { send(); } });
     box.appendChild(h('div', { class: 'btns' }, ok, o.alt ? H.button(o.alt.label, null, { 'data-key': 'form-alt', onclick: function () { send(o.alt.submit); } }) : null, H.button(H.t('Annuler'), null, { 'data-autofocus': fields.length ? null : '1', onclick: function () { H.overlay.close(); } })));   // sans champ, le focus part sur Annuler : Entrée ne détruit rien
