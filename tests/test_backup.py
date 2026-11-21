@@ -90,6 +90,16 @@ class TestCreate(BackupCase):
         self.make()
         self.assertEqual(names_in(self.archive), ["artists/a1.webp", "hub.db", "manifest.json", "posters/film.jpg", "sagas.json"])
 
+    def test_the_photos_sent_for_people_are_kept_and_restored(self):
+        """HUB_DATA/people : les photos de personnes que l'administrateur a envoyées. Elles ne se refont pas (la passe ne rapporte que celles de TMDB)."""
+        (self.data / "people").mkdir()
+        (self.data / "people" / "955.webp").write_bytes(b"portrait")
+        self.make()
+        self.assertIn("people/955.webp", names_in(self.archive))
+        target = self.empty_install()
+        backup.restore(self.archive, target / "hub.db", target)
+        self.assertEqual((target / "people" / "955.webp").read_bytes(), b"portrait")
+
     def test_the_manifest_says_the_hub_version_the_schema_and_each_file_with_its_size_and_checksum(self):
         self.make()
         manifest = manifest_of(self.archive)

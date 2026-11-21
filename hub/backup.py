@@ -6,6 +6,7 @@ L'archive (un .zip) contient ce qui ne se refait pas :
     sagas.json     les sagas composées à la main
     posters/       les affiches choisies à la main
     artists/       les photos d'artistes gardées hors de la Musique
+    people/        les photos de personnes envoyées par l'administrateur (celles de TMDB, sous tmdb/, se refont)
 
 et `manifest.json` : format, version du hub, version du schéma de la base, et chaque fichier avec sa taille et son empreinte SHA-256.
 Les caches (img/, subs/, tmdb/, tmdb-cache/, musicbrainz-cache/), les outils (bin/, pylib/) et la boîte de réception n'y sont pas : ils se refont,
@@ -43,7 +44,7 @@ FORMAT = 1                                   # monte si la forme de l'archive ch
 BASE = "hub.db"
 MANIFEST = "manifest.json"
 FILES = ("sagas.json",)                      # fichiers facultatifs, à la racine de HUB_DATA
-FOLDERS = ("posters", "artists")             # dossiers facultatifs de HUB_DATA, à plat (un fichier par affiche ou photo)
+FOLDERS = ("posters", "artists", "people")   # dossiers facultatifs de HUB_DATA, à plat (un fichier par affiche ou photo)
 BACKUPS = "sauvegardes"                      # HUB_DATA/sauvegardes : où `python -m hub backup` écrit sans chemin donné
 ASIDE = "avant-restauration"                 # HUB_DATA/avant-restauration-<date> : ce qu'une restauration remplace
 TEMPORARY = (".tmp", ".part")                # une écriture en cours (images.write_atomic, enrich) : jamais sauvegardée
