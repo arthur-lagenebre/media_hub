@@ -225,7 +225,7 @@
     if (state === 'other') return H.t('Déjà demandé : « {title} ». Demander aussi', { title: title });
     return H.t('Demander « {title} »', { title: title });
   }
-  // La fenêtre « Demander » (un form : le message facultatif), pour un film ou une série (`m.kind` : « show » ; un film sans `kind`) ou un artiste (`m.kind` : « artist », `m.title` : son nom). Le refus du serveur (plafond, refusée, déjà là) reste dans la fenêtre ;
+  // La fenêtre « Demander » (un form : le message facultatif), pour un film ou une série (`m.kind` : « show » ; un film sans `kind`) ou un artiste (`m.kind` : « artist », `m.title` : son nom, `m.mbid` : son identifiant MusicBrainz quand il a été choisi dans la recherche). Le refus du serveur (plafond, refusée, déjà là) reste dans la fenêtre ;
   // un titre ou un artiste déjà dans la médiathèque propose de l'ouvrir. `done(demande, code)` reçoit la réponse du serveur une fois la fenêtre fermée, avec son code (201 : nouvelle demande ; 200 : rejointe, ou déjà faite).
   var ASKED_LEAD = { show: H.t('L’administrateur verra ta demande et ajoutera la série s’il le peut. Rien n’est téléchargé tout seul.'), movie: H.t('L’administrateur verra ta demande et ajoutera le film s’il le peut. Rien n’est téléchargé tout seul.'),
     artist: H.t('L’administrateur verra ta demande et ajoutera l’artiste s’il le peut. Rien n’est téléchargé tout seul.') };
@@ -239,6 +239,7 @@
       submit: function (v) {
         open.hidden = true;
         var body = kind === 'artist' ? { kind: kind, name: m.title } : { kind: kind, tmdb: m.tmdb, title: m.title };
+        if (kind === 'artist' && m.mbid) body.mbid = m.mbid;          // l'artiste choisi dans MusicBrainz ; un nom tapé tel quel n'en a pas
         if (v.note) body.note = v.note;
         if (kind !== 'artist' && /^\d{4}$/.test(String(m.year || ''))) body.year = String(m.year);
         return H.api('/api/requests', body, { status: function (s) { code = s; } }).catch(function (e) {
@@ -260,7 +261,7 @@
         var id = m.request && m.request.id;
         if (typeof id === 'number') return H.api('/api/requests/' + id + '/delete', {}).catch(goneAlready);
         return H.api('/api/requests?mine=1').then(function (res) {
-          var mine = (res.requests || []).filter(function (r) { return r.kind === (m.kind || 'movie') && r.tmdb === m.tmdb; })[0];
+          var mine = (res.requests || []).filter(function (r) { return typeof m.tmdb === 'number' && r.kind === (m.kind || 'movie') && r.tmdb === m.tmdb; })[0];          // un artiste n'a pas de `tmdb` : sa demande se retire par son identifiant, que le serveur rend toujours
           return mine ? H.api('/api/requests/' + mine.id + '/delete', {}).catch(goneAlready) : null;            // déjà retirée (un autre appareil) : rien à faire
         });
       },
@@ -1533,11 +1534,16 @@
   var REQUEST_STATUS = { pending: H.t('En attente'), added: H.t('Ajouté'), declined: H.t('Refusé') };
   // Le titre d'une demande, avec son année : « Film intermédiaire (2014) ». Le titre vient du serveur (TMDB, ou ce que le compte a envoyé) : toujours en texte.
   function requestTitle(r) { return (r.title || (r.kind === 'show' ? H.t('Série TMDB {n}', { n: r.tmdb }) : H.t('Film TMDB {n}', { n: r.tmdb }))) + (r.year ? ' (' + r.year + ')' : ''); }
-  // Le titre affiché d'une demande ou d'un résultat : un lien vers sa fiche TMDB (`url`, donnée par le serveur), dans un nouvel onglet. Sur la télé, ou sans adresse, un simple texte : rien à y atteindre.
+  // Le titre affiché d'une demande ou d'un résultat : un lien vers sa fiche (`url`, donnée par le serveur), dans un nouvel onglet : TMDB pour un film ou une série, MusicBrainz pour un artiste choisi dans la recherche.
+  // Sur la télé, ou sans adresse, un simple texte : rien à y atteindre. Un artiste ne mène qu'à MusicBrainz : toute autre adresse reste du texte.
   // `data-aside` : le lien s'atteint aux flèches, mais le focus n'y arrive jamais de lui-même (voir H.focus.first) ; `data-key` le lui rend quand la liste se redessine.
+  var MUSICBRAINZ = 'https://musicbrainz.org/';
   function requestHeading(r, text, cls) {
-    var link = H.device === 'tv' || !r.url ? text : h('a', { class: 'rqlink f', href: r.url, target: '_blank', rel: 'noopener noreferrer', 'data-aside': '1', 'data-key': 'tmdb-' + r.kind + '-' + r.tmdb,
-      'aria-label': H.t('Ouvrir « {title} » sur TMDB (nouvel onglet)', { title: text }) }, text);
+    var artist = r.kind === 'artist', link = text;
+    if (H.device !== 'tv' && typeof r.url === 'string' && (!artist || r.url.indexOf(MUSICBRAINZ) === 0)) {
+      link = h('a', { class: 'rqlink f', href: r.url, target: '_blank', rel: 'noopener noreferrer', 'data-aside': '1', 'data-key': artist ? 'mb-' + (r.mbid || r.id) : 'tmdb-' + r.kind + '-' + r.tmdb,
+        'aria-label': artist ? H.t('Ouvrir « {title} » sur MusicBrainz (nouvel onglet)', { title: text }) : H.t('Ouvrir « {title} » sur TMDB (nouvel onglet)', { title: text }) }, text);
+    }
     return h('b', { class: cls || null }, link);
   }
   // L'état en toutes lettres, avec le motif d'un refus : « Refusé : pas en France ».
@@ -1582,7 +1588,7 @@
     function show(focusKey, keep) {
       var key = focusKey || (document.activeElement && out.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null);
       H.clear(out);
-      if (!H.canRequest()) out.appendChild(h('p', { class: 'muted' }, H.t('L’administrateur t’a retiré le droit de demander des films ; tes demandes déjà faites restent ici.')));
+      if (!H.canRequest()) out.appendChild(h('p', { class: 'muted' }, H.t('L’administrateur t’a retiré le droit de demander des films, des séries ou des artistes ; tes demandes déjà faites restent ici.')));
       if (!list.length) {
         out.appendChild(h('div', { class: 'reqempty' }, h('p', null, H.t('Tu n’as aucune demande pour l’instant. Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée : « Demander ».')),
           h('a', { class: 'btn f', href: '#/search', 'data-autofocus': '1', 'data-key': 'req-search' }, H.icon('search'), h('span', { class: 'lbl' }, H.t('Rechercher')))));
@@ -1689,27 +1695,49 @@
     return { el: el, nav: '#/settings', refresh: function () { load(null, true); } };          // au retour : l'administrateur a pu répondre
   });
 
-  // #/request?q=<texte>&kind=movie|show|artist : chercher dans TMDB (par le serveur : GET /api/requests/search) un film ou une série que la médiathèque n'a pas, pour le demander.
-  // « Artiste » remplace la recherche par un champ de nom : rien n'est cherché nulle part, « Demander » (ou Entrée) ouvre la même fenêtre que pour un film. Sans clé TMDB sur le serveur, c'est le seul choix, et il n'y a pas de menu.
+  // #/request?q=<texte>&kind=movie|show|artist : chercher un film ou une série dans TMDB (par le serveur : GET /api/requests/search), ou un artiste dans MusicBrainz (GET /api/requests/artists), que la médiathèque n'a pas, pour le demander.
   // Chaque résultat dit ce qu'on peut en faire, comme une case grisée (ASK) : « Demander » (la même fenêtre), « Demandé » (retirer la sienne), « Demander aussi », « Refusé » ; « Ouvrir » quand il est déjà là.
-  // La recherche part 400 ms après la dernière frappe, ou sur Entrée (qui mène alors au premier résultat) ; une réponse périmée (une recherche est partie depuis) est ignorée.
+  // La recherche de TMDB part 400 ms après la dernière frappe, ou sur Entrée (qui mène alors au premier résultat) ; une réponse périmée (une recherche est partie depuis) est ignorée.
   // Une erreur (429, 502, 503…) s'affiche à la place de l'état, sans effacer les résultats d'avant. Titres et résumés viennent de TMDB : toujours en texte.
+  // « Artiste » : la recherche de MusicBrainz ne part qu'à Entrée ou au bouton « Chercher », jamais à la frappe (le serveur n'interroge MusicBrainz qu'une fois par seconde pour tout le hub). Les homonymes se départagent par leur précision, leur type, leur pays et leurs années.
+  // « Demander « <nom> » tel quel » reste sous les résultats, et après une panne ou une recherche sans résultat : MusicBrainz ne doit pas empêcher de demander un artiste, qui peut ne pas y être. Sans clé TMDB sur le serveur, c'est le seul choix, et il n'y a pas de menu.
   var REQUEST_KINDS = [['', H.t('Les deux')], ['movie', H.t('Films')], ['show', H.t('Séries')], ['artist', H.t('Artiste')]];
+  // Ce que MusicBrainz appelle le type d'un artiste ; un type que la table ne connaît pas s'affiche tel que MusicBrainz le donne.
+  var ARTIST_TYPES = { Group: H.t('Groupe'), Person: H.t('Personne'), Orchestra: H.t('Orchestre'), Choir: H.t('Chœur'), Character: H.t('Personnage'), Other: H.t('Autre') };
   function today() {
     var d = new Date();
     return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
   }
-  // Un résultat de la recherche : sa sorte, son titre, son année, son résumé sur deux lignes, et son bouton. Il se refait sur place quand on le demande ou qu'on retire sa demande ; le focus reste sur son bouton.
+  // Le pays d'un artiste : MusicBrainz donne son code (« FR »), le navigateur le dit en toutes lettres quand il sait ; un vieux navigateur de télé garde le code.
+  function countryName(code) {
+    try { return new Intl.DisplayNames([H.lang], { type: 'region' }).of(code) || code; } catch (e) { return code; }
+  }
+  // Les années d'activité d'un artiste, sans rien d'affiché de vide : « 1993 – 2021 », « depuis 1993 », « jusqu’en 2021 ».
+  function artistYears(r) {
+    if (r.begin && r.end) return r.begin + ' – ' + r.end;
+    return r.begin ? H.t('depuis {year}', { year: r.begin }) : r.end ? H.t('jusqu’en {year}', { year: r.end }) : '';
+  }
+  // Le bouton d'un résultat (film, série ou artiste) : « Ouvrir » quand l'élément est déjà là (`address`), sinon ce que dit l'état de la demande (ASK). `others` : la demande d'un autre compte, ce que redevient le résultat quand on retire la sienne ;
+  // `repaint(true)` refait le résultat sur place, le focus sur son bouton. Rend `{look, action}` : `look.line` est l'état en toutes lettres, `action` le bouton (absent quand il n'y a rien à faire).
+  function hitAction(r, key, address, others, repaint) {
+    var state = address ? null : askState(r.request), look = state ? ASK[state] : null, act = look && look.act, action = null;
+    if (address) action = h('a', { class: 'btn f', href: address, 'data-key': key, 'aria-label': H.t('Ouvrir « {title} »', { title: r.title }) }, H.icon('play'), h('span', { class: 'lbl' }, r.kind === 'artist' ? H.t('Ouvrir la fiche') : H.t('Ouvrir')));
+    else if (act) action = H.button(look.pill, act === 'withdraw' ? 'check' : 'plus', { class: act === 'withdraw' ? 'on' : null, 'data-key': key, 'aria-label': askLabel(state, r.title), onclick: function () {
+      if (act === 'withdraw') withdrawFrom(r, function () { H.toast(H.t('Demande retirée : {title}', { title: r.title })); r.request = others; repaint(true); });
+      else askFor(r, function (res, code) { H.toast(askedToast(r.title, code)); r.request = { status: res.status, mine: true, id: res.id }; repaint(true); });
+    } });
+    return { look: look, action: action };
+  }
+  // Le toast d'une demande faite : « déjà demandé » quand le serveur a rejoint une demande qui existait (200).
+  function askedToast(title, code) {
+    return code === 200 ? H.t('Déjà demandé : {title}. Tu la retrouves dans « Mes demandes ».', { title: title }) : H.t('Demandé : {title}', { title: title });
+  }
+  // Un résultat de TMDB : sa sorte, son titre, son année, son résumé sur deux lignes, et son bouton. Il se refait sur place quand on le demande ou qu'on retire sa demande ; le focus reste sur son bouton.
   function requestHit(r) {
     var row = h('div', { class: 'line rqhit', 'data-kind': r.kind });
-    var others = r.request && !r.request.mine ? r.request : null;           // la demande d'un autre compte : ce que redevient le résultat quand on retire la sienne
+    var others = r.request && !r.request.mine ? r.request : null;
     function paint(focus) {
-      var state = r.item ? null : askState(r.request), look = state ? ASK[state] : null, act = look && look.act, key = 'rq-' + r.kind + '-' + r.tmdb, action = null;
-      if (r.item) action = h('a', { class: 'btn f', href: '#/i/' + r.item, 'data-key': key, 'aria-label': H.t('Ouvrir « {title} »', { title: r.title }) }, H.icon('play'), h('span', { class: 'lbl' }, H.t('Ouvrir')));
-      else if (act) action = H.button(look.pill, act === 'withdraw' ? 'check' : 'plus', { class: act === 'withdraw' ? 'on' : null, 'data-key': key, 'aria-label': askLabel(state, r.title), onclick: function () {
-        if (act === 'withdraw') withdrawFrom(r, function () { H.toast(H.t('Demande retirée : {title}', { title: r.title })); r.request = others; paint(true); });
-        else askFor(r, function (res) { H.toast(H.t('Demandé : {title}', { title: r.title })); r.request = { status: res.status, mine: true, id: res.id }; paint(true); });
-      } });
+      var hit = hitAction(r, 'rq-' + r.kind + '-' + r.tmdb, r.item ? '#/i/' + r.item : null, others, paint), look = hit.look, action = hit.action;
       // La sorte : les mots de H.plural (« film », « série »), la majuscule vient du CSS ; une clé « Film » traduirait aussi un dossier nommé « Film » dans les messages du serveur (H.tr)
       var head = h('div', { class: 'rqhead' }, h('span', { class: 'rqkind' }, r.kind === 'show' ? H.t('série') : H.t('film')), requestHeading(r, r.title || '?', 'rqtitle'),
         r.year ? h('span', { class: 'rqyear' }, r.year) : null, r.date && r.date > today() ? h('span', { class: 'rqsoon' }, H.t('À venir')) : null);
@@ -1720,62 +1748,118 @@
     paint(false);
     return row;
   }
+  // Un résultat de MusicBrainz : un artiste, sans affiche (la case neutre à note de musique), de quoi départager les homonymes, et son bouton. `r.name`, `r.disambiguation`… viennent de MusicBrainz : toujours en texte.
+  // Le résultat porte `kind` et `title` comme une demande, pour que la fenêtre « Demander » et le retrait de la demande le traitent comme les autres.
+  function artistHit(r) {
+    r.kind = 'artist'; r.title = r.name;
+    var row = h('div', { class: 'line rqhit', 'data-kind': 'artist' });
+    var others = r.request && !r.request.mine ? r.request : null;
+    function paint(focus) {
+      var hit = hitAction(r, 'rq-artist-' + r.mbid, r.artist ? artistHref(r.artist) : null, others, paint), look = hit.look, action = hit.action;
+      var years = artistYears(r), detail = [r.disambiguation, ARTIST_TYPES[r.type] || r.type, r.country ? countryName(r.country) : ''].filter(Boolean).join(' · ');
+      var head = h('div', { class: 'rqhead' }, h('span', { class: 'rqkind' }, H.t('artiste')), requestHeading(r, r.name, 'rqtitle'), years ? h('span', { class: 'rqyear' }, years) : null);
+      H.clear(row).appendChild(H.musicBox('rqpic'));
+      row.appendChild(h('div', { class: 'what' }, head, look && look.line ? h('span', { class: 'rqstate' }, look.line) : null, detail ? h('p', { class: 'rqsum' }, detail) : null));
+      if (action) row.appendChild(action);
+      if (focus && action && document.body.contains(row)) H.focus.set(action, true);
+    }
+    paint(false);
+    return row;
+  }
   H.route(/^\/request$/, function (m, query) {
     var searching = H.canSearchRequests();          // chercher un film ou une série dans TMDB : le droit, et une clé sur le serveur ; sans clé, il ne reste que l'artiste
-    var title = searching ? H.t('Demander un film, une série ou un artiste') : H.t('Demander un artiste');
-    if (!H.canRequest()) {          // sans le droit : la page le dit et ramène aux demandes
-      var closed = h('section', { class: 'blank' }, h('h1', null, title), h('p', null, H.t('L’administrateur t’a retiré le droit de demander des films et des séries.')), h('a', { class: 'btn f', href: '#/requests', 'data-autofocus': '1' }, H.t('Mes demandes')));
+    if (!H.canRequest()) {          // sans le droit : la page le dit et ramène aux demandes (un titre neutre : le compte ne peut rien demander)
+      var closed = h('section', { class: 'blank' }, h('h1', null, H.t('Demander')), h('p', null, H.t('L’administrateur t’a retiré le droit de demander des films, des séries ou des artistes.')),
+        h('a', { class: 'btn f', href: '#/requests', 'data-autofocus': '1' }, H.t('Mes demandes')));
       return { el: closed, nav: '#/settings' };
     }
+    var title = searching ? H.t('Demander un film, une série ou un artiste') : H.t('Demander un artiste');
     var kind = !searching ? 'artist' : query && (query.kind === 'movie' || query.kind === 'show' || query.kind === 'artist') ? query.kind : '';
-    var seq = 0, timer = null, asked = null, toResults = false;          // `seq` : la dernière recherche partie ; `asked` : ce qu'elle cherchait (sorte et texte), effacé après une erreur
+    // `seq` : la dernière recherche partie ; `asked` : ce qu'elle cherchait (sorte et texte), effacé après une erreur ; `reproach` : « Écris le nom » est affiché ; `wasArtist` : la liste montre des artistes
+    var seq = 0, timer = null, asked = null, toResults = false, reproach = false, wasArtist = false;
     var say = h('p', { class: 'rqsay muted', role: 'status' }), list = h('div', { class: 'rqhits' });
     var input = h('input', { class: 'f field big', type: 'search', maxlength: '100', autocomplete: 'off', value: (query && query.q) || '',
       'data-autofocus': H.device === 'tv' ? null : '1',      // sur la télé, le champ n'ouvre pas le clavier à l'arrivée
       oninput: function () {
-        if (kind === 'artist') { tell(''); return; }          // un nom ne se cherche pas : rien ne part avant « Demander »
+        if (kind === 'artist') { if (reproach) { reproach = false; tell(''); } return; }          // un nom ne se cherche pas à la frappe : MusicBrainz ne répond qu'à Entrée ou au bouton
         clearTimeout(timer); timer = setTimeout(run, 400);
       },
       onkeydown: function (e) {
         if (e.key === 'Enter') {
           e.preventDefault();
-          if (kind === 'artist') { askArtist(); return; }
+          if (kind === 'artist') { findArtist(); return; }
           clearTimeout(timer); toResults = true; run();
-        } else if (e.key === 'Escape') { e.preventDefault(); H.focus.set(searching ? pick : ask, true); }          // Retour sort d'abord du champ
+        } else if (e.key === 'Escape') { e.preventDefault(); H.focus.set(searching ? pick : go, true); }          // Retour sort d'abord du champ
       } });
     var pick = H.button('', null, { class: 'flt wide', 'data-key': 'rq-kind', onclick: function () {
       H.menu(H.t('Type'), REQUEST_KINDS.map(function (k) { return { label: k[1], value: k[0] }; }), kind, function (v) { kind = v; paint(); run(); });
     } });
-    var ask = H.button(H.t('Demander'), 'plus', { class: 'primary', 'data-key': 'rq-ask', hidden: true, onclick: function () { askArtist(); } });
+    var go = H.button(H.t('Chercher'), 'search', { class: 'primary', 'data-key': 'rq-search', hidden: true, onclick: function () { findArtist(); } });
     var intro = h('p', { class: 'intro muted' });
-    var el = h('section', { class: 'reqsearch' }, h('h1', null, title), intro, h('div', { class: 'tools' }, input, searching ? pick : null, ask), say, list);
+    var el = h('section', { class: 'reqsearch' }, h('h1', null, title), intro, h('div', { class: 'tools' }, input, searching ? pick : null, go), say, list);
+    // L'introduction d'un artiste ; sans clé TMDB, c'est la seule page de demande : elle redit comment demander un film.
+    function artistIntro() {
+      var text = H.t('Cherche dans MusicBrainz l’artiste que la médiathèque n’a pas, puis demande-le à l’administrateur. S’il n’y est pas, tu peux envoyer son nom tel quel. Le hub ne télécharge rien : l’administrateur l’ajoute s’il le peut.');
+      return searching ? text : text + ' ' + H.t('Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée.');
+    }
     function paint() {
       var artist = kind === 'artist';
       filterLabel(pick, H.t('Type'), REQUEST_KINDS.filter(function (k) { return k[0] === kind; })[0][1]);
       input.placeholder = artist ? H.t('Nom de l’artiste') : H.t('Titre d’un film ou d’une série');
       input.setAttribute('aria-label', artist ? H.t('Nom de l’artiste à demander') : H.t('Titre à chercher dans TMDB'));
       input.setAttribute('maxlength', artist ? '200' : '100');          // le plafond du nom d'un artiste (le serveur refuse au-delà)
-      intro.textContent = artist ? H.t('Écris le nom d’un artiste que la médiathèque n’a pas, puis demande-le à l’administrateur. Le hub ne télécharge rien : l’administrateur l’ajoute s’il le peut.')
+      intro.textContent = artist ? artistIntro()
         : H.t('Cherche dans TMDB un film ou une série que la médiathèque n’a pas, puis demande-le à l’administrateur. Le hub ne télécharge rien : l’administrateur l’ajoute s’il le peut.');
-      ask.hidden = !artist;
-      if (artist) { clearTimeout(timer); seq++; asked = null; toResults = false; list.removeAttribute('aria-busy'); H.clear(list); tell(''); }          // les résultats d'une recherche ne sont plus ceux de la page
+      go.hidden = !artist;
+      if (artist || wasArtist) { clearTimeout(timer); seq++; asked = null; toResults = false; reproach = false; list.removeAttribute('aria-busy'); H.clear(list); tell(''); }          // les résultats d'une autre sorte ne sont plus ceux de la page
+      wasArtist = artist;
     }
-    function tell(text, error) { say.textContent = text; say.classList.toggle('err', !!error); }
-    // Demander l'artiste dont le nom est tapé : la fenêtre des films (le message facultatif), puis un toast ; « déjà demandé » quand le serveur a rejoint une demande qui existait (200).
-    function askArtist() {
-      var name = H.tidy(input.value);
-      if (!name) { tell(H.t('Écris le nom de l’artiste.'), true); return; }
-      tell('');
+    function tell(text, error) { say.textContent = text; say.classList.toggle('bad', !!error); }          // `.err` est le panneau d'erreur du lecteur, plein écran : pas pour un message de la page
+    // Demander le nom tel qu'il est tapé, sans `mbid` : la fenêtre des films (le message facultatif), puis un toast. La page repart de zéro.
+    function askAsIs(name) {
       askFor({ kind: 'artist', title: name }, function (res, code) {
-        H.toast(code === 200 ? H.t('Déjà demandé : {title}. Tu la retrouves dans « Mes demandes ».', { title: name }) : H.t('Demandé : {title}', { title: name }));
-        input.value = '';
-        H.focus.set(ask, true);
+        H.toast(askedToast(name, code));
+        input.value = ''; asked = null; seq++;
+        H.clear(list); tell('');
+        H.focus.set(go, true);
       });
     }
-    function landOnResults() {            // après Entrée : le bouton du premier résultat, pour la télécommande
+    // Ce qui reste possible après toute recherche, réussie ou non : envoyer le nom tel quel.
+    function asIs(name) {
+      return h('div', { class: 'line rqasis' }, h('div', { class: 'what' }, h('span', null, H.t('Ce n’est pas le bon artiste, ou il manque ? L’administrateur cherchera lui-même ce nom.'))),          // une ligne comme les résultats : son bouton est dans leur colonne, Haut y mène du dernier résultat
+        H.button(H.t('Demander « {name} » tel quel', { name: name }), 'plus', { 'data-key': 'rq-asis', onclick: function () { askAsIs(name); } }));
+    }
+    function landOnResults() {            // après Entrée (ou « Chercher ») : le bouton du premier résultat, pour la télécommande
       toResults = false;
-      var first = list.querySelector('.f:not([data-aside])');
-      if (first && document.body.contains(el) && el.style.display !== 'none' && !H.overlay.isOpen() && (document.activeElement === input || document.activeElement === document.body)) H.focus.set(first);
+      var first = list.querySelector('.f:not([data-aside])'), now = document.activeElement;
+      if (first && document.body.contains(el) && el.style.display !== 'none' && !H.overlay.isOpen() && (now === input || now === go || now === document.body)) H.focus.set(first);
+    }
+    // Chercher dans MusicBrainz le nom tapé : un nom vide n'est pas cherché ; le même nom déjà cherché ne l'est pas deux fois (sauf après une erreur) ; une réponse périmée est ignorée.
+    function findArtist() {
+      var q = H.tidy(input.value), what = 'artist|' + q;
+      if (!q) { reproach = true; tell(H.t('Écris le nom de l’artiste.'), true); return; }
+      toResults = true;
+      if (what === asked) { if (!list.hasAttribute('aria-busy')) landOnResults(); return; }
+      var mine = ++seq;
+      asked = what; reproach = false;
+      list.setAttribute('aria-busy', 'true');
+      H.clear(list);
+      tell(H.t('Recherche…'));
+      H.api('/api/requests/artists?q=' + encodeURIComponent(q)).then(function (res) {
+        if (mine === seq) showArtists(q, (res && res.results) || [], '');
+      }, function (e) {
+        if (mine !== seq) return;
+        asked = null;          // la même recherche pourra être relancée
+        showArtists(q, [], e.message);
+      });
+    }
+    function showArtists(q, results, failure) {
+      list.removeAttribute('aria-busy');
+      H.clear(list);
+      results.forEach(function (r) { list.appendChild(artistHit(r)); });
+      list.appendChild(asIs(q));
+      if (failure) tell(failure, true); else tell(results.length ? '' : H.t('Aucun artiste trouvé dans MusicBrainz pour « {q} ».', { q: q }));
+      landOnResults();
     }
     function run() {
       if (kind === 'artist') return;
@@ -1804,7 +1888,12 @@
     paint();
     if (input.value.trim()) run();          // « Pas trouvé ? » : le texte de la recherche habituelle, cherché tout de suite
     return { el: el, nav: '#/settings',
-      onBack: function () { if (document.activeElement !== input) return false; H.focus.set(searching ? pick : ask, true); return true; },          // la touche Retour de la télécommande, pendant la saisie
+      onBack: function () {          // la touche Retour de la télécommande : des résultats d'artistes au champ, puis du champ au choix de la sorte
+        var now = document.activeElement;
+        if (now === input) { H.focus.set(searching ? pick : go, true); return true; }
+        if (kind === 'artist' && now && list.contains(now)) { H.focus.set(input, true); return true; }
+        return false;
+      },
       destroy: function () { clearTimeout(timer); seq++; } };
   });
 
@@ -2019,7 +2108,7 @@
     // « Mes demandes » : la page des demandes du compte, depuis « Mon compte ».
     function myRequestsLine() {
       return h('div', { class: 'line' }, h('div', { class: 'what' }, h('b', null, H.t('Mes demandes')),
-        h('span', null, H.canRequest() ? H.t('Les films, les séries et les artistes que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film ni de série ; tes demandes déjà faites restent visibles'))),
+        h('span', null, H.canRequest() ? H.t('Les films, les séries et les artistes que tu as demandés à l’administrateur, et où ils en sont') : H.t('Tu ne peux plus demander de film, de série ni d’artiste ; tes demandes déjà faites restent visibles'))),
         h('a', { class: 'btn f', href: '#/requests', 'data-key': 'my-requests' }, H.icon('queue'), h('span', { class: 'lbl' }, H.t('Mes demandes'))));
     }
     // « Mes suggestions » : les idées et les remarques sur le hub que le compte a envoyées à l'administrateur, depuis « Mon compte ».
