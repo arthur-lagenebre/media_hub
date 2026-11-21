@@ -1,3 +1,8 @@
+## 0.54.0 — 2026-11-21
+- L'administrateur peut corriger la fiche d'un artiste depuis sa page : son nom, ses genres, son résumé, son pays et ses années d'activité. Le nouveau nom se voit partout dans le hub : liste des artistes, albums, lecteur et recherche.
+- Quand un artiste a été confondu avec un homonyme, il peut choisir la bonne fiche MusicBrainz, ou revenir au choix automatique.
+- Chaque champ corrigé se rétablit d'un clic. Rien n'est écrit dans tes fichiers de musique : ils gardent le nom d'origine.
+
 ## 0.53.0 — 2026-11-21
 - L'administrateur peut corriger un album depuis sa fiche : son titre, son année, ses genres, son label et son type (album, EP, single…). La correction se voit partout dans le hub et reste après un nouveau scan.
 - Chaque champ corrigé se rétablit d'un clic, et revient tout de suite à ce que disent les fichiers.

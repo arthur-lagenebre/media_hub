@@ -240,6 +240,7 @@
   // Seuls les champs changés partent ; chaque champ déjà corrigé (`edited` de la fiche) porte son « Rétablir », qui rend la valeur lue dans les étiquettes.
   var ALBUM_FIELDS = [['title', H.t('Titre'), 300], ['year', H.t('Année'), 4], ['genres', H.t('Genres (séparés par des virgules)'), 1500], ['label', H.t('Label'), 200]];
   function genreList(text) { return text.split(',').map(function (g) { return g.trim(); }).filter(function (g, i, all) { return g && all.indexOf(g) === i; }); }
+  A.genreList = genreList;          // aussi pour « Modifier l'artiste » (music.js)
   // Ce que la fiche montre aujourd'hui, champ par champ, dans la forme où la fenêtre le rend (H.form normalise les espaces : un champ qu'on n'a pas touché doit se retrouver égal à son départ, sinon il part comme corrigé).
   function albumStart(d) {
     return { title: H.tidy(d.title || ''), year: d.year ? String(d.year) : '', genres: (d.genres || []).map(H.tidy).join(', '), label: H.tidy(d.label || ''), type: (d.release_types || [])[0] || null };
