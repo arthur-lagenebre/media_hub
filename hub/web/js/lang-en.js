@@ -883,8 +883,8 @@
     '{n} en attente': '{n} pending',
     'Tes demandes sont arrivées': 'Your requests have arrived',
     'Mes demandes': 'My requests',
-    'Les films et les séries que tu as demandés à l’administrateur. Le hub ne télécharge rien : l’administrateur les ajoute s’il le peut.': 'The movies and series you asked the administrator for. The hub downloads nothing: the administrator adds them if they can.',
-    'Les films et les séries que tu as demandés à l’administrateur, et où ils en sont': 'The movies and series you asked the administrator for, and where they stand',
+    'Les films, les séries et les artistes que tu as demandés à l’administrateur. Le hub ne télécharge rien : l’administrateur les ajoute s’il le peut.': 'The movies, series and artists you asked the administrator for. The hub downloads nothing: the administrator adds them if they can.',
+    'Les films, les séries et les artistes que tu as demandés à l’administrateur, et où ils en sont': 'The movies, series and artists you asked the administrator for, and where they stand',
     'Tu ne peux plus demander de film ni de série ; tes demandes déjà faites restent visibles': 'You can no longer request movies or series; the requests you already made stay visible',
     'L’administrateur t’a retiré le droit de demander des films ; tes demandes déjà faites restent ici.': 'The administrator took away your right to request movies; the requests you already made stay here.',
     'Pas encore visible pour toi : demande à l’administrateur où le trouver.': 'Not visible to you yet: ask the administrator where to find it.',
@@ -901,7 +901,7 @@
     'Ajoutées': 'Added',
     'Refusées': 'Declined',
     'Filtrer les demandes': 'Filter the requests',
-    'Ce que les comptes ont demandé. Le hub ne télécharge rien : ajoute le film à la médiathèque, il passe « Ajouté » tout seul s’il porte son identifiant TMDB ; sinon, marque-le à la main.': 'What the accounts have requested. The hub downloads nothing: add the movie to the media library and it turns “Added” by itself if it carries its TMDB id; otherwise, mark it by hand.',
+    'Ce que les comptes ont demandé. Le hub ne télécharge rien : ajoute le film à la médiathèque, il passe « Ajouté » tout seul s’il porte son identifiant TMDB ; sinon, marque-le à la main. Un artiste passe « Ajouté » tout seul quand un album de ce nom arrive dans la musique.': 'What the accounts have requested. The hub downloads nothing: add the movie to the media library and it turns “Added” by itself if it carries its TMDB id; otherwise, mark it by hand. An artist turns “Added” by itself when an album of that name arrives in the music library.',
     'Aucune demande pour l’instant : un compte demande un film depuis sa case grisée (page d’une saga, d’une personne).': 'No requests yet: an account requests a movie from its greyed-out box (the page of a saga or of a person).',
     'Aucune demande dans cet état.': 'No requests in this state.',
     'compte supprimé': 'deleted account',
@@ -990,7 +990,14 @@
     'Aucune lecture récente enregistrée pour ce titre : le registre d’activité ne survit pas à un redémarrage.': 'No recent playback recorded for this title: the activity log doesn’t survive a restart.',
 
     // --- Demander un film ou une série cherché dans TMDB (#/request), et ses entrées ---
-    'Demander un film ou une série': 'Request a movie or a series',
+    'Demander un film, une série ou un artiste': 'Request a movie, a series or an artist',
+    'Demander un artiste': 'Request an artist',
+    'Artiste': 'Artist',
+    'Nom de l’artiste à demander': 'Name of the artist to request',
+    'Écris le nom de l’artiste.': 'Type the artist’s name.',
+    'Écris le nom d’un artiste que la médiathèque n’a pas, puis demande-le à l’administrateur. Le hub ne télécharge rien : l’administrateur l’ajoute s’il le peut.': 'Type the name of an artist the media library doesn’t have, then ask the administrator for them. The hub downloads nothing: the administrator adds them if they can.',
+    'L’administrateur verra ta demande et ajoutera l’artiste s’il le peut. Rien n’est téléchargé tout seul.': 'The administrator will see your request and add the artist if they can. Nothing is downloaded automatically.',
+    'Déjà demandé : {title}. Tu la retrouves dans « Mes demandes ».': 'Already requested: {title}. You will find it in “My requests”.',
     'Nouvelle demande': 'New request',
     'Pas trouvé ? Demander « {q} »': 'Not found? Request “{q}”',
     'Cherche dans TMDB un film ou une série que la médiathèque n’a pas, puis demande-le à l’administrateur. Le hub ne télécharge rien : l’administrateur l’ajoute s’il le peut.': 'Search TMDB for a movie or a series the media library doesn’t have, then request it from the administrator. The hub downloads nothing: the administrator adds it if they can.',
@@ -1004,7 +1011,6 @@
     'Ouvrir « {title} »': 'Open “{title}”',
     'Ouvrir « {title} » sur TMDB (nouvel onglet)': 'Open “{title}” on TMDB (new tab)',
     'L’administrateur verra ta demande et ajoutera la série s’il le peut. Rien n’est téléchargé tout seul.': 'The administrator will see your request and add the series if they can. Nothing is downloaded automatically.',
-    'La recherche de titres à demander n’est pas configurée sur ce serveur. Un film qui manque à une saga, ou à la filmographie d’une personne, se demande depuis sa case grisée.': 'Searching for titles to request isn’t set up on this server. A movie missing from a saga, or from a person’s filmography, is requested from its greyed-out box.',
     'L’administrateur t’a retiré le droit de demander des films et des séries.': 'The administrator took away your right to request movies and series.',
 
     // --- Parce que tu as aimé (accueil, menu « … ») ---

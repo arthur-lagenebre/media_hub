@@ -164,6 +164,7 @@
       return r.text().then(function (t) {
         var data = parsed(t);
         if (!r.ok) throw failure(r, data);
+        if (opts && opts.status) opts.status(r.status);          // le code d'une réponse réussie, pour qui distingue 200 de 201 (POST /api/requests)
         return data;
       });
     });

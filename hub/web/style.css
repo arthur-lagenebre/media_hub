@@ -606,6 +606,9 @@ html:not([data-device="pc"]) .card.wanted.ask:hover:not(:focus) .rqbtn:not(.on) 
 .myrequests { padding-bottom: 3rem; }
 .myrequests h1 { padding: 1.4rem var(--gut) 0.6rem; }
 .myrequests .intro { margin: 0 var(--gut) 1rem; max-width: var(--prose); line-height: 1.5; }
+.poster.rqmusic { color: var(--mute); }
+.poster.rqmusic .ic { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+.poster.rqmusic .ic svg { width: 45%; height: 45%; }
 .reqrow .poster.rqpic { flex: none; width: 3rem; padding-top: 4.5rem; margin-right: 0.9rem; }
 .reqrow .what .rqstatus { color: var(--text); font-weight: 650; overflow-wrap: anywhere; }
 .reqrow[data-status="declined"] .what .rqstatus { color: #ffa595; }
