@@ -1327,8 +1327,19 @@
     }
     // « Lire la suite » n'apparaît que si la biographie dépasse ses lignes : cela se mesure sur la page dessinée (la place dépend de l'écran), et se remesure quand la fenêtre change.
     function measure() { if (head && H.focus.shown(el)) more.hidden = !bio.classList.contains('open') && bio.scrollHeight <= bio.clientHeight + 1; }
+    // Une fiche disparue d'une réponse à l'autre (un homonyme scanné entre-temps, un droit retiré) : l'en-tête s'en va, le titre, les rôles et le bouton reprennent leur place d'avant. Le bouton garde le focus s'il l'avait.
+    function unsheet() {
+      if (!head) return;
+      var had = document.activeElement === button;
+      [title, roles, actions].forEach(function (n) { el.insertBefore(n, head); });
+      el.removeChild(head);
+      head = inner = null;
+      fold(false);
+      more.hidden = true;
+      if (had) H.focus.set(button, true);
+    }
     function sheet(info) {
-      if (!info) return;
+      if (!info) { unsheet(); return; }
       if (!head) {
         var had = document.activeElement === button;
         inner = h('div', { class: 'hero-in' }, h('div', { class: 'info' }, title, trade, roles, dates, bio, more, actions));

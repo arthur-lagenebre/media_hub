@@ -6514,6 +6514,22 @@ class TestPersonSheetUi(UiCase):
         self.assertEqual(self.page.locator("#views > .view.person:visible").evaluate("e => Array.from(e.children).map(c => c.tagName + '.' + c.className)"),
                          ["H1.", "P.roles", "P.actions", "DIV.results"])
 
+    def test_a_sheet_that_is_gone_when_the_page_comes_back_leaves_the_page_as_before(self):
+        """La fiche disparue entre deux visites (un homonyme scanné, un droit retiré) : au retour sur la page, plus rien de l'ancienne fiche, la page d'avant."""
+        self.person("Vivante Test")
+        expect(self.view(".hero .bio")).to_have_text("Née sur scène.")
+        self.run_.hub.db.kv_delete("personinfo:8400")
+        self.view(".shelf .card").first.click()
+        self.view(".hero h1").wait_for()
+        self.shown(self.page.evaluate("location.hash"))
+        with self.page.expect_response(lambda r: "/api/person?" in r.url):
+            self.page.keyboard.press("Escape")                                       # retour : la page de la personne se recharge
+        expect(self.view("> h1")).to_have_text("Vivante Test")
+        for part in (".hero", ".bio", ".dates", ".more", "img"):
+            expect(self.view(part)).to_have_count(0)
+        self.assertEqual(self.page.locator("#views > .view.person:visible").evaluate("e => Array.from(e.children).map(c => c.tagName + '.' + c.className)"),
+                         ["H1.", "P.roles", "P.actions", "DIV.results"])
+
     def test_a_long_biography_is_folded_and_read_more_works_with_the_keyboard(self):
         self.person("Longue Bio")
         bio, more = self.view(".hero .bio"), self.view(".hero .more")
