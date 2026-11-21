@@ -25,7 +25,7 @@ import threading
 import time
 import traceback
 from collections import Counter
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1303,16 +1303,93 @@ def person_extras(hub, person, libs):
     known = hub.db.kv_get(enrich.person_key(ident)) if ident else None
     films = known.get("films") if isinstance(known, dict) else None
     absent = missing.of_person(films, missing.owned_films(hub.db, libs)) if films else []
-    return {"enrichable": bool(ident and hub.cfg.tmdb_key), **({"missing": absent} if absent else {}), **person_sheet(hub.cfg, ident, known)}
+    return {"enrichable": bool(ident and hub.cfg.tmdb_key), **({"missing": absent} if absent else {}), **person_sheet(hub, ident, known)}
 
 
-def person_sheet(cfg, ident, known):
-    """`{"info": {biography, birthday, deathday, place_of_birth, department, photo, tmdb}}` : la fiche que la passe des personnes a gardée (`known`, voir enrich.fetch_person), dates en ISO, `photo` vrai quand son fichier est là, `tmdb` l'identifiant de la personne (la photo est `/img/person/<tmdb>`). Rien sans fiche : pas d'identifiant unique, jamais demandée, ou gardée avant la fiche. Rien n'est demandé en ligne."""
+def person_sheet(hub, ident, known):
+    """`{"info": {biography, birthday, deathday, place_of_birth, department, photo, own_photo, tmdb}}` : la fiche que la passe des personnes a gardée (`known`, voir enrich.fetch_person), corrigée champ par champ par l'administrateur (enrich.edited_sheet), dates en ISO ; `photo` vrai quand elle en a une (envoyée, sinon celle de TMDB), `own_photo` quand c'est celle envoyée ; `tmdb` l'identifiant de la personne (la photo est `/img/person/<tmdb>`). Rien sans fiche : pas d'identifiant unique, jamais demandée, ou gardée avant la fiche. Rien n'est demandé en ligne."""
     info = known.get("info") if isinstance(known, dict) else None
     if not isinstance(info, dict):
         return {}
-    shown = {field: info.get(field) or "" for field in ("biography", "birthday", "deathday", "place_of_birth")}
-    return {"info": {**shown, "department": info.get("known_for_department") or "", "photo": (cfg.data / "tmdb" / missing.photo_name(ident)).is_file(), "tmdb": ident}}
+    shown = enrich.edited_sheet(info, enrich.person_edits(hub.db, ident))
+    return {"info": {**shown, "photo": enrich.person_photo(hub.cfg, ident) is not None, "own_photo": enrich.own_photo(hub.cfg, ident) is not None, "tmdb": ident}}
+
+
+PERSON_EDIT_LOCK = threading.Lock()          # lire-modifier-écrire de `personedit:` : deux administrateurs en même temps ne s'écrasent pas
+
+
+def person_target(hub, ident):
+    """(identifiant, fiche gardée par la passe) de la personne `ident` (les chiffres de l'adresse) ; 404 quand la passe ne lui a pas fait de fiche : on corrige une fiche, on n'en crée pas."""
+    ident = int(ident)
+    known = hub.db.kv_get(enrich.person_key(ident))
+    if not (isinstance(known, dict) and isinstance(known.get("info"), dict)):
+        raise HttpError(404, "pas de fiche pour cette personne : lance d'abord « Chercher ses films manquants »")
+    return ident, known
+
+
+@route("POST", r"/api/person/([0-9]{1,9})/sheet")
+def api_person_sheet_edit(h, m, q):
+    """Corrige la fiche d'une personne : corps `{champ: texte}` parmi biography, department, birthday, deathday (AAAA-MM-JJ), place_of_birth. Un champ envoyé vide, ou égal à ce que dit TMDB, revient à TMDB ; un champ absent ne change pas. Les corrections sont gardées à part (`personedit:<id>`) : une nouvelle passe ne les efface pas. Rend `{"info"}` comme /api/person. Administrateur seulement."""
+    require_admin(h)
+    hub = h.hub
+    ident, known = person_target(hub, m.group(1))
+    body = h.body_json()
+    with PERSON_EDIT_LOCK:
+        try:
+            edits = enrich.new_edits(known["info"], enrich.person_edits(hub.db, ident), body)
+        except ValueError as e:
+            raise HttpError(400, str(e))
+        if edits:
+            hub.db.kv_set(enrich.person_edit_key(ident), edits)
+        else:
+            hub.db.kv_delete(enrich.person_edit_key(ident))
+    h.send_json(person_sheet(hub, ident, known))
+
+
+@route("POST", r"/api/person/([0-9]{1,9})/photo")
+def api_person_photo_set(h, m, q):
+    """Donne à une personne la photo envoyée (le corps : JPEG, PNG ou WebP, 10 Mo au plus), à la place de celle de TMDB ; `crop=x,y,largeur,hauteur` (fractions de l'image) ne garde que ce cadre. Gardée sous HUB_DATA/people : la passe n'y touche pas. Administrateur seulement."""
+    require_admin(h)
+    ident, _ = person_target(h.hub, m.group(1))
+    box = photo_box(q)
+    data = h.body_bytes(PHOTO_UPLOAD_MAX)
+    if not enrich.image_ext(data):
+        raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
+    save_person_photo(h.hub, ident, data, box)
+    h.send_json({"ok": True})
+
+
+@route("POST", r"/api/person/([0-9]{1,9})/photo/crop")
+def api_person_photo_crop(h, m, q):
+    """Ne garde de la photo montrée (envoyée, sinon celle de TMDB) que le cadre `{"x", "y", "w", "h"}` (fractions de l'image) ; le résultat devient la photo envoyée. Administrateur seulement."""
+    require_admin(h)
+    ident, _ = person_target(h.hub, m.group(1))
+    box = body_box(h.body_json())
+    path = enrich.person_photo(h.hub.cfg, ident)
+    if path is None:
+        raise HttpError(404, "pas de photo à recadrer")
+    save_person_photo(h.hub, ident, read_photo(path), box)
+    h.send_json({"ok": True})
+
+
+@route("POST", r"/api/person/([0-9]{1,9})/photo/remove")
+def api_person_photo_remove(h, m, q):
+    """Retire la photo envoyée : celle de TMDB revient (s'il y en a une). 404 quand il n'y en a pas. Administrateur seulement."""
+    require_admin(h)
+    ident, _ = person_target(h.hub, m.group(1))
+    try:
+        removed = enrich.remove_person_photo(h.hub.cfg, ident)
+    except OSError as e:
+        raise HttpError(500, f"photo non retirée : {e}")
+    if not removed:
+        raise HttpError(404, "pas de photo envoyée")
+    h.send_json({"ok": True})
+
+
+def save_person_photo(hub, ident, data, box=None):
+    """enrich.save_person_photo, ses échecs rendus en réponses HTTP (voir photo_errors)."""
+    with photo_errors():
+        enrich.save_person_photo(hub.cfg, ident, data, box)
 
 
 @route("POST", r"/api/enrich/people")
@@ -2021,15 +2098,38 @@ def artist_photo(hub, artist_id, kept, home=None):
 
 
 def save_artist_photo(hub, lib, rows, artist_id, data, box=None):
-    """enrich.save_photo, ses échecs rendus en réponses HTTP : 415 (image illisible), 501 (rien pour convertir), 500 (écriture impossible : le dossier de la médiathèque est peut-être en lecture seule)."""
-    try:
+    """enrich.save_photo, ses échecs rendus en réponses HTTP (voir photo_errors)."""
+    with photo_errors():
         enrich.save_photo(hub.cfg, artist_id, data, artist_home(lib, rows), box, (artist_kept(hub, rows) or {}).get("mbid", ""))
+
+
+@contextmanager
+def photo_errors():
+    """Les échecs de l'enregistrement d'une photo (d'artiste, de personne) rendus en réponses HTTP : 415 (image illisible), 501 (rien pour convertir), 500 (écriture impossible : le dossier de la médiathèque est peut-être en lecture seule)."""
+    try:
+        yield
     except NoConverter as e:
         raise HttpError(501, str(e))
     except ConvertError as e:
         raise HttpError(415, str(e))
     except OSError as e:
         raise HttpError(500, f"photo non enregistrée : {e}")
+
+
+def body_box(body):
+    """Le cadre `{"x", "y", "w", "h"}` (fractions de l'image) d'un corps de requête ; 400 s'il n'en est pas un."""
+    try:
+        return crop_box(",".join(str(body.get(k, "")) for k in ("x", "y", "w", "h")))
+    except ValueError as e:
+        raise HttpError(400, str(e))
+
+
+def read_photo(path):
+    """Les octets de la photo `path` ; 500 si elle ne se lit pas."""
+    try:
+        return path.read_bytes()
+    except OSError as e:
+        raise HttpError(500, f"photo illisible : {e}")
 
 
 def photo_box(q):
@@ -2156,19 +2256,11 @@ def api_artist_photo_crop(h, m, q):
     require_admin(h)
     hub = h.hub
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
-    body = h.body_json()
-    try:
-        box = crop_box(",".join(str(body.get(k, "")) for k in ("x", "y", "w", "h")))
-    except ValueError as e:
-        raise HttpError(400, str(e))
+    box = body_box(h.body_json())
     path = artist_photo(hub, m.group(2), artist_kept(hub, rows), artist_home(lib, rows))
     if path is None:
         raise HttpError(404, "pas de photo à recadrer")
-    try:
-        data = path.read_bytes()
-    except OSError as e:
-        raise HttpError(500, f"photo illisible : {e}")
-    save_artist_photo(hub, lib, rows, m.group(2), data, box)
+    save_artist_photo(hub, lib, rows, m.group(2), read_photo(path), box)
     h.send_json({"ok": True})
 
 
@@ -3099,11 +3191,12 @@ PERSON_ID_RE = re.compile(r"[0-9]{1,9}")          # un identifiant TMDB de perso
 
 @route("GET", r"/img/person/([^/]*)")
 def person_image(h, m, q):
-    """La photo d'une personne (HUB_DATA/tmdb, voir missing.photo_name), posée par la passe des personnes : rien n'est demandé en ligne ici. 400 pour un identifiant qui n'est pas un nombre de neuf chiffres au plus, 404 sans photo."""
+    """La photo d'une personne : celle que l'administrateur a envoyée (HUB_DATA/people), sinon celle de TMDB que la passe des personnes a posée (HUB_DATA/tmdb, voir missing.photo_name) ; rien n'est demandé en ligne ici. 400 pour un identifiant qui n'est pas un nombre de neuf chiffres au plus, 404 sans photo."""
     ident = m.group(1)
     if not PERSON_ID_RE.fullmatch(ident):
         raise HttpError(400, "identifiant de personne invalide : un nombre de 9 chiffres au plus")
-    send_poster(h, q, f"person:{ident}", h.hub.cfg.data / "tmdb" / missing.photo_name(ident), "pas de photo")
+    path = enrich.person_photo(h.hub.cfg, int(ident)) or h.hub.cfg.data / "tmdb" / missing.photo_name(ident)          # sans photo : un chemin absent, send_poster répond 404
+    send_poster(h, q, f"person:{ident}", path, "pas de photo")
 
 
 def send_poster(h, q, ref, path, absent="pas d'affiche"):
