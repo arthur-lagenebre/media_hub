@@ -237,6 +237,12 @@ class TestPaceAndTurns(SearchCase):
         self.results(self.alice, "Air")
         self.assertEqual(len(self.mb.asked), 2)
 
+    def test_no_pause_at_all_once_the_interval_has_passed_exactly(self):
+        self.results(self.alice, "un")
+        self.clock.now += artist_search.INTERVAL
+        self.results(self.alice, "deux")
+        self.assertEqual((len(self.mb.asked), self.clock.slept), (2, []))                 # pas même une attente de zéro seconde
+
     def test_musicbrainz_is_asked_at_most_once_per_interval(self):
         self.results(self.alice, "un")
         self.results(self.alice, "deux")
