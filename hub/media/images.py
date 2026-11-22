@@ -3,7 +3,7 @@
 D'où vient l'image d'un item :
   film    folder.jpg à côté du film, sinon la jaquette que Metadata.py a embarquée dans le .mkv ;
   série   l'affiche TMDB gardée par l'enrichissement, sinon folder.jpg, sinon la vignette d'un épisode ;
-  album   cover.jpg (ou .png...) du dossier, et rien d'autre : ni folder.jpg, ni la pochette embarquée dans les pistes ;
+  album   la pochette choisie dans le hub (voir set_poster), sinon cover.jpg (ou .png...) du dossier, et rien d'autre : ni folder.jpg, ni la pochette embarquée dans les pistes ;
   livre   la couverture désignée par ComicInfo.xml, sinon la première page / l'image de l'epub.
 
 Réduire se fait avec Pillow s'il est là, sinon avec ffmpeg, sinon on rend l'image telle quelle. Une couverture de comics fait 4 Mo : sur une télé, avec 40 couvertures à l'écran, la réduction n'est pas un luxe.
@@ -314,6 +314,15 @@ class Images:
         self.db.kv_set(POSTER_KEY + item_id, name)
         if before != name:
             self._forget_file(before)
+
+    def clear_poster(self, item_id):
+        """Retire l'affiche choisie de l'item (son fichier aussi) : l'image d'origine revient. Vrai s'il y en avait une."""
+        name = self.db.kv_get(POSTER_KEY + item_id)
+        if name is None:
+            return False
+        self.db.kv_delete(POSTER_KEY + item_id)
+        self._forget_file(name)
+        return True
 
     def _forget_file(self, name):
         path = self._poster_file(name)

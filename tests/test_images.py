@@ -576,6 +576,26 @@ class TestCustomPoster(ServiceCase):
         self.db.kv_set("poster:i1", "../secret.png")
         self.assertEqual(self.service.get("item", "i1")[0], b"dossier")
 
+    def test_clearing_the_poster_gives_back_the_original_and_removes_the_file(self):
+        original = self.service.get("item", "i1")
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        self.service.set_poster("i2", fixtures.PNG, ".png")
+        self.assertTrue(self.service.clear_poster("i1"))
+        self.assertEqual(self.service.get("item", "i1")[:3], original)
+        self.assertEqual([p.name.split("-")[0] for p in self.folder().iterdir()], ["i2"])          # l'affiche d'un autre item reste
+        self.assertIsNone(self.db.kv_get("poster:i1"))
+
+    def test_clearing_a_poster_that_was_never_chosen_changes_nothing(self):
+        self.assertFalse(self.service.clear_poster("i1"))
+        self.assertEqual(self.service.get("item", "i1")[0], b"dossier")
+
+    def test_clearing_a_poster_whose_file_went_missing_still_forgets_it(self):
+        self.service.set_poster("i1", fixtures.PNG, ".png")
+        for path in self.folder().iterdir():
+            path.unlink()
+        self.assertTrue(self.service.clear_poster("i1"))
+        self.assertIsNone(self.db.kv_get("poster:i1"))
+
 
 if __name__ == "__main__":
     unittest.main()

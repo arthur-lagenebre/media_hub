@@ -39,6 +39,7 @@ from libraries.video import tmdb
 
 from .. import __version__
 from .. import accounts
+from .. import artistedit
 from .. import backup
 from .. import changelog
 from .. import countries
@@ -51,6 +52,7 @@ from .. import prefs
 from .. import recommend
 from .. import requests as hub_requests
 from .. import request_search
+from .. import artist_search
 from .. import suggestions
 from .. import urls
 from ..activity import Activity, attempt_id
@@ -64,7 +66,8 @@ from ..media import books as bookmedia
 from ..media import probe as prober
 from ..media import subs as subtitles
 from ..media import tracks
-from ..media.images import ConvertError, Images, NoConverter, crop_box, sniff, to_jpeg, write_atomic
+from ..media.images import POSTER_KEY, ConvertError, Images, NoConverter, crop_box, sniff, to_jpeg, write_atomic
+from ..scan import edits
 from ..scan.common import STACK_MAX
 from .jobs import Jobs
 
@@ -121,6 +124,7 @@ class Hub:
         self.throttle = accounts.Throttle()                    # les essais de connexion ratés, par adresse
         self.inbox = Inbox(cfg, self.db)                       # les envois des comptes (voir inbox.py)
         self.finder = request_search.Finder(cfg)                # la recherche dans TMDB des titres à demander (voir request_search.py)
+        self.artist_finder = artist_search.Finder(cfg)          # la recherche dans MusicBrainz des artistes à demander (voir artist_search.py)
         self.streams = threading.BoundedSemaphore(cfg.max_streams)
         self.active = 0                                        # les flux ffmpeg en cours (voir count_stream)
         self.active_lock = threading.Lock()
@@ -559,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_failure(self, status, message):
         """Une erreur du serveur (500, 502 et plus) au journal ; le jeton n'y va pas : masqué d'après les clés décodées (`?%74oken=` aussi)."""
         split = urlsplit(self.path)
-        hidden = {"token", "q"} if unquote(split.path) == "/api/requests/search" else {"token"}         # le texte d'une recherche dans TMDB ne va pas au journal
+        hidden = {"token", "q"} if unquote(split.path) in ("/api/requests/search", "/api/requests/artists") else {"token"}         # le texte d'une recherche dans TMDB ou dans MusicBrainz ne va pas au journal
         pairs = [(k, "***" if k in hidden else v) for k, v in parse_qsl(split.query, keep_blank_values=True)]
         shown = split.path + ("?" + urlencode(pairs, safe="*") if pairs else "")
         print(f"{status} {self.command} {shown} : {request_search.without_key(message, self.hub.cfg.tmdb_key)}", file=sys.stderr)
@@ -1199,7 +1203,7 @@ def api_home(h, m, q):
     settings = prefs.load(hub.db, h.user["id"])
     order = settings["home_unseen_sort"]
     for lib in h.visible_libs():
-        items = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
+        items = shown_rows(hub, lib, hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,)))
         if lib.kind == "music":
             recent = recent_music(items, seen, prefs.SHELF_CARDS)
         else:
@@ -1234,7 +1238,7 @@ def api_search(h, m, q):
     results = []
     for lib in h.visible_libs():
         found = []
-        for row in hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY sort", (lib.id,)):
+        for row in shown_rows(hub, lib, hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY sort", (lib.id,))):
             if needle in fold(row["title"]) or needle in fold(row["grp"]):
                 found.append(with_seen(row, seen, quality, ratings))
                 if len(found) >= 40:
@@ -1578,12 +1582,18 @@ def saga_json(saga, seen):
     return out
 
 
-UNKNOWN_ARTISTS = ("artiste inconnu", "various artists", "artistes divers")        # rangés en dernier : ce ne sont pas des artistes qu'on cherche par leur nom
+UNKNOWN_ARTISTS = hub_requests.UNKNOWN_ARTISTS        # rangés en dernier : ce ne sont pas des artistes qu'on cherche par leur nom (et qu'on ne demande pas)
 
 
 def artist_name(grp):
     """Le nom que montre la carte d'un artiste : « Various Artists » se dit en français, un album sans artiste est « Artiste inconnu »."""
     return "Artistes divers" if fold(grp) == "various artists" else grp or "Artiste inconnu"
+
+
+def shown_rows(hub, lib, rows):
+    """Les lignes d'une bibliothèque telles qu'on les montre : en musique, chaque album porte le nom affiché corrigé de son artiste (voir artistedit.renamed), si bien que listes, tri, recherche et vue « Artistes » le voient ; la base garde les étiquettes."""
+    names = artistedit.names(hub.db, lib.id) if lib.kind == "music" else {}
+    return [artistedit.renamed(row, names) for row in rows] if names else rows
 
 
 def artist_rows(rows):
@@ -1797,7 +1807,7 @@ def api_library(h, m, q):
     hub = h.hub
     lib = library_or_404(hub, m.group(1))
     h.require(lib.id)
-    rows = hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,))
+    rows = shown_rows(hub, lib, hub.db.query("SELECT * FROM items WHERE lib=?", (lib.id,)))
     seen, ratings = seen_counts(hub, h.user["id"], lib.id), hub.db.ratings_for(h.user["id"])
     movies = lib.kind == "movies"
     custom = hub.sagas.of_movies(rows) if movies else {}          # les sagas du fichier, voir sagas.py
@@ -1963,8 +1973,9 @@ def season_badges(rows, found):
 @route("GET", r"/api/item/(\w+)")
 def api_item(h, m, q):
     hub = h.hub
-    item = item_of(h, m.group(1))
-    lib = library_or_404(hub, item["lib"])
+    tagged = item_of(h, m.group(1))
+    lib = library_or_404(hub, tagged["lib"])
+    item = shown_rows(hub, lib, [tagged])[0]
     rows = sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (item["id"],)), key=order_key)
     progress = hub.db.progress_for(h.user["id"], [r["id"] for r in rows])
     meta = meta_json(item["meta"])
@@ -1989,15 +2000,39 @@ def api_item(h, m, q):
         out.update(movie_sagas(hub, item, lib, h.user["id"], ratings))
         mark_requests(h, *[saga.get("missing") for saga in out.get("sagas", [])])
     if item["type"] == "album":
-        out["tracks_total"] = len(rows)
+        album_extras(h, out, tagged, item)
     h.send_json(out)
 
 
-def artist_sheet(info, mbid="", lang="fr", edits=None):
-    """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo). Le pays est traduit en français pour `lang` = 'fr', sinon tel que MusicBrainz le donne.
+def album_extras(h, out, tagged, shown):
+    """Ce que la fiche d'un album ajoute : son nombre de pistes, `edited` pour l'administrateur, et le crédit des pistes qui portaient le nom de l'artiste des étiquettes (`tagged`), remplacé par son nom affiché (`shown`, voir artistedit)."""
+    out["tracks_total"] = len(out["entries"])
+    out.update(edited_sheet(h, tagged))
+    for track in out["entries"]:
+        track["artist"] = artistedit.credit(track["artist"], tagged["grp"], shown["grp"])
+
+
+def sheet_facts(info, lang, fixes):
+    """« Groupe · France · 1993 – 2021 » : le type, le pays (traduit en français pour `lang` = 'fr', sinon tel que MusicBrainz le donne) et les années d'activité, ces deux derniers corrigés par l'administrateur s'il l'a fait (`fixes`, voir artistedit)."""
+    area = fixes.get("country") or (countries.french(info.get("area")) if lang == "fr" else info.get("area"))
+    parts = (artistinfo.TYPES.get(info.get("type"), ""), area, fixes.get("active") or artistinfo.lifespan(info))
+    return " · ".join(p for p in parts if p)
+
+
+def artist_sheet(info, mbid="", lang="fr", edits=None, fixes=None):
+    """Ce que la fiche montre d'un artiste, à partir de ce que MusicBrainz et Wikipédia en ont dit (voir libraries.music.artistinfo) et de ce que l'administrateur a corrigé (`fixes` : pays, années d'activité, résumé ; voir artistedit).
+    Un résumé corrigé est rendu sous `summary`, à la place de celui de Wikipédia (`wiki` vaut alors None : le texte n'est plus le sien ; son adresse reste parmi les liens).
     `edits` (voir artist_link_edits) : les liens que l'administrateur a ajoutés (avant Wikipédia et MusicBrainz) et retirés (de la liste finale, quels qu'ils soient)."""
+    fixes = fixes or {}
     members = [{"name": mem["name"], "roles": mem.get("roles", []), "period": artistinfo.period(mem), "former": bool(mem.get("ended"))} for mem in info.get("members") or []]
-    edits = edits or {}
+    out = {"facts": sheet_facts(info, lang, fixes), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": sheet_links(info, mbid, edits or {})}
+    if "summary" in fixes:
+        out.update(summary=fixes["summary"], wiki=None)
+    return out
+
+
+def sheet_links(info, mbid, edits):
+    """Les liens de la fiche : ceux de MusicBrainz ramenés à WANTED_LINKS, ceux que l'administrateur a ajoutés, Wikipédia et MusicBrainz, sans ceux qu'il a retirés, chaque adresse une fois."""
     links = enrich.pick_links(info.get("links", []))       # aussi à l'affichage : les fiches déjà gardées gardent peut-être d'autres liens
     links.extend(edits.get("added", []))
     if (info.get("wiki") or {}).get("url"):
@@ -2006,8 +2041,7 @@ def artist_sheet(info, mbid="", lang="fr", edits=None):
         links.append({"label": "MusicBrainz", "url": musicbrainz.artist_url(mbid)})
     removed = set(edits.get("removed", []))
     seen = set()
-    links = [link for link in links if link["url"] not in removed and not (link["url"] in seen or seen.add(link["url"]))]       # une adresse une seule fois : une fiche refaite peut avoir trouvé ce que l'administrateur avait ajouté
-    return {"facts": artistinfo.facts({**info, "area": countries.french(info.get("area")) if lang == "fr" else info.get("area")}), "disambiguation": info.get("disambiguation", ""), "wiki": info.get("wiki"), "members": members, "links": links}
+    return [link for link in links if link["url"] not in removed and not (link["url"] in seen or seen.add(link["url"]))]       # une adresse une seule fois : une fiche refaite peut avoir trouvé ce que l'administrateur avait ajouté
 
 
 def artist_albums(hub, lib_id, artist_id):
@@ -2021,14 +2055,20 @@ def artist_albums(hub, lib_id, artist_id):
     return lib, sorted(rows, key=TITLE_SORTS["music"])
 
 
+def kept_sheet(hub, mbid):
+    """La fiche MusicBrainz gardée sous ce `mbid` (avec lui), ou None."""
+    kept = hub.db.kv_get(enrich.artist_key(mbid)) if mbid else None
+    return {**kept, "mbid": mbid} if kept else None
+
+
 def artist_kept(hub, rows):
-    """La fiche gardée par « Fiches artistes » (voir enrich.enrich_artists), ou None : celle du premier album qui porte un identifiant MusicBrainz et qui en a une."""
-    for row in rows:
-        mbid = meta_json(row["meta"]).get("artist_mbid")
-        kept = hub.db.kv_get(enrich.artist_key(mbid)) if mbid else None
-        if kept:
-            return {**kept, "mbid": mbid}
-    return None
+    """La fiche gardée par « Fiches artistes » (voir enrich.enrich_artists), ou None : celle du premier album qui porte un identifiant MusicBrainz et qui en a une. C'est le rapprochement automatique ; la photo s'en tient à lui."""
+    return next(filter(None, (kept_sheet(hub, meta_json(row["meta"]).get("artist_mbid")) for row in rows)), None)
+
+
+def artist_shown(hub, rows, fixes):
+    """La fiche que montre la page de l'artiste : celle que l'administrateur a choisie (`fixes["mbid"]`, voir artistedit) si elle est gardée, sinon le rapprochement automatique (artist_kept)."""
+    return kept_sheet(hub, fixes.get("mbid")) or artist_kept(hub, rows)
 
 
 def wanted_albums(hub, lib_id, artist_id):
@@ -2068,9 +2108,10 @@ def artist_link_url(value):
 
 
 def artist_link_target(hub, m):
-    """(mbid, fiche gardée) de l'artiste visé par une route de liens ; 404 s'il est inconnu ou n'a pas de fiche (sans identifiant MusicBrainz, ou « Fiches artistes » ne l'a pas encore gardée)."""
+    """(mbid, fiche gardée) de l'artiste visé par une route de liens ; 404 s'il est inconnu ou n'a pas de fiche (sans identifiant MusicBrainz, ou « Fiches artistes » ne l'a pas encore gardée).
+    C'est la fiche montrée (artist_shown) : les liens corrigés, rangés sous son mbid, suivent la fiche choisie."""
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
-    kept = artist_kept(hub, rows)
+    kept = artist_shown(hub, rows, artistedit.of_artist(hub.db, lib.id, m.group(2)))
     if kept is None:
         raise HttpError(404, "pas de fiche pour cet artiste")
     return kept["mbid"], kept
@@ -2145,11 +2186,12 @@ def photo_box(q):
 
 
 def artist_tracks(hub, rows, name):
-    """(pistes, {genre: nombre d'albums}) de tous les albums d'un artiste, les pistes dans l'ordre de chaque album."""
+    """(pistes, {genre: nombre d'albums}) de tous les albums d'un artiste, les pistes dans l'ordre de chaque album. `name` : le nom affiché ; une piste créditée du nom des étiquettes prend celui-là (voir artistedit.credit)."""
     tracks, genres = [], {}
     for row in rows:
         for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
-            tracks.append({"id": entry["id"], "title": entry["title"], "artist": entry_json(entry)["artist"] or name, "album": row["title"], "item": row["id"], "duration": entry["duration"],
+            artist = artistedit.credit(entry_json(entry)["artist"], row["grp"], name) or name
+            tracks.append({"id": entry["id"], "title": entry["title"], "artist": artist, "album": row["title"], "item": row["id"], "duration": entry["duration"],
                            "cover": urls.item_cover(row["id"]), "file": urls.entry_file(entry["id"])})
         for genre in safe_json(row["genres"], []):
             genres[genre] = genres.get(genre, 0) + 1
@@ -2163,19 +2205,41 @@ def api_artist(h, m, q):
     h.require(m.group(1))
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     seen = seen_counts(hub, h.user["id"], lib.id)
-    name = rows[0]["grp"] or "Artiste inconnu"
+    fixes = artistedit.of_artist(hub.db, lib.id, m.group(2))
+    name = fixes.get("name") or rows[0]["grp"] or "Artiste inconnu"
     tracks, genres = artist_tracks(hub, rows, name)
-    out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in rows], "tracks": tracks}
-    out["genres"] = [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
+    shown = [artistedit.renamed(r, {m.group(2): fixes["name"]}) for r in rows] if "name" in fixes else rows
+    out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in shown], "tracks": tracks}
+    out.update(artist_genres(hub, lib, genres, fixes))
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
-    kept = artist_kept(hub, rows)
-    if kept:
-        out["info"] = artist_sheet(kept["info"], kept["mbid"], h.lang, artist_link_edits(hub, kept["mbid"]))
+    info = artist_info(h, artist_shown(hub, rows, fixes), fixes)
+    if info:
+        out["info"] = info
     out["wanted"] = [{"year": w["year"], "title": w["title"], "cover": f"/img/wanted/{lib.id}/{m.group(2)}/{w['key']}" if w["cover"] else ""} for w in wanted_albums(hub, lib.id, m.group(2))]
-    out["photo"] = artist_photo(hub, m.group(2), kept, artist_home(lib, rows)) is not None
+    out["photo"] = artist_photo(hub, m.group(2), artist_kept(hub, rows), artist_home(lib, rows)) is not None          # la photo suit le rapprochement automatique, jamais la fiche choisie
     if out["photo"]:
         out["image"] = urls.artist_image(lib.id, m.group(2))
+    if h.user["role"] == "admin":
+        out["edited"] = artistedit.listed(fixes)            # les autres comptes ne savent pas que la fiche a été corrigée
     h.send_json(out)
+
+
+def artist_genres(hub, lib, counted, fixes):
+    """`genres` de la fiche (les cinq plus fréquents de ses albums, ou ceux que l'administrateur a donnés) et `genres_linkable` : ceux que le filtre « Genre » de la bibliothèque connaît, les seuls dont l'interface fait un lien. Un genre corrigé ne change pas le filtre, qui suit les albums."""
+    if "genres" not in fixes:
+        top = [g for g, _ in sorted(counted.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
+        return {"genres": top, "genres_linkable": top}
+    known = {g for row in hub.db.query("SELECT genres FROM items WHERE lib=?", (lib.id,)) for g in safe_json(row["genres"], [])}
+    return {"genres": fixes["genres"], "genres_linkable": [g for g in fixes["genres"] if g in known]}
+
+
+def artist_info(h, kept, fixes):
+    """La fiche (voir artist_sheet) d'après la fiche MusicBrainz montrée `kept` et les corrections ; sans fiche gardée, celle que font les seules corrections (pays, années, résumé), ou None s'il n'y en a pas."""
+    if kept:
+        return artist_sheet(kept["info"], kept["mbid"], h.lang, artist_link_edits(h.hub, kept["mbid"]), fixes)
+    if any(field in fixes for field in artistedit.SHEET_FIELDS):
+        return artist_sheet({}, "", h.lang, None, fixes)
+    return None
 
 
 def artist_link_label(label, url):
@@ -2249,6 +2313,76 @@ def api_artist_photo_set(h, m, q):
         raise HttpError(415, "ce n'est pas une image JPEG, PNG ou WebP")
     save_artist_photo(hub, lib, rows, m.group(2), data, box)
     h.send_json({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Corriger un artiste dans le hub (voir artistedit)
+# ---------------------------------------------------------------------------
+def save_artist_edits(h, lib, artist_id, changes, resets):
+    """Garde les corrections de l'artiste et répond `{"ok": true, "edited": [champs corrigés]}`."""
+    with artistedit.LOCK:
+        kept = artistedit.save(h.hub.db, lib.id, artist_id, changes, resets)
+    h.hub.db.items_changed()            # ce que la musique montre a changé (nom corrigé) : ce que les demandes en ont tiré, gardé jusqu'au prochain scan, est à refaire
+    h.send_json({"ok": True, "edited": artistedit.listed(kept)})
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/edit")
+def api_artist_edit(h, m, q):
+    """Corrige la fiche d'un artiste dans le hub (administrateur seulement), sans rien écrire dans la médiathèque ni changer son identifiant : `{"name", "genres", "summary", "country", "active", "mbid"}`, un ou plusieurs champs ; `null` rétablit un champ (pour `mbid`, revient au rapprochement automatique : la fiche se choisit par `POST /api/artist/<bibliothèque>/<id>/musicbrainz`).
+    Nom de 1 à 200 caractères, 20 genres de 60 caractères au plus, résumé de 5000 caractères au plus (les retours à la ligne sont gardés), pays de 100, années d'activité de 60 ; aucun caractère de contrôle. 400 au moindre champ refusé : rien n'est gardé. Rend `{"ok": true, "edited": [champs corrigés]}`."""
+    require_admin(h)
+    lib, _ = artist_albums(h.hub, m.group(1), m.group(2))
+    try:
+        changes, resets = artistedit.parse(h.body_json())
+    except artistedit.Invalid as e:
+        raise HttpError(400, str(e))
+    save_artist_edits(h, lib, m.group(2), changes, resets)
+
+
+MB_RESULTS = 10
+MB_QUERY_MAX = 200
+
+
+def musicbrainz_failure(e):
+    """Un échec de MusicBrainz, rendu en réponse HTTP : 502, avec ce que MusicBrainz a dit."""
+    return HttpError(502, f"MusicBrainz : {e}")
+
+
+@route("GET", r"/api/artist/([\w-]+)/(\w+)/musicbrainz")
+def api_artist_musicbrainz_search(h, m, q):
+    """Les artistes que MusicBrainz trouve sous le nom `q` (200 caractères au plus ; 10 réponses au plus, de la plus à la moins pertinente) : `{"results": [{"mbid", "name", "type", "country", "disambiguation", "score"}]}`. Administrateur seulement."""
+    require_admin(h)
+    artist_albums(h.hub, m.group(1), m.group(2))
+    query = q.get("q", "").strip()
+    if not query or len(query) > MB_QUERY_MAX:
+        raise HttpError(400, f"q : de 1 à {MB_QUERY_MAX} caractères")
+    try:
+        found = enrich.musicbrainz(h.hub.cfg).search_artists(query, MB_RESULTS)
+    except enrich.MusicBrainzError as e:
+        raise musicbrainz_failure(e)
+    h.send_json({"results": [{"mbid": a.get("id", ""), "name": a.get("name", ""), "type": a.get("type", ""), "country": a.get("country", ""), "disambiguation": a.get("disambiguation", ""),
+                              "score": a.get("score", 0)} for a in found[:MB_RESULTS]]})
+
+
+@route("POST", r"/api/artist/([\w-]+)/(\w+)/musicbrainz")
+def api_artist_musicbrainz(h, m, q):
+    """Choisit la fiche MusicBrainz d'un artiste : `{"mbid": "<identifiant>"}` (ou l'adresse de sa fiche). Elle est demandée à MusicBrainz tout de suite (résumé, membres, liens) et passe avant celle de ses albums. `{"mbid": null}` revient au rapprochement automatique.
+    Les liens corrigés sont rangés sous la fiche : ils suivent celle qui est montrée. 400 pour un identifiant invalide, 502 si MusicBrainz ne répond pas ou ne connaît pas la fiche (rien n'est alors changé). Administrateur seulement. Rend `{"ok": true, "edited": [champs corrigés]}`."""
+    require_admin(h)
+    lib, _ = artist_albums(h.hub, m.group(1), m.group(2))
+    body = h.body_json()
+    if "mbid" in body and body["mbid"] is None:
+        save_artist_edits(h, lib, m.group(2), {}, ["mbid"])
+        return
+    try:
+        mbid = artistedit.mbid(body.get("mbid"))
+    except artistedit.Invalid as e:
+        raise HttpError(400, str(e))
+    try:
+        enrich.choose_artist(h.hub.cfg, h.hub.db, mbid)
+    except enrich.MusicBrainzError as e:
+        raise musicbrainz_failure(e)
+    save_artist_edits(h, lib, m.group(2), {"mbid": mbid}, [])
 
 
 @route("POST", r"/api/artist/([\w-]+)/(\w+)/photo/crop")
@@ -2883,22 +3017,27 @@ def send_sup(h, hub, entry, path, kind, index, cache):
 # ---------------------------------------------------------------------------
 # Images
 # ---------------------------------------------------------------------------
-POSTER_TYPES = ("movie", "show")
+POSTER_TYPES = ("movie", "show", "album")
+
+
+def admin_item(h, ident, types, refusal):
+    """L'item `ident` (administrateur seulement ; 404 s'il n'existe pas) quand son type est l'un de `types` ; 400 `refusal` sinon."""
+    require_admin(h)
+    item = h.hub.item(ident)
+    if item["type"] not in types:
+        h.discard_body()
+        raise HttpError(400, refusal)
+    return item
 
 
 def poster_item(h, ident):
-    """L'item dont on change l'affiche (administrateur) : un film ou une série."""
-    require_admin(h)
-    item = h.hub.item(ident)
-    if item["type"] not in POSTER_TYPES:
-        h.discard_body()
-        raise HttpError(400, "seuls un film ou une série ont une affiche à changer")
-    return item
+    """L'item dont on change l'affiche (administrateur) : un film, une série ou un album."""
+    return admin_item(h, ident, POSTER_TYPES, "seuls un film, une série ou un album ont une affiche à changer")
 
 
 @route("POST", r"/api/item/(\w+)/poster")
 def api_item_poster(h, m, q):
-    """Remplace l'affiche d'un film ou d'une série par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). Un WebP est converti en JPEG ; 415 s'il ne se lit pas, 501 si rien ne sait le convertir. L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque. Il n'y a pas de retour à l'affiche d'avant : la nouvelle devient l'affiche."""
+    """Remplace l'affiche d'un film ou d'une série, ou la pochette d'un album, par l'image envoyée (le corps de la requête : JPEG, PNG ou WebP, 10 Mo au plus). Un WebP est converti en JPEG ; 415 s'il ne se lit pas, 501 si rien ne sait le convertir. L'image reste dans HUB_DATA : rien n'est écrit dans la médiathèque. Une autre image remplace celle-ci ; pour revenir à l'image d'origine d'un album, `POST /api/item/<id>/edit` avec `{"poster": null}`."""
     item = poster_item(h, m.group(1))
     data = h.body_bytes(PHOTO_UPLOAD_MAX)
     ext = enrich.image_ext(data)
@@ -2913,6 +3052,36 @@ def api_item_poster(h, m, q):
             raise HttpError(415, str(e))
     h.hub.images.set_poster(item["id"], data, ext)
     h.send_json({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Corriger un album dans le hub
+# ---------------------------------------------------------------------------
+def edited_fields(hub, item):
+    """Les champs d'un album que l'administrateur a corrigés, dans l'ordre de `edits.FIELDS`, puis `poster` si une pochette a été choisie."""
+    kept = edits.kept(hub.db.kv_get(edits.key(item["lib"], item["id"])))
+    return edits.listed(kept) + (["poster"] if hub.db.kv_get(POSTER_KEY + item["id"]) else [])
+
+
+def edited_sheet(h, item):
+    """`{"edited": [...]}` pour l'administrateur seul : les autres comptes ne savent pas qu'un album a été corrigé."""
+    return {"edited": edited_fields(h.hub, item)} if h.user["role"] == "admin" else {}
+
+
+@route("POST", r"/api/item/(\w+)/edit")
+def api_item_edit(h, m, q):
+    """Corrige un album dans le hub (administrateur seulement), sans rien écrire dans la médiathèque : `{"title", "year", "genres", "label", "type", "poster"}`, un ou plusieurs champs ; `null` rétablit la valeur lue dans les étiquettes (pour `poster`, l'image d'origine : la pochette se choisit par `POST /api/item/<id>/poster`).
+    Titre de 1 à 300 caractères, année de quatre chiffres (de 1000 à l'an prochain), 20 genres de 60 caractères au plus, label de 200 au plus, type parmi `album`, `ep`, `single`, `compilation`, `live`, `soundtrack`, `remix` (le premier des types de sortie). 400 au moindre champ refusé : rien n'est gardé. Rend `{"ok": true, "edited": [champs corrigés]}`."""
+    item = admin_item(h, m.group(1), ("album",), "seul un album se corrige")
+    try:
+        changes, resets = edits.parse(h.body_json())
+    except edits.Invalid as e:
+        raise HttpError(400, str(e))
+    with edits.LOCK:          # le même verrou que le scan : deux administrateurs ne s'écrasent pas, et un scan n'écrit pas la bibliothèque entre la lecture de la ligne et sa réécriture
+        edits.save(h.hub.db, h.hub.item(item["id"]), changes, resets)          # la ligne est relue sous le verrou : celle d'avant peut avoir changé (un autre enregistrement, un scan)
+        if "poster" in resets:
+            h.hub.images.clear_poster(item["id"])
+    h.send_json({"ok": True, "edited": edited_fields(h.hub, item)})
 
 
 # ---------------------------------------------------------------------------
@@ -3460,11 +3629,18 @@ def requests_state(h):
 
 
 def requests_ready(h, seen, quality, ratings):
-    """Pour l'accueil : les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack`), chacune avec la vignette de l'élément (`card`, comme celles des rayons). Vide quand il n'en a pas."""
+    """Pour l'accueil : les demandes du compte arrivées dans une bibliothèque qu'il voit et qu'il n'a pas encore vues (`ack`). Un film ou une série : sa vignette (`card`, comme celles des rayons) ; un artiste : sa fiche (`artist`, voir requests.arrival), sans vignette. Vide quand il n'en a pas."""
     found = hub_requests.ready(h.hub.db, h.hub.cfg, h.user["id"], h.visible_ids())
-    rows = {row["id"]: row for row in items_by_id(h.hub.db, {item for _, item in found})} if found else {}
-    return [{"id": request["id"], "kind": request["kind"], "tmdb": request["tmdb"], "title": request["title"], "year": request["year"], "item": item, "card": with_seen(rows[item], seen, quality, ratings)}
-            for request, item in found if item in rows]
+    wanted = {place for request, place in found if request["kind"] != hub_requests.ARTIST}
+    rows = {row["id"]: row for row in items_by_id(h.hub.db, wanted)} if wanted else {}
+    return [requests_ready_entry(request, place, rows, seen, quality, ratings) for request, place in found if request["kind"] == hub_requests.ARTIST or place in rows]
+
+
+def requests_ready_entry(request, place, rows, seen, quality, ratings):
+    """Une demande arrivée pour l'accueil (voir requests_ready) : `place` est l'identifiant de l'élément (`rows` : ses lignes) ou, pour un artiste, sa fiche."""
+    if request["kind"] == hub_requests.ARTIST:
+        return {"id": request["id"], "kind": request["kind"], "title": request["title"], "year": request["year"], "artist": place, **hub_requests.mbid_fields(request)}
+    return {"id": request["id"], "kind": request["kind"], "tmdb": request["tmdb"], "title": request["title"], "year": request["year"], "item": place, "card": with_seen(rows[place], seen, quality, ratings)}
 
 
 def mark_requests(h, *lists):
@@ -3502,7 +3678,8 @@ def api_requests(h, m, q):
 
 @route("POST", r"/api/requests")
 def api_request_create(h, m, q):
-    """Le compte demande un film ou une série : `{"kind": "movie" | "show", "tmdb": <entier>, "note": "…", "title": "…", "year": "AAAA"}` (titre et année ne servent que si le serveur ne connaît pas le film).
+    """Le compte demande un film ou une série : `{"kind": "movie" | "show", "tmdb": <entier>, "note": "…", "title": "…", "year": "AAAA"}` (titre et année ne servent que si le serveur ne connaît pas le film),
+    ou un artiste : `{"kind": "artist", "name": "…", "note"?: "…"}` (1 à 200 caractères sans caractère de contrôle ; deux noms qui ne diffèrent que par la casse, les accents ou les espaces sont la même demande).
     201 : nouvelle demande ; 200 : le compte rejoint une demande existante, ou l'avait déjà faite. L'administrateur n'a pas de plafond."""
     if not h.user["can_request"]:
         h.discard_body()
@@ -3515,9 +3692,19 @@ def api_request_create(h, m, q):
     if done is None:
         return
     row, new = done
-    h.send_json({"id": row["id"], "kind": row["kind"], "tmdb": row["tmdb"], "status": row["status"], "mine": True}, 201 if new else 200)
-    if new and row["status"] == "pending" and describe is not None:
+    h.send_json(request_reply(row), 201 if new else 200)
+    if wants_posters(row, new, describe):
         fetch_request_posters(hub)
+
+
+def request_reply(row):
+    """La réponse à une demande faite ou rejointe : son identifiant, sa sorte, son état et `mine` ; `tmdb` sauf pour un artiste, qui n'en a pas."""
+    return {"id": row["id"], "kind": row["kind"], **({} if row["kind"] == hub_requests.ARTIST else {"tmdb": row["tmdb"]}), "status": row["status"], "mine": True}
+
+
+def wants_posters(row, new, describe):
+    """Faut-il lancer la tâche « Affiches des demandes » : après une demande **nouvelle** et en attente, quand le serveur a une clé TMDB (`describe`), sauf pour un artiste, qui n'a pas d'affiche."""
+    return new and row["status"] == "pending" and describe is not None and row["kind"] != hub_requests.ARTIST
 
 
 def fetch_request_posters(hub):
@@ -3531,7 +3718,7 @@ def fetch_request_posters(hub):
 def require_requester(h):
     """403 quand le compte n'a pas le droit « Peut demander »."""
     if not h.user["can_request"]:
-        raise HttpError(403, "tu n'as pas le droit de demander des films ni des séries")
+        raise HttpError(403, "tu n'as pas le droit de demander des films, des séries ni des artistes")
 
 
 @route("GET", r"/api/requests/search")
@@ -3559,13 +3746,26 @@ def api_request_search(h, m, q):
     h.send_json({"results": results})
 
 
+@route("GET", r"/api/requests/artists")
+def api_request_artists(h, m, q):
+    """Cherche dans MusicBrainz un artiste à demander : `q`, 1 à 200 caractères. Au plus 10 résultats, dans l'ordre de MusicBrainz : `{"results": [{"mbid", "name", "type", "country", "disambiguation", "begin", "end", "url", "request"?, "artist"?}]}` ;
+    `url` : sa fiche sur le site de MusicBrainz, `request` : la demande de ce nom (comme les résultats de TMDB), `artist` : l'artiste d'une bibliothèque de musique que le compte voit, quand il y est déjà (la règle du 409). Garde-fous : voir artist_search.py.
+    MusicBrainz injoignable, ou la recherche occupée : 502 ou 503 en français, qui disent d'envoyer le nom tel quel (`POST /api/requests` sans `mbid`)."""
+    require_requester(h)
+    text = request_call(artist_search.search_text, q.get("q"))
+    hub = h.hub
+    request_call(hub.artist_finder.pace.take, h.user["id"])
+    results = request_call(hub.artist_finder.search, text)
+    h.send_json({"results": hub_requests.artist_results(hub.db, hub.cfg, h.user["id"], results, h.visible_ids())})
+
+
 @route("GET", r"/img/request/([0-9]{1,15})")
 def request_image(h, m, q):
     """L'affiche d'une demande (HUB_DATA/tmdb, voir request_search.fetch_posters), pour ses demandeurs et l'administrateur ; 404 sans affiche, et pour la demande d'un autre (comme une inconnue)."""
     hub = h.hub
     row = hub.db.one("SELECT r.kind, r.tmdb FROM requests r WHERE r.id=? AND (? OR EXISTS (SELECT 1 FROM request_users u WHERE u.request_id = r.id AND u.user_id=?))",
                      (int(m.group(1)), h.user["role"] == "admin", h.user["id"]))
-    if row is None:
+    if row is None or row["kind"] == hub_requests.ARTIST:              # un artiste n'a pas d'affiche
         raise HttpError(404, "pas d'affiche")
     send_poster(h, q, f"request:{row['kind']}:{row['tmdb']}", hub.cfg.data / "tmdb" / hub_requests.poster_file(row["kind"], row["tmdb"]))
 

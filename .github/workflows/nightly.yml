@@ -2,7 +2,7 @@ name: Nuit
 
 # Les passes longues de « faire bien » (skill ub-mode), sur tout hub/, une fois par nuit plutôt qu'à chaque PR :
 #   crapper : aucune fonction de hub/ au-dessus de CRAP 10, avec l'interface dans Chromium (Playwright) pour la couverture ;
-#   mutator : la passe de mutation, en parties parallèles (hub/server sur dix jobs), sans Playwright, chacune avec son cache différentiel
+#   mutator : la passe de mutation, en parties parallèles (hub/server sur onze jobs), sans Playwright, chacune avec son cache différentiel
 #             et ses seuls modules de tests (toute la suite par mutant ne tenait pas dans un job : voir « tests »).
 #             .github/scripts/mutate_part.py la lance fichier par fichier, et par tranches pour un long fichier :
 #             une partie arrêtée à la limite du job reprend à la passe suivante.
@@ -26,18 +26,21 @@ env:
   # Les deux outils ne sont pas versionnés : on les épingle, pour qu'une passe se rejoue à l'identique.
   # crapper l'est dans .github/actions/setup, au même commit que dans mutator.yml.
   MUTATOR_REF: a5a0cb803b66e0cdb8bf471b3b08af701d424a41
-  # Les modules de tests des dix parts de « serveur » (voir la matrice de mutator) : ceux du serveur, plus ceux qui
+  # Les modules de tests des onze parts de « serveur » (voir la matrice de mutator) : ceux du serveur, plus ceux qui
   # appellent ses routes sans porter son nom (activité, sauvegarde, téléchargements, étiquettes, avis, demandes,
   # suggestions). Sans eux, la tranche des demandes et des suggestions gardait 29 survivants pour 6 tués (run 44567224895).
   # Environ un tiers de temps en plus par mutant ; une tranche de 140 mutations prend alors un peu plus de 4 h.
   # Les routes des personnes (/api/person, /api/enrich/person et /api/enrich/people) et la suite d'une saga (/api/play) sont dans
   # test_person_films, test_enrich_people et test_saga_next : 6 s au total, et 16 survivants de la nuit du 20 novembre (run 44715189607).
   # « Télécharger à distance » (Handler.can et require) est dans test_remote : 18 s, et 3 survivants de la passe 44781939687.
+  # Les corrections d'album et d'artiste (routes /api/music/…/edit, noms affichés) sont dans test_album_edit et test_artist_edit :
+  # 21 s, et 6 survivants de la passe 45008874591.
   SERVEUR_TESTS: >-
     tests/test_server*.py tests/test_range.py tests/test_autoscan.py tests/test_jobs.py
     tests/test_activity.py tests/test_backup.py tests/test_downloads.py tests/test_labels.py tests/test_labels_hostile.py tests/test_ratings.py
-    tests/test_request_search*.py tests/test_requests.py tests/test_suggestions.py
+    tests/test_request_search*.py tests/test_artist_search.py tests/test_requests.py tests/test_suggestions.py
     tests/test_person_films.py tests/test_enrich_people.py tests/test_saga_next.py tests/test_remote.py
+    tests/test_album_edit.py tests/test_artist_edit.py
 
 jobs:
   changes:
@@ -102,25 +105,28 @@ jobs:
       # Coût accepté : un mutant tué seulement par un test d'un autre module passe pour survivant.
       matrix:
         include:
-          # hub/server sur dix jobs, une tranche de 400 lignes de app.py chacun (le premier : __init__.py et jobs.py).
+          # hub/server sur onze jobs, une tranche de 400 lignes de app.py chacun (le premier : __init__.py et jobs.py).
           # mutator repère un mutant par sa position dans le fichier : une ligne ajoutée en haut de app.py fait refaire
           # tout le fichier, environ 15 h de calcul. En un seul job, il ne finissait jamais (runs 44282081246, 44504034976).
-          # Tests : SERVEUR_TESTS. Si app.py dépasse 3600 lignes, un job reçoit deux tranches : ajouter une part.
-          - {part: serveur-1, share: 1/10, paths: hub/server}
-          - {part: serveur-2, share: 2/10, paths: hub/server}
-          - {part: serveur-3, share: 3/10, paths: hub/server}
-          - {part: serveur-4, share: 4/10, paths: hub/server}
-          - {part: serveur-5, share: 5/10, paths: hub/server}
-          - {part: serveur-6, share: 6/10, paths: hub/server}
-          - {part: serveur-7, share: 7/10, paths: hub/server}
-          - {part: serveur-8, share: 8/10, paths: hub/server}
-          - {part: serveur-9, share: 9/10, paths: hub/server}
-          - {part: serveur-10, share: 10/10, paths: hub/server}
+          # Tests : SERVEUR_TESTS. Si app.py dépasse 4000 lignes, un job reçoit une tranche et autre chose, et dépasse
+          # 350 min (run 44890954001) : ajouter une part. tests.test_ci_mutate_part le signale dès la PR qui franchit le seuil.
+          - {part: serveur-1, share: 1/11, paths: hub/server}
+          - {part: serveur-2, share: 2/11, paths: hub/server}
+          - {part: serveur-3, share: 3/11, paths: hub/server}
+          - {part: serveur-4, share: 4/11, paths: hub/server}
+          - {part: serveur-5, share: 5/11, paths: hub/server}
+          - {part: serveur-6, share: 6/11, paths: hub/server}
+          - {part: serveur-7, share: 7/11, paths: hub/server}
+          - {part: serveur-8, share: 8/11, paths: hub/server}
+          - {part: serveur-9, share: 9/11, paths: hub/server}
+          - {part: serveur-10, share: 10/11, paths: hub/server}
+          - {part: serveur-11, share: 11/11, paths: hub/server}
           # scan et media ont fait perdre leur machine deux fois quand ils étaient ensemble (cause non établie : mémoire ?).
           # Séparés pour savoir lequel, moins de mutants à la fois, et une limite de mémoire par lancement de tests.
           - part: scan
             paths: hub/scan
-            tests: tests/test_scan.py tests/test_video_scan.py
+            # test_album_edit : scan/edits.py (corrections d'album réappliquées au scan), 31 survivants sans lui (passe 45008874591).
+            tests: tests/test_scan.py tests/test_video_scan.py tests/test_album_edit.py
             workers: 2
             memory_mb: 4096
           - part: media
@@ -132,7 +138,8 @@ jobs:
             memory_mb: 4096
           - part: donnees
             paths: hub/db.py hub/accounts.py hub/requests.py hub/inbox.py
-            tests: tests/test_database.py tests/test_accounts.py tests/test_throttle.py tests/test_requests.py tests/test_inbox*.py
+            # test_artist_search : requests.artist_results (les demandes d'artiste dans une recherche), 2 survivants sans lui (passe 45008874591).
+            tests: tests/test_database.py tests/test_accounts.py tests/test_throttle.py tests/test_requests.py tests/test_inbox*.py tests/test_artist_search.py
           # Le reste des modules de hub/ : calculé à l'exécution, en retirant ceux de « donnees » (garder les deux listes d'accord).
           # Sans « tests », chaque fichier a les siens (voir mutate_part.py).
           - part: reste

@@ -17,7 +17,7 @@ from collections import Counter
 from functools import partial
 from pathlib import Path
 
-from .requests import TABLES as REQUEST_TABLES
+from .requests import REQUEST_INDEXES, TABLES as REQUEST_TABLES, requests_table
 from .suggestions import REPORT_COLUMNS, TABLES as SUGGESTION_TABLES
 
 ITEM_COLUMNS = {"title", "sort", "letter", "year", "summary", "genres", "grp", "meta", "added", "count"}      # ce que update_item_meta peut changer
@@ -55,6 +55,34 @@ def _create_requests(conn):
     _add_column(conn, "users", "can_request", "INTEGER NOT NULL DEFAULT 1")
 
 
+def _recreate_requests(conn):
+    """12 (suite) : la table `requests` refaite avec ses nouvelles contraintes, par la procédure de SQLite : une table neuve, les lignes recopiées avec leur `id`, l'ancienne supprimée, la neuve renommée. Dans la transaction de la migration.
+    `request_users` n'a pas de clé étrangère : les identifiants conservés suffisent. Un déclencheur ou une vue sur la table ne survivraient pas à la suppression : on s'arrête avant de rien toucher. La suite des identifiants (AUTOINCREMENT) est reportée,
+    pour qu'une demande retirée ne voie pas son identifiant redonné."""
+    depends = conn.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'view') AND (tbl_name='requests' OR sql LIKE '%requests%')").fetchall()
+    if depends:
+        raise RuntimeError(f"un déclencheur ou une vue dépend de la table des demandes ({', '.join(r['name'] for r in depends)}) : elle ne peut pas être refaite")
+    row = conn.execute("SELECT seq FROM sqlite_sequence WHERE name='requests'").fetchone()
+    conn.execute(requests_table("requests_new"))
+    conn.execute("INSERT INTO requests_new(id, kind, tmdb, title, year, status, reason, created, updated) SELECT id, kind, tmdb, title, year, status, reason, created, updated FROM requests")
+    if row and not conn.execute("UPDATE sqlite_sequence SET seq=MAX(seq, ?) WHERE name='requests_new'", (row["seq"],)).rowcount:
+        conn.execute("INSERT INTO sqlite_sequence(name, seq) VALUES('requests_new', ?)", (row["seq"],))
+    conn.execute("DROP TABLE requests")
+    conn.execute("ALTER TABLE requests_new RENAME TO requests")
+
+
+def _create_request_indexes(conn):
+    for statement in REQUEST_INDEXES:
+        conn.execute(statement)
+
+
+def _rebuild_requests(conn):
+    """12 : une demande peut ne pas venir de TMDB (`kind` `artist`, désignée par son nom : `tmdb` devient facultatif, `name_key` garde le nom comparable, `mbid` l'identifiant MusicBrainz choisi) ; l'unicité passe à deux index partiels (voir requests.py). La table d'une base passée par la 8 depuis la 7 est déjà à la nouvelle forme (SCHEMA l'a créée) : seuls les index se créent."""
+    if "name_key" not in [r["name"] for r in conn.execute("SELECT name FROM pragma_table_info('requests')")]:
+        _recreate_requests(conn)
+    _create_request_indexes(conn)
+
+
 def _add_report_columns(conn):
     """10 : les colonnes d'un signalement sur `suggestions` (voir suggestions.py), vides pour les lignes d'avant. `_add_column` saute une colonne déjà là : une base passée par la 9 depuis la 8 (table neuve) ne se rejoue pas."""
     for column, definition in REPORT_COLUMNS.items():
@@ -74,6 +102,7 @@ def _create_suggestions(conn):
 # 9 : les suggestions (table `suggestions`, voir suggestions.py), qui ne change aucune table existante.
 # 10 : les signalements : cinq colonnes ajoutées à `suggestions` (`item_id`, `entry_id`, `cause`, `subject`, `context`), vides pour les lignes d'avant ; aucune ligne ne change.
 # 11 : la colonne `users.remote_download` (« Télécharger à distance »), qui vaut 1 pour les comptes d'avant : rien ne change pour eux, l'administrateur retire le droit.
+# 12 : la table `requests` refaite (recopiée avec ses identifiants) : `tmdb` facultatif, colonnes `name_key` et `mbid`, sorte `artist`, deux index uniques partiels à la place de UNIQUE(kind, tmdb) ; aucune ligne ne change.
 # (Une virgule doit précéder chaque numéro : .github/scripts/check_version.py lit ces clés dans le texte.)
 MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition="INTEGER NOT NULL DEFAULT 1"),
               5: partial(_add_column, table="users", column="can_upload", definition="INTEGER NOT NULL DEFAULT 0"),
@@ -82,8 +111,9 @@ MIGRATIONS = {4: partial(_add_column, table="rights", column="play", definition=
               8: _create_requests,
               9: _create_suggestions,
               10: _add_report_columns,
-              11: partial(_add_column, table="users", column="remote_download", definition="INTEGER NOT NULL DEFAULT 1")}
-SCHEMA_VERSION = 11         # 11 : colonne `users.remote_download` (le droit « Télécharger à distance ») ; 10 : colonnes `item_id`, `entry_id`, `cause`, `subject`, `context` de `suggestions` (signaler un titre qui pose problème) ; 9 : table `suggestions` (idées et remarques sur le hub, pour l'administrateur) ; 8 : tables `requests` et `request_users` (les demandes), colonne `users.can_request` ; 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
+              11: partial(_add_column, table="users", column="remote_download", definition="INTEGER NOT NULL DEFAULT 1"),
+              12: _rebuild_requests}
+SCHEMA_VERSION = 12         # 12 : la table `requests` accepte les demandes d'artistes (`tmdb` facultatif, `name_key`, `mbid`, index uniques partiels) ; 11 : colonne `users.remote_download` (le droit « Télécharger à distance ») ; 10 : colonnes `item_id`, `entry_id`, `cause`, `subject`, `context` de `suggestions` (signaler un titre qui pose problème) ; 9 : table `suggestions` (idées et remarques sur le hub, pour l'administrateur) ; 8 : tables `requests` et `request_users` (les demandes), colonne `users.can_request` ; 7 : table `ratings` (l'avis personnel d'un compte sur un film ou une série) ; 6 : colonne `users.inbox_dir` (le dossier du compte dans la boîte de réception, fixé une fois) ; 5 : colonne `users.can_upload` (envoyer dans la boîte de réception) ; 2 : table `users` (comptes) ; 3 : table `rights` (droits par compte et par bibliothèque) ; 4 : colonne `rights.play` (lire). Une table manquante est créée au démarrage (CREATE IF NOT EXISTS), rien d'existant n'est touché
 
 RATINGS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS ratings(
@@ -241,6 +271,7 @@ class Database:
                 conn.rollback()
                 raise RuntimeError(f"la migration de la base vers la version {version} a échoué ({e}) : la base est restée en version {version - 1}") from e
         if not row:
+            _create_request_indexes(conn)          # une base neuve : SCHEMA n'a pas pu les créer (voir requests.REQUEST_INDEXES)
             conn.execute("INSERT INTO kv(key, value) VALUES('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA_VERSION),))
             conn.commit()
 
@@ -346,6 +377,12 @@ class Database:
         if sets:
             self.execute(f"UPDATE items SET {', '.join(sets)} WHERE id=?", (*params, item_id))
             self.items_changed()
+
+    def rewrite_item(self, row):
+        """Réécrit titre, tri, initiale, année, genres et `meta` d'un item d'après `row` (le résultat de scan.edits.apply) : une correction faite dans le hub, qui peut aussi retirer une clé de `meta`, ce que `update_item_meta` ne fait pas."""
+        self.execute("UPDATE items SET title=?, sort=?, letter=?, year=?, genres=?, meta=? WHERE id=?",
+                     (row["title"], row["sort"], row["letter"], row["year"], row["genres"], row["meta"], row["id"]))
+        self.items_changed()
 
     # --- Progression ---------------------------------------------------------
     def save_progress(self, profile, entry_id, position, duration, done):

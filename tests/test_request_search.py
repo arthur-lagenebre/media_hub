@@ -24,7 +24,7 @@ from libraries.video import tmdb as tmdb_module
 from libraries.video.tmdb import TmdbAuthError, TmdbError
 
 KEY = "cle-tmdb-tres-secrete-0123456789"
-SEARCH_FORBIDDEN = "tu n'as pas le droit de demander des films ni des séries"
+SEARCH_FORBIDDEN = "tu n'as pas le droit de demander des films, des séries ni des artistes"
 UNREACHABLE = {"error": "TMDB ne répond pas, réessaie plus tard"}
 
 
@@ -153,8 +153,9 @@ class TestSearching(SearchCase):
             self.assertEqual((reply.status, reply.json()), (400, message), text)
         reply = self.get(self.alice, "/api/requests/search")
         self.assertEqual((reply.status, reply.json()), (400, message))
-        reply = self.search(self.alice, "film", "album")
-        self.assertEqual((reply.status, reply.json()), (400, {"error": "sorte de demande inconnue (movie ou show)"}))
+        for kind in ("album", "artist"):
+            reply = self.search(self.alice, "film", kind)
+            self.assertEqual((reply.status, reply.json()), (400, {"error": "sorte de demande inconnue (movie ou show)"}), kind)          # un artiste ne se cherche pas dans TMDB
         self.assertEqual(self.tmdb.calls, [])
         self.assertEqual(self.search(self.alice, "  " + "x" * 100 + "  ").status, 200)
         self.assertEqual(self.search(self.alice, "ab").status, 200)
@@ -442,6 +443,12 @@ class TestAskingFromAResult(SearchCase):
         self.ask(self.alice, 1)                                          # déjà là : 409
         self.assertEqual(self.hub.jobs.request_posters.call_count, 1)
 
+    def test_an_artist_asks_nothing_of_tmdb_and_starts_no_poster_task_even_with_a_key(self):
+        reply = self.post(self.alice, "/api/requests", {"kind": "artist", "name": "Air"})
+        self.assertEqual((reply.status, reply.json()["kind"]), (201, "artist"))
+        self.assertEqual(self.tmdb.calls, [])
+        self.hub.jobs.request_posters.assert_not_called()
+
     def test_creations_asking_tmdb_count_in_the_pace_of_the_account(self):
         for n in range(30):
             self.assertEqual(self.ask(self.alice, 1000 + n, "show").status, 404, n)            # inconnus de TMDB : rien n'est créé, mais l'appel a eu lieu
@@ -502,6 +509,12 @@ class TestPosters(SearchCase):
         self.fetch()
         self.assertNotIn("movie/2", self.tmdb.calls)
         self.assertNotIn("tv/78", self.tmdb.calls)
+
+    def test_an_artist_request_has_no_poster_to_fetch_and_the_others_still_are(self):
+        self.assertEqual(self.post(self.alice, "/api/requests", {"kind": "artist", "name": "Air"}).status, 201)
+        self.assertEqual(self.fetch(), {"saved": 2, "failed": 1, "without": 2})
+        self.assertEqual(self.log[-1], "2 affiche(s) téléchargée(s), 2 sans affiche sur TMDB, 1 échec(s).")
+        self.assertEqual([c for c in self.tmdb.calls if "None" in c or "air" in c.lower()], [])
 
     def test_tmdb_down_fails_each_poster_and_a_refused_key_fails_the_job(self):
         self.tmdb.error = TmdbError("<urlopen error timed out>")

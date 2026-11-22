@@ -1,3 +1,19 @@
+## 0.55.0 — 2026-11-22
+- Tu peux maintenant demander un artiste : choisis « Artiste » dans « Nouvelle demande », cherche-le parmi les fiches MusicBrainz, ou envoie simplement le nom que tu as tapé.
+- Ta demande passe à « Ajoutée » toute seule dès qu'un album de cet artiste arrive dans la musique, et elle s'affiche sur ton accueil comme celle d'un film.
+- Si plusieurs personnes demandent le même artiste, même écrit autrement (accents, majuscules, apostrophes), c'est une seule demande.
+
+## 0.54.0 — 2026-11-21
+- L'administrateur peut corriger la fiche d'un artiste depuis sa page : son nom, ses genres, son résumé, son pays et ses années d'activité. Le nouveau nom se voit partout dans le hub : liste des artistes, albums, lecteur et recherche.
+- Quand un artiste a été confondu avec un homonyme, il peut choisir la bonne fiche MusicBrainz, ou revenir au choix automatique.
+- Chaque champ corrigé se rétablit d'un clic. Rien n'est écrit dans tes fichiers de musique : ils gardent le nom d'origine.
+
+## 0.53.0 — 2026-11-21
+- L'administrateur peut corriger un album depuis sa fiche : son titre, son année, ses genres, son label et son type (album, EP, single…). La correction se voit partout dans le hub et reste après un nouveau scan.
+- Chaque champ corrigé se rétablit d'un clic, et revient tout de suite à ce que disent les fichiers.
+- Il peut aussi donner une autre pochette à un album, ou revenir à la sienne.
+- Rien n'est écrit dans tes fichiers de musique : pour corriger le fichier lui-même, passe par l'atelier.
+
 ## 0.52.0 — 2026-11-21
 - L'administrateur peut corriger la fiche d'une personne depuis sa page : sa biographie, son métier, ses dates et son lieu de naissance. Une nouvelle recherche sur TMDB ne défait pas ces corrections, et « Tout reprendre de TMDB » les efface.
 - Il peut aussi lui donner une autre photo, la recadrer, ou revenir à celle de TMDB.
