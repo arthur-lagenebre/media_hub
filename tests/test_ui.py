@@ -204,6 +204,13 @@ class UiCase(unittest.TestCase):
     def view(self, selector="", **kw):
         return self.page.locator(f"#views > .view:visible {selector}".strip(), **kw)
 
+    def shown_form(self):
+        """La fenêtre de champs, une fois H.form installé : il sélectionne le texte du premier champ ~30 ms après l'ouverture (le focus, lui, y est dès l'ouverture) ; un `fill` plus tôt peut écrire dans ce champ.
+        Attendre seulement le focus ne suffit pas (TestPersonSheetEditUi, TestAlbumEditUi : une saisie sur 150 dans le mauvais champ). Un premier champ vide n'a rien à sélectionner : le focus suffit alors."""
+        form = self.page.locator(".menu.form")
+        self.page.wait_for_function("(() => { var f = document.querySelector('.menu.form textarea, .menu.form input'); return f && document.activeElement === f && (!f.value || (f.selectionStart === 0 && f.selectionEnd === f.value.length)) })()")
+        return form
+
     def shown(self, hash):
         """Attend que la page d'adresse `hash` soit affichée. L'adresse change un instant avant que la page suive (`hashchange`) : jusque-là, `view()` désigne encore l'ancienne page, cartes et titre compris."""
         self.page.wait_for_function("h => { var c = window.Hub.current(); return !!c && c.hash === h && c.el.style.display !== 'none'; }", arg=hash)
@@ -4905,9 +4912,7 @@ class TestArtistEditUi(UiCase):
     def open_form(self):
         self.open_sheet()
         self.view(".actions [data-key=artist-edit]").click()
-        form = self.page.locator(".menu.form")
-        expect(form.locator("input").first).to_be_focused()            # la fenêtre donne le focus à son premier champ un instant après s'ouvrir
-        return form
+        return self.shown_form()
 
     def field(self, form, label):
         return form.locator(".flab", has_text=label).locator("input, textarea")
@@ -6766,12 +6771,6 @@ class TestPersonSheetEditUi(UiCase):
     def edits(self):
         return self.run_.hub.db.kv_get("personedit:8400")
 
-    def shown_form(self):
-        """La fenêtre de champs, une fois H.form installé : il sélectionne le texte du premier champ ~30 ms après l'ouverture (le focus, lui, y est dès l'ouverture) ; un `fill` plus tôt peut écrire dans ce champ."""
-        form = self.page.locator(".menu.form")
-        self.page.wait_for_function("(() => { var f = document.querySelector('.menu.form textarea, .menu.form input'); return f && document.activeElement === f && f.value && f.selectionStart === 0 && f.selectionEnd === f.value.length })()")
-        return form
-
     def open_form(self):
         self.person()
         self.view(".hero [data-key=person-edit]").click()
@@ -7315,12 +7314,7 @@ class TestAlbumEditUi(UiCase):
     def open_form(self):
         self.open_sheet()
         self.view(".actions [data-key=album-edit]").click()
-        return self.ready(self.page.locator(".menu.form"))
-
-    def ready(self, form):
-        """Attend que la fenêtre ait donné le focus à son premier champ : elle le fait un instant après s'être ouverte, et ce qu'on saisit avant irait dans le mauvais champ."""
-        expect(form.locator("input").first).to_be_focused()
-        return form
+        return self.shown_form()
 
     def field(self, form, label):
         return form.locator(".flab", has_text=label).locator("input")
@@ -7342,7 +7336,7 @@ class TestAlbumEditUi(UiCase):
         self.view(".grid .card", has_text="Discovery").click()
         self.view(".trk").first.wait_for()
         self.view(".actions [data-key=album-edit]").click()
-        form = self.ready(self.page.locator(".menu.form"))
+        form = self.shown_form()
         expect(form).to_contain_text("La correction ne vaut que dans le hub. Pour corriger le fichier, passe par l’atelier.")
         expect(self.field(form, "Titre")).to_have_value("Discovery")
         expect(self.field(form, "Année")).to_have_value("2001")
@@ -7517,7 +7511,7 @@ class TestAlbumEditUi(UiCase):
         expect(self.view(".actions [data-key=album-edit]")).to_have_text("Edit album")
         expect(self.view(".actions", has_text="Change cover")).to_be_visible()
         self.view(".actions [data-key=album-edit]").click()
-        form = self.ready(self.page.locator(".menu.form"))
+        form = self.shown_form()
         expect(form).to_contain_text("This correction only applies in the hub. To fix the file itself, use the workshop.")
         expect(form.locator("[data-key=restore-title]")).to_have_text("Restore")
         self.field(form, "Year").fill("12")
