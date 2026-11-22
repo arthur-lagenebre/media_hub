@@ -1,0 +1,8 @@
+[
+  {
+    "file": "hub/backup.py",
+    "line": "return sqlite3.connect(f\"file:{path}?mode=ro\", uri=True, **options)",
+    "mutation": "True -> False",
+    "why": "Sous Linux (la CI, le NAS), SQLite lit « file: » comme une URI même sans uri=True (compilé avec SQLITE_USE_URI) : le mutant ne change rien. Sous Windows il ouvre un autre fichier et les tests de test_backup le tuent."
+  }
+]

@@ -10,16 +10,21 @@ chacun lance une unité sur N (un fichier, ou une tranche d'un long fichier).
 
 Un mutant survivant ne fait pas échouer ce script : il est signalé dans `survived` (sortie de
 l'étape), pour que la règle de saut distingue « traité, avec survivants » de « pas allé au bout ».
+Un survivant listé dans `.github/mutants-equivalents.json` (sans effet observable, la raison écrite)
+n'y compte pas : mutator n'a pas de marque « à ignorer » pour Python.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-BATCH_LINES = 400     # hub/server/app.py : 3300 lignes et 850 mutations, soit une centaine par tranche
+EQUIVALENTS = ".github/mutants-equivalents.json"     # les survivants acceptés, chacun avec sa raison : ils ne rendent pas la partie rouge
+BATCH_LINES = 400    # hub/server/app.py : 3300 lignes et 850 mutations, soit une centaine par tranche
 SURVIVED = 3          # code de sortie de mutator quand un mutant survit
 # Modules dont les tests ne portent pas (tous) le nom : sans cela, toute la suite pour chaque mutant, ou de faux survivants.
 OWN_TESTS = {
@@ -90,27 +95,76 @@ def plan_part(root: Path, paths: list[str], tests: str, *, python: str, mutator:
     return commands
 
 
-def run_plan(commands: list[list[str]], execute) -> tuple[int, bool]:
-    """Le code de sortie de la partie, et s'il reste des survivants."""
+Survivor = tuple[str, int, str]      # (fichier, ligne, mutation), tel que mutator l'écrit : « SURVIVED  hub/x.py:12 True -> False »
+SURVIVOR_LINE = re.compile(r"SURVIVED\s+(\S+):(\d+) (.+)")
+
+
+def run_plan(commands: list[list[str]], execute) -> tuple[int, bool, list[Survivor]]:
+    """Le code de sortie de la partie, si mutator a dit qu'un mutant survit, et les survivants qu'il a écrits."""
     failure = 0
     survived = False
+    found: list[Survivor] = []
     for index, command in enumerate(commands):
-        code = execute(command)
+        code, survivors = execute(command)
+        found += survivors
         if code == SURVIVED:
             survived = True
         elif code:
             failure = failure or code
             if index == 0:     # il mesurait la couverture : les suivants n'auraient rien à lire
                 break
-    return failure, survived
+    return failure, survived, found
 
 
-def execute(command: list[str]) -> int:
+def survivors(lines) -> list[Survivor]:
+    found = []
+    for line in lines:
+        match = SURVIVOR_LINE.fullmatch(line.strip())
+        if match:
+            found.append((match[1], int(match[2]), match[3]))
+    return found
+
+
+def load_equivalents(path: Path) -> list[dict]:
+    """Les mutants acceptés comme équivalents (sans effet observable), chacun avec sa raison : voir .github/mutants-equivalents.json."""
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+
+
+def unaccepted(found: list[Survivor], root: Path, accepted: list[dict]) -> list[Survivor]:
+    """Les survivants qui ne sont pas dans `accepted`. Un mutant accepté se reconnaît au fichier, au texte de sa ligne et à la mutation,
+    pas au numéro de ligne : il le reste quand des lignes s'ajoutent au-dessus, et ne l'est plus si sa ligne change."""
+    keys = {(entry["file"], entry["line"], entry["mutation"]) for entry in accepted}
+    texts: dict[str, list[str]] = {}
+
+    def text(name: str, number: int) -> str:
+        if name not in texts:
+            path = root / name
+            texts[name] = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+        lines = texts[name]
+        return lines[number - 1].strip() if 0 < number <= len(lines) else ""
+
+    return [s for s in found if (s[0], text(s[0], s[1]), s[2]) not in keys]
+
+
+def conclude(outcome: tuple[int, bool, list[Survivor]], root: Path, accepted: list[dict]) -> tuple[int, bool, list[Survivor]]:
+    """(code de sortie, la partie reste-t-elle rouge, les survivants non acceptés). Un « survivant » de mutator dont on n'a lu
+    aucune ligne (format changé ?) laisse la partie rouge : mieux vaut un faux rouge qu'un survivant passé sous silence."""
+    failure, survived, found = outcome
+    remaining = unaccepted(found, root, accepted)
+    return failure, survived and (bool(remaining) or not found), remaining
+
+
+def execute(command: list[str]) -> tuple[int, list[Survivor]]:
+    """Lance mutator en recopiant sa sortie au fur et à mesure, et rend son code de sortie avec les survivants qu'il a écrits."""
     lines = "--lines" in command
     print(f"::group::mutator {command[-1]}{' (tranche)' if lines else ''} : {command[2]}", flush=True)
-    code = subprocess.run(command, check=False).returncode
+    printed = []
+    with subprocess.Popen(command, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace") as process:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            printed.append(line)
     print("::endgroup::", flush=True)
-    return code
+    return process.returncode, survivors(printed)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -126,7 +180,12 @@ def main(argv: list[str] | None = None) -> int:
     python = os.path.abspath(".venv/bin/python")
     commands = plan_part(Path.cwd(), args.paths, args.tests, python=python, mutator=args.mutator,
                          workers=args.workers, memory_mb=args.memory_mb, share=args.share)
-    failure, survived = run_plan(commands, execute)
+    root = Path.cwd()
+    accepted = load_equivalents(root / EQUIVALENTS)
+    failure, survived, remaining = conclude(run_plan(commands, execute), root, accepted)
+    print(f"Survivants hors de {EQUIVALENTS} : {len(remaining)}", flush=True)
+    for name, number, mutation in remaining:
+        print(f"  {name}:{number} {mutation}", flush=True)
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as stream:

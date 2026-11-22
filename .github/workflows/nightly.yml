@@ -225,7 +225,8 @@ jobs:
             media_hub/.metrics/crap.edn
             media_hub/mutator.log
 
-      # En dernier, pour que résultats et résumé soient gardés : le job reste rouge tant qu'un mutant survit.
+      # En dernier, pour que résultats et résumé soient gardés : le job reste rouge tant qu'un mutant survit,
+      # sauf ceux de .github/mutants-equivalents.json (sans effet observable, la raison écrite ; voir mutate_part.py).
       - name: Survivants
         if: steps.mutator.outputs.survived == 'true'
         run: |

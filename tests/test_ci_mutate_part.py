@@ -144,22 +144,67 @@ class TestOutcome(unittest.TestCase):
 
         def execute(command):
             seen.append(command)
-            return codes[len(seen) - 1]
+            code = codes[len(seen) - 1]
+            return code, [(f"hub/{command[0]}.py", 1, "True -> False")] if code == 3 else []
 
         return part.run_plan([[str(i)] for i in range(len(codes))], execute), len(seen)
 
     def test_everything_killed(self):
-        self.assertEqual(self.run_plan([0, 0]), ((0, False), 2))
+        self.assertEqual(self.run_plan([0, 0]), ((0, False, []), 2))
 
     def test_a_survivor_is_reported_without_failing_and_the_rest_still_runs(self):
-        self.assertEqual(self.run_plan([0, 3, 0]), ((0, True), 3))
+        self.assertEqual(self.run_plan([0, 3, 0]), ((0, True, [("hub/1.py", 1, "True -> False")]), 3))
 
     def test_a_broken_baseline_fails_but_the_other_files_still_run(self):
-        self.assertEqual(self.run_plan([0, 2, 3]), ((2, True), 3))
+        self.assertEqual(self.run_plan([0, 2, 3]), ((2, True, [("hub/2.py", 1, "True -> False")]), 3))
 
     def test_a_failure_of_the_first_command_stops_everything(self):
         # Il mesure la couverture : sans elle, les suivants n'auraient rien à lire.
-        self.assertEqual(self.run_plan([1, 0, 0]), ((1, False), 1))
+        self.assertEqual(self.run_plan([1, 0, 0]), ((1, False, []), 1))
+
+
+class TestEquivalentMutants(ProjectCase):
+    """Les mutants acceptés (`.github/mutants-equivalents.json`) : reconnus par le fichier, le texte de la ligne et la mutation, pas par le numéro de ligne."""
+
+    WHY = "sans effet : la raison est écrite"
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "hub").mkdir()
+        (self.root / "hub" / "base.py").write_text("import sqlite3\n\nconn = sqlite3.connect(name, uri=True)\n", encoding="utf-8")
+        self.accepted = [{"file": "hub/base.py", "line": "conn = sqlite3.connect(name, uri=True)", "mutation": "True -> False", "why": self.WHY}]
+
+    def test_mutator_lines_give_the_survivors_and_nothing_else(self):
+        out = ["KILLED    hub/base.py:1 == -> !=\n", "SURVIVED  hub/base.py:3 True -> False\n", "UNCOVERED hub/base.py:3 and -> or\n", "Total  1  1  0  2  50.0%\n"]
+        self.assertEqual(part.survivors(out), [("hub/base.py", 3, "True -> False")])
+
+    def test_an_accepted_survivor_is_recognised_wherever_its_line_has_moved(self):
+        self.assertEqual(part.unaccepted([("hub/base.py", 3, "True -> False")], self.root, self.accepted), [])
+        (self.root / "hub" / "base.py").write_text("import sqlite3\nimport json\n\n    conn = sqlite3.connect(name, uri=True)\n", encoding="utf-8")
+        self.assertEqual(part.unaccepted([("hub/base.py", 4, "True -> False")], self.root, self.accepted), [])
+
+    def test_another_mutation_another_line_or_another_file_is_not_accepted(self):
+        others = [("hub/base.py", 3, "delete not"), ("hub/base.py", 1, "True -> False"), ("hub/other.py", 3, "True -> False")]
+        self.assertEqual(part.unaccepted(others, self.root, self.accepted), others)
+
+    def test_each_accepted_mutant_says_why(self):
+        accepted = part.load_equivalents(ROOT / ".github" / "mutants-equivalents.json")
+        self.assertTrue(accepted)
+        for entry in accepted:
+            self.assertEqual(set(entry), {"file", "line", "mutation", "why"}, entry)
+            self.assertTrue(entry["why"].strip(), entry)
+            lines = [text.strip() for text in (ROOT / entry["file"]).read_text(encoding="utf-8").splitlines()]
+            self.assertIn(entry["line"], lines, entry)                       # la ligne existe encore telle quelle : sinon l'entrée est périmée
+
+    def test_a_part_stays_red_only_for_survivors_that_are_not_accepted(self):
+        def run(codes, printed):
+            def execute(command):
+                return codes.pop(0), printed.pop(0)
+            return part.conclude(part.run_plan([["a"], ["b"]], execute), self.root, self.accepted)
+
+        self.assertEqual(run([0, 3], [[], [("hub/base.py", 3, "True -> False")]]), (0, False, []))
+        self.assertEqual(run([0, 3], [[], [("hub/base.py", 3, "delete not")]]), (0, True, [("hub/base.py", 3, "delete not")]))
+        self.assertEqual(run([0, 3], [[], []]), (0, True, []))            # mutator dit « survivant » sans qu'on lise lequel : rouge, par prudence
 
 
 class TestServerSharesOfTheNightlyPass(unittest.TestCase):
