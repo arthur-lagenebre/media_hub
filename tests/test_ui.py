@@ -7643,6 +7643,94 @@ class TestMusicPreload(UiCase):
         expect(self.page.locator("#abar .btn.spd")).to_have_text("1,5×")
 
 
+class TestCollaborationsUi(UiCase):
+    """Un album en collaboration (« Daft Punk & Poppy », dans le dossier de Daft Punk ; Poppy n'a pas de dossier) : la section « Collaborations » de chaque fiche, et les noms crédités de l'album qui mènent chacun à sa fiche. Muse n'a pas de collaboration."""
+
+    @classmethod
+    def add_media(cls, root):
+        music = root / "srv" / "Musique"
+        path = fixtures.write_flac(music / "Daft Punk" / "2013 - Duo" / "01 - Ensemble.flac", "Ensemble", "Duo", "Daft Punk & Poppy", 1, 1, year="2013")
+        fixtures.add_tags(path, ("ALBUMARTISTS", "Daft Punk"), ("ALBUMARTISTS", "Poppy"))
+        (path.parent / "cover.png").write_bytes(fixtures.PNG)
+        remix = fixtures.write_flac(music / "Daft Punk" / "2014 - Remix" / "01 - Remix.flac", "Remix", "Remix", "DP feat. P", 1, 1, year="2014")       # une étiquette qui n'écrit pas les noms en entier
+        fixtures.add_tags(remix, ("ALBUMARTISTS", "Daft Punk"), ("ALBUMARTISTS", "Poppy"))
+        fixtures.write_flac(music / "Muse" / "2003 - Absolution" / "01 - Time.flac", "Time", "Absolution", "Muse", 1, 1, year="2003")
+
+    def setUp(self):
+        super().setUp()
+        self.duo = self.item("musique", "Duo")
+        self.dp, self.poppy = (c["id"] for c in self.duo["credits"])
+
+    def sheet(self, artist):
+        self.open(f"#/artist/musique/{artist}")
+        self.view(".info h1").wait_for()
+
+    def section(self, title):
+        return self.view("section", has=self.page.locator("h2", has_text=re.compile(f"^{title}$")))
+
+    def test_the_main_artist_sheet_lists_the_collaboration_apart_and_counts_it(self):
+        self.sheet(self.dp)
+        self.assertEqual(self.section("Albums").locator(".card .t").all_inner_texts(), ["Discovery"])
+        self.assertEqual(self.section("Collaborations").locator(".card .t").all_inner_texts(), ["Duo", "Remix"])
+        self.assertIn("1 album · 2 collaborations", self.view(".info p.credit, .info p.meta").all_inner_texts()[-1])
+        self.assertEqual(self.errors, [])
+
+    def test_the_collaboration_card_opens_its_album_from_the_keyboard(self):
+        self.sheet(self.dp)
+        self.section("Collaborations").locator(".card").first.focus()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_url(f"**#/i/{self.duo['id']}")
+
+    def test_an_artist_without_collaboration_has_no_such_section(self):
+        self.sheet(self.api("/api/item/" + self.item("musique", "Absolution")["id"])["artist_id"])
+        self.assertEqual(self.section("Albums").locator(".card .t").all_inner_texts(), ["Absolution"])
+        self.assertEqual(self.section("Collaborations").count(), 0)
+
+    def test_a_participant_sheet_opens_with_the_cover_of_the_collaboration(self):
+        self.sheet(self.poppy)
+        self.assertEqual(self.view(".info h1").inner_text(), "Poppy")
+        self.assertEqual(self.section("Collaborations").locator(".card .t").all_inner_texts(), ["Duo", "Remix"])
+        self.assertEqual(self.section("Albums").count(), 0)
+        self.assertIn(f"/img/item/{self.duo['id']}", self.view(".hero-in .sq.big").first.evaluate("e => e.outerHTML"))
+        self.assertIn("2 collaborations", self.view(".info").inner_text())
+        self.assertNotIn("album", self.view(".info p.credit, .info p.meta").all_inner_texts()[-1])         # pas de « 0 album »
+        self.assertEqual(self.errors, [])
+
+    def test_the_credited_names_of_the_album_lead_to_each_sheet(self):
+        self.open("#/i/" + self.duo["id"])
+        line = self.view(".info p.credit", has=self.page.locator("a.f"))
+        line.wait_for()
+        self.assertEqual(line.inner_text(), "Daft Punk & Poppy")                   # le texte d'ALBUMARTIST, tel quel
+        self.assertEqual(line.locator("a.f").all_inner_texts(), ["Daft Punk", "Poppy"])
+        line.locator("a.f", has_text="Poppy").click()
+        self.shown(f"#/artist/musique/{self.poppy}")
+        self.page.go_back()
+        self.view(".info p.credit a.f", has_text="Daft Punk").click()
+        self.shown(f"#/artist/musique/{self.dp}")
+
+    def test_on_a_tv_the_arrows_go_from_one_credited_name_to_the_next(self):
+        self.page.add_init_script("localStorage.setItem('hub.device', JSON.stringify('tv'))")
+        self.open("#/i/" + self.duo["id"])
+        self.view(".info p.credit a.f", has_text="Daft Punk").focus()
+        self.press("ArrowRight")
+        self.assertEqual(self.page.evaluate("document.activeElement.textContent.trim()"), "Poppy")
+        self.page.keyboard.press("Enter")
+        self.shown(f"#/artist/musique/{self.poppy}")
+
+    def test_credited_names_missing_from_the_label_follow_it(self):
+        self.open("#/i/" + self.item("musique", "Remix")["id"])
+        line = self.view(".info p.credit", has=self.page.locator("a.f"))
+        line.wait_for()
+        self.assertEqual(line.inner_text(), "DP feat. P · Daft Punk · Poppy")
+        self.assertEqual(line.locator("a.f").all_inner_texts(), ["Daft Punk", "Poppy"])
+
+    def test_an_album_without_credits_keeps_a_single_artist_link(self):
+        self.open("#/i/" + self.item("musique", "Discovery")["id"])
+        line = self.view(".info p.credit a.f.head")
+        line.wait_for()
+        self.assertEqual(line.all_inner_texts(), ["Daft Punk"])
+
+
 class TestArtistsView(UiCase):
     """La bibliothèque de musique par artiste : un artiste par carte, sans ses albums, quand le compte l'a choisi dans ses paramètres."""
 
