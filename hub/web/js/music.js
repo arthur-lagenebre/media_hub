@@ -195,7 +195,7 @@
     return -1;
   }
   function shelf(d) {
-    var out = d.albums.slice();
+    var out = (d.albums || []).slice();
     (d.wanted || []).forEach(function (w) {
       var after = firstIndex(out, function (a) { return a.year && (a.year > w.year || (a.year === w.year && a.title.toLowerCase() > w.title.toLowerCase())); });
       var undated = firstIndex(out, function (a) { return !a.year; });
@@ -410,7 +410,7 @@
     // Le texte à droite de la photo : nom, faits, genres, totaux, résumé Wikipédia, boutons.
     function artistInfo(d, info) {
       var list = d.tracks;
-      var meta = [H.plural(d.albums.length, 'album'), H.plural(list.length, 'piste'), d.duration ? H.dur(d.duration) : ''].filter(Boolean).join(' · ');
+      var meta = [releaseCount(d), H.plural(list.length, 'piste'), d.duration ? H.dur(d.duration) : ''].filter(Boolean).join(' · ');
       var box = h('div', { class: 'info' }, h('h1', null, d.name));
       var facts = info && info.facts ? info.facts.split(' · ').map(function (part) { return H.tr(part); }) : [];
       if (info && info.disambiguation) facts.push(info.disambiguation);     // la description courte de MusicBrainz (« UK soul/jazz singer ») n'est pas un genre : elle va avec les faits
@@ -423,8 +423,14 @@
       box.appendChild(artistActions(d, list));
       return box;
     }
+    // « 12 albums · 6 collaborations » ; un artiste qui n'a que des collaborations (un participant) : « 1 collaboration ».
+    function releaseCount(d) {
+      var own = d.albums.length, shared = collaborations(d).length;
+      return [own || !shared ? H.plural(own, 'album') : '', shared ? H.plural(shared, 'collaboration') : ''].filter(Boolean).join(' · ');
+    }
+    function collaborations(d) { return d.collaborations || []; }
     function artistHero(d, box) {
-      var first = d.albums[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id, v = stamp ? '&v=' + stamp : '';       // la photo de l'artiste, sinon la pochette de son premier album
+      var first = d.albums[0] || collaborations(d)[0], face = d.photo ? '/img/artist/' + lib + '/' + id : '/img/item/' + first.id, v = stamp ? '&v=' + stamp : '';       // la photo de l'artiste, sinon la pochette de son premier album
       return h('div', { class: 'hero' }, h('div', { class: 'hero-bg', style: 'background-image:url(' + face + '?w=320' + v + ')' }),
         h('div', { class: 'hero-in' }, H.picture(face + '?w=480' + v, d.name, 'sq big'), box));
     }
@@ -435,7 +441,15 @@
       return copy;
     }
     function albumsSection(d) {
-      return h('section', null, h('h2', null, H.t('Albums')), h('div', { class: 'grid' }, shelf(d).map(function (a) { return a.wanted ? wantedCard(a) : H.card(withoutGroup(a), false); })));
+      var list = shelf(d);
+      if (!list.length) return null;           // un participant n'a que des collaborations
+      return h('section', null, h('h2', null, H.t('Albums')), h('div', { class: 'grid' }, list.map(function (a) { return a.wanted ? wantedCard(a) : H.card(withoutGroup(a), false); })));
+    }
+    // Les albums partagés avec d'autres artistes : la carte garde « A & B », qui dit avec qui.
+    function collaborationsSection(d) {
+      var list = collaborations(d);
+      if (!list.length) return null;
+      return h('section', null, h('h2', null, H.t('Collaborations')), h('div', { class: 'grid' }, list.map(function (a) { return H.card(a, false); })));
     }
     // Les membres du groupe : les actuels, puis les anciens.
     function memberSections(info) {
@@ -491,7 +505,7 @@
     }
     function artistBody(d, info) {
       var body = h('div', { class: 'body' });
-      [albumsSection(d)].concat(memberSections(info), [linksSection(info), noSheetNote(info)]).forEach(function (node) { if (node) body.appendChild(node); });
+      [albumsSection(d), collaborationsSection(d)].concat(memberSections(info), [linksSection(info), noSheetNote(info)]).forEach(function (node) { if (node) body.appendChild(node); });
       return body;
     }
     function render() {

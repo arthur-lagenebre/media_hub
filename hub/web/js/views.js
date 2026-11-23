@@ -959,12 +959,28 @@
       line.appendChild(document.createTextNode(around[1] || ''));
       return line;
     }
+    // L'artiste d'un album en collaboration : le texte d'ALBUMARTIST tel quel (« A & B »), chaque nom crédité qu'on y trouve devenu le lien de sa fiche. Un nom que le texte ne contient pas suit, à part.
+    function creditedLine(d) {
+      var line = h('p', { class: 'credit' }), text = d.artist, at = 0, rest = [];
+      d.credits.forEach(function (c) {
+        var link = h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + c.id, 'data-key': 'credit-' + c.id }, c.name);
+        var found = text.indexOf(c.name, at);
+        if (found < 0) { rest.push(link); return; }
+        if (found > at) line.appendChild(document.createTextNode(text.slice(at, found)));
+        line.appendChild(link);
+        at = found + c.name.length;
+      });
+      if (at < text.length) line.appendChild(document.createTextNode(text.slice(at)));
+      rest.forEach(function (link) { line.appendChild(document.createTextNode(' · ')); line.appendChild(link); });
+      return line;
+    }
     // Les lignes « De », « Par » et l'artiste d'un album, sous les genres.
     function credits(d) {
       var out = [];
       if (d.directors && d.directors.length) out.push(directedBy(d));
       if (d.authors && d.authors.length) out.push(h('p', { class: 'credit' }, H.t('Par {names}', { names: d.authors.join(', ') })));
-      if (d.type === 'album' && d.artist && d.artist_id) out.push(h('p', { class: 'credit' }, h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + d.artist_id }, d.artist)));
+      if (d.type === 'album' && d.artist && d.credits) out.push(creditedLine(d));
+      else if (d.type === 'album' && d.artist && d.artist_id) out.push(h('p', { class: 'credit' }, h('a', { class: 'f head', href: '#/artist/' + d.library.id + '/' + d.artist_id }, d.artist)));
       return out;
     }
     function doubtNote(d) {

@@ -579,11 +579,12 @@ class TestArtistRoutes(ArtistCase):
 
     def test_the_folder_of_the_artist_is_the_one_the_scan_found_if_it_is_still_there(self):
         rows = [dict(r) for r in self.db.query("SELECT * FROM items WHERE id IN ('al1','al2') ORDER BY id")]
-        self.assertEqual(app.artist_home(self.lib, rows), self.lib.path / "Daft")
-        rows[0]["meta"] = json.dumps({"artist_dir": "Disparu"})
-        self.assertIsNone(app.artist_home(self.lib, rows))
-        rows[0]["meta"] = json.dumps({"artist_dir": ""})
-        self.assertIsNone(app.artist_home(self.lib, rows))
+        self.assertEqual(app.artist_home(self.lib, rows, "ar1"), self.lib.path / "Daft")
+        self.assertIsNone(app.artist_home(self.lib, rows, "ar2"))                   # le dossier d'un album n'est que celui de son artiste principal, jamais d'un participant
+        rows[0]["meta"] = json.dumps({"artist_id": "ar1", "artist_dir": "Disparu"})
+        self.assertIsNone(app.artist_home(self.lib, rows, "ar1"))
+        rows[0]["meta"] = json.dumps({"artist_id": "ar1", "artist_dir": ""})
+        self.assertIsNone(app.artist_home(self.lib, rows, "ar1"))
 
     def test_an_unknown_artist_or_a_library_that_is_not_music_is_a_404(self):
         self.assertEqual(self.sheet("/api/artist/lib/nope").status, 404)

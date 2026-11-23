@@ -1,3 +1,8 @@
+## 0.56.0 — 2026-11-23
+- Un album fait à plusieurs (« Le Castle Vania & LUMBERJVCK ») est maintenant rangé chez chacun de ses artistes : la page de chacun le montre dans une nouvelle partie « Collaborations ».
+- Sur la page de l'album, chaque nom d'artiste est cliquable et mène à sa propre page, même pour un artiste qui n'a pas d'album à lui.
+- L'album ne compte qu'une fois dans la musique, et il n'y a plus d'artiste « A & B » à part.
+
 ## 0.55.0 — 2026-11-22
 - Tu peux maintenant demander un artiste : choisis « Artiste » dans « Nouvelle demande », cherche-le parmi les fiches MusicBrainz, ou envoie simplement le nom que tu as tapé.
 - Ta demande passe à « Ajoutée » toute seule dès qu'un album de cet artiste arrive dans la musique, et elle s'affiche sur ton accueil comme celle d'un film.
