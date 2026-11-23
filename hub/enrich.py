@@ -780,18 +780,25 @@ def musicbrainz(cfg, **options):
 
 
 def album_artists(db, lib):
-    """({identifiant MusicBrainz: nom}, {identifiant MusicBrainz: {identifiants d'artiste}}, {identifiant d'artiste: son dossier}) d'après les albums de la bibliothèque ; seuls comptent les artistes qui portent un identifiant MusicBrainz."""
+    """({identifiant MusicBrainz: nom}, {identifiant MusicBrainz: {identifiants d'artiste}}, {identifiant d'artiste: son dossier}) d'après les albums de la bibliothèque ; seuls comptent les artistes qui portent un identifiant MusicBrainz.
+    Un album crédité à plusieurs artistes (`meta.credits`, voir scan.music.album_credits) compte chacun d'eux ; le dossier de l'album n'est que celui de son artiste principal."""
     artists, ids, homes = {}, {}, {}
     for row in db.query("SELECT grp, meta FROM items WHERE lib=? AND type='album'", (lib.id,)):
         meta = json.loads(row["meta"])
-        mbid = meta.get("artist_mbid")
-        if mbid:
-            artists.setdefault(mbid, row["grp"])
-            if meta.get("artist_id"):
-                ids.setdefault(mbid, set()).add(meta["artist_id"])
-                if meta.get("artist_dir") and (lib.path / meta["artist_dir"]).is_dir():
-                    homes[meta["artist_id"]] = lib.path / meta["artist_dir"]
+        main = meta.get("artist_id")
+        for name, artist_id, mbid in album_credited(row["grp"], meta):
+            artists.setdefault(mbid, name)
+            if artist_id:
+                ids.setdefault(mbid, set()).add(artist_id)
+                if artist_id == main and meta.get("artist_dir") and (lib.path / meta["artist_dir"]).is_dir():
+                    homes[artist_id] = lib.path / meta["artist_dir"]
     return artists, ids, homes
+
+
+def album_credited(grp, meta):
+    """[(nom, identifiant d'artiste, identifiant MusicBrainz)] des artistes d'un album qui portent un identifiant MusicBrainz : chaque crédité, ou l'artiste de l'album quand il n'a pas de crédits."""
+    credits = meta.get("credits") or [{"name": grp, "id": meta.get("artist_id"), "mbid": meta.get("artist_mbid")}]
+    return [(c.get("name"), c.get("id"), c["mbid"]) for c in credits if c.get("mbid")]
 
 
 def keep_artist(db, mbid, info):

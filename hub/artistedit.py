@@ -135,7 +135,7 @@ def renamed(row, names):
     """La ligne d'un album (une bibliothèque de musique n'a que des albums) avec le nom affiché corrigé de son artiste (`names`, voir plus haut) à la place de celui des étiquettes, dans `grp` et `meta.artist` ; la ligne telle quelle sinon."""
     meta = json.loads(row["meta"] or "{}")
     name = names.get(meta.get("artist_id")) if isinstance(meta, dict) else None
-    if not name:
+    if not name or len(meta.get("credits") or []) > 1:          # une collaboration garde « A & B » : le nom corrigé de son artiste principal n'est pas le sien
         return row
     meta["artist"] = name
     return {**dict(row), "grp": name, "meta": json.dumps(meta)}

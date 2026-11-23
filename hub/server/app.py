@@ -241,12 +241,25 @@ def typed_summary(row, meta):
             out["duration"] = meta["duration"]
         if meta.get("artist_id"):
             out["artist_id"] = meta["artist_id"]
+        if credits := album_credits(meta):
+            out["credits"] = [{"name": c["name"], "id": c["id"]} for c in credits]
     if row["type"] == "series":
         if meta.get("missing"):
             out["missing"] = sum(len(m["numbers"]) for m in meta["missing"])
         if meta.get("stack"):
             out["cover_urls"] = [urls.item_cover(row["id"])] + [urls.entry_image(e) for e in meta["stack"]][:STACK_MAX - 1]
     return out
+
+
+def album_credits(meta):
+    """[{"name", "id", "mbid"}] des artistes crédités d'une collaboration (voir scan.music.album_credits) ; vide pour l'album d'un seul artiste, ou dont les pistes n'ont pas ALBUMARTISTS."""
+    credits = meta.get("credits") if isinstance(meta, dict) else None
+    return credits if isinstance(credits, list) and len(credits) > 1 else []
+
+
+def credits_artist(meta, artist_id):
+    """Vrai si l'album est de cet artiste : il en est l'artiste principal, ou l'un des crédités de la collaboration."""
+    return meta.get("artist_id") == artist_id or any(c.get("id") == artist_id for c in album_credits(meta))
 
 
 def summary(row, seen=None, quality=None, opinion=None):
@@ -1239,7 +1252,7 @@ def api_search(h, m, q):
     for lib in h.visible_libs():
         found = []
         for row in shown_rows(hub, lib, hub.db.query("SELECT * FROM items WHERE lib=? ORDER BY sort", (lib.id,))):
-            if needle in fold(row["title"]) or needle in fold(row["grp"]):
+            if needle in fold(row["title"]) or needle in fold(row["grp"]) or any(needle in fold(c["name"]) for c in album_credits(meta_json(row["meta"]))):
                 found.append(with_seen(row, seen, quality, ratings))
                 if len(found) >= 40:
                     break
@@ -2045,11 +2058,11 @@ def sheet_links(info, mbid, edits):
 
 
 def artist_albums(hub, lib_id, artist_id):
-    """Les albums d'un artiste, du plus ancien au plus récent ; 404 si la bibliothèque n'est pas de la musique ou si l'artiste n'y est pas."""
+    """Les albums d'un artiste, les siens comme ses collaborations (voir credits_artist), du plus ancien au plus récent ; 404 si la bibliothèque n'est pas de la musique ou si l'artiste n'a ni album ni collaboration."""
     lib = library_or_404(hub, lib_id)
     if lib.kind != "music":
         raise HttpError(404, "pas une bibliothèque de musique")
-    rows = [r for r in hub.db.query("SELECT * FROM items WHERE lib=? AND type='album'", (lib.id,)) if meta_json(r["meta"]).get("artist_id") == artist_id]
+    rows = [r for r in hub.db.query("SELECT * FROM items WHERE lib=? AND type='album'", (lib.id,)) if credits_artist(meta_json(r["meta"]), artist_id)]
     if not rows:
         raise HttpError(404, "artiste inconnu")
     return lib, sorted(rows, key=TITLE_SORTS["music"])
@@ -2061,14 +2074,20 @@ def kept_sheet(hub, mbid):
     return {**kept, "mbid": mbid} if kept else None
 
 
-def artist_kept(hub, rows):
-    """La fiche gardée par « Fiches artistes » (voir enrich.enrich_artists), ou None : celle du premier album qui porte un identifiant MusicBrainz et qui en a une. C'est le rapprochement automatique ; la photo s'en tient à lui."""
-    return next(filter(None, (kept_sheet(hub, meta_json(row["meta"]).get("artist_mbid")) for row in rows)), None)
+def artist_mbid_of(meta, artist_id):
+    """L'identifiant MusicBrainz qu'un album donne à cet artiste : celui de son crédit dans une collaboration, sinon celui de l'artiste de l'album."""
+    credit = next((c for c in album_credits(meta) if c.get("id") == artist_id), None)
+    return credit.get("mbid", "") if credit else meta.get("artist_mbid")
 
 
-def artist_shown(hub, rows, fixes):
+def artist_kept(hub, rows, artist_id):
+    """La fiche gardée par « Fiches artistes » (voir enrich.enrich_artists), ou None : celle du premier album qui donne à l'artiste un identifiant MusicBrainz et qui en a une. C'est le rapprochement automatique ; la photo s'en tient à lui."""
+    return next(filter(None, (kept_sheet(hub, artist_mbid_of(meta_json(row["meta"]), artist_id)) for row in rows)), None)
+
+
+def artist_shown(hub, rows, fixes, artist_id):
     """La fiche que montre la page de l'artiste : celle que l'administrateur a choisie (`fixes["mbid"]`, voir artistedit) si elle est gardée, sinon le rapprochement automatique (artist_kept)."""
-    return kept_sheet(hub, fixes.get("mbid")) or artist_kept(hub, rows)
+    return kept_sheet(hub, fixes.get("mbid")) or artist_kept(hub, rows, artist_id)
 
 
 def wanted_albums(hub, lib_id, artist_id):
@@ -2111,7 +2130,7 @@ def artist_link_target(hub, m):
     """(mbid, fiche gardée) de l'artiste visé par une route de liens ; 404 s'il est inconnu ou n'a pas de fiche (sans identifiant MusicBrainz, ou « Fiches artistes » ne l'a pas encore gardée).
     C'est la fiche montrée (artist_shown) : les liens corrigés, rangés sous son mbid, suivent la fiche choisie."""
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
-    kept = artist_shown(hub, rows, artistedit.of_artist(hub.db, lib.id, m.group(2)))
+    kept = artist_shown(hub, rows, artistedit.of_artist(hub.db, lib.id, m.group(2)), m.group(2))
     if kept is None:
         raise HttpError(404, "pas de fiche pour cet artiste")
     return kept["mbid"], kept
@@ -2125,10 +2144,12 @@ def artist_links_now(h, kept, edits):
 PHOTO_UPLOAD_MAX = 10 << 20
 
 
-def artist_home(lib, rows):
-    """Le dossier de l'artiste à la racine de la médiathèque (voir scan.music.artist_dirs), où va sa photo ; None si le dernier scan ne lui en a pas trouvé ou s'il n'est plus là."""
+def artist_home(lib, rows, artist_id):
+    """Le dossier de l'artiste à la racine de la médiathèque (voir scan.music.artist_dirs), où va sa photo ; None si le dernier scan ne lui en a pas trouvé ou s'il n'est plus là.
+    Seuls comptent les albums dont il est l'artiste principal : un participant d'une collaboration n'a pas le dossier de l'album, sa photo va sous HUB_DATA/artists."""
     for row in rows:
-        name = meta_json(row["meta"]).get("artist_dir")
+        meta = meta_json(row["meta"])
+        name = meta.get("artist_dir") if meta.get("artist_id") == artist_id else None
         if name and (lib.path / name).is_dir():
             return lib.path / name
     return None
@@ -2139,10 +2160,15 @@ def artist_photo(hub, artist_id, kept, home=None):
     return enrich.photo_file(hub.cfg.data / "artists", artist_id, (kept or {}).get("mbid", ""), home)
 
 
+def artist_photo_of(hub, lib, rows, artist_id):
+    """artist_photo de l'artiste dont `rows` sont les albums (voir artist_albums)."""
+    return artist_photo(hub, artist_id, artist_kept(hub, rows, artist_id), artist_home(lib, rows, artist_id))
+
+
 def save_artist_photo(hub, lib, rows, artist_id, data, box=None):
     """enrich.save_photo, ses échecs rendus en réponses HTTP (voir photo_errors)."""
     with photo_errors():
-        enrich.save_photo(hub.cfg, artist_id, data, artist_home(lib, rows), box, (artist_kept(hub, rows) or {}).get("mbid", ""))
+        enrich.save_photo(hub.cfg, artist_id, data, artist_home(lib, rows, artist_id), box, (artist_kept(hub, rows, artist_id) or {}).get("mbid", ""))
 
 
 @contextmanager
@@ -2185,12 +2211,28 @@ def photo_box(q):
         raise HttpError(400, str(e))
 
 
+def artist_sections(rows, seen):
+    """{"albums", "collaborations"} de la fiche d'un artiste : ses albums où il est le seul crédité, et ceux qu'il partage avec d'autres (voir album_credits)."""
+    out = {"albums": [], "collaborations": []}
+    for row in rows:
+        out["collaborations" if album_credits(meta_json(row["meta"])) else "albums"].append(with_seen(row, seen))
+    return out
+
+
+def artist_tagged_name(rows, artist_id):
+    """Le nom de l'artiste selon les étiquettes : celui de son premier album à lui seul, sinon celui de son crédit dans sa première collaboration."""
+    solo = [row for row in rows if not album_credits(meta_json(row["meta"]))]
+    if solo:
+        return solo[0]["grp"] or "Artiste inconnu"
+    return next((c["name"] for row in rows for c in album_credits(meta_json(row["meta"])) if c.get("id") == artist_id), "Artiste inconnu")
+
+
 def artist_tracks(hub, rows, name):
     """(pistes, {genre: nombre d'albums}) de tous les albums d'un artiste, les pistes dans l'ordre de chaque album. `name` : le nom affiché ; une piste créditée du nom des étiquettes prend celui-là (voir artistedit.credit)."""
     tracks, genres = [], {}
     for row in rows:
         for entry in sorted(hub.db.query("SELECT * FROM entries WHERE item_id=?", (row["id"],)), key=order_key):
-            artist = artistedit.credit(entry_json(entry)["artist"], row["grp"], name) or name
+            artist = artistedit.credit(entry_json(entry)["artist"], row["grp"], None if album_credits(meta_json(row["meta"])) else name) or name      # une collaboration garde « A & B »
             tracks.append({"id": entry["id"], "title": entry["title"], "artist": artist, "album": row["title"], "item": row["id"], "duration": entry["duration"],
                            "cover": urls.item_cover(row["id"]), "file": urls.entry_file(entry["id"])})
         for genre in safe_json(row["genres"], []):
@@ -2206,17 +2248,17 @@ def api_artist(h, m, q):
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     seen = seen_counts(hub, h.user["id"], lib.id)
     fixes = artistedit.of_artist(hub.db, lib.id, m.group(2))
-    name = fixes.get("name") or rows[0]["grp"] or "Artiste inconnu"
+    name = fixes.get("name") or artist_tagged_name(rows, m.group(2))
     tracks, genres = artist_tracks(hub, rows, name)
     shown = [artistedit.renamed(r, {m.group(2): fixes["name"]}) for r in rows] if "name" in fixes else rows
-    out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "id": m.group(2), "name": name, "albums": [with_seen(r, seen) for r in shown], "tracks": tracks}
+    out = {"library": {"id": lib.id, "label": labels.shown(hub.db, lib), "kind": lib.kind}, "id": m.group(2), "name": name, "tracks": tracks, **artist_sections(shown, seen)}
     out.update(artist_genres(hub, lib, genres, fixes))
     out["duration"] = sum(t["duration"] or 0 for t in out["tracks"])
-    info = artist_info(h, artist_shown(hub, rows, fixes), fixes)
+    info = artist_info(h, artist_shown(hub, rows, fixes, m.group(2)), fixes)
     if info:
         out["info"] = info
     out["wanted"] = [{"year": w["year"], "title": w["title"], "cover": f"/img/wanted/{lib.id}/{m.group(2)}/{w['key']}" if w["cover"] else ""} for w in wanted_albums(hub, lib.id, m.group(2))]
-    out["photo"] = artist_photo(hub, m.group(2), artist_kept(hub, rows), artist_home(lib, rows)) is not None          # la photo suit le rapprochement automatique, jamais la fiche choisie
+    out["photo"] = artist_photo_of(hub, lib, rows, m.group(2)) is not None          # la photo suit le rapprochement automatique, jamais la fiche choisie
     if out["photo"]:
         out["image"] = urls.artist_image(lib.id, m.group(2))
     if h.user["role"] == "admin":
@@ -2392,7 +2434,7 @@ def api_artist_photo_crop(h, m, q):
     hub = h.hub
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
     box = body_box(h.body_json())
-    path = artist_photo(hub, m.group(2), artist_kept(hub, rows), artist_home(lib, rows))
+    path = artist_photo_of(hub, lib, rows, m.group(2))
     if path is None:
         raise HttpError(404, "pas de photo à recadrer")
     save_artist_photo(hub, lib, rows, m.group(2), read_photo(path), box)
@@ -2405,7 +2447,7 @@ def artist_image(h, m, q):
     hub = h.hub
     h.require(m.group(1))
     lib, rows = artist_albums(hub, m.group(1), m.group(2))
-    path = artist_photo(hub, m.group(2), artist_kept(hub, rows), artist_home(lib, rows))
+    path = artist_photo_of(hub, lib, rows, m.group(2))
     try:
         width = int(q.get("w", 0))
     except ValueError:
