@@ -1619,7 +1619,7 @@ def artist_rows(rows):
     out = []
     for key, albums in groups.items():
         albums.sort(key=lambda r: (r["year"] or "9999", r["sort"], r["id"]))
-        name = artist_name(albums[0]["grp"])
+        name = artist_name(artist_tagged_name(albums, key))         # pas « A & B » quand sa plus ancienne sortie est une collaboration
         out.append({"id": key, "lib": albums[0]["lib"], "type": "artist", "title": name, "grp": name, "letter": initial(name), "year": "", "summary": "",
                     "sort": ("~" if fold(name) in UNKNOWN_ARTISTS else "") + fold(name), "genres": json.dumps(sorted({g for a in albums for g in safe_json(a["genres"], [])}), ensure_ascii=False),
                     "meta": json.dumps({"album": albums[0]["id"]}), "added": max(a["added"] for a in albums), "count": len(albums), "albums": [a["title"] for a in albums],

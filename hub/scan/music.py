@@ -164,7 +164,9 @@ def scan_music(lib, known, enriched=None):
         items.append(item)
         entries += _album_entries(lib, item, release)
     counts = _Counts(reused, read)
-    counts.kv = {f"wanted:{lib.id}": wanted_sheet(lib.path, not_owned_nearby(lib.path, releases, wanted.find(lib.path, releases)))}       # les albums manquants se rangent à part : ce ne sont pas des items, aucune liste ne doit les compter
+    mains = {release.rel: main_artist(release, credits[release.rel], homes)[0] for release in releases}
+    found = by_main_artist(wanted.find(lib.path, releases), releases, mains)
+    counts.kv = {f"wanted:{lib.id}": wanted_sheet(lib.path, not_owned_nearby(lib.path, releases, found, mains))}       # les albums manquants se rangent à part : ce ne sont pas des items, aucune liste ne doit les compter
     return items, entries, counts
 
 
@@ -183,13 +185,28 @@ def artist_dirs(releases, artist_of=lambda release: release.artist_id):
     return {artist: name for artist, (name, _) in best.items()}
 
 
-def not_owned_nearby(root, releases, found):
-    """`found` (voir wanted.find) sans les albums qu'un album rangé dans un même dossier possède déjà : une collaboration (« A & B », dans le dossier de A) n'est pas un album de A pour wanted.find, mais elle est là."""
+def by_main_artist(found, releases, mains):
+    """`found` (voir wanted.find) rangé sous l'artiste principal (`mains` : {dossier de l'album: son id}, voir main_artist) plutôt que sous ALBUMARTIST.
+
+    wanted.find donne les albums manquants d'un dossier à l'ALBUMARTIST qui y a le plus d'albums : « A & B » quand A y a plus de collaborations que d'albums à lui. La fiche de A, elle, est rangée sous A.
+    """
+    owner = {}
+    for release in releases:
+        owner.setdefault(release.artist_id, Counter())[mains[release.rel]] += 1
+    out = {}
+    for key, albums in found.items():
+        main = owner[key].most_common(1)[0][0] if key in owner else key
+        out.setdefault(main, set()).update(albums)
+    return {artist: sorted(albums, key=lambda w: w.order) for artist, albums in out.items()}
+
+
+def not_owned_nearby(root, releases, found, mains):
+    """`found` (voir by_main_artist) sans les albums qu'un album rangé dans un même dossier possède déjà : une collaboration (« A & B », dans le dossier de A) n'est pas un album de A pour wanted.find, mais elle est là."""
     root = Path(root)
     folders = [(r, {p for p in r.folder.parents if root in p.parents}) for r in releases]       # les dossiers qui rangent chaque album, celui de la médiathèque exclu
     out = {}
     for artist, albums in found.items():
-        mine = set().union(*(f for r, f in folders if r.artist_id == artist))
+        mine = set().union(*(f for r, f in folders if mains[r.rel] == artist))
         nearby = [r for r, f in folders if f & mine]
         if kept := [w for w in albums if not any(wanted.owned(r, w) for r in nearby)]:
             out[artist] = kept

@@ -98,6 +98,26 @@ class TestScanCollaborations(unittest.TestCase):
         sheet = self.scan()[3].kv["wanted:musique"]
         self.assertEqual([w["title"] for w in sheet[artist_id("Daft Punk")]], ["Absent"])
 
+    def test_wanted_albums_go_to_the_main_artist_even_where_collaborations_outnumber_their_own(self):
+        for title, year in (("Duo", "1995"), ("Trio", "1996")):
+            collaboration(self.root / "Daft Punk", ["Daft Punk", "Poppy"], [DP_MBID, POPPY_MBID], title=title, year=year)
+        fixtures.write_flac(self.root / "Daft Punk" / "2001 - Discovery" / "01 - A.flac", "A", "Discovery", "Daft Punk", 1, 1)
+        (self.root / "Daft Punk" / "2020 - Absent.jpg").write_bytes(fixtures.PNG)
+        (self.root / "Daft Punk" / "1995 - Duo.jpg").write_bytes(fixtures.PNG)              # acquis depuis, en collaboration
+        sheet = self.scan()[3].kv["wanted:musique"]
+        self.assertEqual({k: [w["title"] for w in v] for k, v in sheet.items()}, {artist_id("Daft Punk"): ["Absent"]})       # rien sous « Daft Punk & Poppy », qui n'a pas de fiche
+
+    def test_wanted_albums_follow_the_main_artist_of_most_of_those_collaborations(self):
+        poppy, dp = self.root / "Poppy", self.root / "Zz Daft Punk"          # le dossier de Poppy se lit d'abord
+        for title in ("Seule", "Encore"):
+            fixtures.write_flac(poppy / f"2017 - {title}" / "01 - S.flac", "S", title, "Poppy", 1, 1, year="2017")
+        collaboration(poppy, ["Daft Punk", "Poppy"], [DP_MBID, POPPY_MBID], title="Chez Poppy", year="2018")       # artiste principal : Poppy, dans son dossier
+        for title, year in (("Un", "2013"), ("Deux", "2014")):
+            collaboration(dp, ["Daft Punk", "Poppy"], [DP_MBID, POPPY_MBID], title=title, year=year)                # artiste principal : Daft Punk
+        (dp / "2020 - Absent.jpg").write_bytes(fixtures.PNG)
+        sheet = self.scan()[3].kv["wanted:musique"]
+        self.assertEqual(list(sheet), [artist_id("Daft Punk")])
+
     def test_an_album_of_the_same_name_in_another_artist_folder_does_not_count(self):
         fixtures.write_flac(self.root / "Daft Punk" / "2001 - Discovery" / "01 - A.flac", "A", "Discovery", "Daft Punk", 1, 1)
         fixtures.write_flac(self.root / "Muse" / "2013 - Duo" / "01 - A.flac", "A", "Duo", "Muse", 1, 1, year="2013")
@@ -122,6 +142,16 @@ class TestCreditsOfAnAlbum(unittest.TestCase):
         from hub.server import app
         self.assertEqual((app.artist_mbid_of(self.DUO, "dp"), app.artist_mbid_of(self.DUO, "po")), (DP_MBID, POPPY_MBID))
         self.assertEqual(app.artist_mbid_of(self.SOLO, "dp"), DP_MBID)
+
+    def test_the_artist_card_takes_the_name_of_an_own_album_even_when_a_collaboration_is_older(self):
+        from hub.server import app
+
+        def row(ident, title, year, grp, meta):
+            return {"id": ident, "lib": "musique", "title": title, "year": year, "grp": grp, "sort": title.lower(), "genres": "[]", "added": 1, "meta": json.dumps(meta)}
+
+        rows = [row("a1", "Duo", "1995", "Daft Punk & Poppy", self.DUO), row("a2", "Discovery", "2001", "Daft Punk", {"artist_id": "dp"})]
+        self.assertEqual([(c["title"], c["count"]) for c in app.artist_rows(rows)], [("Daft Punk", 2)])
+        self.assertEqual([c["title"] for c in app.artist_rows(rows[:1])], ["Daft Punk"])        # sans album à lui : son nom dans les crédits
 
     def test_a_corrected_name_replaces_the_label_of_a_single_credit_album_only(self):
         from hub import artistedit
